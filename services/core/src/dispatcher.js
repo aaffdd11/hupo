@@ -16,6 +16,7 @@
 
 import { AgentRuntime } from './agent-runtime.js';
 import { DebugAgent, ruleFindings, stuckTasks } from './debug-agent.js';
+import { comfortFindings, personalityBlock, PersonalityStore } from './personality.js';
 import {
   Conversation,
   MessageWriter,
@@ -113,6 +114,8 @@ export class Dispatcher {
      * 用**另一个** agent 会话，绝不碰用户那条。
      */
     this.debug = new DebugAgent(cfg, this.runtime, store);
+    /** 主人说话画像：新 agent 会话开场时注入（让人舒服，不迎合 —— 见 personality.js） */
+    this.personality = new PersonalityStore(cfg.dataDir);
     /** 每个会话上一次叫 debug agent 审查的时间（防止同一个毛病每轮都叫模型） */
     this._debugCooldown = new Map();
 
@@ -179,13 +182,19 @@ export class Dispatcher {
    * 只喂一次：喂过之后这一整个进程生命周期里它就都记得了。
    */
   #withRecap(conv, text) {
-    if (this.seeded.has(conv.id)) return text;
+    const first = !this.seeded.has(conv.id);
     this.seeded.add(conv.id);
 
     const timeline = timelineContext(conv.log);
-    if (!timeline) return text; // 全新会话，没什么可接的
+    let base = timeline ? recapPrompt(timeline, text) : text;
 
-    return recapPrompt(timeline, text);
+    // 主人说话画像：新 agent 进程的第一条 prompt 里带上（进程生命周期里它自己会记住）。
+    // 画像只调"怎么说话"，不调结论 —— 迎合/造假的边界由人格硬规则管（见 personality.js）。
+    if (first) {
+      const block = personalityBlock(this.personality.get(conv.id));
+      if (block) base = `${block}\n\n${base}`;
+    }
+    return base;
   }
 
   /**
@@ -393,6 +402,8 @@ export class Dispatcher {
       devStep(conv, '监控', 'error', { detail: String(err?.message ?? err).slice(0, 60) });
       return;
     }
+    // 主人说话画像：每轮都更新（纯计算不花钱），新 agent 会话开场就用最新版
+    const profile = this.debug.updateProfile(conv.id, timeliness);
     const latest = timeliness.turns[timeliness.turns.length - 1];
     if (latest) {
       const fmt = (v) => (v == null ? '—' : `${v}ms`);
@@ -407,7 +418,7 @@ export class Dispatcher {
       devStep(conv, '监控', 'error', { detail: `任务挂着没完成：${st.title.slice(0, 30)}` });
     }
 
-    const findings = [...ruleFindings(timeliness), ...stuck];
+    const findings = [...ruleFindings(timeliness), ...stuck, ...comfortFindings(profile)];
     if (!findings.length) return;
 
     // 规则说有问题 —— 叫 debug agent 判语义（后台，不挡用户）

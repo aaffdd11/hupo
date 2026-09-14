@@ -131,6 +131,13 @@ cd /home/deploy/projects/assistant && bash scripts/deploy-web.sh
 系统里有一个**监控 agent**，它在旁边看每一轮对话 —— 用户说了什么、你回了什么、
 他多久看到第一句、中间空窗多久。它会把毛病落成**任务**：
 
+它看**四个维度**：时效（等多久）、合理性（答没答对题、编没编、查没查）、
+**个性适配**（说话的长短、直接度、客套程度贴不贴主人的习惯，有没有空夸迎合）、
+记忆一致（前后矛盾、说过就忘）。主人的原话：「不是迎合，而是让人舒服。不是造假，而是客观讲理。」
+
+主人的说话画像由监控 agent 从对话里**纯统计**出来，存在 `data/personality/`（不进仓库），
+开新 agent 会话时自动放进开场上下文 —— 你只要照它说话就行，不要自己再发挥。
+
 ```bash
 curl -s localhost:8091/api/debug/tasks | python3 -m json.tool      # 待办的问题
 curl -s "localhost:8091/api/debug/report?conversationId=c_main"    # 最近一次审查

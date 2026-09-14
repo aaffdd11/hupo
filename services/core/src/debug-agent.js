@@ -17,6 +17,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { comfortFindings, personalityBlock, profileFromRows, PersonalityStore } from './personality.js';
 
 // ── 阈值：超过就当"不对劲"，触发模型判断 ────────────────────
 // 为什么是这些数：用户的原话是"判据是要多久"。第一句超过 6 秒、
@@ -372,6 +373,8 @@ export class TaskBook {
     if (/要不要我|留客|追问|挽留/.test(t)) return 'pushy';
     if (/没给出结论|没结果|只有开场白|只输出|当结论|没有结论/.test(t)) return 'noconclusion';
     if (/编造|幻觉|不实|凭空|没查就|凭记忆/.test(t)) return 'fabrication';
+    if (/迎合|奉承|讨好|谄媚|空夸|顺着他说|漂亮话/.test(t)) return 'flattery';
+    if (/说话方式|篇幅|长短|短句|长篇|太客套|太啰嗦|太简短|贴合|习惯|敬语/.test(t)) return 'style-fit';
     return 'other';
   }
 
@@ -468,20 +471,28 @@ export function extractJsonObject(text) {
 const DEBUG_PERSONA = `你是一个**挑剔的调试员**，专门审查"助手"刚才这一轮回答好不好。
 你不是助手本人，不要回答用户的问题，只做审查。
 
-你会拿到两样东西：
+你会拿到三样东西：
 1. 每一轮的**时效性数字**（用户说完到第一句话、到结论、中间最长空窗，单位毫秒）
 2. 每一轮的**原文**（用户说了什么、助手说了什么）
+3. 主人的**说话画像**（从对话里统计出来的：长短、直接度、客套程度、情绪基调）
 
 按这个顺序判：
 - **时效性**：用户等得是不是太久？中间有没有让人以为卡住的空窗？数字摆在那里，直接引用。
 - **合理性**：回答对得上用户问的吗？有没有编造、有没有把"我去查"当结果交出去？
   有没有留客式追问（「要不要我…」）？有没有该查却没查就凭记忆答的？
+- **个性适配**：说话的**长短、直接度、客套程度**跟主人的习惯配不配？
+  主人要短你写长、主人直接你绕圈、主人不用敬语你堆客套 —— 都算。
+- **迎合**：有没有用空夸、附和的漂亮话讨好（「您说得太对了」后面却没有新东西）？
+  有没有不敢说不同意见、顺着说？
+- **客观**：有没有为了好听而软化事实、含糊数字？结论有没有出处？
+
+主人的原话：「不是迎合，而是让人舒服。不是造假，而是客观讲理。」—— 按这个标准判。
 
 输出**严格 JSON**，不要别的东西：
 {
   "verdict": "一句话总评",
   "problems": [
-    { "severity": "high|medium|low", "kind": "timeliness|reasonableness",
+    { "severity": "high|medium|low", "kind": "timeliness|reasonableness|style-fit|flattery",
       "what": "具体是什么问题（引用原文或数字）",
       "fix": "该怎么改（要具体到能动手：改哪个环节/加什么约束）" }
   ]
@@ -501,6 +512,8 @@ export class DebugAgent {
     this.runtime = runtime;
     this.store = store;
     this.tasks = new TaskBook(cfg.dataDir);
+    /** 主人说话画像（纯计算，每轮更新；不进仓库） */
+    this.personalities = new PersonalityStore(cfg.dataDir);
     /** 最近一次分析结果（按会话） */
     this.latest = new Map();
   }
@@ -511,6 +524,11 @@ export class DebugAgent {
     return computeTimeliness(turns);
   }
 
+  /** 更新主人说话画像（纯计算，随时可跑，不花钱）。 */
+  updateProfile(conversationId, timeliness) {
+    return this.personalities.update(profileFromRows(timeliness.turns, conversationId));
+  }
+
   /**
    * 跑一次审查。
    *
@@ -519,14 +537,17 @@ export class DebugAgent {
    */
   async review(conv, { force = false } = {}) {
     const timeliness = this.measure(conv);
+    // 主人说话画像：每轮都更新，开新 agent 会话时会注入它的上下文
+    const profile = this.updateProfile(conv.id, timeliness);
+    const comfort = comfortFindings(profile);
     // 「我单独拿去做」却一直没回来 —— 这种静默失败一定要报，
     // 它看起来像"还在做"，用户会一直等（2026-09-14 真实事故）
-    const findings = [...ruleFindings(timeliness), ...stuckTasks(conv.log)];
+    const findings = [...ruleFindings(timeliness), ...stuckTasks(conv.log), ...comfort];
 
     let judged = null;
     // 只在"规则说有问题"或明确要求时才叫模型 —— 每一轮都叫太贵也太慢
     if (force || findings.length) {
-      judged = await this.#judge(conv.id, timeliness, findings);
+      judged = await this.#judge(conv.id, timeliness, findings, profile);
     }
 
     const report = {
@@ -535,19 +556,22 @@ export class DebugAgent {
       timeliness,
       ruleFindings: findings,
       judgment: judged,
+      personality: { profile, comfort },
       tasks: [],
     };
 
     // 该改的就变成任务
+    const label = (kind) =>
+      ({ timeliness: '时效', 'style-fit': '个性', flattery: '迎合', reasonableness: '回答' })[kind] ?? '回答';
     const candidates = [
       ...findings.map((f) => ({
-        title: `${f.kind === 'timeliness' ? '时效' : '回答'}：${f.what}`.slice(0, 120),
+        title: `${label(f.kind)}：${f.what}`.slice(0, 120),
         detail: `${f.why}\n\n原文/数字：${f.what}`,
         severity: f.severity,
         kind: f.kind,
       })),
       ...(judged?.problems ?? []).map((p) => ({
-        title: `${p.kind === 'timeliness' ? '时效' : '回答'}：${p.what}`.slice(0, 120),
+        title: `${label(p.kind)}：${p.what}`.slice(0, 120),
         detail: `${p.fix}`,
         severity: p.severity ?? 'medium',
         kind: p.kind ?? 'reasonableness',
@@ -564,7 +588,7 @@ export class DebugAgent {
   }
 
   /** 叫 debug agent 判语义。它用的是**另一个**会话，不污染用户那条。 */
-  async #judge(conversationId, timeliness, findings) {
+  async #judge(conversationId, timeliness, findings, profile = null) {
     const agent = this.runtime.agent(`debug:${conversationId}`);
     const rows = timeliness.turns.slice(-8).map((r) => ({
       用户说: r.userText || '（它自己开的一轮）',
@@ -584,6 +608,9 @@ export class DebugAgent {
       '',
       '── 每一轮 ──',
       JSON.stringify(rows, null, 2),
+      '',
+      '── 主人的说话画像 ──',
+      personalityBlock(profile) ?? '（样本还太少，暂无画像）',
       '',
       '── 机械规则已经报出来的问题 ──',
       JSON.stringify(findings, null, 2),
