@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1380" height="1000" viewBox="0 0 1380 1000" font-family="'PingFang SC','Microsoft YaHei','Noto Sans CJK SC','Source Han Sans SC','Droid Sans Fallback','DroidSansFallbackFull',system-ui,sans-serif">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#7d8590"/>
+  </marker>
+  <style>text { dominant-baseline: auto; }</style>
+</defs>
+<rect width="100%" height="100%" fill="#0f1419"/>
+<text x="24" y="32" fill="#e6edf3" font-size="18" font-weight="700">图 1 · 系统总架构：4 角色 + 控制器 + 12 组件</text>
+<rect x="20" y="50" width="1340" height="150" rx="10" fill="#161d26" stroke="#232c36" stroke-width="1"/>
+<text x="34" y="72" fill="#8b949e" font-size="12" font-weight="700">一、应用层 APP（控制器所在，唯一掌握全局的地方 · 不产生语言）</text>
+<rect x="20" y="214" width="1340" height="118" rx="10" fill="#161d26" stroke="#232c36" stroke-width="1"/>
+<text x="34" y="236" fill="#8b949e" font-size="12" font-weight="700">二、路由层（只做分类判定，不参与对话）</text>
+<rect x="20" y="346" width="1340" height="250" rx="10" fill="#161d26" stroke="#232c36" stroke-width="1"/>
+<text x="34" y="368" fill="#8b949e" font-size="12" font-weight="700">三、处理层（多 agent，按类别分工 · 永不直接对用户说话）</text>
+<rect x="20" y="610" width="1340" height="170" rx="10" fill="#161d26" stroke="#232c36" stroke-width="1"/>
+<text x="34" y="632" fill="#8b949e" font-size="12" font-weight="700">四、对话层（用户唯一能感知到的两个角色 · 共用同一套声音）</text>
+<rect x="20" y="794" width="1340" height="118" rx="10" fill="#161d26" stroke="#232c36" stroke-width="1"/>
+<text x="34" y="816" fill="#8b949e" font-size="12" font-weight="700">五、记忆层（每用户一份 · 控制器独占写权）</text>
+<rect x="470" y="78" width="440" height="108" rx="8" fill="#1a3028" stroke="#3fb950" stroke-width="1.5"/>
+<text x="690" y="99" fill="#3fb950" font-size="14" font-weight="700" text-anchor="middle">控制器 Controller（APP 本身 · 进程）</text>
+<text x="482" y="122" fill="#e6edf3" font-size="13">不生产语言，只决定：谁在什么时候说 / 记什么 / 拦什么</text>
+<text x="482" y="139" fill="#e6edf3" font-size="13">① 双通道分路拦截（按 source 标记）  ② 优先级队列</text>
+<text x="482" y="156" fill="#e6edf3" font-size="13">③ 事实源 + 角色视图投影             ④ 上下文预算与整块重建调度</text>
+<rect x="60" y="116" width="196" height="70" rx="8" fill="#1a3028" stroke="#3fb950" stroke-width="1.5"/>
+<text x="158" y="135" fill="#3fb950" font-size="12" font-weight="700" text-anchor="middle">进度估算 ETA</text>
+<text x="72" y="156" fill="#e6edf3" font-size="11">快说完 / 还要一会 /</text>
+<text x="72" y="171" fill="#e6edf3" font-size="11"> 还很久</text>
+<rect x="272" y="116" width="196" height="70" rx="8" fill="#1a3028" stroke="#3fb950" stroke-width="1.5"/>
+<text x="370" y="135" fill="#3fb950" font-size="12" font-weight="700" text-anchor="middle">心跳续话 KeepAlive</text>
+<text x="284" y="156" fill="#e6edf3" font-size="11">话题耗尽即降级，无次数上</text>
+<text x="284" y="171" fill="#e6edf3" font-size="11">限</text>
+<rect x="484" y="116" width="196" height="70" rx="8" fill="#1a3028" stroke="#3fb950" stroke-width="1.5"/>
+<text x="582" y="135" fill="#3fb950" font-size="12" font-weight="700" text-anchor="middle">一致性守卫</text>
+<text x="496" y="156" fill="#e6edf3" font-size="11">agree / exte</text>
+<text x="496" y="171" fill="#e6edf3" font-size="11">nd / conflic</text>
+<text x="496" y="186" fill="#e6edf3" font-size="11">t</text>
+<rect x="696" y="116" width="196" height="70" rx="8" fill="#1a3028" stroke="#3fb950" stroke-width="1.5"/>
+<text x="794" y="135" fill="#3fb950" font-size="12" font-weight="700" text-anchor="middle">降级兜底 Fallback</text>
+<text x="708" y="156" fill="#e6edf3" font-size="11">四种终态，绝不留白</text>
+<rect x="908" y="116" width="196" height="70" rx="8" fill="#1a3028" stroke="#3fb950" stroke-width="1.5"/>
+<text x="1006" y="135" fill="#3fb950" font-size="12" font-weight="700" text-anchor="middle">衔接改写器 ⚠新增</text>
+<text x="920" y="156" fill="#e6edf3" font-size="11">把结论改写成接得上上文的</text>
+<text x="920" y="171" fill="#e6edf3" font-size="11">话</text>
+<rect x="1120" y="116" width="196" height="70" rx="8" fill="#1a3028" stroke="#3fb950" stroke-width="1.5"/>
+<text x="1218" y="135" fill="#3fb950" font-size="12" font-weight="700" text-anchor="middle">任务队列 + 轮次归属 ⚠新增</text>
+<text x="1132" y="156" fill="#e6edf3" font-size="11">未完成任务跨轮存活</text>
+<rect x="470" y="240" width="440" height="74" rx="8" fill="#302024" stroke="#f85149" stroke-width="1.5"/>
+<text x="690" y="261" fill="#f85149" font-size="14" font-weight="700" text-anchor="middle">常驻分类器（一次性调用，不进对话）</text>
+<text x="482" y="284" fill="#e6edf3" font-size="13">输出：大类 / 中类 / 小类 + 置信度</text>
+<text x="482" y="301" fill="#e6edf3" font-size="13">纪律：一次只唤醒一个，绝不扇出</text>
+<rect x="70" y="384" width="230" height="96" rx="8" fill="#2a1f33" stroke="#a371f7" stroke-width="1.5"/>
+<text x="185" y="404" fill="#a371f7" font-size="13" font-weight="700" text-anchor="middle">技术类处理 agent</text>
+<text x="82" y="426" fill="#e6edf3" font-size="12">· 独立会话 / 独立窗口</text>
+<text x="82" y="442" fill="#e6edf3" font-size="12">· 独立经验包</text>
+<text x="82" y="458" fill="#e6edf3" font-size="12">· 品类方法论进 system（稳定）</text>
+<rect x="328" y="384" width="230" height="96" rx="8" fill="#2a1f33" stroke="#a371f7" stroke-width="1.5"/>
+<text x="443" y="404" fill="#a371f7" font-size="13" font-weight="700" text-anchor="middle">写作类处理 agent</text>
+<text x="340" y="426" fill="#e6edf3" font-size="12">· 独立会话 / 独立窗口</text>
+<text x="340" y="442" fill="#e6edf3" font-size="12">· 独立经验包</text>
+<text x="340" y="458" fill="#e6edf3" font-size="12">· 品类方法论进 system（稳定）</text>
+<rect x="586" y="384" width="230" height="96" rx="8" fill="#2a1f33" stroke="#a371f7" stroke-width="1.5"/>
+<text x="701" y="404" fill="#a371f7" font-size="13" font-weight="700" text-anchor="middle">生活类处理 agent</text>
+<text x="598" y="426" fill="#e6edf3" font-size="12">· 独立会话 / 独立窗口</text>
+<text x="598" y="442" fill="#e6edf3" font-size="12">· 独立经验包</text>
+<text x="598" y="458" fill="#e6edf3" font-size="12">· 品类方法论进 system（稳定）</text>
+<rect x="844" y="384" width="230" height="96" rx="8" fill="#2a1f33" stroke="#a371f7" stroke-width="1.5"/>
+<text x="959" y="404" fill="#a371f7" font-size="13" font-weight="700" text-anchor="middle">事务类处理 agent</text>
+<text x="856" y="426" fill="#e6edf3" font-size="12">· 独立会话 / 独立窗口</text>
+<text x="856" y="442" fill="#e6edf3" font-size="12">· 独立经验包</text>
+<text x="856" y="458" fill="#e6edf3" font-size="12">· 品类方法论进 system（稳定）</text>
+<rect x="1102" y="384" width="230" height="96" rx="8" fill="#2a1f33" stroke="#a371f7" stroke-width="1.5"/>
+<text x="1217" y="404" fill="#a371f7" font-size="13" font-weight="700" text-anchor="middle">通用处理兜底（未分类时）</text>
+<text x="1114" y="426" fill="#e6edf3" font-size="12">· 独立会话 / 独立窗口</text>
+<text x="1114" y="442" fill="#e6edf3" font-size="12">· 独立经验包</text>
+<text x="1114" y="458" fill="#e6edf3" font-size="12">· 品类方法论进 system（稳定）</text>
+<rect x="70" y="494" width="1230" height="50" rx="6" fill="#22201a" stroke="#d29922" stroke-width="1.2" stroke-dasharray="4 3"/>
+<text x="80" y="515" fill="#d29922" font-size="12">⚠ 上下文按品类隔离：换品类 = 换窗口，成本不随总轮数增长（架构本身消掉了大部分刷新压力）</text>
+<text x="80" y="530" fill="#d29922" font-size="12">⚠ 并发池上限 2：Q1 深研期间 Q2 到达 → 起第二个通用处理会话，任务结束即回收</text>
+<rect x="130" y="642" width="420" height="118" rx="8" fill="#2b2418" stroke="#d29922" stroke-width="1.5"/>
+<text x="340" y="663" fill="#d29922" font-size="14" font-weight="700" text-anchor="middle">接收层（Receiving）</text>
+<text x="142" y="686" fill="#e6edf3" font-size="13">接收用户信息 + 立刻回应，维持在场感</text>
+<text x="142" y="703" fill="#e6edf3" font-size="13">输入：发言简报 + 记忆简报</text>
+<text x="142" y="720" fill="#e6edf3" font-size="13">禁区：不给结论 / 不承诺时间 / 不重复</text>
+<rect x="830" y="642" width="420" height="118" rx="8" fill="#1f2a3d" stroke="#58a6ff" stroke-width="1.5"/>
+<text x="1040" y="663" fill="#58a6ff" font-size="14" font-weight="700" text-anchor="middle">反馈层（Feedback）</text>
+<text x="842" y="686" fill="#e6edf3" font-size="13">承接已说的话，说出结论（有最终发言权）</text>
+<text x="842" y="703" fill="#e6edf3" font-size="13">输入：结论 + 已输出全文 + 接管点 + 一致性</text>
+<text x="842" y="720" fill="#e6edf3" font-size="13">禁区：不自己思考 / 不重复已说内容</text>
+<text x="700" y="717" fill="#3fb950" font-size="13" text-anchor="middle" font-weight="700">同一个人格</text>
+<text x="700" y="734" fill="#3fb950" font-size="13" text-anchor="middle" font-weight="700">（共用 voice 段，</text>
+<text x="700" y="751" fill="#3fb950" font-size="13" text-anchor="middle" font-weight="700">角色指令分开）</text>
+<rect x="70" y="828" width="230" height="66" rx="8" fill="#302024" stroke="#f85149" stroke-width="1.5"/>
+<text x="185" y="848" fill="#f85149" font-size="13" font-weight="700" text-anchor="middle">用户档案 Profile</text>
+<rect x="328" y="828" width="230" height="66" rx="8" fill="#302024" stroke="#f85149" stroke-width="1.5"/>
+<text x="443" y="848" fill="#f85149" font-size="13" font-weight="700" text-anchor="middle">品类树 Taxonomy</text>
+<rect x="586" y="828" width="230" height="66" rx="8" fill="#302024" stroke="#f85149" stroke-width="1.5"/>
+<text x="701" y="848" fill="#f85149" font-size="13" font-weight="700" text-anchor="middle">经验包 Experiences</text>
+<rect x="844" y="828" width="230" height="66" rx="8" fill="#302024" stroke="#f85149" stroke-width="1.5"/>
+<text x="959" y="848" fill="#f85149" font-size="13" font-weight="700" text-anchor="middle">指标 Metrics</text>
+<rect x="1102" y="828" width="230" height="66" rx="8" fill="#302024" stroke="#f85149" stroke-width="1.5"/>
+<text x="1217" y="848" fill="#f85149" font-size="13" font-weight="700" text-anchor="middle">证据链 Evidence</text>
+<rect x="560" y="928" width="260" height="56" rx="8" fill="#1f2d3d" stroke="#4a90d9" stroke-width="1.5"/>
+<text x="690" y="948" fill="#4a90d9" font-size="13" font-weight="700" text-anchor="middle">用户</text>
+<text x="572" y="970" fill="#e6edf3" font-size="12">（只感知对话层，不感知内部编排）</text>
+<path d="M 330 928 L 330 762" fill="none" stroke="#7d8590" stroke-width="1.6" marker-end="url(#arrow)"/>
+<rect x="300" y="824" width="60" height="20" rx="4" fill="#0f1419" opacity="0.92"/>
+<text x="330" y="839" fill="#8b949e" font-size="12" text-anchor="middle">① 说话</text>
+<path d="M 1040 762 L 1040 928" fill="none" stroke="#7d8590" stroke-width="1.6" marker-end="url(#arrow)"/>
+<rect x="986" y="824" width="108" height="20" rx="4" fill="#0f1419" opacity="0.92"/>
+<text x="1040" y="839" fill="#8b949e" font-size="12" text-anchor="middle">⑥ 看到一条消息</text>
+<path d="M 550 762 L 550 700" fill="none" stroke="#7d8590" stroke-width="1.6" marker-end="url(#arrow)"/>
+<rect x="520" y="710" width="60" height="20" rx="4" fill="#0f1419" opacity="0.92"/>
+<text x="550" y="725" fill="#8b949e" font-size="12" text-anchor="middle">② 捕获</text>
+<path d="M 470 300 L 330 384" fill="none" stroke="#7d8590" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+<rect x="370" y="321" width="60" height="20" rx="4" fill="#0f1419" opacity="0.92"/>
+<text x="400" y="336" fill="#8b949e" font-size="12" text-anchor="middle">③ 分发</text>
+<path d="M 910 300 L 945 384" fill="none" stroke="#7d8590" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+<rect x="897.5" y="321" width="60" height="20" rx="4" fill="#0f1419" opacity="0.92"/>
+<text x="927.5" y="336" fill="#8b949e" font-size="12" text-anchor="middle">③ 分发</text>
+<path d="M 340 480 L 340 642" fill="none" stroke="#7d8590" stroke-width="1.6" marker-end="url(#arrow)"/>
+<rect x="310" y="540" width="60" height="20" rx="4" fill="#0f1419" opacity="0.92"/>
+<text x="340" y="555" fill="#8b949e" font-size="12" text-anchor="middle">④ 结论</text>
+<path d="M 690 186 L 690 240" fill="none" stroke="#7d8590" stroke-width="1.6" marker-end="url(#arrow)"/>
+<path d="M 330 116 Q 180 379 330 642" fill="none" stroke="#7d8590" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+<rect x="240" y="358" width="180" height="20" rx="4" fill="#0f1419" opacity="0.92"/>
+<text x="330" y="373" fill="#8b949e" font-size="12" text-anchor="middle">⑤ 简报 / 续话 / 打断</text>
+<path d="M 1040 186 Q 1190 414 1040 642" fill="none" stroke="#7d8590" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+<rect x="998" y="393" width="84" height="20" rx="4" fill="#0f1419" opacity="0.92"/>
+<text x="1040" y="408" fill="#8b949e" font-size="12" text-anchor="middle">⑤ 接管指令</text>
+<path d="M 690 900 L 690 828" fill="none" stroke="#7d8590" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+<rect x="672" y="843" width="36" height="20" rx="4" fill="#0f1419" opacity="0.92"/>
+<text x="690" y="858" fill="#8b949e" font-size="12" text-anchor="middle">读写</text>
+<path d="M 470 186 Q 210 507 470 828" fill="none" stroke="#7d8590" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+</svg>
