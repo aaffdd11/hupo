@@ -100,3 +100,11 @@ sudo chown -R "$(id -un):$(id -gn)" "$TARGET" || exit 1
 
 echo "✅ 完成。站点：https://hupo.stalkerai.cn"
 echo "   构建指纹：$BUILD_ID（服务端会据此通知在线客户端刷新）"
+
+# ── 入库推送（主人的规则：所有系统级修改都必须推 GitHub）──────────
+# 推送失败不阻断部署（界面已经在线上，别因为网络问题装傻），
+# 但改动已在本地提交 —— 任何一次后续成功推送都会补齐。
+echo "▶ 入库推送：提交并推送到 GitHub"
+if ! "$ROOT/scripts/push-changes.sh" "deploy(web): build $BUILD_ID"; then
+  echo "  ⚠ GitHub 推送失败 —— 改动已在本地提交，下次成功推送会自动补齐。"
+fi
