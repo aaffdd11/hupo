@@ -28,28 +28,59 @@ TARGET="/var/www/hupo"
 export PATH="${FLUTTER_BIN:-$HOME/sdk/flutter/bin}:$PATH"
 command -v flutter >/dev/null || { echo "找不到 flutter，请设置 FLUTTER_BIN"; exit 1; }
 
+# ── 前置检查（两条，都是"越晚做代价越大"的类型）─────────────────────
+# ① 磁盘：构建产物 + .dart_tool 很吃盘（40G 已用 72%）。
+#    装到一半没空间，比不部署更糟 —— 站点会半新半旧。
+_free_pct=$(df -P "$ROOT" | awk 'NR==2{gsub(/%/,"",$5); print 100-$5}')
+case "${_free_pct:-}" in ''|*[!0-9]*) _free_pct=100 ;; esac
+if [ "$_free_pct" -lt 12 ]; then
+  echo "✗ 磁盘可用只剩 ${_free_pct}%（<12%）。先清盘再部署。"
+  exit 1
+fi
+
+# ② 构建**不许**在 concierge-core 的 cgroup 里跑。
+#    实测：1 个活跃会话（68+172MB）+ 一次构建（Flutter 工具链 ~846MB）= 1086MB > 1024MB 上限 ⇒ 必然 OOM；
+#    近 7 天 4 次 OOM 的受害者**每次都是它自己起的 dart 前端编译器**。
+#    这里探一下 build.slice 能不能用；不能用就退回原地 —— 部署不能因为"优化"而失败。
+BUILD_SCOPE=()
+if [ "${HUPO_NO_BUILD_SLICE:-0}" != "1" ] && command -v systemd-run >/dev/null 2>&1 && \
+   sudo -n systemd-run --scope --quiet --collect --slice=build.slice \
+     --uid=deploy --gid=deploy -p MemoryMax=2G -- true 2>/dev/null; then
+  BUILD_SCOPE=(sudo -n systemd-run --scope --quiet --collect --slice=build.slice \
+    --uid=deploy --gid=deploy -p MemoryMax=2G -p CPUQuota=300% -p CPUWeight=20 -p IOWeight=20 --)
+  echo "  ▶ 构建跑在 build.slice（2G 内存 / 300% CPU / 低权重），不跟主人的对话抢资源"
+else
+  echo "  ⚠ build.slice 不可用，构建仍在当前 cgroup 里跑（会跟主人的对话抢内存与 CPU）"
+fi
+run() { "${BUILD_SCOPE[@]}" "$@"; }
+
 if [ "${HUPO_DEPLOY_ANYWAY:-0}" = "1" ]; then
   echo "  ⚠⚠ HUPO_DEPLOY_ANYWAY=1：跳过静态分析与测试闸门 —— 出了问题自己担。"
   echo ""
 else
   echo "▶ 静态分析（硬闸）"
-  if ! (cd "$APP" && flutter analyze); then
+  if ! (cd "$APP" && run flutter analyze); then
     echo ""
     echo "✗ 静态分析没过。编译都不过的东西不上线 —— 先把它弄干净。"
     exit 1
   fi
 
   echo "▶ 单元测试（硬闸：协议 / 状态机 / 时间线不变量）"
-  if ! (cd "$APP" && flutter test test/unit); then
+  if ! (cd "$APP" && run flutter test test/unit); then
     echo ""
     echo "✗ 单元测试没过。这层守的是协议和状态机 —— 它坏了是真的坏，不部署。"
     exit 1
   fi
 
-  echo "▶ 界面测试（提示：不阻断）"
-  if ! (cd "$APP" && flutter test test/widget); then
+  echo "▶ 界面测试（提示：不阻断，最多等 ${WIDGET_TEST_TIMEOUT:-180} 秒）"
+  # ⚠ 必须带超时。这套界面测试会**挂住**（转圈动画 + 并发跑多个文件时
+  #   互相饿死 CPU，实测跑过 17 分钟还没结束）。而"不阻断"这个承诺，
+  #   遇上挂住就失效了 —— 脚本永远走不到构建那一步，主人屏幕上什么都不变。
+  #   跑不完就当失败处理：照样部署，靠 browser-check 看屏幕。
+  if ! timeout "${WIDGET_TEST_TIMEOUT:-180}" \
+      bash -c "cd '$APP' && ${BUILD_SCOPE[*]:-} flutter test test/widget"; then
     echo ""
-    echo "  ⚠ 界面测试有失败。"
+    echo "  ⚠ 界面测试有失败或跑不完（超时）。"
     echo "    它们断言的是**布局**（坐标 / 控件 key / 哪块贴顶）——"
     echo "    界面一重构本来就会变，所以**不阻断部署**。"
     echo "    但别当没看见：确认不是真坏了 ——"
@@ -69,7 +100,7 @@ echo "▶ 构建 Web（release，不带 Service Worker）｜构建指纹 $BUILD_
 # --pwa-strategy=none 关掉 Service Worker：
 # 否则浏览器会一直用缓存的旧 main.dart.js，部署了新版本用户也看不到。
 # 开发期必须关；上线稳定后再考虑打开（那时要配合版本化资源名）。
-if ! (cd "$APP" && flutter build web --release --pwa-strategy=none --dart-define=HUpo_BUILD_ID="$BUILD_ID"); then
+if ! (cd "$APP" && run flutter build web --release --pwa-strategy=none --dart-define=HUpo_BUILD_ID="$BUILD_ID"); then
   echo "✗ 构建失败，没有部署。线上仍是上一版（宁可不变，也不要变坏）。"
   exit 1
 fi
@@ -88,7 +119,13 @@ node "$ROOT/scripts/inject-sw-cleanup.mjs" "$APP/build/web/index.html" || exit 1
 
 echo "▶ 部署到 $TARGET"
 sudo mkdir -p "$TARGET" || exit 1
-sudo rsync -a --delete "$APP/build/web/" "$TARGET/" || exit 1
+# ⚠ `--exclude=/apps/` 是**安全线**，不是优化，别删。
+#   rsync 的 --delete 会删掉目标端"多余"的文件与目录。制品目录（小程序的 H5）一旦落在这棵树里，
+#   每一次常规部署都会把它整棵抹掉 —— 而且**没有任何报错**（rsync 成功、构建成功、服务正常），
+#   主人看到的是"小程序莫名其妙不见了"。更糟的是它同时抹掉了"上一版制品长什么样"，
+#   于是防篡改在这个仓库里从第一天起就不可能实现。
+#   制品最终要搬到 /var/lib/hupo-apps（独立 origin），这行是过渡期的保险。
+sudo rsync -a --delete --exclude=/apps/ "$APP/build/web/" "$TARGET/" || exit 1
 
 # 把指纹写到站点根目录：服务端盯着这个文件，一变就通知在线客户端刷新自己。
 # ⚠ 必须在 rsync **之后**写 —— rsync 带 --delete，写在前面会被删掉。
@@ -97,6 +134,12 @@ sudo rsync -a --delete "$APP/build/web/" "$TARGET/" || exit 1
 printf '{"buildId":"%s","builtAt":"%s"}\n' "$BUILD_ID" "$(date -Iseconds)" \
   | sudo tee "$TARGET/client-build.json" >/dev/null || exit 1
 sudo chown -R "$(id -un):$(id -gn)" "$TARGET" || exit 1
+
+# 部署审计：谁、什么时候、部署了哪一版、有没有跳过闸门。
+# 为什么要有：HUPO_DEPLOY_ANYWAY=1 能一次绕掉两个硬闸，之前**不留任何痕迹**。
+printf '%s build=%s anyway=%s free=%s%%\n' "$(date -Iseconds)" "$BUILD_ID" \
+  "${HUPO_DEPLOY_ANYWAY:-0}" "${_free_pct:-?}" \
+  | sudo tee -a "$ROOT/services/core/data/deploy.log" >/dev/null 2>&1 || true
 
 echo "✅ 完成。站点：https://hupo.stalkerai.cn"
 echo "   构建指纹：$BUILD_ID（服务端会据此通知在线客户端刷新）"

@@ -194,7 +194,7 @@ test('手动收口：正在续做的活能收；收过的不行；不存在的�
   d.shutdown();
 });
 
-test('开机不让一堆活同时开工（一次最多接着做 2 件）', () => {
+test('开机不让一堆活同时开工（**全进程合计** 1 件，不是每会话 2 件）', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-cap-'));
   seedOrphan(dir, { taskId: 't1', text: '第一件事' });
   const store = new Store(dir);
@@ -204,13 +204,75 @@ test('开机不让一堆活同时开工（一次最多接着做 2 件）', () =>
 
   const { d, agent } = boot(dir);
   const log = d.conversation('c1').log;
-  assert.equal(log.filter((e) => e.type === 'task/resumed').length, 2, '一次最多接手 2 件');
-  assert.equal(agent.prompts.length, 2);
-  // 剩下的没被放弃，只是等下次开机接着做
+  // ⚠ 旧实现是"每会话 2 件"（`#reconcileTasks` 按会话调 + slice(0,2)），
+  //   10 个会话有残留任务时开机就起 20 个 agent（每个 ~172MB）⇒ 1G 顶爆。
+  assert.equal(log.filter((e) => e.type === 'task/resumed').length, 1, '全进程合计只接手 1 件');
+  assert.equal(agent.prompts.length, 1);
+  // 没轮到的**不能收口**（收口就等于放弃），也不能假装在做 —— 等下次（或闸门重试）
   assert.equal(
     log.filter((e) => e.type === 'task/completed').length,
     0,
     '没轮到的不能收口（收口就等于放弃）',
   );
+  assert.equal(log.filter((e) => e.type === 'task/resume-excused').length, 0, '还没失败，不该有豁免');
   d.shutdown();
+});
+
+test('★内存/预算闸拦下时不烧活：既不续做、也不收口，等一会儿再看', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-gated-'));
+  seedOrphan(dir);
+
+  const runtime = fakeRuntime();
+  // 把预算压成 0 ⇒ 必然被闸拦下（等价于"内存占用过高"那条分支）
+  const d = new Dispatcher({ ...cfg(dir), maxResumeTotal: 0 }, new Store(dir), { runtime });
+  const log = d.conversation('c1').log;
+
+  assert.equal(log.filter((e) => e.type === 'task/resumed').length, 0, '被闸拦下，不续做');
+  assert.equal(
+    log.filter((e) => e.type === 'task/completed').length,
+    0,
+    '⚠ 也不能收口 —— 收口就等于把主人的活丢掉（这正是"内存一紧张就丢活"的坑）',
+  );
+  assert.equal(runtime.agent('c1').prompts.length, 0, '不该起处理层');
+  d.shutdown();
+});
+
+test('★被机器杀掉不算活的问题：resume-excused 不消耗重试额度', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-excused-'));
+  const store = seedOrphan(dir);
+  // 续做过 3 次（本该"试太多次就认了"），但其中 3 次都是**被机器杀掉**（OOM/上游）
+  for (let i = 1; i <= 3; i++) {
+    store.append('c1', { type: 'task/resumed', seq: 5 + i, taskId: 't1', attempts: i, at: Date.now() - 1000 * i });
+    store.append('c1', { type: 'task/resume-excused', seq: 10 + i, taskId: 't1', reason: 'agent-exit:null', at: Date.now() - 900 * i });
+  }
+
+  const { d, agent } = boot(dir);
+  const log = d.conversation('c1').log;
+  assert.equal(
+    log.filter((e) => e.type === 'task/resumed').length,
+    4,
+    '三次都是机器打断的 ⇒ 不该认输，应该再试一次（否则主人收到的是假话）',
+  );
+  assert.equal(agent.prompts.length, 1);
+  assert.equal(log.filter((e) => e.type === 'task/completed').length, 0);
+  d.shutdown();
+});
+
+test('降级启动（CONCIERGE_SKIP_RESUME=1）不续做，但要收口、不能挂着', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-degraded-'));
+  seedOrphan(dir);
+
+  process.env.CONCIERGE_SKIP_RESUME = '1';
+  try {
+    const { d, agent } = boot(dir);
+    const log = d.conversation('c1').log;
+    assert.equal(log.filter((e) => e.type === 'task/resumed').length, 0, '降级启动不续做');
+    assert.equal(agent.prompts.length, 0, '不起了处理层');
+    const done = log.filter((e) => e.type === 'task/completed');
+    assert.equal(done.length, 1, '但必须收口 —— 否则界面一直显示"还有件事在处理"');
+    assert.equal(done[0].reason, 'degraded-start');
+    d.shutdown();
+  } finally {
+    delete process.env.CONCIERGE_SKIP_RESUME;
+  }
 });

@@ -67,9 +67,13 @@ Widget _wrap(Widget child) => MaterialApp(
     );
 
 /// 等异步取数落地（不能用 pumpAndSettle：转圈是无限动画）。
+///
+/// 帧数给够还有第二个原因：加城市是 push 一个新页面再 pop 回来，
+/// 页面切换动画要 300ms —— 没走完时旧页面的列表项还挂在树上，
+/// 同一个名字会被数出两个（踩过）。
 Future<void> _settle(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.pump(const Duration(milliseconds: 30));
+  for (var i = 0; i < 14; i++) {
+    await tester.pump(const Duration(milliseconds: 60));
   }
 }
 
@@ -105,7 +109,7 @@ void main() {
     await tester.tap(find.byKey(const Key('weather-result-29.500,120.904')));
     await _settle(tester);
 
-    expect(find.text('新昌'), findsOneWidget);
+    expect(find.byKey(const Key('weather-card-29.500,120.904')), findsOneWidget);
     expect(find.text('2 个城市 · 未来 7 天'), findsOneWidget);
     expect(store.saved?.map((c) => c.name), containsAll(['嵊州', '新昌']));
   });

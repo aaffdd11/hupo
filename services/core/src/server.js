@@ -162,9 +162,12 @@ async function handleHttp(req, res, dispatcher, clientBuild, serverInfo, auth) {
 
   // ① 客户端启动时问"要不要登录、我现在算不算登录了"
   if (req.method === 'GET' && url.pathname === '/api/auth') {
+    // ⚠ `required` 现在**恒为 true**：没设口令时服务端不再放行，而是回 503（见下面 fail-closed）。
+    //   所以客户端永远该显示登录页；`needsSetup` 用来告诉它"服务端还没设口令，去设置"。
     return json(200, {
-      required: auth.active,
-      authenticated: auth.active ? Boolean(auth.verifyToken(tokenFromRequest(req))) : true,
+      required: true,
+      needsSetup: !auth.hasPassword,
+      authenticated: auth.active ? Boolean(auth.verifyToken(tokenFromRequest(req))) : false,
     });
   }
 
@@ -202,7 +205,21 @@ async function handleHttp(req, res, dispatcher, clientBuild, serverInfo, auth) {
   }
 
   // ── 从这里往下全部要令牌 ─────────────────────────────────
-  if (auth.active && !auth.verifyToken(tokenFromRequest(req))) {
+  //
+  // ⚠ 这是 **fail-closed**：口令没设 / `data/auth.json` 被删 / 开关被关，
+  //   一律按安全默认**拒绝**，不是放行。
+  //   旧写法是 `auth.active && !verify`，而 `auth.active = enabled && hasPassword` ——
+  //   于是"忘了设口令"= 全部 API 裸奔（读全部对话 / 以主人身份下指令 / 读调试数据 /
+  //   实时读所有消息，四条路同时打开），而这条链路的尽头是一个挂着**免密 sudo** 的 agent。
+  //   这个洞在本项目**真实出现过**（v6 附十就是补它的）。
+  if (!auth.active) {
+    return json(503, {
+      error: 'auth-not-configured',
+      message: '服务端没有设置访问口令，已按安全默认拒绝全部请求。请先在服务端设置口令。',
+      needsSetup: true,
+    });
+  }
+  if (!auth.verifyToken(tokenFromRequest(req))) {
     return json(401, { error: 'unauthorized' });
   }
 
@@ -332,10 +349,20 @@ async function handleHttp(req, res, dispatcher, clientBuild, serverInfo, auth) {
   json(404, { error: 'not found' });
 }
 
-/** 取客户端 IP（走 nginx 时看 X-Forwarded-For 的第一跳）。 */
+/**
+ * 取客户端 IP —— **取最后一跳**。
+ *
+ * ⚠ 旧写法取第一跳（`split(',')[0]`），而 nginx 的 `$proxy_add_x_forwarded_for`
+ * 会把**客户端自带的值前置**、把真实对端追加在最后 —— 于是拿到的是**攻击者自己填的字符串**。
+ * 攻击者每次请求换一个 `X-Forwarded-For: 1.2.3.4`，限速器每次都看到"新 IP"，
+ * "5 次锁 15 分钟"当场失效，公网口令框变成可无限爆破的靶子。
+ */
 function clientIp(req) {
   const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff) return xff.split(',')[0].trim();
+  if (typeof xff === 'string' && xff) {
+    const hops = xff.split(',').map((s) => s.trim()).filter(Boolean);
+    if (hops.length) return hops[hops.length - 1];
+  }
   return req.socket?.remoteAddress ?? 'unknown';
 }
 

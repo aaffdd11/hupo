@@ -1,0 +1,33 @@
+--- /etc/nginx/conf.d/hupo-stalkerai.conf.bak.20260916-024952	2026-09-13 17:39:02.949618597 +0800
++++ /etc/nginx/conf.d/hupo-stalkerai.conf	2026-09-16 02:49:52.415472554 +0800
+@@ -11,14 +11,20 @@
+     index index.html;
+     charset utf-8;
+ 
++    server_tokens off;
++    include snippets/hupo-security-headers.conf;
++
+     location = /index.html {
+         add_header Cache-Control "no-cache, must-revalidate";
++        include snippets/hupo-security-headers.conf;
+     }
+     location = /flutter_service_worker.js {
+         add_header Cache-Control "no-cache, must-revalidate";
++        include snippets/hupo-security-headers.conf;
+     }
+     location /assets/ {
+         add_header Cache-Control "public, max-age=2592000, immutable";
++        include snippets/hupo-security-headers.conf;
+     }
+     # 服务端 API（systemd: concierge-core，127.0.0.1:8091）
+     # 注意：必须放在 location / 之前，否则会被静态兜底吃掉
+@@ -30,7 +36,8 @@
+         proxy_set_header Connection "upgrade";
+         proxy_set_header Host $host;
+         proxy_set_header X-Real-IP $remote_addr;
+-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
++        proxy_set_header X-Forwarded-For $remote_addr;
++        include snippets/hupo-security-headers.conf;
+         proxy_set_header X-Forwarded-Proto $scheme;
+         # 流式：关缓冲，否则事件会被攒着不发
+         proxy_buffering off;

@@ -14,6 +14,8 @@
 // 产品纪律一条没变（见 packages/protocol/PROTOCOL.md）：
 //   不是一对一 / 每段都是整句 / 绝不沉默 / 主动开口是允许的。
 
+import fs from 'node:fs';
+
 import { AgentRuntime } from './agent-runtime.js';
 import { DebugAgent, ruleFindings, stuckTasks } from './debug-agent.js';
 import { comfortFindings, personalityBlock, PersonalityStore } from './personality.js';
@@ -94,8 +96,48 @@ function parseLooseJson(text) {
  */
 const RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
 const MAX_RESUME_ATTEMPTS = 3;
-/** 开机最多同时接着做几件：一次起一堆 agent 进程（每个 ~190MB）会把服务顶爆。 */
-const MAX_RESUME_AT_BOOT = 2;
+/**
+ * 开机最多接着做几件 —— **全进程合计**，不是每会话。
+ *
+ * ⚠ 旧实现是 `slice(0, 2)`，而 `#reconcileTasks` 是**按会话**调的：
+ * 于是"最多 2 件"实际是"每个会话最多 2 件" —— 10 个会话有残留任务时开机会起 20 个 agent，
+ * 每个 ~172MB，直接把 1G 顶爆。拍板第 10 条改成全进程合计 1 件。
+ */
+const MAX_RESUME_TOTAL = Number(process.env.CONCIERGE_MAX_RESUME_TOTAL || 1);
+/** 续做前看内存：占用比 ≥ 这个值就不续做（过一会儿再看）。与准入闸同阈值。 */
+const MEMORY_GATE_RATIO = Number(process.env.CONCIERGE_MEMORY_GATE || 0.75);
+/** 被闸拦下时隔多久再看一次 —— 不烧活、也不假装在做。 */
+const RESUME_RETRY_MS = Number(process.env.CONCIERGE_RESUME_RETRY_MS || 5 * 60 * 1000);
+/** 重试次数上限：12 × 5 分钟 = 1 小时，仍在 6 小时窗口内。 */
+const RESUME_RETRY_MAX = 12;
+
+/**
+ * 本进程所在 cgroup 的内存占用比（0~1）。读不到 / 没有限额 ⇒ 返回 0（不拦）。
+ *
+ * 为什么读 cgroup 而不是 `process.memoryUsage()`：真正会顶爆 1G 的是**整个 cgroup**
+ * （调度器 + 所有 agent + 构建），单个 Node 进程的 RSS 看不出这件事。
+ * 为什么限定"本服务自己的 cgroup"：跑测试或手工起服务时进程不在 concierge 的 cgroup 里，
+ * 那时的比例毫无意义，拿它拦续做只会让行为随机。
+ */
+export function memoryPressure() {
+  try {
+    const line = fs
+      .readFileSync('/proc/self/cgroup', 'utf8')
+      .split('\n')
+      .find((l) => l.startsWith('0::'));
+    const rel = line ? line.slice(3).trim() : '';
+    if (!/concierge/i.test(rel)) return 0;
+    const base = `/sys/fs/cgroup${rel}`;
+    const cur = Number(fs.readFileSync(`${base}/memory.current`, 'utf8').trim());
+    const maxRaw = fs.readFileSync(`${base}/memory.max`, 'utf8').trim();
+    if (!Number.isFinite(cur) || maxRaw === 'max') return 0;
+    const max = Number(maxRaw);
+    if (!Number.isFinite(max) || max <= 0) return 0;
+    return cur / max;
+  } catch {
+    return 0; // 读不到就不拦 —— 宁可少拦一次，也不要因为读文件失败就不续做
+  }
+}
 
 /**
  * 续做的开场白：**把主人的原话再给一遍**。
@@ -137,6 +179,14 @@ export class Dispatcher {
     this.seeded = new Set();
     /** @type {Map<string, string>} 会话 → 正在续做的那件任务（这一轮结束要收口） */
     this.resumed = new Map();
+    /** 本进程已经派出去了几件续做（**全进程合计**，见 MAX_RESUME_TOTAL） */
+    this._resumedTotal = 0;
+    /** @type {Map<string, number>} 会话 → 被内存/预算闸拦下后重试过几次 */
+    this._resumeRetry = new Map();
+    /** @type {Set<NodeJS.Timeout>} 重试定时器（关服务时要清掉） */
+    this._resumeTimers = new Set();
+    /** 降级启动（跳过续做）时为 true —— 见构造器里的说明 */
+    this.degraded = false;
 
     this.runtime = runtime ?? new AgentRuntime(cfg);
     /** agent 进程状态的推送定时器（开发者模式才真正算） */
@@ -152,11 +202,26 @@ export class Dispatcher {
     this._debugCooldown = new Map();
 
     if (store) {
+      // 降级启动：上次是被 OOM 打断的（或正处在崩溃环里）⇒ **不续做**，只服务对话。
+      // 不这么做的话闭环是：起不来 → RestartSec 后重启 → 对账把同一件重活重派 → 又 OOM。
+      // 由 hupo-crash-guard 决定（5 分钟内 ≥3 次启动、且上次日志里有 oom-kill）。
+      const degraded = process.env.CONCIERGE_SKIP_RESUME === '1';
+      this.degraded = degraded;
+      if (degraded) {
+        console.warn('[调度器] 降级启动：跳过续做（CONCIERGE_SKIP_RESUME=1）');
+      }
       for (const { conversationId } of store.list()) {
         const conv = restoreConversation(conversationId, store);
         this.conversations.set(conversationId, conv);
-        // 启动时对账：上次被打断的任务要收口，不能永远挂着（见 #reconcileTasks）
-        this.#reconcileTasks(conv);
+        if (degraded) {
+          // 不续做，但也不能把"还有件事在处理"永远挂着 —— created/completed 必须配对
+          for (const t of this.#openTasks(conv)) {
+            conv.emit({ type: 'task/completed', taskId: t.taskId, reason: 'degraded-start' });
+          }
+        } else {
+          // 启动时对账：上次被打断的任务要收口，不能永远挂着（见 #reconcileTasks）
+          this.#reconcileTasks(conv);
+        }
       }
     }
   }
@@ -277,8 +342,44 @@ export class Dispatcher {
       }
     }
 
-    // 只挑最近的几件接着做（开机一瞬间起一堆 agent 进程会把内存顶爆）
-    const picks = resumable.sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).slice(0, MAX_RESUME_AT_BOOT);
+    // 只挑最近的几件接着做（开机一瞬间起一堆 agent 进程会把内存顶爆）。
+    // 两道闸：① 全进程合计预算（**不是每会话**）② 内存占用比。
+    // 预算与阈值可被 cfg 覆盖（测试用；生产走常量 / 环境变量）
+    const budget = Number(this.cfg.maxResumeTotal ?? MAX_RESUME_TOTAL);
+    const gate = Number(this.cfg.memoryGateRatio ?? MEMORY_GATE_RATIO);
+    const pressure = memoryPressure();
+    const room = Math.max(0, budget - this._resumedTotal);
+    let gated = '';
+    let picks = [];
+    if (room <= 0) {
+      gated = `全局续做预算已用完（${budget} 件）`;
+    } else if (pressure >= gate) {
+      gated = `内存占用 ${Math.round(pressure * 100)}% ≥ ${Math.round(gate * 100)}%`;
+    } else {
+      picks = resumable.sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).slice(0, room);
+    }
+
+    // 被闸拦下的活：**不烧掉、也不假装在做** —— 过一会儿再看一次（有次数上限）。
+    // 这样既不会在内存紧张时把服务顶爆，也不会因为"开机那一刻恰好很满"就丢掉主人的活。
+    if (gated && resumable.length) {
+      const tried = this._resumeRetry.get(conv.id) ?? 0;
+      if (tried < RESUME_RETRY_MAX) {
+        this._resumeRetry.set(conv.id, tried + 1);
+        const timer = setTimeout(() => this.#reconcileTasks(conv), RESUME_RETRY_MS);
+        timer.unref?.();
+        this._resumeTimers.add(timer);
+        devStep(conv, '对账', 'info', {
+          detail: `暂不续做（${gated}），${Math.round(RESUME_RETRY_MS / 60000)} 分钟后再看一次`,
+        });
+      } else {
+        // 重试也超了：如实收口，不能让主人一直等一件不会自己回来的事
+        for (const t of resumable) {
+          conv.emit({ type: 'task/completed', taskId: t.taskId, reason: 'deferred' });
+          abandoned += 1;
+          recentAbandoned += 1;
+        }
+      }
+    }
 
     if (picks.length) {
       // 先说一句：主人得知道这件事**没有烂在那儿**
@@ -338,9 +439,28 @@ export class Dispatcher {
     return [...open.values()];
   }
 
-  /** 这件活已经续做过几次（防止"做不成"的活无限重派）。 */
+  /**
+   * 这件活**真正**续做过几次（防止"做不成"的活无限重派）。
+   *
+   * ⚠ 要减掉 `resume-excused`：进程被 OOM 杀掉、上游挂了 —— 这些**不是活的问题**，
+   * 不该算进那 3 次额度。不然主人收到的是"可能没做完"，
+   * 而真相是机器把它杀了两遍（实测踩过的假话）。
+   */
   #resumeAttempts(conv, taskId) {
-    return conv.log.filter((e) => e.type === 'task/resumed' && e.taskId === taskId).length;
+    const resumed = conv.log.filter((e) => e.type === 'task/resumed' && e.taskId === taskId).length;
+    const excused = conv.log.filter((e) => e.type === 'task/resume-excused' && e.taskId === taskId).length;
+    return Math.max(0, resumed - excused);
+  }
+
+  /**
+   * 这一轮失败**不是活的问题** ⇒ 不烧续做额度。
+   * 由两条路径调用：agent 进程退出/OOM（`exit`）、prompt 被拒（`#fail`）。
+   */
+  #excuseResume(conv, reason) {
+    const taskId = this.resumed.get(conv.id);
+    if (!taskId) return;
+    conv.emit({ type: 'task/resume-excused', taskId, reason, at: Date.now() });
+    devStep(conv, '续做', 'info', { detail: `失败豁免（${reason}）：不消耗重试额度` });
   }
 
   /**
@@ -353,6 +473,7 @@ export class Dispatcher {
   #resume(conv, task) {
     conv.emit({ type: 'task/resumed', taskId: task.taskId, attempts: task.attempts + 1 });
     this.resumed.set(conv.id, task.taskId);
+    this._resumedTotal += 1;
     const agent = this.#wire(conv);
     agent.prompt(this.#withRecap(conv, resumePrompt(task))).catch((err) => this.#fail(conv, err));
     devStep(conv, '续做', 'start', {
@@ -455,6 +576,9 @@ export class Dispatcher {
     });
 
     agent.on('exit', ({ code, wasReady, stderrTail }) => {
+      // ⚠ 先豁免续做额度、再收口：进程被杀**不是活的问题**（OOM / 崩溃），
+      //   不该消耗"试三次就放弃"的额度 —— 否则主人收到的是假话。
+      this.#excuseResume(conv, `agent-exit:${code ?? 'signal'}`);
       // 进程死了：这一轮必须收口，不能让用户等一个不会再来的答案
       const cur = translator.forceClose('failed');
       if (cur) this.#legalClose(conv, FAILED_LINE);
@@ -505,6 +629,8 @@ export class Dispatcher {
     const resumedId = this.resumed.get(conv.id);
     if (resumedId && resumedId !== info.taskId) {
       this.resumed.delete(conv.id);
+      // 交回分配器 ⇒ 释放全局续做名额（否则名额只减不加，后面的活永远等不到）
+      this._resumedTotal = Math.max(0, this._resumedTotal - 1);
       conv.emit({ type: 'task/completed', taskId: resumedId, reason: 'completed' });
     }
     this.#watch(conv);
@@ -610,6 +736,7 @@ export class Dispatcher {
   }
 
   #fail(conv, err) {
+    this.#excuseResume(conv, 'prompt-failed');
     devStep(conv, 'turn', 'error', { detail: String(err?.message ?? err).slice(0, 160) });
     const cur = this.translators.get(conv.id)?.forceClose('failed');
     if (!cur) this.#legalClose(conv, FAILED_LINE);
@@ -667,6 +794,8 @@ export class Dispatcher {
       clearTimeout(info.deadlineTimer);
     }
     this.turns.clear();
+    for (const t of this._resumeTimers ?? []) clearTimeout(t);
+    this._resumeTimers?.clear();
     await this.runtime.shutdown();
   }
 
