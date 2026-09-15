@@ -85,12 +85,42 @@ function parseLooseJson(text) {
   }
 }
 
+/**
+ * 被打断的活**接着做完**的边界（见 #reconcileTasks）。
+ *
+ * 为什么要有上限：处理层可以被无限重启，但一件活不能无限重派 ——
+ * 试三次还做不成，说明它不是"被打断"，是**根本做不到**（缺权限、缺信息、
+ * 或者主人要的东西本身有问题）。那时候要如实收口，不能假装还在做。
+ */
+const RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
+const MAX_RESUME_ATTEMPTS = 3;
+/** 开机最多同时接着做几件：一次起一堆 agent 进程（每个 ~190MB）会把服务顶爆。 */
+const MAX_RESUME_AT_BOOT = 2;
+
+/**
+ * 续做的开场白：**把主人的原话再给一遍**。
+ *
+ * 为什么不用"你刚才做到哪了"这种问法：处理层是**无状态**的（它读的是工作区里
+ * 真实的文件和状态），所以不需要恢复内存 —— 只要原话给它，它自己会接着干。
+ * 这也是为什么事件记录里必须存**原文**（旧记录只存了 24 字的标题）。
+ */
+function resumePrompt(task) {
+  return [
+    `【接着做完】你之前接了下面这件事，做到一半被打断了（这是第 ${task.attempts + 1} 次接手）。`,
+    `主人的原话：「${task.prompt}」`,
+    '接着把它做完。做完直接说结果 —— 用你自己的话，一句结论，不要复述这段说明。',
+    '如果这件事要改代码、改系统、重启服务：先把改动做完并验证生效，再回来说结果。',
+  ].join('\n');
+}
+
 export class Dispatcher {
   /**
    * @param {object} cfg
    * @param {import('./store.js').Store} [store] 给了就落盘，重启后记录还在
+   * @param {{ runtime?: import('./agent-runtime.js').AgentRuntime }} [opts]
+   *   runtime 可注入（测试用：不用真起 dsh 进程）
    */
-  constructor(cfg, store = null) {
+  constructor(cfg, store = null, { runtime } = {}) {
     this.cfg = cfg;
     this.store = store;
     /** @type {Map<string, Conversation>} */
@@ -105,8 +135,10 @@ export class Dispatcher {
     this.lastUserText = new Map();
     /** @type {Set<string>} 已经喂过"前情背景"的会话（每个进程生命周期只喂一次） */
     this.seeded = new Set();
+    /** @type {Map<string, string>} 会话 → 正在续做的那件任务（这一轮结束要收口） */
+    this.resumed = new Map();
 
-    this.runtime = new AgentRuntime(cfg);
+    this.runtime = runtime ?? new AgentRuntime(cfg);
     /** agent 进程状态的推送定时器（开发者模式才真正算） */
     this._telemetryTimer = null;
     /**
@@ -198,37 +230,70 @@ export class Dispatcher {
   }
 
   /**
-   * 重启对账：把**永远挂着的任务**收口。
+   * 重启对账：**被打断的活接着做完，而不是宣布失败**。
    *
-   * 为什么必须有：界面上那句"还有件事在处理"是客户端**从事件记录重建**的
-   *（`task/created` 建、`task/completed` 消）。如果整个服务重启 —— agent 连同
-   * 那件正在做的活一起被杀 —— 就没人补 `task/completed` 了，
-   * 于是这句话会**永远挂在页面上**，用户一直等一件根本不会再回来的事。
+   * ⚠ 2026-09-15 纠偏。主人原话：「接收到系统修改任务，并没有修改系统。」
    *
-   * 2026-09-14 真实事故：agent 改客户端改到一半重启了服务，任务挂着没收口，
-   * 主人半小时后还在页面看到"还有件事在处理"，只好来问"现在在发生什么"。
+   * 旧行为（错的）：服务一重启，正在做的那件事就报一句"我断了，可能没做完"，
+   * 然后**活真的没了**。实测：15:02 主人让它做一个天气小程序，15:02:42 它说
+   * "我单独拿去做"，15:08 服务重启（为了部署别的改动），那件活当场蒸发 ——
+   * 主人要的东西一样没做出来，只收到一句"我断了"。
    *
-   * 对账的两条原则：
-   *   · **一定收口** —— 宁可少显示一条"在处理"，也不能让用户等一个不会来的结果
-   *   · **只对最近的说话** —— 几天前断掉的事就没必要突然冒出来说一句
+   * 根因：**活的命挂在处理层进程上**。分配器（永续）只在记录里写了
+   * "有这么一件事"，没有任何"接着做"的机制。
+   *
+   * 现在按架构分工来：
+   *   · **分配器永续** —— 它记得每一件没做完的活（原话、试过几次）
+   *   · **处理层可死可重启** —— 进程没了不要紧，分配器重新派一个新的去做
+   *   · **做完交回分配器** —— 那一轮结束就收口（见 #onTurnEnd）
+   *
+   * 只有三种情况才真放弃：太久（6 小时）、试太多次（3 次）、或者连原话都没存下来。
+   * 放弃也要收口 —— 界面上那句"还有件事在处理"是客户端从事件记录重建的，
+   * 配对不能破（否则用户一直等一件不会回来的事）。
    */
   #reconcileTasks(conv) {
-    const open = new Map();
-    for (const e of conv.log) {
-      if (e.type === 'task/created') open.set(e.taskId, e);
-      else if (e.type === 'task/completed') open.delete(e.taskId);
-    }
-    if (!open.size) return;
+    const open = this.#openTasks(conv);
+    if (!open.length) return;
 
-    let newest = 0;
-    for (const [taskId, e] of open) {
-      newest = Math.max(newest, e.at ?? 0);
-      conv.emit({ type: 'task/completed', taskId, reason: 'interrupted' });
-    }
-    devStep(conv, '对账', 'info', { detail: `收口 ${open.size} 件被打断的事` });
+    const now = Date.now();
+    const resumable = [];
+    let abandoned = 0;
+    let recentAbandoned = 0;
 
-    // 打断得不算久才值得说一句；陈年旧账悄悄清掉就行
-    if (Date.now() - newest < 6 * 60 * 60 * 1000) {
+    for (const t of open) {
+      const ageMs = now - (t.at ?? now);
+      const attempts = this.#resumeAttempts(conv, t.taskId);
+      const canResume =
+        ageMs <= RESUME_WINDOW_MS &&
+        attempts < MAX_RESUME_ATTEMPTS &&
+        String(t.prompt ?? '').trim();
+      if (canResume) {
+        resumable.push({ ...t, attempts });
+      } else {
+        // 真放弃：太久、试太多次、或者连"主人要什么"都没存下来
+        conv.emit({ type: 'task/completed', taskId: t.taskId, reason: 'interrupted' });
+        abandoned += 1;
+        if (ageMs <= RESUME_WINDOW_MS) recentAbandoned += 1;
+      }
+    }
+
+    // 只挑最近的几件接着做（开机一瞬间起一堆 agent 进程会把内存顶爆）
+    const picks = resumable.sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).slice(0, MAX_RESUME_AT_BOOT);
+
+    if (picks.length) {
+      // 先说一句：主人得知道这件事**没有烂在那儿**
+      const w = new MessageWriter(conv, {
+        messageId: newId('m'),
+        agent: 'dispatcher',
+        origin: 'proactive',
+        re: [],
+      });
+      w.chunk('deep', '对了，之前那件事我接着做完，完了跟你说。', false);
+      w.end();
+      for (const t of picks) this.#resume(conv, t);
+    }
+
+    if (recentAbandoned) {
       const w = new MessageWriter(conv, {
         messageId: newId('m'),
         agent: 'dispatcher',
@@ -241,6 +306,58 @@ export class Dispatcher {
       w.chunk('deep', '对了，之前那件事我断了，可能没做完。', false);
       w.end();
     }
+
+    devStep(conv, '对账', 'info', {
+      detail: `接着做 ${picks.length} 件 ｜ 放弃 ${abandoned} 件`,
+    });
+  }
+
+  /**
+   * 从事件记录里读出**还没做完的活** —— 这就是"分配器永续"的那份账。
+   *
+   * `prompt` 是主人的**原话**：旧记录里没有（那时只存了 24 字标题），
+   * 所以往回找这条任务之前最后一句 `user/echo` 兜底。
+   */
+  #openTasks(conv) {
+    const open = new Map();
+    let lastUserText = '';
+    for (const e of conv.log) {
+      if (e.type === 'user/echo') {
+        lastUserText = String(e.text ?? '');
+      } else if (e.type === 'task/created') {
+        open.set(e.taskId, {
+          taskId: e.taskId,
+          title: e.title ?? '',
+          at: e.at ?? null,
+          prompt: String(e.prompt ?? lastUserText ?? ''),
+        });
+      } else if (e.type === 'task/completed') {
+        open.delete(e.taskId);
+      }
+    }
+    return [...open.values()];
+  }
+
+  /** 这件活已经续做过几次（防止"做不成"的活无限重派）。 */
+  #resumeAttempts(conv, taskId) {
+    return conv.log.filter((e) => e.type === 'task/resumed' && e.taskId === taskId).length;
+  }
+
+  /**
+   * 把一件没做完的活**重新派给处理层**。
+   *
+   * 分配器永续、处理层可死可重启 —— 这就是两者之间那条线：
+   * 分配器记得"有这么一件事、主人是怎么说的、试过几次"，
+   * 处理层每次都是新进程，接着做靠的是**原话 + 工作区的真实状态**，不是内存。
+   */
+  #resume(conv, task) {
+    conv.emit({ type: 'task/resumed', taskId: task.taskId, attempts: task.attempts + 1 });
+    this.resumed.set(conv.id, task.taskId);
+    const agent = this.#wire(conv);
+    agent.prompt(this.#withRecap(conv, resumePrompt(task))).catch((err) => this.#fail(conv, err));
+    devStep(conv, '续做', 'start', {
+      detail: `第 ${task.attempts + 1} 次接手：${String(task.title).slice(0, 24)}`,
+    });
   }
 
   /** 手动收口一件任务（运维用；正常情况走对账）。 */
@@ -383,6 +500,13 @@ export class Dispatcher {
     if (info.escalated) {
       conv.emit({ type: 'task/completed', taskId: info.taskId });
     }
+    // 续做的那件活：这一轮结束 = 处理层把它交回分配器了 ⇒ 收口
+    //（用户那边的"还有件事在处理"必须消掉，不能挂着）
+    const resumedId = this.resumed.get(conv.id);
+    if (resumedId && resumedId !== info.taskId) {
+      this.resumed.delete(conv.id);
+      conv.emit({ type: 'task/completed', taskId: resumedId, reason: 'completed' });
+    }
     this.#watch(conv);
   }
 
@@ -466,6 +590,9 @@ export class Dispatcher {
       taskId,
       messageId: w.messageId,
       title,
+      // ⚠ 存**原话**：万一处理层半路被杀，分配器要能拿着这句话重新派一件活出去
+      //（只存 24 字标题是不够的 —— 实测丢过"未来 7 天"这种关键限定）
+      prompt: userText,
       at: Date.now(),
     });
   }

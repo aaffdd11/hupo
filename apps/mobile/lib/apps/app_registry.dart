@@ -11,10 +11,19 @@ import 'about_app.dart';
 import 'conversations_app.dart';
 import 'dev_mode_app.dart';
 import 'mini_app.dart';
+import 'weather_app.dart';
 
 /// 当前该摆在桌面上的应用。
 List<MiniApp> availableMiniApps(MiniAppEnv env) {
   final apps = <MiniApp>[
+    MiniApp(
+      id: 'weather',
+      name: '天气',
+      icon: Icons.wb_sunny_outlined,
+      color: const Color(0xFF3E8BD8),
+      description: '多城市未来 7 天预报',
+      build: (context) => const WeatherAppPage(),
+    ),
     if (env.transport != null)
       MiniApp(
         id: 'conversations',
