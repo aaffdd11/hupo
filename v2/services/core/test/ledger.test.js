@@ -16,6 +16,7 @@ import nodeOs from 'node:os';
 import nodePath from 'node:path';
 
 import { Store } from '../src/store.js';
+import { renderLedger } from '../src/ledger-text.js';
 import { Timeline } from '../src/timeline.js';
 import { TRASH_TTL_MS } from '../src/trash.js';
 import {
@@ -67,6 +68,31 @@ test('🔴 同一句话两次 ⇒ **逐字段 diff = 0**（时钟注入，不真
 
 test('回显是纯函数：同一个 fields 两次一模一样（主人看到的那句话不会飘）', () => {
   assert.equal(renderEcho(OK), renderEcho({ ...OK }));
+});
+
+test('🔴 D6.3 的正式判据：**同一句话隔 7 天问两次，逐字段 diff = 0**', () => {
+  // 不真等 7 天：时钟注入（契约 §五）。两句都是同一句原话，
+  // 抽出来的六个字段必须一模一样 —— 差别只允许出现在"什么时候记的"上。
+  const WEEK = 7 * 24 * 60 * 60 * 1000;
+  const first = bench({ now: () => AT, ids: ['a'] });
+  const later = bench({ now: () => AT + WEEK, ids: ['b'] });
+  const said = '上周装了三台空调，一台一千二，不含税';
+  const a = first.ledger.write(OK, { said });
+  const b = later.ledger.write(OK, { said });
+
+  for (const f of FIELDS) {
+    assert.deepEqual(a[f], b[f], `字段 ${f} 在 7 天之后变了 —— 那就是"同一句话记出两笔账"`);
+  }
+  assert.notEqual(a.at, b.at, '（负向对照：确实隔了 7 天，不是同一个时刻）');
+  assert.equal(a.said, b.said);
+});
+
+test('🔴 D6.10：同一笔账问两次 ⇒ 出口那段文字**一模一样**', () => {
+  const a = bench({ now: () => AT, ids: ['a'] });
+  const b = bench({ now: () => AT + 7 * 24 * 60 * 60 * 1000, ids: ['b'] });
+  a.ledger.write(OK, { said: SAID });
+  b.ledger.write(OK, { said: SAID });
+  assert.equal(renderLedger(a.ledger.list()), renderLedger(b.ledger.list()));
 });
 
 // ── ② 校验：逐项说清哪一项（D6.5）────────────────────────────

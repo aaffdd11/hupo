@@ -20,6 +20,7 @@ import nodeNet from 'node:net';
 import nodePath from 'node:path';
 
 import { LedgerError } from './ledger.js';
+import { renderLedger } from './ledger-text.js';
 
 /** 账本套接字放哪。**跟着 dataDir 走**（它和账本日志是一对）。 */
 export function ledgerSocketPath(dataDir) {
@@ -48,12 +49,18 @@ export function handleLedgerOp(ledger, req) {
         const rec = ledger.write(req.fields, { said: req.said });
         return { ok: true, entry: rec, echo: null };
       }
-      case 'list':
+      case 'list': {
+        // ⚠️ **文字在服务端渲染**（契约 §八 第 3 件）：口径只有一处
+        //    （`foldTotals`）⇒ MCP 那一侧**只转述、不重算**。
+        //    在那边再算一遍的话，"含税说不清算不算"就会有两个答案。
+        const items = ledger.list();
         return {
           ok: true,
-          items: ledger.list({ includeHidden: req.includeHidden === true }),
+          items,
           totals: ledger.totals(),
+          text: renderLedger(items, { month: req.month ?? null }),
         };
+      }
       case 'bin':
         return { ok: true, items: ledger.listBin(), ttlDays: ledger.ttlDays };
       case 'delete': {

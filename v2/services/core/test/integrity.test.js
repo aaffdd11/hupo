@@ -195,6 +195,7 @@ test('清单要**完整**：三类"开机自动读"的东西一个都不能漏',
     '/repo/v2/services/core/src', // ① 会被执行的
     '/repo/scripts',
     '/repo/v2/services/core/hupo-persona.yml', // ② 开机喂给 agent 的
+    '/repo/v2/services/core/hupo-capabilities.yml', // ② 同上：它决定模型手里有哪些工具
     '/repo/AGENTS.md',
     '/home/u/.dsh/profiles',
     '/home/u/.dsh/settings.yaml',

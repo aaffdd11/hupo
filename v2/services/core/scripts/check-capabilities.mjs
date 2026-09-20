@@ -136,6 +136,72 @@ if (process.exitCode && childErr.length > 0) {
   for (const line of childErr.join('').split('\n').slice(0, 15)) console.error(`      ${line}`);
 }
 
+// ── ③ 用**我们那支真服务器**再起一次：证明它不会把 dsh 的启动弄挂 ──
+//
+// ② 用的是录音桩（那样"被拉起来"才是可观察的事实）。但它证明不了
+// **我们这支**脚本自己起得来 —— 而 `failOnStartupError: true` 意味着
+// 它起不来就会**把整个 agent 弄挂**（用户那边是"它不答话了"）。
+// 所以这一段不能省：真服务器 + 真套接字，看 dsh 是不是**干净地**起来。
+console.log('③ 用真服务器再起一次：它会不会把 dsh 弄挂');
+{
+  const nodeNet = await import('node:net');
+  const net = nodeNet.default;
+  const { Store } = await import('../src/store.js');
+  const { Timeline } = await import('../src/timeline.js');
+  const { Ledger } = await import('../src/ledger.js');
+  const { LedgerSocket, ledgerSocketPath } = await import('../src/ledger-socket.js');
+
+  const dataDir = nodePath.join(tmp, 'realdata');
+  nodeFs.mkdirSync(dataDir, { recursive: true });
+  const store = new Store({ dataDir, fsync: false });
+  const timeline = new Timeline({ id: 'ledger', store });
+  const ledger = new Ledger({ store, timeline }).sync();
+  const sockPath = ledgerSocketPath(dataDir);
+  const sock = new LedgerSocket({ ledger, socketPath: sockPath }).listen();
+  await sock.ready();
+
+  const realEnv = { ...env, HUPO_LEDGER_SERVER: SERVER, HUPO_LEDGER_SOCKET: sockPath };
+  delete realEnv.HUPO_PROBE_LOG;
+  const args3 = ['--profile', 'sdk', '--patch', nodePath.join(CORE, 'hupo-persona.yml'), '--patch', PATCH];
+  const c3 = nodeChildProcess.spawn('dsh', args3, {
+    env: realEnv, stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const err3 = [];
+  c3.stdout.resume();
+  c3.stderr.setEncoding('utf8');
+  c3.stderr.on('data', (d) => err3.push(String(d)));
+  const code = await new Promise((resolve) => {
+    const t = setTimeout(() => { c3.kill('SIGKILL'); resolve('timeout'); }, 30000);
+    c3.on('exit', (c) => { clearTimeout(t); resolve(c); });
+    // 关掉 stdin ⇒ 它把这一轮服务收干净、正常退出
+    c3.stdin.end();
+  });
+  const noisy = err3.join('');
+  const pluginFailed = /mcp|plugin|fail/i.test(noisy) && /error|fail|throw/i.test(noisy);
+  if (code === 0 && !pluginFailed) ok(`真服务器在场时 dsh 干净退出（code ${code}）`);
+  else bad(`真服务器把 dsh 弄挂了（code ${code}）：${noisy.split('\n').slice(0, 6).join(' / ')}`);
+
+  // ★ 顺带证明**那条口真的能写**：经真服务器那条路走一遍（不是自己直连）
+  const roundTrip = await new Promise((resolve) => {
+    const conn = net.connect(sockPath);
+    let buf = '';
+    conn.setEncoding('utf8');
+    conn.on('connect', () => conn.write(`${JSON.stringify({
+      op: 'write',
+      fields: { kind: '装空调', qty: 3, unit: '台', unitPrice: 1200, tax: false, date: '2026-08-20' },
+      said: '上周装了三台空调，一台一千二，不含税',
+    })}\n`));
+    conn.on('data', (d) => { buf += d; if (buf.includes('\n')) { conn.destroy(); resolve(buf.trim()); } });
+    conn.on('error', () => resolve('{}'));
+  });
+  if (/"ok":true/.test(roundTrip) && ledger.list().length === 1) {
+    ok('那条口走通了：写一笔 → 盘上多一条');
+  } else {
+    bad(`那条口没写进去：${roundTrip}`);
+  }
+  sock.close();
+}
+
 // ── 收尾 ────────────────────────────────────────────────────
 try { nodeFs.rmSync(tmp, { recursive: true, force: true }); } catch { /* 尽力 */ }
 if (process.exitCode) { console.error('\n❌ 能力层这条链路**没通**'); process.exit(1); }

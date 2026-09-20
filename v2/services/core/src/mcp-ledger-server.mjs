@@ -192,10 +192,11 @@ async function callTool(name, args) {
   }
 
   if (name === 'ledger_list') {
-    const r = await ask({ op: 'list' });
+    // ⚠️ **这段文字是服务端渲染好的**（契约 §八 第 3 件）：这边**只转述**。
+    //    在这儿再算一遍合计 = 同一件事有两个答案（含税那一条最先漂）。
+    const r = await ask({ op: 'list', month: args?.month ?? null });
     if (!r.ok) return textResult(`账本这一侧没答上来：${r.error}`, true);
-    const text = renderList(r.items ?? [], r.totals ?? {}, args?.month ?? null);
-    return textResult(text);
+    return textResult(r.text ?? '账本这一侧没给出文字。');
   }
 
   if (name === 'ledger_delete') {
@@ -222,46 +223,6 @@ async function callTool(name, args) {
   }
 
   return textResult(`没有这个工具：${name}`, true);
-}
-
-/**
- * 出口那一段文字（契约 §八 第 3 件）。
- *
- * ⚠️ 三条口径都在这里落地：**一段文字不是表**、**含税说不清的进不了合计而且要说出来**、
- *    **没说钱的那几条也要说**（它们是"记了事没记钱"，不是 0 元）。
- * ⚠️ 用词过禁用词闸：不出现"记录""时间线"这一族。
- */
-export function renderList(items, totals, month = null) {
-  const list = (Array.isArray(items) ? items : []).filter(
-    (r) => !month || String(r?.date ?? '').startsWith(month),
-  );
-  if (list.length === 0) return month ? `${month} 这个月一条都没有。` : '账上还一条都没有。';
-  const lines = list.map((r) => {
-    const money = r.unitPrice === null || r.unitPrice === undefined
-      ? '没说钱'
-      : `${r.qty * r.unitPrice}`;
-    return `${r.date} ${r.kind} ${r.qty}${r.unit}｜${money}`;
-  });
-  const scope = month ? list : items;
-  const t = month
-    ? foldTotals(list)
-    : totals;
-  const tail = [`一共 ${t.total ?? 0}`];
-  if ((t.notCounted ?? 0) > 0) tail.push(`有 ${t.notCounted} 条含不含税说不清，没有算进来`);
-  if ((t.noPrice ?? 0) > 0) tail.push(`有 ${t.noPrice} 条没说钱，也没有算进来`);
-  void scope;
-  return `${lines.join('\n')}\n\n${tail.join('；')}。`;
-}
-
-/** 只看某个月时，合计要在这一小段里自己折一遍（服务端那份是全部的）。 */
-function foldTotals(items) {
-  let total = 0; let notCounted = 0; let noPrice = 0;
-  for (const r of items) {
-    if (r.unitPrice === null || r.unitPrice === undefined) { noPrice += 1; continue; }
-    if (r.tax === 'unknown') { notCounted += 1; continue; }
-    total += r.qty * r.unitPrice;
-  }
-  return { total: Math.round(total * 100) / 100, notCounted, noPrice };
 }
 
 // ── 主循环：一行一条 JSON-RPC ────────────────────────────────

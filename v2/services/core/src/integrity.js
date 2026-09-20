@@ -78,6 +78,11 @@ export function protectedPaths({ repo, home = nodeOs.homedir() }) {
     { path: p('scripts'), kind: 'dir', mode: 'report', why: '主人会手动跑的脚本（同上，开发期"只报不拦"）' },
     // ② 开机自动喂给 agent 的
     { path: p('v2/services/core/hupo-persona.yml'), mode: 'strict', why: '每开一个新 agent 就喂一遍：改一句就改掉它的性格与纪律' },
+    {
+      path: p('v2/services/core/hupo-capabilities.yml'),
+      mode: 'strict',
+      why: '能力层：每开一个新 agent 就挂一次（它决定模型手里有哪些工具）——改它就能给自己加一条新的能力',
+    },
     { path: p('AGENTS.md'), mode: 'strict', why: '助手给"下一次的自己"读的说明书' },
     {
       path: d('profiles'),
@@ -109,6 +114,14 @@ export function protectedPaths({ repo, home = nodeOs.homedir() }) {
     //      真要覆盖它得看**内容**而不是**摘要**（那是另一件事，记在
     //      `docs/dev/00-PROGRESS.md` §六 第 23 条）。
     //    依据：决策 **C1**（"KV 是运行时数据不是源码 ⇒ 判据改成'清单里没有可写路径'"）。
+    //
+    // ⚠️ **账本（`data/ledger.jsonl`）同样故意不在清单里**（批 4，2026-09-21）：
+    //    它是**用户数据**，每一笔都在写它 ⇒ 放进来只会有两种结果：
+    //      · strict —— 记一笔账之后开机就"对不上"（荒谬）
+    //      · report —— 每次开机都报"它动过"（**每次都响的报警等于没有报警**）
+    //    ⇒ 与 `storages` 同一条取舍（C1）。⚠️ 代价也一样：**"有人往账本里塞东西"
+    //      这条路没有被清单覆盖** —— 它靠的是"写盘只有服务端那一处"
+    //      （MCP 那支进程只能经域套接字提请求，见 `ledger-socket.js`）。
   ];
 }
 

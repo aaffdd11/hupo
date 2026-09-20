@@ -215,6 +215,40 @@ export function renderEcho(fields) {
   return `我听到的是：${parts.join('，')}`;
 }
 
+/**
+ * **合计的那条口径**（D6.9）——**纯函数，只有这一处实现**。
+ *
+ * ⚠️ 为什么把它单独拎出来：出口那段文字（`ledger-text.js`）和服务端都要用同一个口径。
+ *    抄第二份的那天起，"含税说不清算不算"就会有两个答案 ——
+ *    而这个数的错法很安静：账面看起来只是"少算了一点"。
+ *
+ * 三条同时成立：**没钱的单列**（它们是"记了事没记钱"，不是 0 元）；
+ * **含税说不清的排除并报数**（只排除不报数 = 悄悄少算）；**小数不留浮点尾巴**。
+ *
+ * @param {{qty:number, unitPrice:number|null, tax:boolean|string}[]} records
+ * @returns {{total:number, counted:number, notCounted:number, noPrice:number}}
+ */
+export function foldTotals(records) {
+  let total = 0;
+  let counted = 0;
+  let notCounted = 0;
+  let noPrice = 0;
+  for (const r of Array.isArray(records) ? records : []) {
+    if (r.unitPrice === null || r.unitPrice === undefined) {
+      noPrice += 1;
+      continue;
+    }
+    if (r.tax === 'unknown') {
+      notCounted += 1;
+      continue;
+    }
+    total += r.qty * r.unitPrice;
+    counted += 1;
+  }
+  // 浮点相加会给 0.30000000000000004 这种尾巴 ⇒ 只保留到分。
+  return { total: Math.round(total * 100) / 100, counted, notCounted, noPrice };
+}
+
 export class Ledger {
   #store;
   #timeline;
@@ -445,24 +479,7 @@ export class Ledger {
    * @returns {{total:number, counted:number, notCounted:number, noPrice:number}}
    */
   totals() {
-    let total = 0;
-    let counted = 0;
-    let notCounted = 0;
-    let noPrice = 0;
-    for (const r of this.list()) {
-      if (r.unitPrice === null || r.unitPrice === undefined) {
-        noPrice += 1;
-        continue;
-      }
-      if (r.tax === 'unknown') {
-        notCounted += 1;
-        continue;
-      }
-      total += r.qty * r.unitPrice;
-      counted += 1;
-    }
-    // 浮点相加会给 0.30000000000000004 这种尾巴 ⇒ 只保留到分。
-    return { total: Math.round(total * 100) / 100, counted, notCounted, noPrice };
+    return foldTotals(this.list());
   }
 
   /**
