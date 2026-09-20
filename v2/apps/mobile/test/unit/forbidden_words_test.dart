@@ -8,6 +8,7 @@ import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/process_words.dart';
+import 'package:hupo_app/models/trash_words.dart';
 
 void main() {
   test('★ 永久禁用的那几个，一个都不许漏', () {
@@ -66,6 +67,44 @@ void main() {
       reasoningLabel,
       // ⚠️ **关于页那几句也在这儿**（直接引数据源，不手抄 —— 手抄会漂）
       ...aboutFacts.expand((f) => [f.title, ...f.lines]),
+      // ⚠️ 批 3「删掉 / 回收站」那一批（`28-DELETE.md`）：顶栏入口、气泡长按菜单、
+      //    删前那份清单、回收站页的按钮与几句回话 —— **直接引数据源**。
+      trashTitle,
+      trashTooltip,
+      bubbleMenuTitle,
+      bubbleMenuDelete,
+      bubbleMenuDeleteHint,
+      bubbleMenuCancel,
+      planTitle,
+      planCancel,
+      planConfirm,
+      planCannotLine,
+      planEmptyLine,
+      trashEmptyLine,
+      trashNoPreviewLine,
+      trashLoadFailedLine,
+      trashRetry,
+      trashRestore,
+      trashPurge,
+      trashPurgeConfirmTitle,
+      trashPurgeConfirmBody,
+      trashPurgeConfirmYes,
+      trashPurgeConfirmNo,
+      trashDeletedLine,
+      trashRestoredLine,
+      trashPurgedLine,
+      trashDeleteFailedLine,
+      trashRestoreFailedLine,
+      trashPurgeFailedLine,
+      trashPlanFailedLine,
+      trashUnauthorizedLine,
+      // 拼出来的那几句也要扫（模板里可能有内部词）
+      planTtlLine(30),
+      planTtlLine(null),
+      purgeAtLine(1758400000000),
+      verdictLabel('delete'),
+      verdictLabel('cannot'),
+      planItemTitle('可见的那几句', '这台设备'),
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

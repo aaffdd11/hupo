@@ -27,6 +27,12 @@ sealed class TimelineItem {
   /// 排序键。**不许用时间戳当排序键**——
   /// 本地发言是客户端钟、服务端事件是服务端钟，混钟排序会乱。
   (int, int) get order => (seq, tie);
+
+  /// 这一条对应的那个 id（分隔线没有 ⇒ `null`）。
+  ///
+  /// ⚠️ **删除的单位就是它**（契约 `28-DELETE.md` §三·补）：
+  ///    落盘的事件里没有轮号，"一轮"由客户端按 `messageId` 认出来。
+  String? get messageId => null;
 }
 
 /// 用户说的一句话。
@@ -39,6 +45,9 @@ class UserUtterance extends TimelineItem {
     this.state = MessageState.queued,
   });
 
+  /// ⚠️ `@override`：基类那个 `messageId` 是"有的条目没有"（分隔线），
+  ///    气泡**一定**有 ⇒ 这里收窄成非空（`_render` 那一层才不用到处判空）。
+  @override
   final String messageId;
   final String text;
   MessageState state;
@@ -56,6 +65,8 @@ class UserUtterance extends TimelineItem {
 class AssistantMessage extends TimelineItem {
   AssistantMessage({required this.messageId, required super.seq});
 
+  /// ⚠️ `@override`：理由同 [UserUtterance.messageId]。
+  @override
   final String messageId;
   String quick = '';
   String deep = '';
@@ -96,6 +107,38 @@ class AssistantMessage extends TimelineItem {
   }
 
   bool get isEmpty => quick.isEmpty && deep.isEmpty;
+
+  /// 已经拼进这个气泡的那些**流式片段**：`(block, seqInBlock)`。
+  ///
+  /// ⚠️ 为什么非记不可（契约 `28-DELETE.md` §三·补 的**那个后果**）：
+  ///    "从回收站拿回来"= 服务端把那几条**内容事件按原样重新追加一遍**
+  ///    （**新 `seq`**、`at` 保留 ⇒ 盘上的历史一字不改）。
+  ///    而客户端的 `_seenSeq` 是**按 `seq` 去重**的 ⇒ **挡不住这种重发**：
+  ///    同一段正文会再 `+=` 一次，屏幕上那句话说两遍。
+  ///    ⇒ 判据是 `(messageId, block, seqInBlock)`——`messageId` 不必进键，
+  ///      因为这个集合本来就长在**那一条**气泡上。
+  ///
+  /// ⚠️ 只在内存里（`timeline_store` 存的是**事件**，不是这个集合）⇒
+  ///    冷启动重放时它从空开始，缓存里的每一段各自拼一次，正是想要的。
+  final Set<(String, int)> _chunks = {};
+
+  /// 拼一段正文。**同一段第二次到 ⇒ 丢掉**（返回 `false`）。
+  ///
+  /// ⚠️ `seqInBlock` 认不出来（旧生产者 / 坏帧）⇒ **当新的一段拼上去**：
+  ///    没有编号就分不出"重发"和"真的一段"，两条路都得选一个坏结果——
+  ///    这里选"不吞内容"：吞掉一段正文是**屏幕少了字、没人看得出来**，
+  ///    而我们自己的生产者（`message-writer.js` 的 `chunk()`）**每一段都带号**，
+  ///    所以这条兜底在真机上根本不该被走到。
+  bool addChunk({required String block, required Object? seqInBlock, required String text}) {
+    final b = block == 'deep' ? 'deep' : 'quick';
+    if (seqInBlock is int && !_chunks.add((b, seqInBlock))) return false;
+    if (b == 'deep') {
+      deep += text;
+    } else {
+      quick += text;
+    }
+    return true;
+  }
 }
 
 /// 时间线上的一条分隔（"你不在的时候" / "进入某层"）。
@@ -140,11 +183,98 @@ class ProcessStep {
       ProcessStep(turn: turn, step: step, state: state, done: done ?? this.done);
 }
 
+/// **一轮** = 一条用户的话 + 它的回答（契约 `28-DELETE.md` §三·补）。
+///
+/// ⚠️ 为什么"分组"是**客户端**的事：落盘的事件里没有轮号
+///    （`message/status` / `step/*` 上的 `turn` 是瞬态，盘上留不下），
+///    而删除的单位又是"一轮" ⇒ 服务端没法自己分，只能由看得见时间线的这一侧给。
+///
+/// ⚠️ 它不是一个新的"配对协议"（协议 R1 那条禁令还在：客户端**不做配对**、
+///    不判断哪句该配哪句）。它只回答一个很窄的问题：
+///    **长按某一条时，该把哪几个 id 交给服务端**。
+class TurnGroup {
+  TurnGroup({this.userMessageId, this.answerMessageId});
+
+  /// 用户那条的 id（还没说过话、或者话没被服务端认领 ⇒ `null`）。
+  String? userMessageId;
+
+  /// 回答那条的 id（还没答 / 还没轮到 ⇒ `null`）。
+  String? answerMessageId;
+
+  /// 交给服务端的 id 清单（**两个都可能只有其中一个**）。
+  List<String> get messageIds => [
+        if (userMessageId != null) userMessageId!,
+        if (answerMessageId != null) answerMessageId!,
+      ];
+
+  bool contains(String messageId) =>
+      userMessageId == messageId || answerMessageId == messageId;
+}
+
+/// 把一条时间线分成"一轮一轮"（纯函数 ⇒ 进 `test/unit` 硬闸）。
+///
+/// 规矩只有两条：
+///   1. **只有到过服务端的那条才算一轮的头**（`confirmed` 的用户发言；助手的气泡
+///      本来就是服务端来的）。用户自己还没发出去/没被认领的那句 ⇒ 不成轮
+///      ——服务端那边根本没有它，删它是个空请求。
+///   2. 回答**先到先配**：一条回答配给**最早那条还没配上回答**的用户发言。
+///      ⇒ 这和服务端自己那套 `#turnOwner`（`delivered.shift()`）是同一条规矩，
+///        连发两句时不会两边认成不同的一轮。
+///
+/// 配不上的两种残局也各自成组（"只有用户那句" / "只有那条回答"）——
+/// 它们各是一个能删的东西，藏起来不必等另一半。
+List<TurnGroup> turnGroupsOf(Iterable<TimelineItem> items) {
+  final ordered = [...items]..sort((a, b) {
+      final c = a.seq.compareTo(b.seq);
+      return c != 0 ? c : a.tie.compareTo(b.tie);
+    });
+  final groups = <TurnGroup>[];
+  final waiting = <TurnGroup>[]; // 说过话、还没等到回答的那些（先来先配）
+  for (final it in ordered) {
+    switch (it) {
+      case UserUtterance():
+        if (it.state != MessageState.confirmed) continue;
+        final g = TurnGroup(userMessageId: it.messageId);
+        groups.add(g);
+        waiting.add(g);
+      case AssistantMessage():
+        if (waiting.isEmpty) {
+          groups.add(TurnGroup(answerMessageId: it.messageId));
+        } else {
+          waiting.removeAt(0).answerMessageId = it.messageId;
+        }
+      case TimelineMarker():
+        continue; // 分隔线不属于任何一轮
+    }
+  }
+  return groups;
+}
+
+/// 某个 id 所在的那一轮；**不在任何一轮里 ⇒ `null`**。
+///
+/// ⚠️ `null` 是有意思的：比如"这句还没发出去"（它在服务端不存在），
+///    那时界面上**不该给删掉这个入口**——给了就是个删不掉的动作。
+TurnGroup? turnGroupOf(Iterable<TimelineItem> items, String messageId) {
+  for (final g in turnGroupsOf(items)) {
+    if (g.contains(messageId)) return g;
+  }
+  return null;
+}
+
 /// 时间线本体。
 class Timeline {
   final List<TimelineItem> _items = [];
   final Set<int> _seenSeq = {};
   int _lastSeq = 0;
+
+  /// 被删掉（进了回收站）的那些 id —— **藏起来，不销毁**（契约 §8.3）。
+  ///
+  /// ⚠️ 为什么是一份"id 集合"而不是挂在条目上的一个布尔：
+  ///    · `turn/deleted` **可能比那些条目先到**（补发 / 重放时尤其）——
+  ///      挂布尔的话那时无处可挂，后到的条目会照样画出来（屏幕说假话）；
+  ///    · 恢复只是把这几个 id 从集合里拿掉，**一个字节都不用重建**（契约 §8.3：
+  ///      恢复要立刻、且不许再要一次网络）。
+  final Set<String> _hiddenIds = {};
 
   /// 服务端说"这一轮开始了"——**内部状态名**（`process_words.dart` 负责翻成人话）。
   ///
@@ -224,8 +354,11 @@ class Timeline {
   }
 
   /// 有没有**还没收口**的助手气泡（= 它正在说，或者说到一半断了）。
+  ///
+  /// ⚠️ 只数**画得出来的**那些：一条被删掉（藏起来）的没收口气泡
+  ///    不该让屏幕上冒出"它正在做…"——那一轮已经不在屏幕上了。
   bool get _hasOpenAssistant =>
-      _items.any((it) => it is AssistantMessage && !it.ended);
+      _items.any((it) => it is AssistantMessage && !it.ended && _visible(it));
 
   /// 现在还没收口的那**一条**助手气泡（一轮最多一条，N22）。
   ///
@@ -246,15 +379,85 @@ class Timeline {
   /// 已收到的最大服务端号。**补发就从它开始要**。
   int get lastSeq => _lastSeq;
 
+  /// **界面上该画的那几条**（按 `(seq, tie)` 排）。
+  ///
+  /// ⚠️ **被删掉的那些不在这儿**（契约 §8.3：藏起来，不销毁）——
+  ///    渲染、草稿存档、以及"哪几条属于哪一轮"全都从这一份推，
+  ///    于是"藏起来"这件事**只有一处**，不可能某条路漏了它。
+  ///    （被藏起来的条目仍然在 `_items` 里：恢复要立刻、不许再要一次网络。）
   List<TimelineItem> get items {
-    final list = [..._items]..sort((a, b) {
+    final list = _items.where(_visible).toList()
+      ..sort((a, b) {
         final c = a.seq.compareTo(b.seq);
         return c != 0 ? c : a.tie.compareTo(b.tie);
       });
     return list;
   }
 
-  bool get isEmpty => _items.isEmpty;
+  bool get isEmpty => items.isEmpty;
+
+  /// 这一条现在该不该画出来。
+  ///
+  /// ⚠️ 分隔线没有 `messageId` ⇒ **永远画**：它不属于任何一轮，
+  ///    删除删的是一轮里的话，不是"你不在的时候"那条线。
+  bool _visible(TimelineItem it) {
+    final id = it.messageId;
+    return id == null || !_hiddenIds.contains(id);
+  }
+
+  /// 这一条是不是"被删掉了、现在藏着"。
+  bool isHidden(String messageId) => _hiddenIds.contains(messageId);
+
+  /// 收到 `turn/deleted`（或删成功之后）：**把这几个 id 藏起来**（不销毁）。
+  ///
+  /// ⚠️ 藏起来的若是**还开着的那条**（它正在说），过程那一块也跟着撤：
+  ///    步骤流水是"那一轮的事"，那一轮被删了还留在屏幕上是在说一件没发生的事。
+  void hideMessages(Iterable<String> messageIds) {
+    final ids = _ids(messageIds);
+    if (ids.isEmpty) return;
+    _hiddenIds.addAll(ids);
+    final open = _openAssistant;
+    if (open != null && ids.contains(open.messageId)) {
+      _turnState = null;
+      _steps.clear();
+      _pendingReasoning = '';
+    }
+  }
+
+  /// 收到 `turn/restored`：**取消隐藏**（内容还在服务端，补发会带回来）。
+  void showMessages(Iterable<String> messageIds) {
+    for (final id in _ids(messageIds)) {
+      _hiddenIds.remove(id);
+    }
+  }
+
+  /// 收到 `turn/purged`：服务端已经压实 ⇒ **从内存里丢掉**（永远不会再补发）。
+  ///
+  /// ⚠️ 号**不还**：压实时那些事件的 `seq` 是保留的（契约 §三：号一个不跳），
+  ///    所以 `_seenSeq` 里那些号继续留着 —— 补发再收到同号也不该重新画出来。
+  void purgeMessages(Iterable<String> messageIds) {
+    final ids = _ids(messageIds);
+    if (ids.isEmpty) return;
+    _hiddenIds.removeAll(ids);
+    _items.removeWhere((it) {
+      final id = it.messageId;
+      return id != null && ids.contains(id);
+    });
+  }
+
+  static Set<String> _ids(Iterable<String> messageIds) =>
+      {for (final id in messageIds) if (id.isNotEmpty) id};
+
+  /// 事件里那份 `messageIds`（契约 §8.1）。读不出来 ⇒ **空**
+  /// （空 = 什么都不做：宁可不动，也不许凭猜删东西）。
+  static List<String> messageIdsOfEvent(Map<String, dynamic> event) {
+    final raw = event['messageIds'];
+    if (raw is! List) return const [];
+    return [
+      for (final e in raw)
+        if (e is String && e.isNotEmpty) e,
+    ];
+  }
 
   /// 本地乐观上屏。返回 messageId（重发时要用同一个）。
   ///
@@ -319,12 +522,15 @@ class Timeline {
       case 'message/text':
         final m = _findMessage(messageId);
         if (m == null) return;
-        final text = event['text'] as String? ?? '';
-        if (event['block'] == 'deep') {
-          m.deep += text;
-        } else {
-          m.quick += text;
-        }
+        // ⚠️ **按 `(messageId, block, seqInBlock)` 去重**（`AssistantMessage.addChunk`）：
+        //    "从回收站拿回来"会把这一段**按原样重新追加一遍**（新 `seq`），
+        //    而上面的 `_seenSeq` 只认 `seq` ⇒ **挡不住重发**。
+        //    少了这一条，屏幕上那句话说两遍。
+        m.addChunk(
+          block: event['block'] as String? ?? 'quick',
+          seqInBlock: event['seqInBlock'],
+          text: event['text'] as String? ?? '',
+        );
       case 'message/end':
         // 这一轮说完了 ⇒ 界面上那行「它在做…」跟着撤，
         // **步骤流水一起清掉**（不收的话就会留成"永远在查资料"）。
@@ -348,6 +554,19 @@ class Timeline {
           seq: rawSeq,
           catchUp: catchUp,
         ));
+      // ── 删掉 / 恢复 / 真删（契约 §8.1、§8.3）────────────────────
+      //
+      // ⚠️ 三条都**取号、落盘**，所以它们走的是这条"带 seq"的路
+      //    （不是 `_applyTransient`）——重启之后客户端才知道谁被删过。
+      // ⚠️ 键是 `messageIds`：**没有轮号可算**（落盘的事件里没有 `turn`）。
+      // ⚠️ 一条里认不出的 id 一律不认（`messageIdsOfEvent`）——
+      //    宁可什么都不动，也不许凭猜藏/删东西。
+      case 'turn/deleted':
+        hideMessages(messageIdsOfEvent(event));
+      case 'turn/restored':
+        showMessages(messageIdsOfEvent(event));
+      case 'turn/purged':
+        purgeMessages(messageIdsOfEvent(event));
       default:
         // 未知类型：安静忽略（向前兼容）
         return;
@@ -360,7 +579,20 @@ class Timeline {
     for (var i = 0; i < _items.length; i += 1) {
       final it = _items[i];
       if (it is UserUtterance && it.messageId == messageId) {
-        _items[i] = it.copyWith(seq: seq, tie: 0, state: nextState(it.state, MessageState.confirmed));
+        final next = nextState(it.state, MessageState.confirmed);
+        // ⚠️ **已经认领过的那条不再改它排在哪。**
+        //    理由（和 `message/text` 那个去重是同一件事的两面）：从回收站拿回来时，
+        //    服务端会把这一问一答**按原样重新追加**（新 `seq`）。
+        //    照旧无条件 `copyWith(seq:)` 的话，用户那句话会**跳到它自己那条回答后面**
+        //    ——因为回答那条走的是 `message/start`，而它被 `_findMessage` 挡在门口、
+        //    位置一动不动。两半的位置就错开了，屏幕上"问答"会看着像反的。
+        //    ⇒ 只在"本地那条还没被认领"时把号换成服务端的（那一步是必须的：
+        //      本地借的是 `_lastSeq`，不换就排错地方）。
+        if (it.state == MessageState.confirmed) {
+          if (next != it.state) _items[i] = it.copyWith(state: next);
+          return;
+        }
+        _items[i] = it.copyWith(seq: seq, tie: 0, state: next);
         return;
       }
     }
@@ -530,6 +762,9 @@ class Timeline {
       ..addAll(mine);
     _seenSeq.clear();
     _lastSeq = 0;
+    // 谁被删过也从头来：墓碑事件**本身也落盘**（§8.1），重放会把它重新发上来
+    // ⇒ 清掉不会丢东西，而留着反倒可能挡住"这一轮已经被拿回来"的新事实。
+    _hiddenIds.clear();
     // 服务端亲口说"你这号不对了" ⇒ 这一屏不再是缓存画的（缓存本身由调用方清）
     _stale = false;
     // 瞬态不属于"落盘的历史" ⇒ 重放之前先清掉（它会被后面的帧重新点起来）

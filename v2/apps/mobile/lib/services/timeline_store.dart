@@ -140,4 +140,12 @@ class TimelineStore {
       await p.remove(key);
     } catch (_) {}
   }
+
+  /// 等到**已经交出去的那几次存取都做完**（排队队列追平）。
+  ///
+  /// ⚠️ 给 `test/unit` 用的：控制器里那几处写缓存是**不 await 的**
+  ///    （缓存是"最好有"，绝不能拖慢屏幕）。于是测"删完之后盘上还剩什么"的时候
+  ///    要有一个确定的等法——`await Future.delayed(0)` 只是**赌**它做完了。
+  ///    和 `DraftStore.flush` 同一套；生产路径不调这个。
+  Future<void> flush() => _enqueue(() async {}, null);
 }

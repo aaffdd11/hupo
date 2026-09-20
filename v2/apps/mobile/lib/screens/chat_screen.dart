@@ -19,12 +19,17 @@ import 'package:flutter/material.dart';
 import '../models/conn_state.dart';
 import '../models/scroll_follow.dart';
 import '../models/timeline.dart';
+import '../models/trash_words.dart';
+import '../services/api.dart';
 import '../services/chat_controller.dart';
+import '../widgets/bubble_menu.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/composer.dart';
 import '../widgets/process_level_menu.dart';
 import '../widgets/process_view.dart';
+import '../widgets/trash_plan_sheet.dart';
 import 'about_screen.dart';
+import 'trash_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key, required this.controller, required this.onLoggedOut});
@@ -97,6 +102,15 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: const Text('助手'),
         actions: [
+          // ⚠️ **回收站**（契约 §二 第 2 条：放顶栏）。删掉的东西先进这儿，
+          //    30 天内能拿回来 —— 顶栏这一处就是"我删的东西去哪了"的答案。
+          IconButton(
+            tooltip: trashTooltip,
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => TrashScreen(controller: c)),
+            ),
+            icon: const Icon(Icons.delete_outline),
+          ),
           // ⚠️ **过程四档的入口**（契约 §五：位置等主人看过再定，
           //    所以这一批只做"能切"）。换档要重连（`level` 是连接级的）。
           IconButton(
@@ -201,6 +215,7 @@ class _ChatScreenState extends State<ChatScreen> {
         UserUtterance() => UserBubble(
             utterance: item,
             onResend: () => c.resend(item.messageId),
+            onLongPress: () => _onBubbleLongPress(c, item),
           ),
         AssistantMessage() => _answer(item, c),
         TimelineMarker() => MarkerLine(marker: item),
@@ -216,10 +231,68 @@ class _ChatScreenState extends State<ChatScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        AnswerBubble(message: m),
+        AnswerBubble(message: m, onLongPress: () => _onBubbleLongPress(c, m)),
         if (reasoning.isNotEmpty) ReasoningBlock(text: reasoning),
       ],
     );
+  }
+
+  // ── 长按气泡 → 删掉这一轮（契约 `28-DELETE.md`）────────────────
+
+  /// 长按气泡：先弹菜单，选中"删掉"之后**先取清单、再删**（§四：删前必须列清单）。
+  ///
+  /// ⚠️ 一次问答 = 一轮 = 两个 `messageId`（§三·补）——那两个 id 由
+  ///    `ChatController.turnMessageIds` 从**画得出来的**那几条里算出来。
+  ///    算不出来（比如这句还没发出去）⇒ **连入口都不给**：那会是一个
+  ///    "看起来能删、其实服务端没有它"的动作。
+  Future<void> _onBubbleLongPress(ChatController c, TimelineItem item) async {
+    final id = item.messageId;
+    if (id == null) return;
+    final ids = c.turnMessageIds(id);
+    if (ids == null) return;
+
+    final action = await showModalBottomSheet<BubbleAction>(
+      context: context,
+      builder: (_) => const BubbleMenu(),
+    );
+    if (action != BubbleAction.delete || !mounted) return;
+    await _deleteTurn(c, ids);
+  }
+
+  /// 删掉这一轮：**清单 → 确认 → 删**。
+  Future<void> _deleteTurn(ChatController c, List<String> ids) async {
+    final plan = await c.planDelete(ids);
+    if (!mounted) return;
+    switch (plan) {
+      case TrashOk(:final value):
+        final yes = await showModalBottomSheet<bool>(
+          context: context,
+          isScrollControlled: true,
+          builder: (_) => TrashPlanSheet(plan: value),
+        );
+        if (yes != true || !mounted) return;
+        final done = await c.removeTurn(ids);
+        if (!mounted) return;
+        // ⚠️ 成没成都**如实说**：这一步错了的话用户会以为删掉了（或以为没删）。
+        switch (done) {
+          case TrashOk():
+            _say(trashDeletedLine);
+          case TrashUnauthorized():
+            _say(trashUnauthorizedLine);
+          case TrashFailed():
+            _say(trashDeleteFailedLine);
+        }
+      case TrashUnauthorized():
+        _say(trashUnauthorizedLine);
+      case TrashFailed():
+        // ⚠️ 清单都拿不到 ⇒ **一个字都不许删**（"先看清单"这一步不许绕）。
+        _say(trashPlanFailedLine);
+    }
+  }
+
+  void _say(String line) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(line)));
   }
 }
 

@@ -21,10 +21,17 @@ import '../models/timeline.dart';
     };
 
 class UserBubble extends StatelessWidget {
-  const UserBubble({super.key, required this.utterance, this.onResend});
+  const UserBubble({super.key, required this.utterance, this.onResend, this.onLongPress});
 
   final UserUtterance utterance;
   final VoidCallback? onResend;
+
+  /// 长按气泡（契约 `28-DELETE.md` §二 第 2 条：删除的入口就在这儿）。
+  ///
+  /// ⚠️ 用 `InkWell` 而不是裸的 `GestureDetector`：`test/widget/accessibility_test.dart`
+  ///    有一条源码级断言**禁止 `lib/` 里出现裸的 GestureDetector**（真加了就得把它
+  ///    加进命中区扫描）。`InkWell` 里的手势由 Material 撑着，且命中区就是气泡本身。
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -37,42 +44,52 @@ class UserBubble extends StatelessWidget {
       child: Container(
         constraints: const BoxConstraints(maxWidth: 520),
         margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: failed
-              // 失败：底色也换掉——但**不只靠颜色**，下面还有图标与字
-              ? theme.colorScheme.errorContainer
-              : theme.colorScheme.primaryContainer,
-          borderRadius: BorderRadius.circular(14),
-          border: failed ? Border.all(color: theme.colorScheme.error, width: 1.5) : null,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(utterance.text, style: theme.textTheme.bodyLarge),
-            const SizedBox(height: 4),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(mark.icon, size: theme.textTheme.bodySmall!.fontSize! + 4),
-                const SizedBox(width: 4),
-                Text(mark.label, style: theme.textTheme.bodySmall),
-                if (failed && onResend != null) ...[
-                  const SizedBox(width: 12),
-                  // 触控目标 ≥44：视觉上是个小按钮，用 padding 把命中区撑起来
-                  TextButton(
-                    onPressed: onResend,
-                    style: TextButton.styleFrom(
-                      minimumSize: const Size(44, 44),
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                      tapTargetSize: MaterialTapTargetSize.padded,
-                    ),
-                    child: const Text('重发'),
+        // ⚠️ 气泡本体改成 `Material` + `InkWell`（为了长按），
+        //    底色 / 圆角 / 失败时那圈边**照旧**：
+        //    四态必须一眼可辨，而且不许只靠颜色（下面还是图标 + 文字）。
+        child: Material(
+          color: failed ? theme.colorScheme.errorContainer : theme.colorScheme.primaryContainer,
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: failed
+                ? BorderSide(color: theme.colorScheme.error, width: 1.5)
+                : BorderSide.none,
+          ),
+          child: InkWell(
+            onLongPress: onLongPress,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(utterance.text, style: theme.textTheme.bodyLarge),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(mark.icon, size: theme.textTheme.bodySmall!.fontSize! + 4),
+                      const SizedBox(width: 4),
+                      Text(mark.label, style: theme.textTheme.bodySmall),
+                      if (failed && onResend != null) ...[
+                        const SizedBox(width: 12),
+                        // 触控目标 ≥44：视觉上是个小按钮，用 padding 把命中区撑起来
+                        TextButton(
+                          onPressed: onResend,
+                          style: TextButton.styleFrom(
+                            minimumSize: const Size(44, 44),
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            tapTargetSize: MaterialTapTargetSize.padded,
+                          ),
+                          child: const Text('重发'),
+                        ),
+                      ],
+                    ],
                   ),
                 ],
-              ],
+              ),
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -81,9 +98,12 @@ class UserBubble extends StatelessWidget {
 
 /// 助手说的一条。快答与深答**在同一个气泡里**（协议 R2）。
 class AnswerBubble extends StatelessWidget {
-  const AnswerBubble({super.key, required this.message});
+  const AnswerBubble({super.key, required this.message, this.onLongPress});
 
   final AssistantMessage message;
+
+  /// 长按气泡（同 [UserBubble.onLongPress]）。
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -96,34 +116,40 @@ class AnswerBubble extends StatelessWidget {
         // 限宽：太宽的长行没人读得下去（平板上一行 70 个字）
         constraints: const BoxConstraints(maxWidth: 760),
         margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
+        child: Material(
           color: theme.colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (text.isEmpty)
-              // 一句话都还没有：不要留一个空气泡，给一个"在处理"的轻标记
-              Text('在处理…', style: theme.textTheme.bodySmall)
-            else
-              Text(text, style: theme.textTheme.bodyLarge),
-            if (message.sources.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              ...message.sources.take(5).map(
-                    (s) => Text(
-                      '· ${s['title'] ?? s['url'] ?? '来源'}',
-                      style: theme.textTheme.bodySmall,
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          child: InkWell(
+            onLongPress: onLongPress,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (text.isEmpty)
+                    // 一句话都还没有：不要留一个空气泡，给一个"在处理"的轻标记
+                    Text('在处理…', style: theme.textTheme.bodySmall)
+                  else
+                    Text(text, style: theme.textTheme.bodyLarge),
+                  if (message.sources.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    ...message.sources.take(5).map(
+                          (s) => Text(
+                            '· ${s['title'] ?? s['url'] ?? '来源'}',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ),
+                  ],
+                  if (message.ended && message.reason != null && message.reason != 'completed')
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text('（这条没说完）', style: theme.textTheme.bodySmall),
                     ),
-                  ),
-            ],
-            if (message.ended && message.reason != null && message.reason != 'completed')
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text('（这条没说完）', style: theme.textTheme.bodySmall),
+                ],
               ),
-          ],
+            ),
+          ),
         ),
       ),
     );

@@ -15,14 +15,18 @@
 // **v2 的客户端里没有浮动面板、也没有任何拖拽手势** ⇒ 没有落点。
 // 它不是"没做"，是**在 v2 的界面上不成立**（见 `docs/dev/13-A11Y.md` §二）。
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:hupo_app/models/message_state.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/timeline.dart';
+import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/screens/login_screen.dart';
 import 'package:hupo_app/services/api.dart';
@@ -128,6 +132,97 @@ void _stuff(Timeline t) {
   t.apply({'type': 'timeline/marker', 'kind': 'away', 'seq': 9});
 }
 
+// ── 批 3「删掉 / 回收站」那一批（`28-DELETE.md`）新加的界面 ──────────
+//
+// ⚠️ 和关于页 / 过程四档同一条理由：**新加的界面必须也过这两道闸**，
+//    不然"五档不溢出 + 命中区 ≥44"会随时间失效。
+// ⚠️ 全部**从真入口进**（顶栏那个回收站图标 / 长按气泡），
+//    不直接把页面当 `home` pump 出来 —— 那样没有返回键，
+//    命中区扫描会"一个能点的都没扫到"。
+
+/// 假回执。⚠️ **必须带 `charset=utf-8`**（`http.Response` 默认按 latin1 编正文，
+/// 正文里有中文就当场抛）；真服务端也是带 charset 的。
+http.Response _json(String body) =>
+    http.Response(body, 200, headers: {'content-type': 'application/json; charset=utf-8'});
+
+/// 一份"回收站里有东西、清单里有一条删不掉"的假服务端（不开端口、不碰真网）。
+ChatController _trashController() {
+  final api = Api(
+    client: MockClient((r) async {
+      if (r.url.path == '/api/trash') {
+        return _json(jsonEncode({
+          'items': [
+            {
+              'messageIds': ['u_1', 'm_1'],
+              'at': 1758400000000,
+              'purgeAt': 1758400000000,
+              'preview': '帮我把这周工时记一下',
+            },
+            {'messageIds': ['u_2'], 'at': 1758400000000, 'purgeAt': 1758400000000, 'preview': ''},
+          ],
+        }));
+      }
+      if (r.url.path == '/api/trash/plan') {
+        return _json(jsonEncode({
+          'messageIds': ['u_1', 'm_1'],
+          'items': [
+            {
+              'what': '可见的那几句',
+              'where': '这台设备',
+              'verdict': 'delete',
+              'note': '这一屏上看得到的，会跟着清掉',
+            },
+            {
+              'what': '它记住的那一段',
+              'where': '记忆里',
+              'verdict': 'cannot',
+              'note': '要等这段对话的记忆被重建才会消失',
+            },
+          ],
+          'purgeAt': 1758400000000,
+          'ttlDays': 30,
+        }));
+      }
+      return _json('{}');
+    }),
+  );
+  // ⚠️ **必须给令牌**：没有它，`loadTrash` / `planDelete` 会当场返回"令牌不行"，
+  //    于是这一页只显示一句人话、列表与清单都不画 —— 而扫描照样绿（"闸变弱了"）。
+  return ChatController(api: api, tokens: TokenStore(), token: 'tok');
+}
+
+/// 一份**一整轮**的时间线（用户那句 + 它的回答）——
+/// 长按要认得出一轮（`turnGroupOf`）才会给菜单。
+ChatController _turnController() {
+  final c = _trashController();
+  c.ingest({'type': 'user/echo', 'seq': 1, 'messageId': 'u_1', 'text': '帮我把这周工时记一下'});
+  c.ingest({'type': 'message/start', 'seq': 2, 'messageId': 'm_1'});
+  c.ingest({'type': 'message/text', 'seq': 3, 'messageId': 'm_1', 'block': 'quick', 'text': '这周 7 小时。'});
+  c.ingest({'type': 'message/end', 'seq': 4, 'messageId': 'm_1', 'reason': 'completed'});
+  return c;
+}
+
+/// **像用户那样**打开回收站页：从主界面点顶栏那个入口。
+Future<void> _openTrash(WidgetTester tester, double scale) async {
+  await _pump(tester, ChatScreen(controller: _trashController(), onLoggedOut: () {}), scale);
+  await tester.tap(find.byTooltip(trashTooltip));
+  await tester.pumpAndSettle();
+}
+
+/// **像用户那样**长按一条回答，弹出删除菜单。
+Future<void> _openBubbleMenu(WidgetTester tester, double scale) async {
+  await _pump(tester, ChatScreen(controller: _turnController(), onLoggedOut: () {}), scale);
+  await tester.longPress(find.text('这周 7 小时。'));
+  await tester.pumpAndSettle();
+}
+
+/// **像用户那样**一路走到**删前那份清单**：长按 → 菜单 → 删掉。
+Future<void> _openPlan(WidgetTester tester, double scale) async {
+  await _openBubbleMenu(tester, scale);
+  await tester.tap(find.text(bubbleMenuDelete));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   // 换档会写本机设置（`ProcessLevelStore`）——测试里给它一个空盘，
   // 免得真去敲一个不存在的平台插件（写失败也不会抛，但别让它去敲）。
@@ -172,6 +267,33 @@ void main() {
           expect(size.height >= minTouch, isTrue,
               reason: '切换面板 @${s}x：一行的命中区只有 ${size.height}');
         }
+      });
+
+      testWidgets('回收站页（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 批 3 新加的页面 ⇒ 必须也过这道闸（同关于页那条的理由）。
+        await _openTrash(tester, s);
+        expect(_drain(tester), isEmpty, reason: '回收站页在 ${s}x 溢出了');
+        // 负向对照：**真的画出了条目**才算数（只画出"读不到"那一句的话，
+        // 这道闸量的是一个空页）。
+        expect(find.text(trashRestore), findsWidgets, reason: '★ 回收站页没画出条目 ⇒ 这条闸漏了它');
+      });
+
+      testWidgets('气泡长按菜单（从真入口进）@ ${s}x', (tester) async {
+        await _openBubbleMenu(tester, s);
+        expect(_drain(tester), isEmpty, reason: '删除菜单在 ${s}x 溢出了');
+        // 菜单里那一行是 `ListTile`（不在按钮扫描的种类里）⇒ 单独量它的命中区。
+        for (final t in find.byType(ListTile).evaluate()) {
+          final size = tester.getSize(find.byWidget(t.widget));
+          expect(size.height >= minTouch, isTrue,
+              reason: '删除菜单 @${s}x：一行的命中区只有 ${size.height}');
+        }
+      });
+
+      testWidgets('删前那份清单（从真入口进，含"删不掉"那一条）@ ${s}x', (tester) async {
+        await _openPlan(tester, s);
+        expect(_drain(tester), isEmpty, reason: '删前清单在 ${s}x 溢出了');
+        // 而且它**照实**把"删不掉"写出来了（§五：那句必须出现在屏幕上）
+        expect(find.text(planCannotLine), findsOneWidget);
       });
 
       testWidgets('空屏 @ ${s}x', (tester) async {
@@ -280,6 +402,23 @@ void main() {
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
         await _openAbout(tester, s);
         await sweep(tester, '关于页 @${s}x');
+      });
+
+      testWidgets('回收站页（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 新加的页面必须也进这份扫描 —— 不然它的按钮（恢复 / 彻底删掉）
+        //    就没有任何东西守着"命中区 ≥44"。
+        await _openTrash(tester, s);
+        await sweep(tester, '回收站页 @${s}x');
+      });
+
+      testWidgets('删前那份清单（从真入口进）@ ${s}x', (tester) async {
+        await _openPlan(tester, s);
+        await sweep(tester, '删前清单 @${s}x');
+      });
+
+      testWidgets('气泡长按菜单（从真入口进）@ ${s}x', (tester) async {
+        await _openBubbleMenu(tester, s);
+        await sweep(tester, '删除菜单 @${s}x');
       });
 
       testWidgets('主界面（含"重发"那个入口）@ ${s}x', (tester) async {

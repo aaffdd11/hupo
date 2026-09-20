@@ -13,6 +13,7 @@ import '../models/conn_state.dart';
 import '../models/message_state.dart';
 import '../models/process_levels.dart';
 import '../models/timeline.dart';
+import '../models/trash.dart';
 import 'api.dart';
 import 'draft_store.dart';
 import 'process_level_store.dart';
@@ -61,7 +62,10 @@ class ChatController extends ChangeNotifier {
   ///
   /// ⚠️ 为什么要单独留一份：`Timeline` 里已经是**画出来的条目**了，
   ///    从条目反推事件等于把"缓存"变成"第二次解释"——那就违反"只缓存，不判断"。
-  final List<Map<String, dynamic>> _facts = [];
+  ///
+  /// ⚠️ 不 `final`：**删除**要把属于那几个 id 的事实整批换掉
+  ///    （`withoutMessages`；纯函数，进 `test/unit`）。
+  List<Map<String, dynamic>> _facts = [];
 
   final Timeline timeline = Timeline();
   String? _token;
@@ -308,16 +312,39 @@ class ChatController extends ChangeNotifier {
     // ★ 服务端开口了：从这一刻起，"它正在做"才是我们**知道**的事
     timeline.markFresh();
     timeline.apply(event);
+
+    // ★ **删掉 / 恢复 / 真删**（契约 §8.1、§8.3）：模型那一层已经把条目
+    //   藏起来 / 取消藏 / 丢掉了；这里补的是**本机那两份**（契约 §四 🔴）：
+    //   缓存里那一屏 + 属于这一轮的草稿。
+    //
+    //   ⚠️ 为什么非清不可：不清的话，下一次开机本机缓存会**先把那一屏画出来**
+    //      ——屏幕上又出现"已经删掉的话"，而服务端那边它已经没了。那就是说假话。
+    //   ⚠️ 墓碑事件**自己不许清**：它是"谁被删过"的唯一凭据，
+    //      冷启动要靠它把藏起来这件事重新立起来。
+    final forgets = event['type'] == 'turn/deleted' || event['type'] == 'turn/purged';
+    final ids = Timeline.messageIdsOfEvent(event);
+
     if (TimelineStore.isPersistable(event)) {
       _facts.add(event);
       // 内存里也别只涨不降（留一点余量给"还没落盘的那几条"）
       if (_facts.length > TimelineStore.capEvents * 2) {
         _facts.removeRange(0, _facts.length - TimelineStore.capEvents);
       }
-      _maybeSave(event);
+      if (forgets) {
+        // ⚠️ **先去掉、再写盘**：反过来的话会先把"已经删掉的那一屏"原样写回去，
+        //    下一次开机就又画出来了。
+        // ⚠️ 写盘**立刻做**（不走 `_maybeSave` 的去抖）：这一条是结构性的，
+        //    而且它错了的代价是屏幕上出现已经删掉的话。
+        _facts = withoutMessages(_facts, ids.toSet());
+        local.save(_facts);
+      } else {
+        _maybeSave(event);
+      }
     }
     // ⚠️ 服务端可能**正好在这一帧里认领了**本地那条（`user/echo`）⇒ 立刻把它
     //    从存档里去掉。晚一步的话，刷新之后它会被画两遍（一遍事实、一遍存档）。
+    // ★ 被删掉的那一轮若在存档里（它还没被认领）⇒ 这一句会把它一并去掉：
+    //   `draftsFrom` 是从**画得出来的那些**条目推的（`timeline.items`）。
     _saveDrafts();
     notifyListeners();
   }
@@ -450,6 +477,95 @@ class ChatController extends ChangeNotifier {
       if (it is UserUtterance && it.messageId == messageId) return it.text;
     }
     return null;
+  }
+
+  // ── 删掉 / 回收站（契约 `docs/dev/28-DELETE.md`）──────────────
+
+  /// 长按某一条时，**该把哪几个 id 交给服务端**。
+  ///
+  /// 一轮 = 一条用户的话 + 它的回答（契约 §三·补：落盘的事件里没有轮号，
+  /// 所以"哪两条算一轮"只能由看得见时间线的这一侧给）。
+  ///
+  /// 返回 `null` = 这一条还不在任何一轮里（**比如还没发出去的那句**）——
+  /// 那时界面上不该给"删掉"这个入口：那会是一个删不掉的动作。
+  List<String>? turnMessageIds(String messageId) {
+    final g = turnGroupOf(timeline.items, messageId);
+    if (g == null) return null;
+    final ids = g.messageIds;
+    return ids.isEmpty ? null : ids;
+  }
+
+  /// 删前那份清单。**只读**（契约 §8.2：这一步不许有门槛）。
+  Future<TrashAnswer<TrashPlan>> planDelete(List<String> messageIds) async {
+    final t = _token;
+    if (t == null) return const TrashUnauthorized<TrashPlan>();
+    return api.trashPlan(messageIds: messageIds, token: t);
+  }
+
+  /// 删掉（放进回收站）。
+  ///
+  /// ⚠️ 成功之后**立刻就地藏 + 清本机**，不等 WS 上那条 `turn/deleted`：
+  ///    契约 §四 🔴 要的是"删完屏幕上就一个字都不剩"，
+  ///    而"等服务端那一帧"在断线时**永远不会来**——那时就是屏幕在说假话。
+  ///    （事件到了会再走一遍，幂等。）
+  Future<TrashAnswer<bool>> removeTurn(List<String> messageIds) async {
+    final t = _token;
+    if (t == null) return const TrashUnauthorized<bool>();
+    final r = await api.trashRemove(messageIds: messageIds, token: t);
+    if (r is TrashOk<bool>) await _forgetTurn(messageIds);
+    return r;
+  }
+
+  /// 回收站里现在有什么。
+  Future<TrashAnswer<List<TrashEntry>>> loadTrash() async {
+    final t = _token;
+    if (t == null) return const TrashUnauthorized<List<TrashEntry>>();
+    return api.trashList(token: t);
+  }
+
+  /// 从回收站拿回来。
+  ///
+  /// ⚠️ 服务端会落一条 `turn/restored`（契约 §8.3），但那一帧要是没到
+  ///    （断线 / 补发窗口已经过去），屏幕上就少了一条**其实已经拿回来**的话
+  ///    ——那也是一种说假话 ⇒ 就地取消隐藏（幂等，事件到了再做一遍没差别）。
+  Future<TrashAnswer<bool>> restoreTurn(List<String> messageIds) async {
+    final t = _token;
+    if (t == null) return const TrashUnauthorized<bool>();
+    final r = await api.trashRestore(messageIds: messageIds, token: t);
+    if (r is TrashOk<bool>) {
+      timeline.showMessages(messageIds);
+      notifyListeners();
+    }
+    return r;
+  }
+
+  /// 彻底删掉（拿不回来）。成功后**从内存里丢掉**（契约 §8.3）。
+  Future<TrashAnswer<bool>> purgeTurn(List<String> messageIds) async {
+    final t = _token;
+    if (t == null) return const TrashUnauthorized<bool>();
+    final r = await api.trashPurge(messageIds: messageIds, token: t);
+    if (r is TrashOk<bool>) await _forgetTurn(messageIds, purge: true);
+    return r;
+  }
+
+  /// 就地收拾"这一轮已经不在了"：藏起来（或丢掉）+ **清本机那两份**。
+  ///
+  /// ⚠️ 这两件事必须**一起**做。只藏内存不清缓存 ⇒ 下次开机那一屏又画出来；
+  ///    只清缓存不藏内存 ⇒ 这一屏现在还看得见。
+  Future<void> _forgetTurn(List<String> messageIds, {bool purge = false}) async {
+    final ids = messageIds.toSet();
+    if (purge) {
+      timeline.purgeMessages(messageIds);
+    } else {
+      timeline.hideMessages(messageIds);
+    }
+    _facts = withoutMessages(_facts, ids);
+    // ⚠️ 立刻写盘（不是 `_maybeSave` 那种去抖）：这是结构性的，
+    //    而且**写晚了就等于"已经删掉的一屏还留在盘上"**。
+    await local.save(_facts);
+    // 草稿从"画得出来的那些"重算 ⇒ 属于这一轮的草稿跟着消失（`draftsFrom`）。
+    _saveDrafts();
+    notifyListeners();
   }
 
   /// 启动时查一次"这台机器设密码了没"。

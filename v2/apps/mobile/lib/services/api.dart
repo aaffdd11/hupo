@@ -10,6 +10,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../models/trash.dart';
+
 /// 说话的结果。**把"为什么没成功"分清楚**——
 /// 因为对用户说的话不一样，能做的事也不一样。
 sealed class SayOutcome {
@@ -197,6 +199,123 @@ class Api {
   }
 
   void close() => _c.close();
+}
+
+/// 「删掉 / 回收站」这一路的结果（契约 `28-DELETE.md` §8.2）。
+///
+/// ⚠️ 三种**不许混**（和 [SayOutcome] / [RenewOutcome] 同一条纪律）：
+///   * [TrashOk]：服务端明说做成了；
+///   * [TrashUnauthorized]：令牌不行 ⇒ 该回登录页，**不是**"网不好"；
+///   * [TrashFailed]：网的问题 / 服务端没收下 / 回执读不出来 ⇒ **什么都没发生**
+///     （这一条尤其重要：删是破坏性动作，"以为删了其实没删"和
+///      "以为没删其实删了"都不许出现 ⇒ 界面上只认**明说的 ok**）。
+sealed class TrashAnswer<T> {
+  const TrashAnswer();
+}
+
+class TrashOk<T> extends TrashAnswer<T> {
+  const TrashOk(this.value);
+  final T value;
+}
+
+class TrashUnauthorized<T> extends TrashAnswer<T> {
+  const TrashUnauthorized();
+}
+
+class TrashFailed<T> extends TrashAnswer<T> {
+  const TrashFailed(this.detail);
+  final String detail;
+}
+
+/// 回执 + 解析器 → 结果。**纯函数**（不起网络、不碰界面、不看钟）⇒
+/// 它能进 `test/unit` 硬闸（和 [sayOutcomeOf] / [renewOutcomeOf] 同一条理由）。
+///
+/// 状态码的分工：`200` ⇒ 按 [parse] 解；`401` ⇒ 令牌不行；
+/// 其余（含 4xx/5xx）⇒ 失败，**一个字节都不当成功**。
+TrashAnswer<T> trashAnswerOf<T>(
+  int status,
+  String body,
+  T Function(Map<String, dynamic>) parse,
+) {
+  if (status == 401) return TrashUnauthorized<T>();
+  if (status != 200) return TrashFailed<T>('HTTP $status');
+  try {
+    final j = jsonDecode(body);
+    if (j is! Map<String, dynamic>) return TrashFailed<T>('回执不是对象');
+    return TrashOk<T>(parse(j));
+  } catch (e) {
+    return TrashFailed<T>('回执解不开：$e');
+  }
+}
+
+/// 五个"删掉 / 回收站"的入口（契约 §8.2）。
+///
+/// ⚠️ **全都带令牌头**（`Authorization: Bearer`），**一个都不许走 URL**
+///    ——和 [say] / [renew] 同一条规矩。
+/// ⚠️ `plan` 是**只读**的（"先看清单"不许有门槛）；`remove` / `purge` 必须显式
+///    `confirm:true`（少它服务端就 400，见契约 §8.2）——这一条客户端**照实发**，
+///    不替服务端判断。
+extension TrashApi on Api {
+  Map<String, String> _auth(String token) => {
+        ...{'content-type': 'application/json'},
+        'authorization': 'Bearer $token',
+      };
+
+  Future<TrashAnswer<T>> _post<T>(
+    String path,
+    Map<String, dynamic> body,
+    String token,
+    T Function(Map<String, dynamic>) parse,
+  ) async {
+    try {
+      final r = await _c
+          .post(_u(path), headers: _auth(token), body: jsonEncode(body))
+          .timeout(const Duration(seconds: 20));
+      return trashAnswerOf<T>(r.statusCode, r.body, parse);
+    } catch (e) {
+      return TrashFailed<T>('$e');
+    }
+  }
+
+  /// 删前那份清单。**不给 `confirm`**（它是只读的）。
+  Future<TrashAnswer<TrashPlan>> trashPlan({
+    required List<String> messageIds,
+    required String token,
+  }) =>
+      _post('/api/trash/plan', {'messageIds': messageIds}, token, trashPlanFrom);
+
+  /// 删掉（放进回收站）。⚠️ `confirm:true` 是契约要求的。
+  Future<TrashAnswer<bool>> trashRemove({
+    required List<String> messageIds,
+    required String token,
+  }) =>
+      _post('/api/trash/remove', {'messageIds': messageIds, 'confirm': true}, token, (_) => true);
+
+  /// 回收站里现在有什么。
+  Future<TrashAnswer<List<TrashEntry>>> trashList({required String token}) async {
+    try {
+      final r = await _c
+          .get(_u('/api/trash'), headers: {'authorization': 'Bearer $token'})
+          .timeout(const Duration(seconds: 20));
+      return trashAnswerOf<List<TrashEntry>>(r.statusCode, r.body, trashEntriesFrom);
+    } catch (e) {
+      return TrashFailed<List<TrashEntry>>('$e');
+    }
+  }
+
+  /// 从回收站拿回来。
+  Future<TrashAnswer<bool>> trashRestore({
+    required List<String> messageIds,
+    required String token,
+  }) =>
+      _post('/api/trash/restore', {'messageIds': messageIds}, token, (_) => true);
+
+  /// 彻底删掉。⚠️ 同样必须 `confirm:true`。
+  Future<TrashAnswer<bool>> trashPurge({
+    required List<String> messageIds,
+    required String token,
+  }) =>
+      _post('/api/trash/purge', {'messageIds': messageIds, 'confirm': true}, token, (_) => true);
 }
 
 /// `/api/say` 的回执 → 结果。**纯函数**（不起网络、不碰界面、不看钟）——
