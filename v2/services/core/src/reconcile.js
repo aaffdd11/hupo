@@ -41,6 +41,7 @@
 // （本文件末尾那个 `reconcileOnBoot` 是**唯一**碰 IO 的，而且它只做"照单执行"。）
 
 import { MessageWriter } from './message-writer.js';
+import { planResume } from './resume-plan.js';
 
 /**
  * 默认回看窗口：**6 小时**（手册 §15.3）。
@@ -62,6 +63,17 @@ export const RECONCILE_WINDOW_MS = 6 * 60 * 60 * 1000;
  *    `apps/mobile/lib/models/forbidden_words.dart` 那道闸管的是界面文案，
  *    这一句**就是**界面文案，所以同样受它管。
  */
+/**
+ * 对用户说的那句话（**这一件马上要自动重做**那一版）。
+ *
+ * ⚠️ 它和 `INTERRUPTED_LINE` 的区别是**承诺**：那一版说"你说一声我重新来一遍"
+ *    （等主人开口），这一版说"我重新做一遍"（已经在做）。
+ * ⚠️ 人格硬规则第 3 条「**不许说了不做**」—— 说这句的**同一个开机流程**
+ *    必须真的把活派出去（`serve.js` 紧接着就 `deliver`）。
+ */
+export const INTERRUPTED_RESUMING_LINE =
+  '你刚才让我做的那件事，可能没做完 —— 中间我被打断了。我重新做一遍，做完了告诉你。';
+
 export const INTERRUPTED_TOUCHED_LINE =
   '你刚才让我做的那件事，可能没做完 —— 中间我被打断了。' +
   '它可能已经改过东西了（写过文件、或者跑过命令），所以我没有自己重来。' +
@@ -103,6 +115,8 @@ export function findInterrupted(events, { now = Date.now(), windowMs = RECONCILE
   /** 主人哪句话引起来的活里**动过东西**（决策 D10.1）。`null` = 归属不明（保守当"动过"） */
   const mutatedRefs = new Set();
   let lastEchoRef = null;
+  /** 主人最后说的那句话的**原文**（续做要拿它去重来，所以必须带上） */
+  let lastEchoText = null;
 
   for (const e of events) {
     if (!e || typeof e.type !== 'string') continue;
@@ -110,6 +124,7 @@ export function findInterrupted(events, { now = Date.now(), windowMs = RECONCILE
     switch (e.type) {
       case 'user/echo':
         lastEchoRef = typeof e.messageId === 'string' ? e.messageId : null;
+        lastEchoText = typeof e.text === 'string' ? e.text : null;
         echoes.push({
           messageId: lastEchoRef,
           text: typeof e.text === 'string' ? e.text : null,
@@ -129,6 +144,11 @@ export function findInterrupted(events, { now = Date.now(), windowMs = RECONCILE
             at: typeof e.at === 'number' ? e.at : now,
             // 这一轮是主人哪句话引起来的（用来对上"动过东西"那份记录）
             ref: lastEchoRef,
+            // ⚠️ **原话也要带上** —— 续做要拿它去重来。
+            //    早先只给 `unanswered` 带了 text、没给 `orphans` 带，
+            //    结果**最常见的那种打断**（它应了一声、然后被杀）**永远重来不了**
+            //    （没有原话就不知道重来什么）。这个洞是测试逼出来的。
+            text: lastEchoText,
           });
         }
         break;
@@ -150,6 +170,7 @@ export function findInterrupted(events, { now = Date.now(), windowMs = RECONCILE
     .map(([messageId, info]) => ({
       messageId,
       ref: info.ref ?? null,
+      text: info.text ?? null,
       at: info.at,
       ageMs: Math.max(0, now - info.at),
       tell: now - info.at <= windowMs, // ⚠️ 只对最近 6 小时内的说话
@@ -226,16 +247,33 @@ export function reconcileOnBoot({
   timelineId = null,
   now = Date.now(),
   windowMs = RECONCILE_WINDOW_MS,
+  /** 续做的开关。**不给 ⇒ 不自动重来**（保守默认：宁可只通知） */
+  resume = null,
   log = () => {},
 }) {
   const id = timelineId ?? timeline.id;
+  let events;
   let found;
   try {
-    found = findInterrupted(store.readAll(id), { now, windowMs });
+    events = store.readAll(id);
+    found = findInterrupted(events, { now, windowMs });
   } catch (err) {
-    return { ok: false, closed: 0, told: 0, total: 0, error: `读日志失败：${err?.message ?? err}` };
+    return {
+      ok: false, closed: 0, told: 0, total: 0, mutated: 0,
+      resume: null, resumeReason: 'read-failed',
+      error: `读日志失败：${err?.message ?? err}`,
+    };
   }
-  if (found.incidents === 0) return { ok: true, closed: 0, told: 0, total: 0, mutated: 0 };
+  if (found.incidents === 0) {
+    return { ok: true, closed: 0, told: 0, total: 0, mutated: 0, resume: null, resumeReason: 'nothing-interrupted' };
+  }
+
+  // ★ **先决定要不要自动重来，再决定说什么话** —— 顺序反了就会撒谎：
+  //   一边说"你说一声我重新来一遍"、一边自己已经派了出去，那句话就是假的。
+  //   （人格硬规则 3 禁的是"说了不做"；"做了却说没做"一样坏。）
+  const plan = resume
+    ? planResume({ findings: found, events, now, ...resume })
+    : { pick: null, reason: 'off' };
 
   let closed = 0;
   const failures = [];
@@ -265,7 +303,12 @@ export function reconcileOnBoot({
       const w = new MessageWriter({ timeline, agent: 'agent', origin: 'proactive' });
       // ★ **动过东西的要说清"我没敢自己重来"** —— 那是主人该知道的事
       //   （他得去看一眼那些文件）。只说"我重新来一遍"会让他以为没什么要紧。
-      w.chunk('deep', found.anyMutated ? INTERRUPTED_TOUCHED_LINE : INTERRUPTED_LINE);
+      const line = plan.pick
+        ? INTERRUPTED_RESUMING_LINE
+        : found.anyMutated
+          ? INTERRUPTED_TOUCHED_LINE
+          : INTERRUPTED_LINE;
+      w.chunk('deep', line);
       w.end('completed');
       told = 1;
     } catch (err) {
@@ -285,6 +328,11 @@ export function reconcileOnBoot({
     unanswered: found.unanswered.length,
     /** 其中动过东西的有几处（那些**不许自动重来**，见 D10.1） */
     mutated: found.mutatedIncidents,
+    /** 这一轮打算自动重来的那一件（`null` = 不重来）。
+     *  ⚠️ 调用方**必须真的把它派出去** —— 话已经说出去了。 */
+    resume: plan.pick,
+    /** 为什么不重来（给排障看，不是给用户的文案） */
+    resumeReason: plan.reason,
     ...(failures.length > 0 ? { error: failures.join('；') } : {}),
   };
 }

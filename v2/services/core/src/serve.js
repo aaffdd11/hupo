@@ -18,10 +18,12 @@ import { Dispatcher } from './dispatcher.js';
 import { SayService } from './say.js';
 import { Store } from './store.js';
 import { reconcileOnBoot } from './reconcile.js';
+import { CRASH_WINDOW_MS, markCleanExit, recordStart } from './boot-marker.js';
+import { RESUMED_EVENT } from './resume-plan.js';
 import { Timeline } from './timeline.js';
 import { createServer } from './server.js';
 import { loadConfig, preflight } from './config.js';
-import { installProcessGuard } from './process-guard.js';
+import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
 
 
 const cfg = loadConfig(process.env, process.cwd());
@@ -49,9 +51,21 @@ const timeline = new Timeline({
 // ⚠️ 位置就在这儿：**在服务开始收请求之前**。晚一步的话，
 //    客户端可能已经连上、把那条没收口的气泡渲染成"还在做"了。
 // ⚠️ 而且它**不许阻断启动**（手册 §15.3）——函数内部自己包住了。
+// ★ **崩溃环判定**（§11.1）：判断"是不是刚崩过几次"。
+// ⚠️ 必须在对账**之前** —— 降级状态是"要不要续做"的输入之一。
+const boot = recordStart(cfg.dataDir);
+if (boot.degraded) {
+  console.warn(
+    `  ⚠️ ${HUMAN_LINES.degraded}\n` +
+      `     （${CRASH_WINDOW_MS / 60000} 分钟内启动了 ${boot.starts} 次，上一次没善终 ⇒ **这次不续做**）`,
+  );
+}
+
 const reconciled = reconcileOnBoot({
   timeline,
   store,
+  // 续做只在**没降级**时开（§11.1：崩溃环里继续续做只会放大问题）
+  resume: { degraded: boot.degraded },
   log: (m) => console.warn(m),
 });
 if (!reconciled.ok) {
@@ -86,6 +100,24 @@ const { listen, close } = createServer({
   timeline, store, auth, say, dispatcher, webRoot, buildId: cfg.buildId,
   log: (m) => console.log(m),
 });
+
+// ★ **续做**：对账说出口的那句"我重新做一遍"，在这里真的做。
+// ⚠️ 顺序不能反：**先落 `task/resumed`（记额度）再投递** ——
+//    投递失败也要算一次"发起过"，否则一个每次投递都失败的活会被无限重试。
+if (reconciled.resume) {
+  const { ref, text, attempt } = reconciled.resume;
+  console.log(`  ▶ 续做：把「${text.slice(0, 24)}…」重做一遍（第 ${attempt} 次）`);
+  try {
+    timeline.emit({ type: RESUMED_EVENT, ref, attempt });
+    dispatcher.deliver(text, { messageId: ref }).catch((err) => {
+      console.warn(`  ⚠️ 续做投递失败：${err?.message ?? err}（额度已经记过了）`);
+    });
+  } catch (err) {
+    console.warn(`  ⚠️ 续做没发起：${err?.message ?? err}`);
+  }
+} else if (reconciled.total > 0) {
+  console.log(`  · 没有自动重做（原因：${reconciled.resumeReason}）`);
+}
 
 const addr = await listen(cfg.port, '127.0.0.1');
 
@@ -131,6 +163,11 @@ console.log(
         `—— 已收口${reconciled.told > 0 ? '，并告诉了用户' : '（太旧，没打扰用户）'}`
   }`,
 );
+console.log(
+  // ⚠️ "上次是怎么结束的"要一眼看见：它是排障时第一个要问的问题
+  `  上次退出 ${boot.uncleanLastRun ? '⚠️ 没善终（被硬杀 / 断电）' : '干净'}` +
+    `（${CRASH_WINDOW_MS / 60000} 分钟内第 ${boot.starts} 次启动${boot.degraded ? '，**已降级：这次不续做**' : ''}）`,
+);
 console.log(`  时间线   已有事件 ${timeline.seq} 条`);
 console.log('──────────────────────────────────────────────');
 
@@ -146,6 +183,8 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     await dispatcher.shutdown();
     await runtime.shutdown();
     await close();
+    // ★ 留下"这次是好好走的"标记 ⇒ 下次开机才知道上一次是不是被硬杀的
+    markCleanExit(cfg.dataDir);
     process.exit(0);
   });
 }

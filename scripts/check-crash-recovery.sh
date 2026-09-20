@@ -111,4 +111,54 @@ fi
 grep -E "上次收尾" "$DATA/serve3.log" | sed 's/^/  /'
 
 echo
-echo "✅ 通过：硬杀之后能自己收干净，而且不会反复唠叨"
+echo "════ 第二幕：一件**只读过东西**的活 —— 它应该被自动重做 ════"
+echo "（上面那一幕用的是 bash ⇒ 动过东西 ⇒ 只通知。这一幕用只读的活。）"
+
+DATA2="$(mktemp -d /tmp/hupo-resume-XXXX)"
+start2() { setsid nohup env HUPO_DATA="$DATA2" HUPO_PORT="$PORT" HUPO_WEB="$DIR/web" \
+  HUPO_BUILD_ID="$1" node src/serve.js > "$2" 2>&1 < /dev/null & echo $!; }
+
+P1="$(start2 resume-a "$DATA2/s1.log")"; PIDS+=("$P1"); sleep 3
+printf '%s' "$PASS" | HUPO_DATA="$DATA2" node src/auth-cli.mjs set >/dev/null 2>&1; sleep 1.5
+T2="$(curl -s -X POST "http://127.0.0.1:$PORT/api/login" -H 'content-type: application/json' \
+  -d "{\"password\":\"$PASS\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')"
+
+# 造一件"只读过东西、被硬杀"的现场：直接往日志里写（**不花模型调用**）——
+# 这条要验的是**调度**，不是模型。形态与真 agent 走只读工具时落下来的完全一样。
+python3 - "$DATA2/main.jsonl" <<'PY'
+import json, sys, time
+now = int(time.time() * 1000)
+evs = [
+  {"type":"user/echo","messageId":"u_ro","text":"帮我查一下明天的天气","clientAt":None,"seq":1,"at":now-60000},
+  {"type":"message/start","messageId":"m_ro","agent":"agent","origin":"reactive","re":[],"seq":2,"at":now-59000},
+  {"type":"message/text","messageId":"m_ro","block":"quick","seqInBlock":1,"text":"我查着…","seq":3,"at":now-58000},
+]
+open(sys.argv[1],"w",encoding="utf-8").write("".join(json.dumps(e,ensure_ascii=False)+"\n" for e in evs))
+PY
+echo "▶ 现场：只读过东西、开了口没收口（$DATA2/main.jsonl）"
+kill -9 "$P1" 2>/dev/null; sleep 1
+P2="$(start2 resume-b "$DATA2/s2.log")"; PIDS+=("$P2"); sleep 6
+
+python3 - "$DATA2/main.jsonl" "$DATA2/s2.log" <<'PY'
+import json, sys
+evs=[json.loads(l) for l in open(sys.argv[1],encoding='utf-8')]
+log=open(sys.argv[2],encoding='utf-8').read()
+resumed=[e for e in evs if e['type']=='task/resumed']
+texts=[e.get('text','') for e in evs if e['type']=='message/text']
+checks=[
+  ('🔴 落了 `task/resumed`（额度记下来了）', len(resumed)==1),
+  ('🔴 归属对：`ref` 就是主人那句话', len(resumed)==1 and resumed[0].get('ref')=='u_ro'),
+  ('🔴 说的是"我重新做一遍"（不是"你说一声"）', any('我重新做一遍' in t for t in texts)),
+  ('🔴 服务真的去起了 agent 把活派出去', '续做：' in log),
+]
+bad=0
+for n,ok in checks:
+    print(('  ✅ ' if ok else '  ❌ ')+n)
+    if not ok: bad+=1
+sys.exit(0 if bad==0 else 1)
+PY
+[ $? -eq 0 ] || { echo "❌ 第二幕没过"; exit 1; }
+echo "  （日志：$(grep -o '续做：.*' "$DATA2/s2.log" | head -1)）"
+
+echo
+echo "✅ 通过：动过东西的只通知；只读过东西的**真的自动重做**，而且额度落盘"
