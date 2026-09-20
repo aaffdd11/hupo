@@ -2,15 +2,16 @@
 
 > **上游**：`ARCHITECTURE-v7.md`（大架构，权威）｜`docs/pm-panel/DECISIONS.md`（11 条拍板）
 >
-> **新一代（AI 手机）的四份，按"先读哪份"排**：
+> **新一代（AI 手机）的五份，按"先读哪份"排**：
 > | 文件 | 回答什么问题 |
 > |---|---|
 > | [`ai-phone-architecture.md`](ai-phone-architecture.md) | **谁是干什么的**——多租户 + 工作区 + 统一窗口；含 N12–N24 不变量 |
 > | [`R2-ENGINEERING.md`](R2-ENGINEERING.md) | **改完之后代码长什么样**——模块图 / **协议 v2 字段** / 状态机 / 接口契约 / 测试地图 / 文件级改动总索引 |
-> | [`R2-MASTER-PLAN.md`](R2-MASTER-PLAN.md) | **先做什么后做什么**——七批，每批带"能验证什么""装不装得上平板" |
-> | [`R2-plan-review.md`](R2-plan-review.md) | **哪里想错了**——三席独立评审（**推翻了前一版计划的核心论断**） |
+> | [`R2-MASTER-PLAN.md`](R2-MASTER-PLAN.md) | **先做什么后做什么**——八批（含 1.5），每批带"能验证什么""装不装得上平板" |
+> | [`R2-plan-review.md`](R2-plan-review.md) | **计划哪里想错了**——三席独立评审（**推翻了前一版计划的核心论断**） |
+> | [`R2-ENGINEERING-review.md`](R2-ENGINEERING-review.md) | **工程文档哪里写错了**——三席独立评审（**砍掉 3 个协议字段、加进批 1.5、挖出 2 个今天在咬人的 bug**） |
 >
-> 需求书：`docs/pm-panel/R2-DECISIONS.md`（**60+ 条已拍板**）｜实测：`R2-verification.md`｜
+> 需求书：`docs/pm-panel/R2-DECISIONS.md`（**60+ 条已拍板 + 7 条待裁决 P-e–P-k**）｜实测：`R2-verification.md`｜
 > 用户体验：`docs/ux/`（10 份走查 + 合成 + 解决方案）
 >
 > **下面四份子架构描述的是"单用户那一代"，仍然有效**（作为历史记录保留，**不更新**）；

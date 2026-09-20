@@ -754,3 +754,162 @@ B 做的是"**过程的可见性**"（等待期告诉你在做什么）。**两�
 > `AGENTS.md` 与 `hupo-persona.yml` 里写的 **`sudo` 免密**与实测**相反**（本机实测 `sudo` **要密码**），
 > 而 **P2 甲方案的安全性正建立在"要密码"上**。
 > **必须同批改**——否则助手的自我认知会把甲的护栏读没（它会以为"反正我免密"，然后一直去试）。
+
+---
+
+# 二轮独立评审新报的 7 条 —— ⏳ **待裁决**
+
+> **来源**：`docs/design/R2-ENGINEERING-review.md`（三席评审 `R2-ENGINEERING.md`）。
+> 评审把那份文档逐条拿代码核了一遍，报出 **20 处要改**（已改）+ **7 条需要拍板**。
+>
+> ⚠️ **其中 P-e 与 P-f 不是"将来的设计问题"，是今天就在咬人的 bug。**
+> **没拍之前不许照 `R2-ENGINEERING.md` §八 那几段动手。**
+
+---
+
+## P-e ★ transport 生命周期（批 0-a 的核心）
+
+**今天的事实**（评审挖出来的）：
+
+```
+main.dart:114        只造一个 transport
+  ├── :116  给主 controller
+  └── :195  给 ChatScreen → chat_screen.dart:223 MiniAppEnv
+              → app_registry.dart:34 → conversation_list_screen.dart:81
+                            ↑ 同一个实例（_events 是 broadcast，:207）
+
+用户退出那个会话：
+  conversation_list_screen.dart:88  controller.dispose()
+    → chat_controller.dart:442      _transport.dispose()
+      → websocket_transport.dart:306-308   关掉 _events / _devSteps / _agentSnaps
+        → _disposed = true ⇒ _open():155 永不重连
+```
+
+⇒ **进「会话」应用、退出来，主屏从此一条消息都收不到，而且不自恢复。**
+
+| 选项 | 做法 | 代价 |
+|---|---|---|
+| **甲** ✅ | **拆两层**：`Connection`（重连 / 令牌 / 版本 / 唯一的 WS）由**顶层持有**；`Session`（`conversationId` / `sinceSeq` / `lastSeq`）**每会话一个**。`Session.dispose()` **只解除自己那一路订阅**，**碰不到 `Connection`** | 要动 `transport.dart`（89 行接口）+ `mock_transport.dart`（423 行）+ 全部调用点；但**这是唯一能同时解决 §1.4 欠账 2 与 3 的方案** |
+| **乙** | 保持单例，**`dispose` 不再关 `_events`**，改为暴露"按会话取消订阅" | 改动小，但**单例里仍存着会话级字段**（`_conversationId` / `_sinceSeq`）⇒ **多作用域一上来必炸**（那是欠账 2） |
+| **丙** | **每会话一个完整 transport**（不复用连接） | 连接数 = 会话数，**和"一条统一时间线"直接冲突**；手机网络下必被系统掐 |
+
+**推荐：甲。** 理由：**一个 WS 连接是物理约束**（不能每会话一条），**而会话级状态必须分离**——
+甲正好是这两句话的直译。而且**它同时是批 0-a"多作用域客户端怎么接"的答案**。
+
+---
+
+## P-f ★ 一轮的稳定 id（`dispatcher` 的 `turns` 键）
+
+**今天的事实**（根因经复核，比"两套 id"更隐蔽）：
+
+```
+session-translate.js:209/219   this.current = { turn, writer, … } → onTurnStart(this.current)
+                               ⇒ dispatcher 的 info **就是** translator.current（同一对象）
+dispatcher.js:617              存键用 info.writer.messageId ← 「当时」的气泡 id
+
+handoffTimer（短）先到 → #escalate(:700) → handoff()
+  session-translate.js:288       cur.writer = new MessageWriter(…newId('m')…)
+                                 ↑ cur === this.current === info
+                                 ⇒ **info.writer.messageId 被隔着一层改掉了**
+
+deadlineTimer（长）后到 → :611 guard 读到**新** id ⇒ undefined !== info ⇒ **永不收口**
+:623 delete 也删**新** id ⇒ **旧键永久残留**（:792 shutdown 还要遍历）
+```
+
+⇒ **升格过的轮次，180s 硬收口彻底失效** ⇒ **N19 与 D7 的"超时收敛"在这条路径上同时是假的。**
+⚠️ 它藏得住的原因是：**dispatcher 全文没有一处给 `info.writer` 赋值**——单看 dispatcher，
+会以为这个 id 是稳定的。
+
+| 选项 | 做法 | 代价 |
+|---|---|---|
+| **甲** ✅ | **`this.turns` 直接用 `info.turn` 作键**（五处都改）。`turn` 号在一轮内**构造上不会变**，`handoff` 也不碰它（`:202` 已随 `info` 给出） | **最小**：五个键，不加字段；`turnMessageId` 这个 Map（`:146/:199`，全库只写不读）**在这个用途上用不着**——要么删掉，要么另作他用 |
+| **乙** | 把已有的 `turnMessageId`（`:199`）变成"真接口"，`turns` 用它作键 | 也能修，但**要维护一个 Map 并保证它同步**；而 `info.turn` 本来就在手上 ⇒ **多一层没必要** |
+| **丙** | 保存 `info` 时**把 id 拷一份**（`info.key = info.writer.messageId`），守卫读 `info.key` | 能修，但**错误前提被固化**：它假设"要的是一个固定 id"，而真正要的是"**一轮**"这个身份；下一个人仍会踩 |
+
+**推荐：甲。** 理由：**它把键换成"构造上就稳定"的东西**，而不是"再小心一点去记住旧值"。
+乙、丙都是在**替一个不该存在的 id 打补丁**。
+
+---
+
+## P-g P-3 的定稿口径（`seq` 到底还叫不叫"可选"）
+
+上一版写的 P-3 自相矛盾：**既说"瞬态事件不占号"，又说 `timeline/marker` "占一个位置"**。
+
+| 选项 | 做法 | 代价 |
+|---|---|---|
+| **甲** ✅ | **"不占号" = "不上时间线"**：`client/reload` 是**控制帧**、本地应声是 **UI 状态**，二者**在进入 `timeline` 之前就被消费掉**；**`marker` 是持久事件（取号、落盘、有位置）** | **零**：`ServerEvent.seq` 保持 `required int`；**不碰基类**；`test/unit/timeline_test.dart:128`（"缺 seq 被拒"）**继续绿** |
+| **乙** | `seq` 改可空 + 客户端排序加兜底键 | ⚠️ 要动基类 + **破一条硬闸测试**；而且**兜底键不能顺手用 `at`**（本地发言是客户端钟、服务端事件是服务端钟，**混钟当排序键会乱**，现网是刻意避免混钟的） |
+| **丙** | 保留 `emitTransient` 发号，把 N22 的措辞改成"持久事件无空洞" | 承认磁盘有空洞，**但"只增不减"就失去了可校验性**（无法用"最大号 + 1"判重） |
+
+**推荐：甲。** 理由：它**让"不占号"和"占位置"不再打架**，而且**不动已经稳定的基类与硬闸**。
+
+---
+
+## P-h `catchUp`：线上字段，还是客户端自己算
+
+**背景**：客户端**已经有** `at >= _serverNowAtConnect` 划线（`chat_controller.dart:298-300`）。
+⚠️ 而且 **`main.dart:79` 的 `connect()` 默认 `resumeFrom = 0`** ⇒ **首次打开也走 replay**，
+服务端若无条件标 `catchUp`，会**把全量历史标成"断线补发"**。
+
+| 选项 | 做法 | 代价 |
+|---|---|---|
+| **甲** ✅ | **线上字段**；`server.js:110-119` 在**补发唯一出口 `:119`** 包一层；⚠️ **不许 `Object.assign(事件, {catchUp})`**（事件对象来自 `conv.log`，**会被写坏**），必须浅拷贝；**服务端只在 `sinceSeq > 0` 时标 `true`** | 小；且**首次打开不再被误标** |
+| **乙** | **客户端推导**（用已有的划线），零协议字段 | 免费，但**混钟**（客户端钟 vs 服务端钟） |
+| **丙** | 不加字段、不推导：进入时**插一条 `timeline/marker`** 表达 | 依赖 P-3 定稿（marker 是持久事件）；**多一条历史** |
+
+**推荐：甲。** 理由：**"是不是补发"只有服务端知道**（它知道客户端报的 `sinceSeq`）；
+客户端推导要在混钟上做判断，那是已知会乱的。
+
+---
+
+## P-i `source` 去留（协议里到底有几条轴）
+
+**今天的事实**：现网已经有**两条轴**——
+`origin`（`dispatcher.js:549-556` `nextProvenance()`：有 pending 用户消息 = `reactive`，否则 `proactive`）回答"**为什么开口**"；
+`agent`（`conversation.js:193` 发 `'agent'｜'dispatcher'`，**已在线上、只是客户端不读**）回答"**谁在说**"。
+
+新加的 `source`（`user` / `dispatcher` / `agent:<scopeId>`）**与 `agent` 重复一半、与 `origin` 混淆一半**：
+`message/start` **永远是助手在说**，那个 `user` 想表达的其实是 `origin` 的地盘。
+
+| 选项 | 做法 |
+|---|---|
+| **甲** ✅ | **删掉 `source`**，用回 `agent` + `origin`（两条轴各答各的） |
+| **乙** | 保留 `source`，但**只表达 `origin`** ⇒ 与 `origin` 合并成一个字段 |
+| **丙** | 三轴并存，文档写清各自语义 |
+
+**推荐：甲。** 理由：**字段越少越冻结得住**；而 `agent` **本来就在线上**，只是没人读——
+**先让客户端把已有的读起来**，比再加一个更省。
+
+---
+
+## P-j env 白名单：先盘点，还是先做减法
+
+**背景**：`dsh` 是 node CLI，**丢 `PATH` 就回到 ENOENT**（`config.js:32`、`agent-runtime.js:105` 的注释里就是那个坑）；
+还需 `HOME`（读 `~/.dsh`）、`TMPDIR`、`LANG`，以及**部署侧注入的 `DSH_*` / 代理变量**。
+⚠️ **仓库里没有 `.service` 文件，"到底有哪些变量"现在不知道。**
+
+| 选项 | 做法 | 代价 |
+|---|---|---|
+| **甲** ✅ | **先做减法**：传全部 `process.env`，**只删 `*_API_KEY` / `*_TOKEN` / `*_SECRET`** | **立即可做、零 ENOENT 风险**；白名单的**原本目标（去掉密钥）已经达成**；严格白名单是加分项 |
+| **乙** | **先盘点生产机 unit 文件，再写严格白名单** | 更干净，但**阻塞在"主人提供 unit"**；而且盘点完仍有"未来新增变量被漏掉"的风险 |
+| **丙** | 直接写白名单（不盘点） | ❌ **会 ENOENT**（评审明说：不许先砍后盘点） |
+
+**推荐：甲（乙随后）。** 理由：**甲今天就做得了，而且已经关掉那个真实的泄露面**；
+严格白名单作为后续收敛，**不阻塞批 6**。
+
+---
+
+## P-k 上抛之后的进程级策略
+
+**背景**：`store.append` 上抛之后，**`emit` 有 18 个调用点、无一处 `try`**
+（dispatcher 12 / conversation 5 / server 1）；最狠的路径是 `agent-runtime.js:300` ← `stdout.on('data'):117`
+与 `dispatcher:603/610` 的 `setTimeout`——**在 Node 里都是未捕获异常**（全库无 `uncaughtException`）
+⇒ **盘满 → 退出 → 重启 → 再盘满**。
+
+| 选项 | 做法 | 代价 |
+|---|---|---|
+| **甲** ✅ | **`emit` 统一包一层**（不再逐处 try）+ 进程级 `uncaughtException` / `unhandledRejection`：**用 `emitTransient` 发一条人话 notice**（它不落盘 ⇒ **盘满也能发出去**），然后**有界退出 + 退避重启** | 小；**判据要加一条"调用点不需要自己 try"** |
+| **乙** | 只 `emit` 抛，靠调用方自己处理 | ❌ **18 处里漏一处就回到原点** |
+| **丙** | `emit` 抛 + **不退出**：捕获后进内存队列，盘恢复再补写 | ⚠️ **它把"丢了"伪装成"稍后写"**——进程一崩，队列里的**永久没了**；而且掩盖了盘满这个事实 |
+
+**推荐：甲。** 理由：**盘满是运维事实，必须让人知道**；丙把故障藏起来，**正是 09 最恨的那种"看着像成功了"**。
