@@ -76,7 +76,7 @@ lib/screens/about_screen.dart  ← 只负责摆
 |---|---|
 | 禁用词（工作区 / 连接 / 工具 / **正在听**…） | `test/unit/about_facts_test.dart` **+** `forbidden_words_test.dart`（直接引数据源，**不手抄**） |
 | D3.3 的三条（按设备 / 保守 / **不许一刀切**） | `test/unit/about_facts_test.dart` |
-| 五档不溢出 + 命中区 ≥44 | `test/widget/accessibility_test.dart`（**硬闸**） |
+| 五档不溢出 + 命中区 ≥44 | `test/widget/accessibility_test.dart`（**硬闸**，39 条） |
 
 ### 2.1 那条"不许一刀切"是**逐字**查的
 
@@ -111,7 +111,7 @@ for (final bad in ['用不了', '不能语音', '不支持语音', '打不了字
 bash scripts/check-client.sh     # 四道闸（三条硬闸 + 一条提示）
 ```
 
-**客户端 94 条全过**（`test/unit` 55 + `test/widget` 39），`analyze` 干净。
+**客户端 99 条全过**（`test/unit` 55 + `test/widget` 44），`analyze` 干净。
 
 ### 4.1 线上实测
 
