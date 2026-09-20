@@ -165,6 +165,26 @@ class Api {
     }
   }
 
+  /// **续期**：用现在这个令牌换一个新的（欠账 13 · 决策 A）。
+  ///
+  /// 策略（空闲窗 + 绝对上限）**住在服务端**——客户端不复制那几个天数，
+  /// 它只负责"拿旧的换新的"和"把新的存好"。见 `renewOutcomeOf` 顶上的分工。
+  ///
+  /// ⚠️ 令牌**只走 `Authorization` 头**、**没有 body**（和 [say] 同一条规矩）。
+  /// ⚠️ 结果分三种，**尤其要把"令牌真的没了"和"网不行了"分开**：
+  ///    前者才允许清令牌，后者**一个字节都不许清**（B1 的根）。
+  Future<RenewOutcome> renew(String token) async {
+    try {
+      final r = await _c
+          .post(_u('/api/renew'), headers: {'authorization': 'Bearer $token'})
+          .timeout(const Duration(seconds: 8));
+      return renewOutcomeOf(r.statusCode, r.body);
+    } catch (e) {
+      // 网不通 / 超时 / 请求根本没发出去 ⇒ **不是**令牌的问题。
+      return RenewNetworkError('$e');
+    }
+  }
+
   /// 服务端构建指纹 + 它的钟（协议 R10：每次连上对版本）。
   Future<Map<String, dynamic>?> version() async {
     try {
@@ -248,6 +268,85 @@ SayOutcome sayOutcomeOf(int status, String body) {
     default:
       return SayRejected('HTTP $status');
   }
+}
+
+/// `/api/renew` 的回执 → 结果。**纯函数**（不起网络、不碰界面、不看钟）——
+/// ⇒ 和 [sayOutcomeOf] 同一条纪律：协议语义**只有这一处**，
+///   于是它能进 `test/unit` 被逐码钉住（改错一个码 = 清错令牌 = 把人踢回登录页）。
+///
+/// 状态码的分工（**不许互相串**）：
+///   200 + 读得出 `{token, expiresAt}` ⇒ 换到了新的；
+///   200 + 读不出来 ⇒ **当失败**（回执坏了），**不许把坏东西存下去**；
+///   401 ⇒ 这个令牌**没得续了**（过期 / 被撤销 / 过了绝对上限）——
+///         **只有这一种**才允许清令牌（服务端明说）；
+///   其余（含抛异常）⇒ **网的问题**，可重试、**什么都别清**。
+RenewOutcome renewOutcomeOf(int status, String body) {
+  switch (status) {
+    case 200:
+      try {
+        final j = jsonDecode(body);
+        if (j is! Map) return const RenewMalformed('回执不是对象');
+        final token = j['token'];
+        final exp = j['expiresAt'];
+        // ⚠️ 两个字段**都要**：只要读不出任何一个就当失败。
+        //    半个令牌存下去比不续期更坏——下次开机拿它连，而它可能根本不能用。
+        if (token is! String || token.isEmpty) return const RenewMalformed('没有 token');
+        if (exp is! num) return const RenewMalformed('没有 expiresAt');
+        return RenewOk(token: token, expiresAt: exp.toInt());
+      } catch (_) {
+        return const RenewMalformed('回执解不开');
+      }
+    case 401:
+      return const RenewExpired();
+    default:
+      // 服务端抽风（5xx…）也算这一类：**可重试**，不是"你令牌不行了"。
+      return RenewNetworkError('HTTP $status');
+  }
+}
+
+/// 续期的结果 → **该做什么**。纯函数 ⇒ 进 `test/unit` 硬闸。
+///
+/// 三件事**一个都不许混**（混错的代价是"网络抖一下就把人踢回登录页"）：
+///   * [RenewAction.useNewToken]：存新的、用它连流；
+///   * [RenewAction.logout]：**只有 401** 走这条——清令牌 + 回登录页；
+///   * [RenewAction.keepOldToken]：网的问题 / 回执坏了 ⇒ 旧令牌照常往下走。
+enum RenewAction { useNewToken, logout, keepOldToken }
+
+RenewAction renewActionOf(RenewOutcome o) => switch (o) {
+      RenewOk() => RenewAction.useNewToken,
+      RenewExpired() => RenewAction.logout,
+      // ⚠️ 这两种都**不是**"令牌不行了"：网的问题、以及回执读不出来。
+      //    它们共有一条底线：**一个字节都不许清**。
+      RenewNetworkError() || RenewMalformed() => RenewAction.keepOldToken,
+    };
+
+/// 续期的结果。
+sealed class RenewOutcome {
+  const RenewOutcome();
+}
+
+class RenewOk extends RenewOutcome {
+  const RenewOk({required this.token, required this.expiresAt});
+  final String token;
+  final int expiresAt;
+}
+
+/// 401：这个令牌**没得续了**。→ 该回登录页，**不是**"网不好"。
+class RenewExpired extends RenewOutcome {
+  const RenewExpired();
+}
+
+/// 网的问题（连不上 / 超时 / 非 200·401 的码）⇒ 值得重试，**不许清令牌**。
+class RenewNetworkError extends RenewOutcome {
+  const RenewNetworkError(this.detail);
+  final String detail;
+}
+
+/// 200 但回执读不出 `token`/`expiresAt` ⇒ 当失败。
+/// ⚠️ **不许**把坏令牌存下去；也**不许**清令牌（这不是 401）。
+class RenewMalformed extends RenewOutcome {
+  const RenewMalformed(this.detail);
+  final String detail;
 }
 
 /// 令牌状态探针。

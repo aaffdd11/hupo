@@ -58,6 +58,7 @@ export class Auth {
   #fs;
   #now;
   #tokenTtlMs;
+  #absCapMs;
   #lockAfter;
   #lockMs;
   #secret;
@@ -76,11 +77,12 @@ export class Auth {
    * @param {number} [o.tokenTtlMs]
    * @param {string|null} [o.passwordHash] 直接给（测试用）；不给则从 data/auth.json 读
    */
-  constructor({ dataDir, fs = nodeFs, now = Date.now, tokenTtlMs, lockAfter, lockMs, passwordHash }) {
+  constructor({ dataDir, fs = nodeFs, now = Date.now, tokenTtlMs, absCapMs = null, lockAfter, lockMs, passwordHash }) {
     this.#dataDir = dataDir;
     this.#fs = fs;
     this.#now = now;
     this.#tokenTtlMs = tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS;
+    this.#absCapMs = absCapMs ?? TOKEN_ABS_CAP_MS;
     this.#lockAfter = lockAfter ?? DEFAULT_LOCK_AFTER;
     this.#lockMs = lockMs ?? DEFAULT_LOCK_MS;
     this.#fs.mkdirSync(this.#dataDir, { recursive: true });
@@ -315,7 +317,7 @@ export class Auth {
     // ⚠️ 滑动窗要从**现在**算，不能从 `iat` 算：
     //    从 `iat` 算的话，"续期"续出来的 `exp` 和原来**一模一样**（等于没续）。
     //    封顶那一项仍然从 `iat` 算 —— 那就是**绝对上限**。
-    const exp = Math.min(now + TOKEN_IDLE_WINDOW_MS, issuedAt + TOKEN_ABS_CAP_MS);
+    const exp = Math.min(now + this.#tokenTtlMs, issuedAt + this.#absCapMs);
     const payload = { sub, iat: issuedAt, exp, jti: jti ?? crypto.randomUUID() };
     const body = this.#b64(JSON.stringify(payload));
     return { token: `${body}.${this.#sign(body)}`, expiresAt: payload.exp, sub };
@@ -335,7 +337,7 @@ export class Auth {
     const payload = this.verify(token);
     if (!payload) return null;
     const iat = Number.isFinite(payload.iat) ? payload.iat : this.#now();
-    if (this.#now() - iat > TOKEN_ABS_CAP_MS) return null; // 过了绝对上限 ⇒ 请重新登录
+    if (this.#now() - iat > this.#absCapMs) return null; // 过了绝对上限 ⇒ 请重新登录
     return this.issue({ sub: payload.sub, iat, jti: payload.jti });
   }
 

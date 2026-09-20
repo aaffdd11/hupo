@@ -25,12 +25,20 @@ class ChatController extends ChangeNotifier {
     String? token,
     TimelineStore? local,
     DraftStore? drafts,
+    this.onUnauthorized,
   })  : _token = token,
         local = local ?? TimelineStore(),
         drafts = drafts ?? DraftStore();
 
   final Api api;
   final TokenStore tokens;
+
+  /// 服务端明说"这个令牌没得续了"（续期 401）时叫一声——
+  /// **界面那一层靠它回登录页**（services 不 import material，所以只能回调）。
+  ///
+  /// ⚠️ 和 `logout()`（用户自己按的退出）是两件事，但**收拾的东西一样**：
+  ///    清令牌 + 清本机那一屏（换个人登录不许看见上一个人的）。
+  final void Function()? onUnauthorized;
 
   /// 本机那"一屏"（S5c）。**只缓存，不判断**——见 `timeline_store.dart`。
   final TimelineStore local;
@@ -76,6 +84,12 @@ class ChatController extends ChangeNotifier {
   /// ⚠️ [openStream] 只给 `test/unit` 用：纯逻辑的闸不该去开真 socket
   ///    （那会让"这件事对不对"变成"这机器上网络快不快"）。
   ///    **生产路径永远是 `true`**，而且顺序永远是"先读本机、再连流"。
+  ///
+  /// ⚠️ **续期（欠账 13 · 决策 A）排在哪**：读到令牌之后、连流之前，
+  ///    但**一定在这句 `notifyListeners()` 之后**。
+  ///    理由就是 `17-LOCAL-FIRST.md` 的教训——续期要等网络（最长 8 秒），
+  ///    挡在"先画本机一屏"前面的话，冷启动那一屏就没了。
+  ///    ⇒ 顺序是：**先画本机 ⇒ 再续期 ⇒ 再连流**。
   Future<void> start({required String token, bool openStream = true}) async {
     _token = token;
     await tokens.write(token);
@@ -83,7 +97,41 @@ class ChatController extends ChangeNotifier {
     _lastError = null;
     await _restoreLocal();
     notifyListeners();
+    // ★ 本机那一屏已经画出来了，这才轮到网络。
+    if (!await _renew()) return; // 令牌真的没了 ⇒ 已经回登录页，别连流
     if (openStream) _ensureStream();
+  }
+
+  /// 续一次。**成功就用新的；401 才清；网的问题什么都不清。**
+  ///
+  /// 返回值：`true` = 可以照常往下走（拿到新令牌、或者拿旧令牌继续）；
+  ///        `false` = 令牌真的不行了（已经清干净、也叫了 [onUnauthorized]）。
+  ///
+  /// ⚠️ 三条分支对应 [renewActionOf] 那个纯函数的三档，
+  ///    这里**只管照着做**（判断在纯函数里，测试在 `test/unit` 里逐档钉住）。
+  Future<bool> _renew() async {
+    final t = _token;
+    if (t == null) return true;
+    final outcome = await api.renew(t);
+    switch (renewActionOf(outcome)) {
+      case RenewAction.useNewToken:
+        // 存起来再用：**先落盘**（下次开机要拿它去连），再拿它连流。
+        final fresh = (outcome as RenewOk).token;
+        _token = fresh;
+        await tokens.write(fresh);
+        return true;
+      case RenewAction.keepOldToken:
+        // ⚠️ **一个字节都不许清**：网的问题、或者回执读不出来。
+        //    拿旧令牌照常往下走——能连上就连，连不上走原来那套"网断了"。
+        return true;
+      case RenewAction.logout:
+        // 服务端明说没得续了（过期 / 被撤销 / 过了绝对上限）——
+        // **这是唯一该回登录页的情形**。
+        _lastError = '登录过期了，重新登录一下';
+        await logout();
+        onUnauthorized?.call();
+        return false;
+    }
   }
 
   /// 把上一屏读回来（读不到就什么都不做 —— **空屏是允许的，乱画不允许**）。
