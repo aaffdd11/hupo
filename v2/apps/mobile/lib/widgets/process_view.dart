@@ -2,11 +2,14 @@
 //
 // 三样东西各画各的，**因为它们是三种不同的东西**：
 //
-//   ① 步骤流水 —— 它**做了哪几步**（第 ③ 档）。一步步摆在对话流尾巴上。
+//   ① 步骤流水 —— 它**做了哪几步**（第 ③ 档）。一步步摆在对话流尾巴上，
+//      轮一收口就消失（那是过程噪音）。
 //   ② 推理原文 —— 它**心里想的**。⚠️ **不是它说的话**（D7.4）：
 //      视觉上必须一眼分得开——气泡是"它对你说的"，这一块是"它没说出口的"。
 //      所以它用**另一种容器**（左边一道竖线 + 更暗的底 + 斜体），
 //      而不是再套一个气泡。
+//      ⚠️ 它摆在**它自己那条气泡的正下方**（`chat_screen._answer`），
+//      而且**收口不清**：主人回头要看的是"这条回答当时怎么想的"。
 //   ③ 安静档 —— **什么都不画**（连「它正在做…」也没有）。
 //
 // ⚠️ 一条硬规矩：**不许写死尺寸**（D3）。容器跟着字算：
@@ -22,14 +25,17 @@ import '../models/process_words.dart';
 import '../models/timeline.dart';
 import 'bubbles.dart';
 
-/// 对话流尾巴上的那一块过程。
+/// 对话流尾巴上的那一块过程（**步骤流水** / 那行「它正在做…」）。
+///
+/// ⚠️ 推理原文**不在这儿**：它挂在**它自己那条气泡**下面
+///    （`ReasoningBlock`，由 `chat_screen._render` 摆），因为主人回头要看的是
+///    "**这条回答**当时怎么想的"——摆到尾巴上就会跟着下一轮跑掉。
 class ProcessTail extends StatelessWidget {
   const ProcessTail({
     super.key,
     required this.level,
     required this.busyText,
     required this.steps,
-    required this.reasoning,
   });
 
   final ProcessLevel level;
@@ -39,9 +45,6 @@ class ProcessTail extends StatelessWidget {
 
   /// 第 ③ 档的步骤流水（其余档位为空）。
   final List<ProcessStep> steps;
-
-  /// 第 ④ 档的思考原文（其余档位为空串）。
-  final String reasoning;
 
   @override
   Widget build(BuildContext context) {
@@ -54,10 +57,9 @@ class ProcessTail extends StatelessWidget {
       return text == null ? const SizedBox.shrink() : BusyLine(text: text);
     }
 
-    // ③ 步骤流水 / 推理原文。
+    // ③ 步骤流水（第 ④ 档也有步骤，服务端那两档都发 `step/*`）。
     final shown = _shownSteps();
-    final hasReasoning = reasoning.isNotEmpty;
-    if (shown.isEmpty && !hasReasoning) {
+    if (shown.isEmpty) {
       // 还没有步骤可摆（比如状态先到、第一件活还没开）⇒
       // 用那行「它正在做…」把空白补上，**不许留白**。
       final text = busyText;
@@ -67,10 +69,7 @@ class ProcessTail extends StatelessWidget {
     final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final s in shown) _StepLine(step: s, theme: theme),
-        if (hasReasoning) _ReasoningBlock(text: reasoning, theme: theme),
-      ],
+      children: [for (final s in shown) _StepLine(step: s, theme: theme)],
     );
   }
 
@@ -120,39 +119,49 @@ class _StepLine extends StatelessWidget {
 ///   · 左边一道竖线（气泡是圆角矩形，这一块是"引文"的样子）
 ///   · 更暗的底（气泡用的是 `surfaceContainerHighest`）
 ///   · 斜体 + 提示色 + 一行标题说明"这是没说出口的"
-class _ReasoningBlock extends StatelessWidget {
-  const _ReasoningBlock({required this.text, required this.theme});
+///
+/// ⚠️ 它由 `chat_screen` 摆在**它那条气泡的正下方**：主人回头看的是
+///    "这条回答当时怎么想的"，所以要跟着那条走，不能挂在尾巴上。
+class ReasoningBlock extends StatelessWidget {
+  const ReasoningBlock({super.key, required this.text});
 
   final String text;
-  final ThemeData theme;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(top: 6),
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHigh,
-        border: Border(
-          left: BorderSide(color: theme.colorScheme.outline, width: 3),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            reasoningLabel,
-            style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            text,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.hintColor,
-              fontStyle: FontStyle.italic,
+    final theme = Theme.of(context);
+    // 限宽与气泡一致（平板上一行七十个字没人读）
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: Container(
+          margin: const EdgeInsets.only(top: 6),
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHigh,
+            border: Border(
+              left: BorderSide(color: theme.colorScheme.outline, width: 3),
             ),
           ),
-        ],
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                reasoningLabel,
+                style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                text,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.hintColor,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

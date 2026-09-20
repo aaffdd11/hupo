@@ -93,12 +93,16 @@ Future<void> _openProcessMenu(WidgetTester tester, double scale) async {
 ///
 /// ⚠️ 用**最高的那一档**（`reasoning`）：它同时包含步骤流水与推理原文，
 ///    也就是这一批新加的两样最多的字。
+/// ⚠️ 推理原文**挂在气泡上** ⇒ 得先有 `message/start`，否则它只是"待挂"、
+///    一个像素都不画（那道闸就白量了）。
 Future<ChatController> _processController() async {
   final c = _controller();
   await c.setLevel(ProcessLevel.reasoning);
   c.ingest({'type': 'message/status', 'turn': 1, 'state': 'started'});
   c.ingest({'type': 'step/start', 'turn': 1, 'step': 1, 'state': 'searching'});
   c.ingest({'type': 'step/start', 'turn': 1, 'step': 2, 'state': 'writing'});
+  c.ingest({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
+  c.ingest({'type': 'message/text', 'messageId': 'm1', 'block': 'quick', 'text': '这周 7 小时。', 'seq': 2});
   c.ingest({'type': 'reasoning/delta', 'turn': 1, 'text': '他问的是这周，我先把账翻出来对一下。'});
   return c;
 }

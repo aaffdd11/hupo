@@ -87,6 +87,7 @@ void main() {
 
   testWidgets('★ 推理原文：正文和标题都在屏幕上，而且**不在气泡里**', (tester) async {
     final c = await _pump(tester, ProcessLevel.reasoning);
+    c.ingest({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
     c.ingest({'type': 'reasoning/delta', 'turn': 1, 'text': '先看看他问的是哪一周'});
     await tester.pump();
 
@@ -100,12 +101,63 @@ void main() {
     );
   });
 
+  testWidgets('🔴 收口之后：步骤没了，**推理还挂在它那条气泡下面**', (tester) async {
+    // 这是批 3 改过一次的地方：一出答案就把推理删掉，第 ④ 档就只剩
+    // "生成过程中盯着看"；而它真正的用处是主人**回头看它当时怎么想的**。
+    final c = await _pump(tester, ProcessLevel.reasoning);
+    c.ingest({'type': 'message/status', 'turn': 1, 'state': 'started'});
+    c.ingest({'type': 'step/start', 'turn': 1, 'step': 1, 'state': 'searching'});
+    c.ingest({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
+    c.ingest({'type': 'message/text', 'messageId': 'm1', 'block': 'quick', 'text': '晴天', 'seq': 2});
+    c.ingest({'type': 'reasoning/delta', 'turn': 1, 'text': '他问的是明天'});
+    await tester.pump();
+    expect(find.text('在查资料'), findsOneWidget);
+
+    c.ingest({'type': 'message/end', 'messageId': 'm1', 'seq': 3, 'reason': 'completed'});
+    await tester.pump();
+
+    expect(find.text('在查资料'), findsNothing, reason: '步骤是过程噪音 ⇒ 收口即清');
+    expect(find.text('他问的是明天'), findsOneWidget, reason: '推理是内容 ⇒ 留着供主人回头看');
+    expect(find.text(reasoningLabel), findsOneWidget);
+  });
+
+  testWidgets('🔴 重放（服务端说号不对了）⇒ 推理必须从屏幕上消失', (tester) async {
+    // 它本来就不该存在于任何地方（契约 §二）⇒ reset 是它的终点。
+    final c = await _pump(tester, ProcessLevel.reasoning);
+    c.ingest({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
+    c.ingest({'type': 'reasoning/delta', 'turn': 1, 'text': '不该留下的'});
+    await tester.pump();
+    expect(find.text('不该留下的'), findsOneWidget);
+
+    c.ingest({'type': '__reset__'});
+    await tester.pump();
+    expect(find.text('不该留下的'), findsNothing);
+    expect(find.text(reasoningLabel), findsNothing);
+  });
+
+  testWidgets('★ 换出第 ④ 档 ⇒ 推理下屏；换回来还看得见（是隐藏，不是删）', (tester) async {
+    final c = await _pump(tester, ProcessLevel.reasoning);
+    c.ingest({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
+    c.ingest({'type': 'reasoning/delta', 'turn': 1, 'text': '心里过的那些话'});
+    await tester.pump();
+    expect(find.text('心里过的那些话'), findsOneWidget);
+
+    await c.setLevel(ProcessLevel.doing);
+    await tester.pump();
+    expect(find.text('心里过的那些话'), findsNothing, reason: '换了档就不许再占屏幕');
+    expect(find.text(reasoningLabel), findsNothing);
+
+    await c.setLevel(ProcessLevel.reasoning);
+    await tester.pump();
+    expect(find.text('心里过的那些话'), findsOneWidget, reason: '没删 ⇒ 换回来还看得见');
+  });
+
   testWidgets('🔴 安静档：**什么都不显示**（连「它正在做…」也没有）', (tester) async {
     final c = await _pump(tester, ProcessLevel.quiet);
     c.ingest({'type': 'message/status', 'turn': 1, 'state': 'started'});
     c.ingest({'type': 'step/start', 'turn': 1, 'step': 1, 'state': 'searching'});
-    c.ingest({'type': 'reasoning/delta', 'turn': 1, 'text': '心里想的'});
     c.ingest({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
+    c.ingest({'type': 'reasoning/delta', 'turn': 1, 'text': '心里想的'});
     await tester.pump();
 
     expect(find.text(busyFallback), findsNothing);

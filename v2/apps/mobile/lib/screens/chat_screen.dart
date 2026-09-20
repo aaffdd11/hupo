@@ -139,7 +139,6 @@ class _ChatScreenState extends State<ChatScreen> {
               level: c.level,
               busyText: c.agentLine,
               steps: c.steps,
-              reasoning: c.reasoning,
             ),
     );
   }
@@ -163,9 +162,25 @@ class _ChatScreenState extends State<ChatScreen> {
             utterance: item,
             onResend: () => c.resend(item.messageId),
           ),
-        AssistantMessage() => AnswerBubble(message: item),
+        AssistantMessage() => _answer(item, c),
         TimelineMarker() => MarkerLine(marker: item),
       };
+
+  /// 一条回答：气泡 + （第 ④ 档时）**它自己那条**的思考原文。
+  ///
+  /// ⚠️ 推理原文摆在**它那条气泡的正下方**，不是对话流尾巴上：
+  ///    主人回头看的是"这条回答当时怎么想的"——挂尾巴上会跟着下一轮跑掉。
+  /// ⚠️ 它与气泡是**两个容器**（D7.4：它不是它说的话）。
+  Widget _answer(AssistantMessage m, ChatController c) {
+    final reasoning = c.reasoningOf(m);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        AnswerBubble(message: m),
+        if (reasoning.isNotEmpty) ReasoningBlock(text: reasoning),
+      ],
+    );
+  }
 }
 
 /// 顶部状态条。**只在"需要用户知道点什么"的时候出现**——

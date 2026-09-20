@@ -19,6 +19,21 @@ void _openTurn(Timeline t, int turn, {String state = 'searching'}) {
   t.apply({'type': 'step/start', 'turn': turn, 'step': 1, 'state': state});
 }
 
+/// 全局递增的号：`message/*` 要带号（服务端事实），而每条测试各有一个 Timeline。
+int _seq = 0;
+
+/// 开一轮 **并且开出一条气泡** —— 推理原文挂在气泡上，所以要有一条。
+void _openTurnWithBubble(Timeline t, int turn) {
+  t.apply({'type': 'message/status', 'turn': turn, 'state': 'started'});
+  t.apply({'type': 'message/start', 'messageId': 'm$turn', 'seq': ++_seq});
+}
+
+/// 屏幕上那一条回答的思考原文（它挂在气泡上）。
+String _reasoning(Timeline t) {
+  final msgs = t.items.whereType<AssistantMessage>().toList();
+  return msgs.isEmpty ? '' : msgs.last.reasoning;
+}
+
 void main() {
   group('步骤流水（第 ③ 档）', () {
     test('★ 一步进来就有一条，状态名要经人话表翻', () {
@@ -74,11 +89,21 @@ void main() {
   });
 
   group('推理原文（第 ④ 档）', () {
-    test('★ 一段段拼起来', () {
+    test('★ 一段段拼起来，挂在**它那条气泡**上', () {
       final t = Timeline();
+      _openTurnWithBubble(t, 1);
       t.apply({'type': 'reasoning/delta', 'turn': 1, 'text': '先看'});
       t.apply({'type': 'reasoning/delta', 'turn': 1, 'text': '一眼'});
-      expect(t.reasoning, '先看一眼');
+      expect(_reasoning(t), '先看一眼');
+    });
+
+    test('★ 推理**先于正文**到 ⇒ 先存着，气泡一开就挂上去（服务端就是这个顺序）', () {
+      // `assistant/message` 的 content 里 reasoning 段在 text 段前面 ⇒
+      // 服务端先发 `reasoning/delta`、后发 `message/start`。
+      final t = Timeline();
+      t.apply({'type': 'reasoning/delta', 'turn': 1, 'text': '还没开口就在想'});
+      t.apply({'type': 'message/start', 'messageId': 'm1', 'seq': ++_seq});
+      expect(_reasoning(t), '还没开口就在想');
     });
 
     test('🔴 只在内存里：没有号 ⇒ 缓存那条路（只收带号的）碰不到它', () {
@@ -89,12 +114,25 @@ void main() {
       expect(TimelineStore.isPersistable({'type': 'message/text', 'seq': 3}), isTrue);
     });
 
+    test('🔴 重放拿不到它：缓存里那些帧喂回来，气泡上一个字都没有', () {
+      final t = Timeline();
+      // 缓存里只可能有带号的事实；就算有人硬塞一条推理进来，它没有号 ⇒ 当瞬态
+      t.seedFromCache([
+        {'type': 'message/start', 'messageId': 'm1', 'seq': 1},
+        {'type': 'message/text', 'messageId': 'm1', 'block': 'quick', 'text': '晴天', 'seq': 2},
+        {'type': 'message/end', 'messageId': 'm1', 'seq': 3, 'reason': 'completed'},
+      ]);
+      expect(_reasoning(t), isEmpty);
+      expect(t.items.whereType<AssistantMessage>().single.reasoning, isEmpty);
+    });
+
     test('畸形帧 ⇒ 忽略', () {
       final t = Timeline();
+      _openTurnWithBubble(t, 1);
       t.apply({'type': 'reasoning/delta', 'text': '没有轮'});
       t.apply({'type': 'reasoning/delta', 'turn': 1});
       t.apply({'type': 'reasoning/delta', 'turn': 1, 'text': ''});
-      expect(t.reasoning, isEmpty);
+      expect(_reasoning(t), isEmpty);
     });
   });
 
@@ -108,16 +146,17 @@ void main() {
 
     test('旧轮的推理晚到 ⇒ 丢掉，不许掺进这一轮的思考里', () {
       final t = Timeline();
+      _openTurnWithBubble(t, 3);
       t.apply({'type': 'reasoning/delta', 'turn': 3, 'text': '这一轮的'});
       t.apply({'type': 'reasoning/delta', 'turn': 2, 'text': '上一轮的'});
-      expect(t.reasoning, '这一轮的');
+      expect(_reasoning(t), '这一轮的');
     });
 
     test('🔴 收口之后又飘回来的步骤 ⇒ 丢掉（这是"永久停在正在做"的根）', () {
       final t = Timeline();
       _openTurn(t, 1);
-      t.apply({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
-      t.apply({'type': 'message/end', 'messageId': 'm1', 'seq': 2, 'reason': 'completed'});
+      t.apply({'type': 'message/start', 'messageId': 'm1', 'seq': ++_seq});
+      t.apply({'type': 'message/end', 'messageId': 'm1', 'seq': ++_seq, 'reason': 'completed'});
       expect(t.steps, isEmpty);
 
       // 迟到的第 1 轮步骤
@@ -133,64 +172,81 @@ void main() {
     test('收口之后**新的一轮**照常进来（别把闸关死）', () {
       final t = Timeline();
       _openTurn(t, 1);
-      t.apply({'type': 'message/end', 'messageId': 'm1', 'seq': 1, 'reason': 'completed'});
+      t.apply({'type': 'message/end', 'messageId': 'm1', 'seq': ++_seq, 'reason': 'completed'});
       _openTurn(t, 2, state: 'writing');
       expect(t.steps.single.turn, 2);
       expect(t.agentLine, isNotNull);
     });
   });
 
-  group('🔴 超时收敛：轮收口 ⇒ 过程必须清掉', () {
-    test('`message/end` ⇒ 步骤与思考一起清（不许留成"永远在查资料"）', () {
+  group('🔴 超时收敛：轮收口 ⇒ **步骤**清掉（推理原文留着）', () {
+    test('`message/end` ⇒ 步骤清、提示撤，但推理**还在那条气泡上**', () {
       final t = Timeline();
-      _openTurn(t, 1);
+      _openTurnWithBubble(t, 1);
+      t.apply({'type': 'step/start', 'turn': 1, 'step': 1, 'state': 'searching'});
       t.apply({'type': 'reasoning/delta', 'turn': 1, 'text': '想一想'});
       expect(t.steps, isNotEmpty);
-      expect(t.reasoning, isNotEmpty);
+      expect(_reasoning(t), isNotEmpty);
 
-      t.apply({'type': 'message/end', 'messageId': 'm1', 'seq': 1, 'reason': 'timeout'});
+      t.apply({'type': 'message/end', 'messageId': 'm1', 'seq': ++_seq, 'reason': 'timeout'});
+      expect(t.steps, isEmpty, reason: '步骤是过程噪音 ⇒ 收口必须清（不许留成"永远在查资料"）');
+      expect(t.agentLine, isNull);
+      // ★ 推理是**内容**，不是过程噪音：一出答案就删，第 ④ 档就只剩"盯着看"了
+      expect(_reasoning(t), '想一想', reason: '主人回头还要看它当时怎么想的');
+    });
+
+    test('收口那条消息**根本不存在**也照样清步骤（end 先到 / 配对不上）', () {
+      final t = Timeline();
+      _openTurn(t, 1);
+      t.apply({'type': 'message/end', 'messageId': 'm_不存在', 'seq': ++_seq, 'reason': 'completed'});
       expect(t.steps, isEmpty);
-      expect(t.reasoning, isEmpty);
       expect(t.agentLine, isNull);
     });
 
-    test('收口那条消息**根本不存在**也照样清（end 先到 / 配对不上）', () {
+    test('它断了（`error`）⇒ 步骤清、提示撤，推理留着（气泡还开着）', () {
       final t = Timeline();
-      _openTurn(t, 1);
-      t.apply({'type': 'message/end', 'messageId': 'm_不存在', 'seq': 1, 'reason': 'completed'});
-      expect(t.steps, isEmpty);
-      expect(t.agentLine, isNull);
-    });
-
-    test('它断了（`error`）⇒ 过程也得清（那一轮不会再有收尾了）', () {
-      final t = Timeline();
-      _openTurn(t, 1);
+      _openTurnWithBubble(t, 1);
       t.apply({'type': 'reasoning/delta', 'turn': 1, 'text': '想一想'});
       t.apply({'type': 'error', 'kind': 'agent-exit', 'text': '刚才我断了'});
       expect(t.steps, isEmpty);
-      expect(t.reasoning, isEmpty);
       expect(t.agentLine, isNull);
+      expect(_reasoning(t), '想一想');
     });
 
-    test('新的一轮开了 ⇒ 上一轮的过程不作数（收口帧丢了也不会留下旧的）', () {
+    test('新的一轮开了 ⇒ 上一轮的**步骤**不作数；**上一轮气泡上的推理留着**', () {
       final t = Timeline();
-      _openTurn(t, 1);
+      _openTurnWithBubble(t, 1);
+      t.apply({'type': 'step/start', 'turn': 1, 'step': 1, 'state': 'searching'});
       t.apply({'type': 'reasoning/delta', 'turn': 1, 'text': '第一轮的思考'});
       t.apply({'type': 'message/status', 'turn': 2, 'state': 'started'});
-      expect(t.steps, isEmpty);
-      expect(t.reasoning, isEmpty);
+      expect(t.steps, isEmpty, reason: '步骤属于"现在这一轮"');
+      expect(_reasoning(t), '第一轮的思考', reason: '推理挂在第 1 轮那条气泡上，跟着它走');
     });
 
-    test('服务端说"你这号不对了"（reset）⇒ 过程全清，号从头来', () {
+    test('🔴 reset（重放 / 退出登录）⇒ 推理**一个字节都不剩**', () {
       final t = Timeline();
-      _openTurn(t, 5);
+      _openTurnWithBubble(t, 5);
       t.apply({'type': 'reasoning/delta', 'turn': 5, 'text': '旧世界的思考'});
+      expect(_reasoning(t), isNotEmpty);
+
       t.reset();
       expect(t.steps, isEmpty);
-      expect(t.reasoning, isEmpty);
+      // 挂在气泡上的那一段：气泡本身被清掉了（只留用户自己没确认的话）⇒ 没地方可留
+      expect(t.items.whereType<AssistantMessage>(), isEmpty);
+      expect(_reasoning(t), isEmpty);
       // 号从头来 ⇒ 新的第 1 轮认得出（不会被当成"迟到的旧轮"丢掉）
       _openTurn(t, 1);
       expect(t.steps.single.turn, 1);
+    });
+
+    test('🔴 reset 也要清掉**还没挂上去**的那一段（否则它会粘到下一轮的气泡上）', () {
+      final t = Timeline();
+      // 推理先到、气泡还没开 ⇒ 存在"待挂"里
+      t.apply({'type': 'reasoning/delta', 'turn': 5, 'text': '不该留下的'});
+      t.reset();
+      // reset 之后新的一轮开气泡 —— 上一段绝不许粘上来
+      _openTurnWithBubble(t, 1);
+      expect(_reasoning(t), isEmpty);
     });
   });
 }
