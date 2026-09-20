@@ -25,10 +25,13 @@ const REPO = nodePath.resolve(import.meta.dirname, '../../../..');
 import {
   buildBaseline,
   checkAgainstDisk,
+  coverageGaps,
   filesUnder,
   hashFile,
+  homeFromPasswd,
   integrityReport,
   protectedPaths,
+  resolveServiceHome,
   verifyBaseline,
 } from '../src/integrity.js';
 
@@ -76,6 +79,96 @@ test('对上了 ⇒ ok，而且一条问题都没有', () => {
     assert.equal(r.state, 'ok');
     assert.equal(r.blocked.length, 0);
     assert.ok(r.count > 5, `清单太小了：${r.count}`);
+  } finally {
+    f.cleanup();
+  }
+});
+
+// ── ★ 2026-09-21 那个**静默失效**（清单漏了一整类路径）──────────
+//
+// 实测踩到的形状：清单是主人用 `sudo` 建的，而 `sudo` 下 `os.homedir()` = `/root`
+// ⇒ `~/.dsh/profiles` 那三条算成了 `/root/.dsh/**`，那里一个文件都没有
+// ⇒ 被**静静跳过** ⇒ **P1 最核心的那条保护从来没进过清单**，而横幅写"对上了"。
+// ⇒ 这一组闸守的就是"**不许再静默**"。
+
+test('`homeFromPasswd`：按 uid 取 home（纯函数）', () => {
+  const text = 'root:x:0:0:root:/root:/bin/bash\ndeploy:x:1001:1001::/home/deploy:/bin/bash\n';
+  assert.equal(homeFromPasswd(text, 0), '/root');
+  assert.equal(homeFromPasswd(text, 1001), '/home/deploy');
+  assert.equal(homeFromPasswd(text, 4242), null);
+  assert.equal(homeFromPasswd('', 1001), null);
+  assert.equal(homeFromPasswd('坏行\n', 1001), null);
+});
+
+test('🔴 清单按**仓库属主**的 home 算，不按"现在跑命令的人"（sudo 下是 /root）', () => {
+  const f = fixture();
+  try {
+    // fixture 的仓库属主就是当前用户 ⇒ 解析出来必须是**当前用户的 home**
+    assert.equal(resolveServiceHome({ repo: f.repo }), nodeOs.homedir());
+    // 兜底：仓库不存在时不许抛，退给调用方给的值
+    assert.equal(resolveServiceHome({ repo: '/definitely/not/here', fallback: '/x' }), '/x');
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('🔴 声明要保护、盘上有东西、清单里却一条都没有 ⇒ **算漏**（这就是那个坑）', () => {
+  const f = fixture();
+  try {
+    // 造一份**漏掉 home 那一类**的清单（正是 sudo 建出来的那种）
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    for (const k of Object.keys(baseline.entries)) {
+      if (k.startsWith(f.home)) delete baseline.entries[k];
+    }
+    const gaps = coverageGaps({ repo: f.repo, home: f.home, baseline });
+    const paths = gaps.map((g) => g.path);
+    assert.ok(paths.includes(nodePath.join(f.home, '.dsh', 'profiles')), `没查出 profile 那一类：${paths}`);
+    assert.ok(paths.includes(nodePath.join(f.home, '.dsh', 'settings.yaml')));
+    assert.equal(paths.some((p) => p.includes('storages')), false, '运行时数据本来就不该在清单里，别误报');
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('清单**完整**时 ⇒ 一条漏都没有（负向对照：不然上面那条永远绿）', () => {
+  const f = fixture();
+  try {
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    assert.deepEqual(coverageGaps({ repo: f.repo, home: f.home, baseline }), []);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('🔴 漏掉的是 strict ⇒ 开机**拒绝启动**（"写着有闸、其实没核对"比不设更坏）', () => {
+  const f = fixture();
+  try {
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    for (const k of Object.keys(baseline.entries)) {
+      if (k.startsWith(f.home)) delete baseline.entries[k];
+    }
+    nodeFs.writeFileSync(f.baselinePath, `${JSON.stringify(baseline)}\n`);
+    const rep = integrityReport({ repo: f.repo, home: f.home, baselinePath: f.baselinePath });
+    assert.ok(rep.problems.some((p) => p.includes('漏了这一条')), rep.problems.join('\n'));
+    assert.ok(rep.problems.some((p) => p.includes('.dsh')), '要点名是哪一条路径');
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('开机核对时**也会**做那一次反向检查（不只 `--build` 时查）', () => {
+  const f = fixture();
+  try {
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    nodeFs.writeFileSync(f.baselinePath, `${JSON.stringify(baseline)}\n`);
+    const r = checkAgainstDisk({ repo: f.repo, home: f.home, baselinePath: f.baselinePath });
+    assert.deepEqual(r.gaps, [], '完整清单 ⇒ 没有漏');
+    for (const k of Object.keys(baseline.entries)) {
+      if (k.startsWith(f.home)) delete baseline.entries[k];
+    }
+    nodeFs.writeFileSync(f.baselinePath, `${JSON.stringify(baseline)}\n`);
+    const r2 = checkAgainstDisk({ repo: f.repo, home: f.home, baselinePath: f.baselinePath });
+    assert.ok(r2.gaps.length > 0, '漏了就要看得见');
   } finally {
     f.cleanup();
   }

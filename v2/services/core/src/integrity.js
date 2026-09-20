@@ -125,6 +125,76 @@ export function protectedPaths({ repo, home = nodeOs.homedir() }) {
   ];
 }
 
+/**
+ * 从 `/etc/passwd` 的内容里取某个 uid 的 home（**纯函数**，好测）。
+ * 取不到返回 null。
+ */
+export function homeFromPasswd(text, uid) {
+  for (const line of String(text ?? '').split('\n')) {
+    const f = line.split(':');
+    if (f.length >= 7 && Number(f[2]) === uid && f[5]) return f[5];
+  }
+  return null;
+}
+
+/**
+ * **这份清单该按谁的 home 算。**
+ *
+ * ⚠️⚠️ 这是 2026-09-21 实测踩出来的一个**静默失效**，值得完整读一遍：
+ *
+ *   清单是**主人用 `sudo` 建的**，而 `sudo` 下 `os.homedir()` 是 **`/root`**。
+ *   于是 `~/.dsh/profiles`、`~/.dsh/settings.yaml`、`~/.dsh/.credentials.yaml`
+ *   这三条被算成了 `/root/.dsh/**` —— 而那里**一个文件都没有**
+ *   ⇒ `buildBaseline` 把"读不到的文件"**静静跳过** ⇒ **这三条从来没进过清单**。
+ *
+ *   也就是说：**P1 最核心的那条保护（不许改自己的 profile / 设置 / 密钥）一直是空的**，
+ *   而开机横幅照样写"完整性 对上了"。这正是本仓库最忌讳的形状：
+ *   **看起来有闸、其实没有。**
+ *
+ *   ⇒ 修法：清单要按**仓库属主的 home** 算（服务就跑在那个账号下），
+ *      **不是**按"现在跑这条命令的人"算。`sudo` 不改变仓库属主。
+ */
+export function resolveServiceHome({ repo, fallback = null } = {}) {
+  try {
+    const uid = nodeFs.statSync(repo).uid;
+    const passwd = nodeFs.readFileSync('/etc/passwd', 'utf8');
+    const home = homeFromPasswd(passwd, uid);
+    if (home) return home;
+  } catch { /* 读不到就退回调用方给的兜底 */ }
+  return fallback ?? nodeOs.homedir();
+}
+
+/**
+ * **清单漏了哪几条**（P1.2 的判据：一条路径都不许剩）。
+ *
+ * ⚠️ 为什么非要有这个函数：`verifyBaseline()` 是**按清单里已有的条目**核对的
+ *    —— 清单里**没有**的东西，它永远看不见。上面那个 `/root` 的坑就是这么静默过去的。
+ *    ⇒ 这里反过来问一句：**"声明要保护的路径，盘上真有东西，而清单里一条都没有"**，
+ *      有几个？那几个就是**没被看着的**。
+ *
+ * 判据刻意不含"盘上本来就没有"的路径（例如这台机器上还没装 dsh）：
+ * 那种情况下没什么可保护的，不该报。
+ *
+ * @returns {{path:string, mode:string, onDisk:number, why:string}[]}
+ */
+export function coverageGaps({ repo, home, baseline }) {
+  const entries = baseline?.entries ?? {};
+  const gaps = [];
+  for (const e of protectedPaths({ repo, home })) {
+    // ⚠️ `filesUnder()` 对**单文件**那一类是直接把路径给你、**不看它在不在**
+    //    ⇒ 这里必须自己过一遍"真的在盘上"。（`buildBaseline` 靠 hash 失败跳过，
+    //      所以那边看不出这个差别；这一条要是漏了，就会把"本来就没有的文件"
+    //      报成"清单漏了它" —— 假红比漏报好，但假红会把人训练成不看这一栏。）
+    const under = filesUnder(e).filter((f) => nodeFs.existsSync(f));
+    if (under.length === 0) continue; // 盘上没有 ⇒ 没什么可保护的
+    const covered = under.filter((f) => Object.prototype.hasOwnProperty.call(entries, f));
+    if (covered.length === 0) {
+      gaps.push({ path: e.path, mode: e.mode, onDisk: under.length, why: e.why });
+    }
+  }
+  return gaps;
+}
+
 /** 一个文件的 sha256（十六进制）。 */
 export function hashFile(file) {
   return nodeCrypto.createHash('sha256').update(nodeFs.readFileSync(file)).digest('hex');
@@ -254,6 +324,10 @@ export function writeBaselineFile(file, baseline) {
 
 /** 从磁盘读清单并核对（`serve.js` 开机走这条）。 */
 export function checkAgainstDisk({ repo, home, baselinePath = BASELINE_PATH }) {
+  // ⚠️ **没给 home 就按"仓库属主"算**（不是 `os.homedir()`）：
+  //    清单是用 `sudo` 建的，而 `sudo` 下 homedir 是 `/root`
+  //    ⇒ 两边算的必须是同一个 home，否则清单里那几条永远对不上（见 `resolveServiceHome`）。
+  const who = home ?? (repo ? resolveServiceHome({ repo }) : nodeOs.homedir());
   if (!nodeFs.existsSync(baselinePath)) return verifyBaseline({ exists: false });
   let baseline = null;
   try {
@@ -267,7 +341,11 @@ export function checkAgainstDisk({ repo, home, baselinePath = BASELINE_PATH }) {
       warnings: [],
     };
   }
-  return verifyBaseline({ baseline });
+  const r = verifyBaseline({ baseline });
+  // ★ **反着查一遍**：声明要保护的路径里，盘上有东西、而清单里一条都没有的
+  //   —— 那几条就是"没被看着的"。`verifyBaseline` 永远看不见它们（它只看清单里已有的）。
+  r.gaps = repo ? coverageGaps({ repo, home: who, baseline }) : [];
+  return r;
 }
 
 /**
@@ -297,6 +375,20 @@ export function integrityReport({ repo, home, baselinePath = BASELINE_PATH }) {
   }
   for (const c of r.warnings) {
     notes.push(`开机清单里"只报不拦"的条目动过：${c.file}（${c.what}）`);
+  }
+  // ★ **漏掉的那几条**（2026-09-21 实测踩到的那一类）。
+  //   ⚠️ strict 的那几条**算问题**（拒绝启动）：声明了"对不上就不许起"，
+  //      而实际上**根本没在核对** —— 那不是"少一道闸"，是"写着有闸却没有"，
+  //      比不设更坏。report 的那几条只提醒。
+  for (const g of r.gaps ?? []) {
+    const line =
+      `开机清单**漏了这一条**：${g.path}（盘上有 ${g.onDisk} 个文件，清单里一个条目都没有）` +
+      `\n      ⇒ 这等于"**写着有闸、其实没在核对**"（${g.why}）。` +
+      `\n      ⇒ 多半是用 ` +
+      '`sudo` 建清单时 home 算成了 `/root`（见 resolveServiceHome 的说明）。重建：' +
+      `${rebuildCommand({ repo })}`;
+    if (g.mode === 'strict') problems.push(line);
+    else notes.push(line);
   }
   return { ...r, problems, notes };
 }

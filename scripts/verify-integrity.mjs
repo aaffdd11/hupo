@@ -23,8 +23,10 @@ import {
   BASELINE_PATH,
   buildBaseline,
   checkAgainstDisk,
+  coverageGaps,
   filesUnder,
   protectedPaths,
+  resolveServiceHome,
   writeBaselineFile,
 } from '../v2/services/core/src/integrity.js';
 
@@ -36,7 +38,18 @@ const valueOf = (f, dflt) => {
 };
 
 const repo = nodePath.resolve(valueOf('--repo', nodePath.resolve(import.meta.dirname, '..')));
-const home = valueOf('--home', undefined) ?? undefined;
+/**
+ * ⚠️⚠️ **home 按"仓库属主"算，不按"现在跑这条命令的人"算。**
+ *
+ * 这是 2026-09-21 实测踩出来的一个**静默失效**：清单是主人用 `sudo` 建的，
+ * 而 `sudo` 下 `os.homedir()` = **`/root`** ⇒ `~/.dsh/profiles` 那三条
+ * 被算成 `/root/.dsh/**`，而那里一个文件都没有 ⇒ 被 `buildBaseline` **静静跳过**
+ * ⇒ **P1 最核心的那条保护从来没进过清单**，而横幅照样写"对上了"。
+ *
+ * ⇒ 服务跑在仓库属主名下，所以清单也该按他的 home 算（`sudo` 不改变仓库属主）。
+ */
+const resolvedHome = resolveServiceHome({ repo });
+const home = valueOf('--home', undefined) ?? resolvedHome;
 const baselinePath = nodePath.resolve(valueOf('--baseline', BASELINE_PATH));
 
 if (has('--help') || has('-h')) {
@@ -54,16 +67,21 @@ if (has('--help') || has('-h')) {
   nodeProcess.exit(0);
 }
 
-const list = protectedPaths({ repo, ...(home ? { home } : {}) });
+const list = protectedPaths({ repo, home });
 
 if (has('--list')) {
   // ⚠️ 这是给主人"**看一眼再签**"用的（P2 甲的安全性 = 主人真的看一眼）：
   //    不用 root、不写任何东西，只把"按下 --build 之后会被钉住的东西"列出来。
+  console.log(`仓库：${repo}`);
+  console.log(`按谁的 home 算：${home}${home === resolvedHome ? '（仓库属主的）' : '（--home 指定的）'}`);
   let files = 0;
   for (const e of list) {
     const under = e.kind === 'dir' ? filesUnder(e) : [e.path];
     files += under.length;
-    console.log(`[${e.mode === 'strict' ? '拦' : '报'}] ${e.path}  （${under.length} 个文件）`);
+    // ⚠️ **0 个文件**的那几条要显眼：那种路径**钉了等于没钉**
+    //    （2026-09-21 那个 `/root` 的坑就是它们静默跳过的）。
+    const mark = under.length === 0 ? '  ⚠️ 盘上一个文件都没有 ⇒ 这条钉不住' : '';
+    console.log(`[${e.mode === 'strict' ? '拦' : '报'}] ${e.path}  （${under.length} 个文件）${mark}`);
     console.log(`      ${e.why}`);
   }
   console.log(`\n合计 ${list.length} 条、${files} 个文件。`);
@@ -89,12 +107,23 @@ if (has('--build')) {
     console.error('✗ 一个文件都没扫到 —— 路径不对？先确认 --repo 指的是这个仓库的根。');
     nodeProcess.exit(2);
   }
+  // ★ **建完先反着查一遍**：有没有"声明要保护、盘上有东西、却一个条目都没进清单"的路径。
+  //   ⚠️ 这几条必须**当场喊出来**：它们正是 2026-09-21 那个 `/root` 的坑的形状
+  //      ——建完横幅写"建好了"，而其中几条**根本没被钉住**。
+  const gaps = coverageGaps({ repo, home, baseline });
   nodeFs.mkdirSync(nodePath.dirname(baselinePath), { recursive: true, mode: 0o755 });
   writeBaselineFile(baselinePath, baseline);
   console.log(`✅ 清单建好了：${baselinePath}`);
+  console.log(`   按谁的 home 算：${home}${home === resolvedHome ? '（仓库属主的）' : '（--home 指定的）'}`);
   console.log(`   ${count} 个文件 · 只读 ${(0o444).toString(8)} · ${new Date(baseline.builtAt).toISOString()}`);
   console.log('   覆盖：');
   for (const e of list) console.log(`     · ${e.path}  [${e.mode}]  ${e.why}`);
+  if (gaps.length > 0) {
+    console.error(`\n✗ **有 ${gaps.length} 条声明要保护、却一个条目都没进清单**：`);
+    for (const g of gaps) console.error(`   [${g.mode}] ${g.path}（盘上 ${g.onDisk} 个文件）—— ${g.why}`);
+    console.error('   ⇒ 这几条**等于没有闸**。多半是 home 算错了（见 resolveServiceHome 的说明）。');
+    nodeProcess.exit(2);
+  }
   console.log('\n▶ 现在重启服务，让它按这份清单核对：');
   console.log('     scripts/restart-core.sh');
   nodeProcess.exit(0);
@@ -111,10 +140,26 @@ if (r.state === 'absent') {
 }
 
 const total = Object.keys(r.changed).length;
-if (r.state === 'ok') {
+const gaps = r.gaps ?? [];
+if (r.state === 'ok' && gaps.length === 0) {
   console.log(`✅ 对上了：${baselinePath}`);
-  console.log('   开机自动读的那些东西，一个都没被动过。');
+  console.log(`   按谁的 home 算：${home}${home === resolvedHome ? '（仓库属主的）' : '（--home 指定的）'}`);
+  console.log('   开机自动读的那些东西，一个都没被动过；声明要保护的路径也**一条都没漏**。');
   nodeProcess.exit(0);
+}
+
+if (gaps.length > 0) {
+  console.error(`✗ **清单漏了 ${gaps.length} 条**（声明要保护、盘上有东西、清单里却没有）：`);
+  for (const g of gaps) {
+    console.error(`   [${g.mode === 'strict' ? '拦' : '报'}] ${g.path}（盘上 ${g.onDisk} 个文件）—— ${g.why}`);
+  }
+  console.error('   ⇒ 这几条**等于没有闸**（"写着有、其实没在核对"，比不设更坏）。');
+  console.error(`   ⇒ 重建：sudo ${nodeProcess.execPath} ${nodeProcess.argv[1]} --build`);
+}
+
+if (r.state === 'ok') {
+  // 只有"漏"（没有"变了"）：strict 的那几条照样算会拒绝启动
+  nodeProcess.exit(gaps.some((g) => g.mode === 'strict') ? 2 : 1);
 }
 
 console.log(`✗ 对不上：${baselinePath}`);
@@ -124,7 +169,7 @@ for (const c of r.warnings) console.log(`   [报] ${c.file} —— ${c.what}（$
 console.log('\n▶ 怎么收拾：');
 console.log(`   · 是你自己（或主人）刚改的  ⇒ sudo ${nodeProcess.execPath} ${nodeProcess.argv[1]} --build`);
 console.log('   · 不是你改的                ⇒ git revert 那一次改动，或把文件改回去');
-if (r.blocked.length === 0) {
+if (r.blocked.length === 0 && !gaps.some((g) => g.mode === 'strict')) {
   console.log('   （只有"只报不拦"的条目动过 ⇒ **服务照常起**，但要知道这件事）');
   nodeProcess.exit(1);
 }
