@@ -78,6 +78,33 @@ D6.4 说"只认**明说的**『记一笔』"、D6.5 说"**不确认不写**"。�
    （`/root/.dsh/profiles/` 我用 sudo 看过一次，没展开）⇒ **动手前先把这两处读全**，
    **别照这一节猜**。另一条路（自己写树外 cordis 工具插件、用 `dsh plugin` 装）更重，不推荐先走。
 
+> ✅ **这三条"先认的代价"已经实测更正**（上面第 3 条点名要的那两处都读了）——
+> 其中 **① 可以绕开、② 根本不用装**。**见下一节 §三·补二**。
+
+### 三·补二 ✅ "动手前先读的那两处"读了（2026-09-21，实测）
+
+> 上一节末尾点名：**先把 `dsh-mcp-client` 那篇 README 读全 + 展开 profile 看实际布局，别照猜。**
+> 这一节就是读的结果 —— **四处更正，其中一条能省掉一整次 root 重建。**
+
+| # | 上一节写的 | 实测 |
+|---|---|---|
+| 1 | profile 在 **`/root/.dsh/profiles/**`** | 实际是 **`/home/deploy/.dsh/profiles/{sdk,web}/`**（服务跑在 `deploy` 下）。sdk 的 bundle = `dsh-base` + `dsh-sdk-app`；两个 profile 的 `cordis.yml` / `cordis.patch.yml` **今天都还是空的 `[]`** |
+| 2 | "profile 那边加一条 dsh-mcp-client 配置"——**没写怎么加** | `dsh --patch` **可重复**（`--help` 原文 `--patch <path> … (repeatable)`），而且 patch **支持 insert 列表**：`- insert: [ … ]`（**无 `id` = 追加到顶层**）。⚠️ 写成 `- id: <新id>` + `name:` **不成立** —— 那被当成"改一个**已存在**的条目"，实测报 `patch: entry "…" not found` |
+| 3 | 代价 ①"profile 是 `strict` ⇒ 改完要主人补一条重建" | **这条可以绕开**：能力层写成**仓库自己的那份 patch**，spawn 时当**第二个 `--patch`** 挂上（**人格层今天已经这么挂**）。⇒ **一次都不碰 `~/.dsh/profiles/**`** |
+| 4 | 代价 ②要 `dsh plugin add` 装 | **不用装**：`@deepseek-ai/dsh-mcp-client` **已经可解析**（`~/.dsh/profiles/node_modules/@deepseek-ai/dsh-mcp-client` 有软链，`@modelcontextprotocol/sdk` 也在）⇒ 没有"安装产物被改写"的问题 |
+
+**探针怎么做的**（可复现；**没碰仓库、也没碰真 profile**）：把 `~/.dsh/profiles` 复制到
+`/tmp/dsh-probe/profiles`，然后
+`DSH_HOME=/tmp/dsh-probe dsh --profile sdk --patch <临时 patch> --dump-config`。
+⚠️ `--dump-config` 走的是**和真正启动同一套** patch 语义（`dsh-app-boot` 的 `applyEntryPatches`），
+所以这个探针的结论对启动有效。两种写法各跑一遍：
+`- id: …` ⇒ stderr 一句 `patch: entry "…" not found` 且树里没有它；`- insert: [ … ]` ⇒ **树里出现该插件、stderr 干净**。
+
+⇒ **仍然要付的代价只剩一条**：那份新 patch 文件按 **P1.2** 属于"**开机自动喂给 agent 的东西**"，
+要进 `protectedPaths()` ⇒ **开机清单要重建一次**（一次性，**可以和其他改动攒到一起**，见 `00-PROGRESS.md` §九）。
+
+⚠️ 这一节**不改契约的任何口径**，只更正"怎么落地"。
+
 ## 四、能力契约层的登记表要登记什么（P4 原话那四样）
 
 | 字段 | 这一条（工时账）填什么 |
