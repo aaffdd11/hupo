@@ -47,6 +47,7 @@ export function createServer({
   store,
   auth,
   say,
+  dispatcher = null,
   webRoot = null,
   buildId = 'dev',
   now = Date.now,
@@ -142,7 +143,16 @@ export function createServer({
         text: body?.text,
         clientAt: body?.clientAt,
       });
-      // 幂等：重复的 messageId 回 200 但**不重复落盘**，而且明确说这是重复的
+      // ⚠️ **只有真落盘了才交给 agent**。
+      //    重复（duplicate）**绝不能**再投一次——
+      //    那正是"重发 = agent 干两遍"（评审 E2）。
+      if (!result.duplicate && dispatcher) {
+        // 投递是异步的（`session/prompt` 立刻返回，答案从事件流回来），
+        // 所以**不等它**——等它会把 HTTP 响应也拖住。
+        dispatcher.deliver(body?.text).catch((err) => {
+          log(`[dispatch] 投递失败：${err?.message ?? err}`);
+        });
+      }
       return sendJson(res, 200, {
         ok: true,
         duplicate: result.duplicate,
