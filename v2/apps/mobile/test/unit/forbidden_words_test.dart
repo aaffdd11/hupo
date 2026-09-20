@@ -4,6 +4,7 @@
 // 走查里最一致的失败不是"功能没有"，是"我看不懂这句话"。
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
 
 void main() {
@@ -27,7 +28,8 @@ void main() {
 
   test('★ 我们实际用的那些文案，必须干净', () {
     // 这几句是界面里真会显示的（含 D2 定稿的登录页）
-    const copies = [
+    // ⚠️ 用 `final` 不用 `const`：下面要**展开**关于页那份数据源（`const` 里展不开）
+    final copies = [
       '你说的事它真会去做，不只是陪聊。',
       '所以这道门只有你能开。',
       '装机器时给你的那一串',
@@ -48,6 +50,8 @@ void main() {
       '忘了密码？在机器上重设一次就行。',
       '记一笔账、问一件事、让它去查个东西。',
       '它会把做过的事说给你听。',
+      // ⚠️ **关于页那几句也在这儿**（直接引数据源，不手抄 —— 手抄会漂）
+      ...aboutFacts.expand((f) => [f.title, ...f.lines]),
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

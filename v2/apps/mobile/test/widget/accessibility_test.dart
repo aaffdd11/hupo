@@ -65,6 +65,18 @@ List<Object> _drain(WidgetTester tester) {
   return out;
 }
 
+/// **像用户那样**打开关于页：从主界面点顶栏那个 i。
+///
+/// ⚠️ 直接把 `AboutScreen` 当 `home` 泵出来的话，它**没有返回键**
+///    （没有可弹回去的路由）⇒ 命中区扫描会"一个能点的都没扫到"，
+///    然后被那条负向对照拦下来。**那条负向对照是对的** —— 它说的就是
+///    "扫描是空转的"。⇒ 用真入口进。
+Future<void> _openAbout(WidgetTester tester, double scale) async {
+  await _pump(tester, ChatScreen(controller: _controller(), onLoggedOut: () {}), scale);
+  await tester.tap(find.byTooltip('关于'));
+  await tester.pumpAndSettle();
+}
+
 /// 一份"什么内容都有"的时间线：四态、快答+深答、标记、断了的那条。
 void _stuff(Timeline t) {
   t.addLocalUtterance('帮我把这周工时记一下', 'u_1');
@@ -102,6 +114,12 @@ void main() {
         c.timeline.apply({'type': 'message/status', 'turn': 1, 'state': 'started'});
         await _pump(tester, ChatScreen(controller: c, onLoggedOut: () {}), s);
         expect(_drain(tester), isEmpty, reason: '主界面在 ${s}x 溢出了');
+      });
+
+      testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 新加的界面**必须也过这道闸** —— 不然"五档不溢出"会随时间失效。
+        await _openAbout(tester, s);
+        expect(_drain(tester), isEmpty, reason: '关于页在 ${s}x 溢出了');
       });
 
       testWidgets('空屏 @ ${s}x', (tester) async {
@@ -195,6 +213,11 @@ void main() {
       testWidgets('登录页 @ ${s}x', (tester) async {
         await _pump(tester, _login(), s);
         sweep(tester, '登录页 @${s}x');
+      });
+
+      testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
+        await _openAbout(tester, s);
+        sweep(tester, '关于页 @${s}x');
       });
 
       testWidgets('主界面（含"重发"那个入口）@ ${s}x', (tester) async {

@@ -9,6 +9,7 @@
 //   ② 每条消息的四态（在气泡里）
 //   ③ 出错的实话：没发出去就是没发出去
 //   ④ 它正在做（`BusyLine`）：一轮开了、还没出字的那段空白
+//   ⑤ 关于（顶栏那个 i）：**这台设备上能不能用嘴说** —— D3.3 要求如实说
 //
 // ⚠️ 文案里**不许出现内部词**（"连接/客户端/云端/工作区"…）——
 //    有 `forbidden_words` 那道闸守着，改文案时会拦。
@@ -20,6 +21,7 @@ import '../services/chat_controller.dart';
 import '../services/stream.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/composer.dart';
+import 'about_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key, required this.controller, required this.onLoggedOut});
@@ -69,6 +71,15 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: const Text('助手'),
         actions: [
+          // ⚠️ **关于**放在这儿不是装饰：H1 点名要避免的形态是
+          //    "字放大了，但还是打不了字" ⇒ 得有一处**如实告诉他这台设备上行不行**。
+          IconButton(
+            tooltip: '关于',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const AboutScreen()),
+            ),
+            icon: const Icon(Icons.info_outline),
+          ),
           IconButton(
             tooltip: '退出',
             onPressed: () async {
