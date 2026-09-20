@@ -36,12 +36,12 @@ class SayNotSetup extends SayOutcome {
 
 /// 试得太频繁。→ 要告诉用户**还有多久**（手册 D2：只说"太频繁"等于没说）。
 ///
-/// ⚠️ **今天没有生产者**：`/api/say` 上的 429 归 [SayBusy]（忙不过来），
-///    登录那条路（"试得太频繁、锁住了"）走的是 [login] 的 [LoginResult]，
-///    根本不经过 [SayOutcome]。
-///    留着它是因为**这件事本身还在**（登录就在限流）：哪天说话这条路也要限流，
-///    那句话已经在这儿了，不用重新发明；而且它是 sealed 家族的一员，
-///    删掉等于顺手改了"结果有哪几种"。
+/// ⚠️ **它在说话这条路上仍然有生产者**：`/api/say` 的 429 里，
+///    **不带** `{"error":"busy"}` 的那些就是它（见 [sayOutcomeOf]）。
+///    所以别删——删了就等于把"试得太频繁"这件事从结果集合里去掉，
+///    而**那条语义是冻结的**（旧客户端还在按它说话）。
+///
+/// （登录那条"锁住了"走的是 [login] 的 [LoginResult]，不经过这里；两件事都有。）
 class SayLocked extends SayOutcome {
   const SayLocked(this.retryAfterSec);
   final int retryAfterSec;
@@ -188,13 +188,38 @@ class Api {
 ///
 /// 状态码的分工（**不许互相串**；同一个码在两个端点上可以是两件事）：
 ///   200 收下了 ｜ 401 令牌不行 ｜ 503 这台机器还没设密码 ｜
-///   429 **这条路（`/api/say`）上只有一个意思：它忙不过来** ｜
+///   429 **要按 body 分**：`{"error":"busy"}` ⇒ 忙不过来；
+///   其它 429 ⇒ 原来那个意思（试得太频繁 + `retryAfterSec`）｜
 ///   其余 = 没细分，交给上层说"服务器没收下：HTTP xxx"。
 ///
-/// ⚠️ **429 在 `/api/login` 上不是这个意思**（那边是"试得太频繁、锁住了"，
-///    还要读 `retryAfterSec` 告诉用户等多久）。那条路走的是 [Api.login]，
-///    **不经过这里**——两件事共用一个状态码，靠"是哪个端点"分开，
-///    不靠猜 body（猜 body 等于把协议变成模糊的）。
+/// ⚠️ **429 在 `/api/login` 上也是另一回事**（"试得太频繁、锁住了"，
+///    还要读 `retryAfterSec`）。那条路走的是 [Api.login]，**不经过这里**。
+///    ⇒ 同一个码在三处三种事：靠"哪个端点 + body 里那个显式 `error`"分开，
+///      **不许**靠"看码就断定"。
+/// 这个 body 是不是"我忙不过来"（内存准入闸拒的）。
+///
+/// ⚠️ 只认**显式字段** `error == "busy"`；解析不了就当"不是"（宁可落到
+/// 那个更保守的旧意思上，也不要凭猜把限流说成"忙"）。
+bool isBusyBody(String body) {
+  try {
+    final j = jsonDecode(body);
+    return j is Map && j['error'] == 'busy';
+  } catch (_) {
+    return false;
+  }
+}
+
+/// 从 body 里读"还要等多少秒"（读不到就是 0 —— 和改动前的行为一致）。
+int retryAfterSecOf(String body) {
+  try {
+    final j = jsonDecode(body);
+    if (j is Map) return (j['retryAfterSec'] as num?)?.toInt() ?? 0;
+  } catch (_) {
+    // 读不出来就说 0：老行为就是这样（`?? 0`）
+  }
+  return 0;
+}
+
 SayOutcome sayOutcomeOf(int status, String body) {
   switch (status) {
     case 200:
@@ -208,10 +233,18 @@ SayOutcome sayOutcomeOf(int status, String body) {
     case 503:
       return const SayNotSetup();
     case 429:
-      // 内存准入闸拒的："我满了，这一句没收下"（手册 `08-SPEC.md` §9.1）。
-      // ⚠️ 那边的阈值/占用比**不住在客户端**——这里只认"没收下"这个事实，
-      //    以及"可以再发一次"这个结论（N11）。
-      return const SayBusy();
+      // ⚠️ **429 在这条路上有两种意思，必须分开**（同一个码、两个端点、两种事，
+      //    是这个项目既有的风格：`/api/login` 上 429 也是另一回事）。
+      //    · `{"error":"busy"}` ⇒ 内存准入闸拒的（手册 `08-SPEC.md` §9.1）：
+      //      **我满了，这一句没收下**，过一会儿再发一次。
+      //    · 其它（`{"error":"locked","retryAfterSec":N}`）⇒ **原来那个意思**：
+      //      你试得太频繁，等 N 秒。**这条语义不许被 busy 吃掉**
+      //      （`03-DEVELOPMENT.md` §三：协议字段一旦上线就冻结）。
+      //
+      // ⚠️ 这不是"猜 body"：`error` 是**显式字段**（登录那条路也一直这么传
+      //    `retryAfterSec`）。猜的是"看码就断定"，而那个断定今天已经不成立了。
+      if (isBusyBody(body)) return const SayBusy();
+      return SayLocked(retryAfterSecOf(body));
     default:
       return SayRejected('HTTP $status');
   }

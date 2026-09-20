@@ -65,12 +65,18 @@ void main() {
       expect(sayOutcomeOf(429, _busy), isA<SayBusy>());
     });
 
-    test('★ 同一个 429：说话这条路只有一个意思（忙不过来），登录那条路**一个字没动**',
+    test('★ 同一个 429 分三种事：说话这条路按 body 分，登录那条路**一个字没动**',
         () async {
       // ① `/api/say`：429 = 它满了，这一句没收下。
       //    ⚠️ **不猜 body**——按"是哪个端点"分，不按"body 长什么样"猜。
       expect(sayOutcomeOf(429, _busy), isA<SayBusy>());
-      expect(sayOutcomeOf(429, '{"error":"locked","retryAfterSec":90}'), isA<SayBusy>());
+      // ⚠️ **不带 busy 标记的 429 仍然是原来那个意思**（试得太频繁 + 等多久）。
+      //    这条语义是**冻结**的（旧客户端还在按它说话）：新加的"忙"不许把它吃掉。
+      final locked = sayOutcomeOf(429, '{"error":"locked","retryAfterSec":90}');
+      expect(locked, isA<SayLocked>());
+      expect((locked as SayLocked).retryAfterSec, 90);
+      // 读不出来也别慌：老行为是 0，而且**不许**把它说成"忙"
+      expect((sayOutcomeOf(429, '不是 JSON') as SayLocked).retryAfterSec, 0);
 
       // ② `/api/login`：同一个状态码，意思完全不同 —— 这条是**回归条**：
       //    加 SayBusy 时最容易顺手把登录那句"还有多久"（D2）弄丢。
