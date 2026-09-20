@@ -92,11 +92,12 @@ bash scripts/check-crash-recovery.sh     # 被硬杀之后能自己收干净吗
 bash scripts/check-apk.sh                # 打出来的安卓包里权限对不对
 
 # 推送到 GitHub
-bash scripts/push-changes.sh "一句话说明"
+bash scripts/push-changes.sh "一句话说明" -- <改动的路径...>
 ```
 
-> ⚠️ **`test/widget` 里除了可访问性那一份，其余是提示档**——它断言的是布局，
-> 界面一重构必然过期。**但 `analyze`、`test/unit`、可访问性那 39 条挂了必须修干净。**
+> ⚠️ **`test/widget` 里除了可访问性那一份，其余是提示档**——它断言的是"有没有画到屏幕上"，
+> 界面一重构必然过期。**但 `analyze`、`test/unit`、可访问性那一份挂了必须修干净。**
+> ⇒ 一条命令跑完三道闸：`bash scripts/check-client.sh`（提示档**扫目录**，新加一份会自动跑）。
 > 详见 [`docs/dev/13-A11Y.md`](docs/dev/13-A11Y.md)。
 
 ---
