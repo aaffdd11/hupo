@@ -156,10 +156,12 @@ bash scripts/push-changes.sh "一句话说明"
 
 **它们全都在 git 历史里**，需要时这样取：
 
+**删除前的完整快照是 commit `f93f296`**（那之后的第一个 commit 就是删除）：
+
 ```bash
-git log --oneline | tail -20                  # 找回删除前的提交
-git show <commit>:<path>                      # 看某个文件当时的样子
-git show <commit>:ARCHITECTURE-v7.md          # 例
+git show f93f296:ARCHITECTURE-v7.md                 # 例：旧的总架构
+git show f93f296:docs/ux/06-retiree.md              # 例：那位不会拼音的用户的原话
+git ls-tree -r --name-only f93f296 | grep docs/     # 列出当时所有文档
 ```
 
 ⚠️ **手册已经把该留的都收敛进来了**（包括不变量 N1–N11、接口表、安全模型、iOS 构建、

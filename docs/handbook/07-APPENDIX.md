@@ -278,7 +278,7 @@ cd services/core && node --test test/*.test.js                 # 72 全过
 | DSH 版本 | `@deepseek-ai/dsh` **0.1.5-rc.1**（**rc**，接口可能变） |
 | 证书到期 | 2026-12-11（**来自旧运维文档，未在本机复核**） |
 | 生产机 `unit` 文件 | ⚠️ **没拿到** ⇒ env 白名单**不许先砍后盘点** |
-| `DSH_HOME` | ⚠️ **当前无处设置**（只在文档与 `scripts/diagrams.mjs:585` 出现） |
+| `DSH_HOME` | ⚠️ **当前无处设置**（全库搜不到给它赋值的地方） |
 
 ---
 

@@ -109,7 +109,7 @@ systemd 单元 = concierge-core
 会话存储    = $DSH_HOME/sessions/（键是**绝对路径的编码**）
 ```
 
-⚠️ **`DSH_HOME` 当前无处设置**——它只出现在文档与 `scripts/diagrams.mjs:585` 里，
+⚠️ **`DSH_HOME` 当前无处设置**——全库搜不到一个地方给它赋值，
 **生产机上到底有没有、值是多少，必须先核**（这件事挡着 §四 的 env 白名单）。
 
 ### 2.3 客户端
