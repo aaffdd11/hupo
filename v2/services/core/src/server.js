@@ -188,6 +188,8 @@ export function createServer({
   auth,
   say,
   dispatcher = null,
+  /** 回收站（批 3 第二件）。`null` = 这台部署没开这条路（路由一律 404）。 */
+  trash = null,
   webRoot = null,
   buildId = 'dev',
   now = Date.now,
@@ -248,12 +250,74 @@ export function createServer({
       if (path === '/api/audit' && req.method === 'GET') {
         return sendJson(res, 200, { entries: auth.auditLog });
       }
+      // ── 回收站（批 3 第二件 · 契约 `docs/dev/28-DELETE.md` §8.2）────────
+      // ⚠️ 键是 `messageIds`（不是轮号）：盘上没有轮号，见契约 §三·补。
+      if (trash) {
+        if (path === '/api/trash' && req.method === 'GET') {
+          return sendJson(res, 200, { items: trash.list(), ttlDays: trash.ttlDays });
+        }
+        if (path === '/api/trash/plan' && req.method === 'POST') {
+          // ⚠️ **只读**：少 `confirm` 也能调 —— "先看清单"这一步不许有门槛。
+          let body;
+          try {
+            body = await readJson(req, 16 * 1024);
+          } catch {
+            return sendJson(res, 400, { error: 'bad-json' });
+          }
+          return sendJson(res, 200, trash.plan(body?.messageIds));
+        }
+        if (path === '/api/trash/remove' && req.method === 'POST') {
+          return handleTrashWrite(req, res, 'remove');
+        }
+        if (path === '/api/trash/restore' && req.method === 'POST') {
+          let body;
+          try {
+            body = await readJson(req, 16 * 1024);
+          } catch {
+            return sendJson(res, 400, { error: 'bad-json' });
+          }
+          return sendJson(res, 200, { ok: trash.restore(body?.messageIds) });
+        }
+        if (path === '/api/trash/purge' && req.method === 'POST') {
+          return handleTrashWrite(req, res, 'purge');
+        }
+      }
       return sendJson(res, 404, { error: 'not-found' });
     }
 
     // 静态：Flutter web
     if (webRoot) return serveStatic(req, res, path);
     return sendJson(res, 404, { error: 'not-found' });
+  }
+
+  /**
+   * 两个**破坏性**动作（删掉 / 彻底删）。
+   *
+   * ⚠️ `confirm:true` 是**必须的**：删是破坏性动作，**不许一个手滑的请求就能触发**
+   *    （契约 §8.2）。少它一律 400，而且**什么都不做**。
+   */
+  async function handleTrashWrite(req, res, kind) {
+    let body;
+    try {
+      body = await readJson(req, 16 * 1024);
+    } catch {
+      return sendJson(res, 400, { error: 'bad-json' });
+    }
+    if (body?.confirm !== true) return sendJson(res, 400, { error: 'confirm-required' });
+    try {
+      if (kind === 'remove') {
+        const r = trash.remove(body?.messageIds);
+        return sendJson(res, 200, {
+          ok: true, messageIds: r.messageIds, purgeAt: r.at + trash.ttlMs,
+        });
+      }
+      const r = trash.purge(body?.messageIds);
+      return sendJson(res, 200, { ok: true, freedBytes: r.freedBytes });
+    } catch (err) {
+      // 认不出来的输入 / 已经彻底删过 / 压实失败 —— 都要**说清哪一种**，别回一个笼统的 500
+      log(`[trash] ${kind} 失败：${err?.message ?? err}`);
+      return sendJson(res, 400, { error: 'trash-failed', reason: err?.message ?? String(err) });
+    }
   }
 
   async function handleLogin(req, res) {

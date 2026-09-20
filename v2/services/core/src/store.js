@@ -7,6 +7,8 @@
 //   2. **先落盘成功，调用方才能推订阅者。** 本模块只负责"落"，
 //      "推"在 `timeline.js`，且必须在 append 返回之后。
 //   3. **append-only，一条一行 JSON。** 不原地改、不重写文件。
+//      ⚠️ **唯一的例外是 `rewrite()`（压实）**：它只服务"真删"——见那里的说明。
+//      除它之外任何地方都不许重写这条日志。
 //   4. **fsync 之后才算落盘**（断电不丢）。可用 `fsync: false` 换速度，
 //      但那样"落盘成功"就只是"写进页缓存"。
 //
@@ -165,6 +167,62 @@ export class Store {
       prev = e.seq;
     }
     return { count: events.length, maxSeq: prev };
+  }
+
+  /**
+   * ⚠️ **重写整条日志（压实）—— append-only 之外唯一的例外。**
+   *
+   * 它只服务一件事：**"真删"要让内容真的不在盘上**（契约 `docs/dev/28-DELETE.md` §三）。
+   * 只追加是删不掉字节的，所以这里必须重写。
+   *
+   * 两条不许破：
+   *   1. **原子**：先写 `<日志>.tmp` → fsync → `rename` 覆盖。
+   *      断电只会看到"旧的"或"新的"，**永远看不到半份**（半份 = 整条时间线没了）。
+   *   2. **号一个不跳**：调用方必须让每条事件**带它原来的 `seq`**。
+   *      压实是"把内容换成占位"，**不是"抽掉行"** ——
+   *      抽行会让 `verifyMonotonic` 变红，也会让"编号 = 已落盘最大 + 1"（N22）失效。
+   *
+   * @param {string} timelineId
+   * @param {object[]} events  完整的新内容（每条都得带 seq）
+   */
+  rewrite(timelineId, events) {
+    const file = this.pathFor(timelineId);
+    const tmp = `${file}.tmp`;
+    const text = events.map((e) => `${JSON.stringify(e)}\n`).join('');
+
+    let fd;
+    let failure = null;
+    try {
+      fd = this.#fs.openSync(tmp, 'w');
+      this.#fs.writeSync(fd, text, null, 'utf8');
+      if (this.#fsync) this.#fs.fsyncSync(fd);
+    } catch (err) {
+      failure = err;
+    }
+    if (fd !== undefined) {
+      try {
+        this.#fs.closeSync(fd);
+      } catch (err) {
+        failure ??= err;
+      }
+    }
+    if (!failure) {
+      try {
+        this.#fs.renameSync(tmp, file);
+      } catch (err) {
+        failure = err;
+      }
+    }
+    if (failure) {
+      // 尽力把半成品清掉；清不掉也不许掩盖真正的失败
+      try {
+        this.#fs.unlinkSync(tmp);
+      } catch { /* 尽力而为 */ }
+      throw new StoreError(
+        `压实失败（${timelineId}）：${failure?.message ?? failure}`,
+        { cause: failure },
+      );
+    }
   }
 
   #parse(line, timelineId) {

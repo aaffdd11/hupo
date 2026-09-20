@@ -17,6 +17,7 @@ import { AgentRuntime } from './agent-runtime.js';
 import { Auth } from './auth.js';
 import { Dispatcher } from './dispatcher.js';
 import { SayService } from './say.js';
+import { Trash } from './trash.js';
 import { Store } from './store.js';
 import { reconcileOnBoot } from './reconcile.js';
 import { CRASH_WINDOW_MS, markCleanExit, recordStart } from './boot-marker.js';
@@ -115,6 +116,9 @@ if (!reconciled.ok) {
 
 const auth = new Auth({ dataDir: cfg.dataDir });
 const say = new SayService({ timeline, store, timelineId: 'main' });
+// 回收站（批 3 第二件）。⚠️ **必须 sync**：不 sync 的话重启之后回收站是空的，
+// 而屏幕上那些话还藏着 —— 用户会以为永远拿不回来了（契约 `docs/dev/28-DELETE.md`）。
+const trash = new Trash({ timeline, store, timelineId: 'main' }).sync();
 
 // agent 运行时 + 粘合层。
 // ⚠️ `onEvict` 是「**先收口再卸**」里的那个收口——runtime 没有翻译层，
@@ -153,9 +157,25 @@ const turnStatus = createTurnStatus({
 turnStatus.start();
 
 const { listen, close } = createServer({
-  timeline, store, auth, say, dispatcher, webRoot, buildId: cfg.buildId,
+  timeline, store, auth, say, dispatcher, trash, webRoot, buildId: cfg.buildId,
   log: (m) => console.log(m),
 });
+
+// ★ **回收站到点就真删**（X3③）。⚠️ 只做"到点压实"这一半；
+//   "提前一周告一声"那句话**留给系统通知**（批 3 第三件，契约 §七）——
+//   现在只把账算准（回收站里每条都写着什么时候会真删）。
+const trashSweep = setInterval(() => {
+  try {
+    for (const done of trash.purgeExpired()) {
+      console.log(`  🗑 回收站到点，彻底删掉 ${done.messageIds.length} 条（释放 ${done.freedBytes} 字节）`);
+    }
+  } catch (err) {
+    // ⚠️ 压实失败**不许把进程带走**：它是维护动作，而且台账（`turn/deleted`）
+    //    还在盘上 ⇒ 下一轮扫描还会再试一次，不会漏掉。
+    console.warn(`  ⚠️ 回收站扫描失败：${err?.message ?? err}`);
+  }
+}, 60 * 60 * 1000);
+trashSweep.unref?.();
 
 // ★ **续做**：对账说出口的那句"我重新做一遍"，在这里真的做。
 // ⚠️ 顺序不能反：**先落 `task/resumed`（记额度）再投递** ——
@@ -253,6 +273,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     await runtime.shutdown();
     await close();
     turnStatus.stop();
+    clearInterval(trashSweep);
     // ★ 留下"这次是好好走的"标记 ⇒ 下次开机才知道上一次是不是被硬杀的
     markCleanExit(cfg.dataDir);
     process.exit(0);
