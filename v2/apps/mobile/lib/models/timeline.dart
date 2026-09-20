@@ -12,6 +12,7 @@
 // ⚠️ 纯逻辑，**不许 import flutter/material**（禁令 1）。要进 `test/unit` 硬闸。
 
 import 'message_state.dart';
+import 'notice.dart';
 import 'process_words.dart';
 
 /// 一条时间线条目。`seq` 是服务端发的号；本地乐观发言借用"当前最大号"。
@@ -153,6 +154,43 @@ class TimelineMarker extends TimelineItem {
   final bool catchUp;
 }
 
+/// **系统通知那一条**（契约 `29-NOTICE.md` 约束 2）。
+///
+/// 为什么它必须**进列表、占一个位置**：浮窗只是"喊一声"，它会自己消失；
+/// 而"它替你做的决定 / 出事了 / 你不在时发生的事"要**经得起你不在**——
+/// 主人在浮窗消失之后回来，也得看得见那一条。
+///
+/// ⚠️ 它是**持久事件**（`notice` 取号、落盘），所以走的是 `Timeline.apply`
+///    那条"带 seq"的路；瞬态的 `notice/urgent` **绝不进这里**（决策 P-g）。
+///
+/// ⚠️ 它**没有 `messageId`**（不是一轮对话，删的是"话"，不是通知本身）⇒
+///    长按删除那条路天然够不着它（`_visible` 那一处说得一样）。
+class TimelineNotice extends TimelineItem {
+  const TimelineNotice({
+    required this.notice,
+    required super.seq,
+    this.catchUp = false,
+  });
+
+  final Notice notice;
+
+  /// 它是**补发**上来的（断线重连 / 冷启动重放）。
+  ///
+  /// ⚠️ 这个标志只给**浮窗**看：补发的是"过去发生过的事实"，
+  ///    而浮窗是"现在喊你一声"（和 `message/start` 那处 `!catchUp` 同理）。
+  ///    时间线那一条**照画**——它本来就是给"你不在"留的。
+  final bool catchUp;
+
+  /// 这一条按得动的撤销；`null` = **不画那个按钮**。
+  ///
+  /// ⚠️ fail-closed（和 `NoticeUndo.usable` 同一条规矩）：认不出来的 `action`、
+  ///    或者 id 清单是空的 ⇒ 不给入口。画一个按了不会有结果的按钮，
+  ///    就是屏幕上说假话（N10）。
+  /// ⚠️ 它是个**纯查询**：撤销**怎么走**（走哪条接口）不在这儿，在控制器那一层
+  ///    ——两处（浮窗 + 时间线）必须走**同一条路**（约束 3）。
+  NoticeUndo? get undo => (notice.undo?.usable ?? false) ? notice.undo : null;
+}
+
 /// 过程里的**一步**（第 ③ 档「步骤流水」，契约 §三 `step/*`）。
 ///
 /// ⚠️ **瞬态**：不占号、不落盘（决策 P-g）⇒ 它**不是**时间线条目，
@@ -245,6 +283,8 @@ List<TurnGroup> turnGroupsOf(Iterable<TimelineItem> items) {
         }
       case TimelineMarker():
         continue; // 分隔线不属于任何一轮
+      case TimelineNotice():
+        continue; // 通知也不属于任何一轮（它没有 messageId，删的是"话"）
     }
   }
   return groups;
@@ -554,6 +594,16 @@ class Timeline {
           seq: rawSeq,
           catchUp: catchUp,
         ));
+      // ── 系统通知（契约 `29-NOTICE.md` 约束 2：**时间线里必须有那一条**）──
+      //
+      // ⚠️ `text` **由服务端给、客户端照抄**（§五 🔴）——这里一个字都不重写。
+      // ⚠️ 只有认得出的**那句话**才上时间线：`text` 读不出来 ⇒ 什么都不加
+      //    （一条没有话的通知占一个位置，屏幕上就是一行空白）。
+      // ⚠️ 瞬态的 `notice/urgent` **走不到这里**：它没有 seq（见 `_applyTransient`）。
+      case 'notice':
+        final n = Notice.fromEvent(event);
+        if (n == null) return;
+        _items.add(TimelineNotice(notice: n, seq: rawSeq, catchUp: catchUp));
       // ── 删掉 / 恢复 / 真删（契约 §8.1、§8.3）────────────────────
       //
       // ⚠️ 三条都**取号、落盘**，所以它们走的是这条"带 seq"的路
@@ -625,6 +675,12 @@ class Timeline {
         // 步骤是**过程噪音** ⇒ 那一轮死了就不该留着。
         // ⚠️ 推理原文**留着**：它是内容，挂在那条还开着的气泡上（改过一次，别改回去）。
         _closeTurn();
+      case 'notice/urgent':
+        // ⚠️ **瞬态通知不进时间线**（契约 §三① + 决策 P-g）：它没有号，
+        //    所以它只在浮窗里喊一声（`ChatController` 那条路接住它）。
+        //    这一句是**故意什么都不做**，不是漏了——写在这儿免得下一个人
+        //    以为"应该在这儿加一条"。
+        return;
       default:
         return;
     }

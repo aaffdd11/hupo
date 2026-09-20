@@ -32,6 +32,7 @@ import 'package:hupo_app/screens/login_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
+import 'package:hupo_app/widgets/notice.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// D3.5 点名的五档。
@@ -223,6 +224,76 @@ Future<void> _openPlan(WidgetTester tester, double scale) async {
   await tester.pumpAndSettle();
 }
 
+/// **像用户那样**让浮窗出现在屏幕上（批 3「系统通知」新加的界面）。
+///
+/// ⚠️ 和关于页同一条理由：新加的界面**必须也过这两道闸**。
+/// ⚠️ **从真入口进**：走的是控制器收服务端事件那条路（`ingest`），
+///    不是直接 pump 一个 `NoticeOverlay` —— 那样它没有底下的页面，
+///    "五档不溢出"量的就不是用户真会看到的那棵树。
+///
+/// ⚠️ 浮窗那个"自己消失"的钟：**这一条用例必须把它收掉**，
+///    否则 `AutomatedTestWidgetsFlutterBinding` 会在用例结束时
+///    断言 "A Timer is still pending"（那是这个框架的硬规矩）。
+Future<void> _openNoticeIn(WidgetTester tester, ChatController c, double scale) async {
+  // ⚠️ **先挂起来、再让通知到**：浮窗和主界面是 `Stack` 的两层，
+  //    通知到时 `setState` 会把这一帧重画出来。
+  await _pump(tester, ChatScreen(controller: c, onLoggedOut: () {}), scale);
+  c.ingest(_noticeEvent());
+  await tester.pump();
+  // 负向对照：**浮窗真的画出来了**才算数（没画出来的话下面那道扫描
+  // 扫的是底下的页面，而它照样绿 —— 那就是"闸变弱了"）
+  expect(find.byType(NoticeOverlay), findsOneWidget, reason: '★ 浮窗没画出来 ⇒ 这条闸漏了它');
+  // ⚠️ 范围必须**指到浮窗里**：同一句话在时间线那一条上也有一份
+  //    （两处撤销是同一份数据 —— 那正是约束 3）
+  expect(
+    find.descendant(of: find.byType(NoticeOverlay), matching: find.text(noticeUndoLabel2)),
+    findsOneWidget,
+    reason: '★ 浮窗里那个撤销按钮也得真在屏幕上（D3.6 要量它）',
+  );
+}
+
+/// 收掉浮窗（**并让那一帧画出来**）：用例结尾用它清掉那个钟。
+Future<void> _closeNotice(WidgetTester tester, ChatController c) async {
+  c.dismissNotice();
+  await tester.pump();
+}
+
+/// **像用户那样**让浮窗自己走掉，屏幕上只剩**时间线里那一条通知**。
+Future<void> _openNoticeLine(WidgetTester tester, double scale) async {
+  final c = _controller();
+  await _pump(tester, ChatScreen(controller: c, onLoggedOut: () {}), scale);
+  c.ingest(_noticeEvent());
+  // ⚠️ 两拍：第一拍让那个钟到点，第二拍才把新的一帧画出来
+  await tester.pump(ChatController.noticeLinger);
+  await tester.pump();
+  expect(find.byType(NoticeLine), findsOneWidget, reason: '★ 浮窗走了，时间线里那一条必须还在（约束 2）');
+  expect(
+    find.descendant(of: find.byType(NoticeLine), matching: find.text(noticeUndoLabel2)),
+    findsOneWidget,
+    reason: '★ 时间线里那个撤销也得在（"你不在"之后还能按）',
+  );
+}
+
+/// 一条**有撤销**的系统通知（服务端给的形状，`29-NOTICE.md` §五）。
+///
+/// ⚠️ `text` 与 `undo.label` 都是**服务端给的**：写在这份测试里，
+///    不是客户端文案（`test/unit/notice_test.dart` 钉着"客户端不许有模板"）。
+Map<String, dynamic> _noticeEvent() => {
+      'type': 'notice',
+      'kind': 'expiring',
+      'text': '有一条过几天会彻底删掉',
+      'at': 1758400000000,
+      'seq': 42,
+      'undo': {
+        'label': noticeUndoLabel2,
+        'action': 'trash/restore',
+        'messageIds': ['u_x', 'm_y'],
+      },
+    };
+
+/// 服务端给的那个撤销按钮字。
+const noticeUndoLabel2 = '拿回来';
+
 void main() {
   // 换档会写本机设置（`ProcessLevelStore`）——测试里给它一个空盘，
   // 免得真去敲一个不存在的平台插件（写失败也不会抛，但别让它去敲）。
@@ -294,6 +365,19 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '删前清单在 ${s}x 溢出了');
         // 而且它**照实**把"删不掉"写出来了（§五：那句必须出现在屏幕上）
         expect(find.text(planCannotLine), findsOneWidget);
+      });
+
+      testWidgets('浮窗（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 批 3「系统通知」的新界面（`29-NOTICE.md`）：**必须也过这道闸**。
+        final c = _controller();
+        await _openNoticeIn(tester, c, s);
+        expect(_drain(tester), isEmpty, reason: '浮窗在 ${s}x 溢出了');
+        await _closeNotice(tester, c);
+      });
+
+      testWidgets('时间线里那一条通知（从真入口进）@ ${s}x', (tester) async {
+        await _openNoticeLine(tester, s);
+        expect(_drain(tester), isEmpty, reason: '时间线里那一条在 ${s}x 溢出了');
       });
 
       testWidgets('空屏 @ ${s}x', (tester) async {
@@ -419,6 +503,21 @@ void main() {
       testWidgets('气泡长按菜单（从真入口进）@ ${s}x', (tester) async {
         await _openBubbleMenu(tester, s);
         await sweep(tester, '删除菜单 @${s}x');
+      });
+
+      testWidgets('浮窗（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 浮窗里的"撤销 / 知道了"两个按钮必须也进这份扫描 ——
+        //    不然它们的命中区没有任何东西守着（D3.6）。
+        final c = _controller();
+        await _openNoticeIn(tester, c, s);
+        await sweep(tester, '浮窗 @${s}x');
+        await _closeNotice(tester, c);
+      });
+
+      testWidgets('时间线里那一条通知（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 撤销窗口**不能随浮窗一起消失**（约束 3）⇒ 它自己也得被量到。
+        await _openNoticeLine(tester, s);
+        await sweep(tester, '时间线里那条通知 @${s}x');
       });
 
       testWidgets('主界面（含"重发"那个入口）@ ${s}x', (tester) async {

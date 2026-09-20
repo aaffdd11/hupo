@@ -25,11 +25,19 @@ import '../services/chat_controller.dart';
 import '../widgets/bubble_menu.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/composer.dart';
+import '../widgets/notice.dart';
 import '../widgets/process_level_menu.dart';
 import '../widgets/process_view.dart';
 import '../widgets/trash_plan_sheet.dart';
 import 'about_screen.dart';
 import 'trash_screen.dart';
+
+/// "下面那一整块"的名字（状态条 + 内容 + 输入框）。
+///
+/// ⚠️ **给闸用的**：契约 `29-NOTICE.md` 约束 1 的判据是 **D4.8：高度变化 = 0px**，
+///    而"变化"必须量在**同一个东西**上 —— 就是这一块。它一直都在
+///    （通知来之前是空屏、来之后是列表），所以前后比它才是 0px 的判据。
+const Key chatBodyKey = Key('chat-body');
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key, required this.controller, required this.onLoggedOut});
@@ -98,7 +106,11 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final c = widget.controller;
-    return Scaffold(
+    // ⚠️ **浮窗（通知）与主界面是 `Stack` 的两层，不是 `Column` 的两行。**
+    //    约束 1 的判据是 **D4.8：高度变化 = 0px** —— 塞进 `Column` 就当场破掉
+    //    （下面整块内容会被那条通知往下推）。有闸钉着：
+    //    `test/widget/notice_overlay_test.dart` 量的是**下面内容前后同一个矩形**。
+    final sheet = Scaffold(
       appBar: AppBar(
         title: const Text('助手'),
         actions: [
@@ -137,27 +149,61 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ],
       ),
-      body: Column(
+      body: _sheetBody(c),
+    );
+
+    final n = c.notice;
+    // ⚠️ `Positioned(top/left/right)` **不给 bottom** ⇒ 浮窗只占它自己那么大，
+    //    而且**不参与 `Stack` 的尺寸计算**（`Stack` 的尺寸由非 positioned 的
+    //    那个孩子决定）。这就是"浮在上面、不挤动下面"的**结构**保证——
+    //    不是靠"看起来像浮着"。
+    return PopScope(
+      // ⚠️ 退出这一屏就把浮窗撤了：它是"现在喊你一声"，
+      //    而下一屏上没有它（不然那个钟到点时会去动一棵已经没了的树）。
+      onPopInvokedWithResult: (didPop, _) => c.dismissNotice(),
+      child: Stack(
         children: [
-          _StatusStrip(state: c.conn, error: c.lastError),
-          Expanded(
-            child: Center(
-              child: ConstrainedBox(
-                // 内容列限宽（手册 D4.6 / R5）：平板上一行七十个字没人读
-                constraints: const BoxConstraints(maxWidth: 760),
-                child: _body(c),
+          sheet,
+          if (n != null)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: NoticeOverlay(
+                notice: n,
+                // ⚠️ 浮窗那个**不带 `from`**：它读浮窗手上那一条
+                onUndo: () => _undoNotice(),
+                onDismiss: c.dismissNotice,
               ),
             ),
-          ),
-          Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 760),
-              child: Composer(onSend: c.send),
-            ),
-          ),
-          SizedBox(height: MediaQuery.viewInsetsOf(context).bottom),
         ],
       ),
+    );
+  }
+
+  Widget _sheetBody(ChatController c) {
+    return Column(
+      // ⚠️ 这个键是**给闸用的**（见 `chatBodyKey`）
+      key: chatBodyKey,
+      children: [
+        _StatusStrip(state: c.conn, error: c.lastError),
+        Expanded(
+          child: Center(
+            child: ConstrainedBox(
+              // 内容列限宽（手册 D4.6 / R5）：平板上一行七十个字读不下去
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: _body(c),
+            ),
+          ),
+        ),
+        Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: Composer(onSend: c.send),
+          ),
+        ),
+        SizedBox(height: MediaQuery.viewInsetsOf(context).bottom),
+      ],
     );
   }
 
@@ -219,7 +265,34 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         AssistantMessage() => _answer(item, c),
         TimelineMarker() => MarkerLine(marker: item),
+        // ★ **系统通知那一条**（契约 `29-NOTICE.md` 约束 2）：进列表、跟着滚、
+        //   占一个位置。有 `undo` 时在这儿也渲染撤销（约束 3）——
+        //   ⚠️ 按下去走的是**同一条路**（`_undoNotice` → `c.undoNotice()`）。
+        TimelineNotice() => NoticeLine(
+            notice: item.notice,
+            onUndo: item.undo == null ? null : () => _undoNotice(item),
+          ),
       };
+
+  /// 按"撤销"（**浮窗里那个与时间线里那个共用这一条**，约束 3）。
+  ///
+  /// [from] 不传 = 浮窗里那个；传了 = 时间线里那一条
+  /// （⚠️ 两者的 undo **各读各的**：浮窗会自己消失，时间线那一条不会）。
+  ///
+  /// ⚠️ 成没成都如实说（N11）——用词与回收站那一页**同一句**
+  ///    （同一件事同一句话，别再新造一个说法）。
+  Future<void> _undoNotice([TimelineNotice? from]) async {
+    final r = await widget.controller.undoNotice(from: from);
+    if (!mounted || r == null) return;
+    switch (r) {
+      case TrashOk():
+        _say(trashRestoredLine);
+      case TrashUnauthorized():
+        _say(trashUnauthorizedLine);
+      case TrashFailed():
+        _say(trashRestoreFailedLine);
+    }
+  }
 
   /// 一条回答：气泡 + （第 ④ 档时）**它自己那条**的思考原文。
   ///

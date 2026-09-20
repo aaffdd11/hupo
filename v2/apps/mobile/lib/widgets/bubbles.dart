@@ -10,6 +10,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/message_state.dart';
+import '../models/notice_words.dart';
 import '../models/timeline.dart';
 
 /// 四态的视觉。**图标 + 文字**双通道，不靠颜色单独承载信息。
@@ -160,11 +161,19 @@ class AnswerBubble extends StatelessWidget {
 ///
 /// 为什么要分开：系统替用户做的决定（建了个东西、一件事做完了、删去哪了）
 /// **不是对话**。混进气泡里，用户会以为"它在跟我唠嗑"。
+///
+/// ⚠️ 批 3 起，"系统通知"那一条的正式形态是 `widgets/notice.dart`
+///    的 `NoticeLine` / `NoticeOverlay`（契约 `29-NOTICE.md`）——
+///    它们要带撤销、要分浮窗与时间线两份。这一条留着是因为它是一个有用的
+///    通用形状，但**通知那条路不许用它**（否则"两处撤销"就没有共同实现）。
 class SystemNotice extends StatelessWidget {
-  const SystemNotice({super.key, required this.text, this.onUndo});
+  const SystemNotice({super.key, required this.text, this.label, this.onUndo});
 
   final String text;
   final VoidCallback? onUndo;
+
+  /// 撤销按钮上的字（服务端给的那份，见 `NoticeUndo.label`）。
+  final String? label;
 
   @override
   Widget build(BuildContext context) {
@@ -180,7 +189,7 @@ class SystemNotice extends StatelessWidget {
             TextButton(
               onPressed: onUndo,
               style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
-              child: const Text('撤销'),
+              child: Text(label ?? noticeUndoLabel),
             ),
         ],
       ),

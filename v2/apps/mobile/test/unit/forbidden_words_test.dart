@@ -6,6 +6,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
+import 'package:hupo_app/models/notice_words.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/process_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
@@ -105,6 +106,14 @@ void main() {
       verdictLabel('delete'),
       verdictLabel('cannot'),
       planItemTitle('可见的那几句', '这台设备'),
+      // ⚠️ 批 3「系统通知」那一批（`29-NOTICE.md`）：浮窗与时间线里那一条的
+      //    **按钮字 / 补的那句话** —— **直接引数据源**（手抄会漂）。
+      //    ⚠️⚠️ 这里**没有** `notice.text` 的五个模板，那是对的：
+      //       通知正文**由服务端给、客户端照抄**（§五 🔴），客户端这边
+      //       一个字的模板都不许有（`notice_test.dart` 有一条钉着这件事）。
+      noticeUndoLabel,
+      noticeDismissLabel,
+      noticeNotKeptLine,
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

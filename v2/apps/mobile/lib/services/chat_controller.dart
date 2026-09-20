@@ -11,9 +11,11 @@ import 'package:flutter/foundation.dart';
 
 import '../models/conn_state.dart';
 import '../models/message_state.dart';
+import '../models/notice.dart';
 import '../models/process_levels.dart';
 import '../models/timeline.dart';
 import '../models/trash.dart';
+import '../models/trash_words.dart';
 import 'api.dart';
 import 'draft_store.dart';
 import 'process_level_store.dart';
@@ -78,11 +80,29 @@ class ChatController extends ChangeNotifier {
   /// 现在这一幕给用户看多少过程（契约 §三）。**开档前是默认档 `doing`**。
   ProcessLevel _level = defaultProcessLevel;
 
+  /// 浮窗里现在挂着的那一条通知（契约 `29-NOTICE.md` 约束 1）。
+  ///
+  /// ⚠️ 它**只是浮窗那半边**：时间线那一条在 `Timeline` 里（约束 2），
+  ///    两者由**同一个事件**喂进来，界面那一层两处照同一份数据画。
+  Notice? _notice;
+
+  /// 浮窗**自己消失**用的那个钟。
+  ///
+  /// ⚠️ 时长住在这一处、**不许写进任何给用户看的话**（契约 §一 第 4 条：
+  ///    不承诺时间——"3 秒后消失"那类话是承诺，一个都不许有）。
+  static const noticeLinger = Duration(seconds: 6);
+
+  Timer? _noticeTimer;
+
   String? get token => _token;
   bool get needsSetup => _needsSetup;
   ConnState get conn => _conn;
   bool get connected => _conn == ConnState.connected;
   String? get lastError => _lastError;
+
+  /// 浮窗里现在该显示的那一条；`null` = **一个像素都不画**（约束 1：
+  /// 它要么浮在内容上、要么不在，**绝不参与布局**）。
+  Notice? get notice => _notice;
 
   /// 现在这一幕的过程档位。
   ProcessLevel get level => _level;
@@ -258,6 +278,8 @@ class ChatController extends ChangeNotifier {
     _stream?.close();
     _stream = null;
     _token = null;
+    // ⚠️ 浮窗跟着账号走：换个人登录不许还看见上一位那条通知
+    _dismissNotice();
     // ⚠️ 缓存跟着账号走：这台机器换了个人登录，**不许再看见上一个人的一屏**，
     //    也**不许看见上一个人打了一半的话**（欠账 18）
     _invalidateLocal();
@@ -298,6 +320,9 @@ class ChatController extends ChangeNotifier {
       // 服务端说"你的号跑到我前面了"⇒ 本地那条时间线不作数了。
       // 不是"没有新东西"——是"从头来"。
       timeline.reset();
+      // ⚠️ **浮窗一起撤**：它是"现在喊你一声"，而这一屏已经不算是那个世界了
+      //    （时间线里那一条也跟着被清掉，重放会把它重新送上来）。
+      _dismissNotice();
       // ⚠️ **缓存也要一起清**：不清的话下次开机又会把那个**已经不存在的世界**
       //    先画出来，然后再被服务端打脸——那一屏就是编造。
       _invalidateLocal();
@@ -311,6 +336,22 @@ class ChatController extends ChangeNotifier {
     }
     // ★ 服务端开口了：从这一刻起，"它正在做"才是我们**知道**的事
     timeline.markFresh();
+
+    // ★ 系统通知（契约 `29-NOTICE.md`）：
+    //   · `notice`（带号）⇒ ① 时间线里留一条（`timeline.apply`）
+    //                        ② 浮窗喊一声（**补发上来的不喊**，见下）
+    //   · `notice/urgent`（无号）⇒ **只在浮窗里**、绝不新增时间线条目。
+    //   ⚠️ 浮窗那一声必须**在 `timeline.apply` 之前**决定，理由只有一个：
+    //      补发的（`catchUp`）通知是**过去发生过的事**，而浮窗是"现在喊你"。
+    //      混起来的话，冷启动一屏历史通知会一条条往外弹（那是骚扰，也是假话）。
+    final type = event['type'];
+    if (type == 'notice/urgent') {
+      _showNotice(Notice.fromEvent(event));
+    } else if (type == 'notice' && event['catchUp'] != true) {
+      // ⚠️ **浮窗里的撤销与时间线里那条是同一件事**（约束 3）⇒
+      //    两处都渲染 `notice.undo`，都由 `undoNotice()` 走同一条路。
+      _showNotice(Notice.fromEvent(event));
+    }
     timeline.apply(event);
 
     // ★ **删掉 / 恢复 / 真删**（契约 §8.1、§8.3）：模型那一层已经把条目
@@ -347,6 +388,87 @@ class ChatController extends ChangeNotifier {
     //   `draftsFrom` 是从**画得出来的那些**条目推的（`timeline.items`）。
     _saveDrafts();
     notifyListeners();
+  }
+
+  // ── 系统通知那半边的浮窗（契约 `29-NOTICE.md` 约束 1 / 3）────────
+
+  /// 把一条通知挂到浮窗上（**并让它自己消失**）。
+  ///
+  /// ⚠️ 这里**只管浮窗**：时间线那一条由 `timeline.apply` 管（约束 2）。
+  ///    两处不是"两份状态"，是**同一条通知的两个落点**。
+  ///
+  /// ⚠️ 谁也不许在这里写"几秒后消失"那种话（契约 §一 第 4 条）。
+  void _showNotice(Notice? n) {
+    // 没有话 / 读不出来的通知不上屏（宁可没有，也不给一个空框）
+    if (n == null) return;
+    _noticeTimer?.cancel();
+    _notice = n;
+    _noticeTimer = Timer(noticeLinger, _dismissNotice);
+  }
+
+  /// 浮窗撤掉（用户按了撤销 / 知道了 / 它自己到点了 / 退出登录）。
+  ///
+  /// ⚠️ **时间线那一条不跟着撤**（约束 2）：那正是这一件存在的理由——
+  ///    浮窗只是"喊一声"，而通知要经得起"你不在"。
+  void _dismissNotice() {
+    _noticeTimer?.cancel();
+    _noticeTimer = null;
+    if (_notice == null) return;
+    _notice = null;
+    notifyListeners();
+  }
+
+  /// 界面上那两个"知道了"按的就是这个。
+  void dismissNotice() => _dismissNotice();
+
+  /// 撤销这条路要交给服务端的东西（**按不动就 `null`**）。
+  ///
+  /// ⚠️ 两个入口、**同一份判断**：
+  ///    · `from == null` ⇒ 浮窗里那个（读浮窗手上那一条）；
+  ///    · 给了 `from` ⇒ **时间线里**那一条。
+  ///
+  /// ⚠️ 为什么时间线那个**不能**读浮窗手上那一条（这一条踩过一次，别改回去）：
+  ///    浮窗**会自己消失**（约束 2），而"撤销窗口不能随浮窗一起消失"
+  ///    正是约束 3 的全部意思。读浮窗 = 浮窗一走，时间线那个按钮就成了
+  ///    一个按了不会有结果的按钮 —— 那是屏幕上说假话（N10）。
+  ///
+  /// ⚠️ `action` 今天只有一条（`trash/restore`，契约 §五）：
+  ///    认不出来的 action 一律**不给入口**。
+  /// ⚠️ 它**不新造接口**：复用的是回收站那条 `trashRestore`（`restoreTurn`）。
+  ///    通知的撤销与回收站里那个"恢复"是同一件事。
+  List<String>? undoNoticeIds({TimelineNotice? from}) {
+    final u = from?.undo ?? _notice?.undo;
+    if (u == null || !u.usable) return null;
+    if (u.action != NoticeUndoAction.trashRestore) return null;
+    return u.messageIds;
+  }
+
+  /// 按撤销：**和回收站里那个"恢复"是同一条路**。
+  ///
+  /// [from] 同 [undoNoticeIds]：不传 = 浮窗那个；传了 = 时间线那一条。
+  ///
+  /// ⚠️ 成没成都如实说（N11）：失败时把浮窗撤掉、把那一句写上顶部状态条，
+  ///    而且把结果**交回调用方**（按下它的那一层才说得出话）。
+  ///    ——"以为拿回来了其实没有"和"以为没拿回来其实拿回来了"都不许出现
+  ///    （契约 §四 🔴 与回收站那一批同一条纪律）。
+  ///
+  /// ⚠️ **两处走的是同一个方法**（约束 3 说的"同一件事"就是这个意思）：
+  ///    差别只有"这份 undo 是从哪儿读的"。浮窗撤掉只是顺手——
+  ///    时间线那一条**不撤**（它就是给"你不在"留的）。
+  ///
+  /// 返回值：`null` = 这一条没有按得动的撤销（**什么都没做**）。
+  Future<TrashAnswer<bool>?> undoNotice({TimelineNotice? from}) async {
+    final ids = undoNoticeIds(from: from);
+    if (ids == null) return null;
+    _notice = null;
+    _noticeTimer?.cancel();
+    _noticeTimer = null;
+    final r = await restoreTurn(ids);
+    if (r is! TrashOk<bool>) {
+      _lastError = r is TrashUnauthorized ? trashUnauthorizedLine : trashRestoreFailedLine;
+      notifyListeners();
+    }
+    return r;
   }
 
   /// 存缓存：**按"句子的边界"写，不按钟写**。
@@ -576,6 +698,10 @@ class ChatController extends ChangeNotifier {
 
   @override
   void dispose() {
+    // ⚠️ 那个"自己消失"的钟必须先停：不然它到点时会去动一个已经 dispose 的
+    //    通知器（而且在测试里**留一个没走完的定时器本身就是一种失败**）。
+    _noticeTimer?.cancel();
+    _noticeTimer = null;
     _stream?.dispose();
     _stream = null;
     super.dispose();
