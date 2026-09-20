@@ -20,6 +20,12 @@
 # ⚠️ 这一步还是"一次性解药"：老访客浏览器里存着**旧的 immutable 响应**，
 #    换响应头改不了它已经存下的东西 —— 但 `index.html` 一直是 `no-cache`，
 #    所以它会取到新的 HTML，而新的 HTML 指向一个**新名字** ⇒ 自动绕开旧缓存。
+#
+# ── 为什么还有一道"引用图检查" ──────────────────────────────
+# 改名是 `sed` 出来的：**漏一处 ⇒ 线上白屏**，而**构建和单测都还是绿的**
+# （它们守的是 Dart 源码，碰不到产物里的路径）。
+# ⇒ 重启之前先跑 `scripts/check-web-refs.mjs`：从 `index.html` 出发顺着引用
+#   把每个被引用的文件都找到，**一个 404 都不许有**。这是"页面能不能开"的唯一本地判据。
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -66,6 +72,15 @@ done
 grep -q "flutter_bootstrap.$STAMP.js" "$WEB/index.html" || { echo "✗ index.html 没改写成功"; exit 1; }
 grep -q "main.$STAMP.dart.js" "$WEB/flutter_bootstrap.$STAMP.js" || { echo "✗ bootstrap 没改写成功"; exit 1; }
 echo "  ✓ 改完了"
+
+# ── 自证：从 index.html 出发，顺着引用把每个文件都找一遍（**一个 404 都不许有**）──
+# 为什么放在**重启之前**：改名是 sed 出来的，漏一处线上就是白屏，而构建/单测都还是绿的。
+# 这是"页面能不能开"的**唯一本地判据**；对不上就**根本不部署**（沿用上面"宁可不变"那条纪律）。
+NODE_BIN="${NODE_BIN:-$(command -v node)}"
+[ -n "$NODE_BIN" ] || { echo "✗ 找不到 node（这条引用图检查要它；设 NODE_BIN）"; exit 2; }
+echo "▶ 引用图检查（本地，0 个 404 才继续）"
+"$NODE_BIN" "$ROOT/scripts/check-web-refs.mjs" "$WEB" | sed 's/^/  /' || {
+  echo "✗ 引用图里有找不到的文件 ⇒ 没有部署（线上仍是上一版）"; exit 1; }
 
 echo "▶ 重启服务（构建指纹 $STAMP）"
 HUPO_BUILD_ID="$STAMP" bash "$ROOT/scripts/restart-core.sh" 2>&1 | grep -E "构建|监听|上次退出" | sed 's/^/  /'

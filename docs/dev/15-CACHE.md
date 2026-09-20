@@ -160,3 +160,55 @@ bash scripts/deploy-web-v2.sh            # 构建 + 部署 + 重启 + 公网验�
 | 1 | **给 `assets/`、`canvaskit/` 也加指纹** | 它们靠 `no-cache` + 304 兜着（**正确**，只是每次加载多一个往返）。真要更快就得递归加指纹 + 改写 `AssetManifest` —— **这一批没做**，记在欠账表第 15 条 |
 | 2 | **`Service Worker` / 自毁 SW** | v2 一直用 `--pwa-strategy=none`（**没有 SW**），所以没有"旧 SW 赖着不走"的问题。⚠️ 但如果哪天打开 PWA，**这套缓存结论要重算** |
 | 3 | **安卓包的那份 web 产物** | 安卓是另一个分发路径（APK 自带产物），**这一套缓存规则与它无关** |
+
+---
+
+## 六、补 · 欠账 #15 的**实测结论**（2026-09-21）
+
+> 结论：**`canvaskit/` 那半边无账可还；`assets/` 那半边要两处一起改才有效**。
+> 这一轮落地的是**一道自证闸**（下 §6.3），改名那件事**没做**。
+
+### 6.1 `canvaskit/`：**不在取用链上**
+
+真产物里的加载器：`buildConfig` 有 `engineRevision`、**没有** `useLocalCanvasKit`，
+而 `_flutter.loader.load()` 是空参 ⇒ **永远取 gstatic**。
+本地那份 `canvaskit/`（26M）只是 `--no-web-resources-cdn` 的备份 ⇒ **改了也没人取**。
+
+### 6.2 `assets/`：能改，但要**两处一起**
+
+| 事实（实测） | 后果 |
+|---|---|
+| 引擎拼的是 `assetBase + "assets/" + key`；**清单里存的是相对键**（不含 `assets/` 前缀） | ⇒ **不用碰二进制 manifest**（这一点我一开始想错了，是子 agent 纠正的） |
+| 服务端的 `CONTENT_HASHED` 是 `/[.\-][0-9a-f]{8,}\./i` —— **指纹后面必须跟点** | ⇒ 目录名加指纹（`assets.<指纹>/`）**仍被判 `no-cache`** ⇒ 只改目录名**纯亏**（部署后首访从 304 变成整份 200 重下，NOTICES 1.7M） |
+
+⇒ 要做就得**一起**：① `src/server.js` 的正则末尾 `\.` 放宽成 `[.\/]`；
+② deploy 脚本 `assets/` → `assets.<指纹>/` + 给 `_flutter.loader.load()` 传 `assetBase`。
+**⚠️ 还没做**：它改的是"缓存行为"这一块（我们在这里出过一次事故），
+而且收益只是"少几次 304 往返" ⇒ **由主人拍板**（见 `00-PROGRESS.md` §六 #15）。
+
+### 6.3 这一轮真正落地的：**部署前那道自证闸**
+
+新增 `scripts/check-web-refs.mjs`，接进 `deploy-web-v2.sh`：**暂存之后、重启之前**跑，
+**非 0 就不部署**（沿用"构建失败就不部署"那条纪律）。
+
+它做一件事：**从 `index.html` 出发，顺着引用把每个被引用的文件都找一遍 —— 一个 404 都不许有。**
+外部地址（gstatic 那种）只列不判。
+
+真产物上：`✅ 引用全在：对了 11 个文件，0 个 404`。
+**变异验证**（把 `assets/` 改名但不改引用）：当场 **3 红、exit 1** ⇒ 这道闸不是空转的。
+
+### 6.4 顺带发现的：**用户看得见的脚手架占位**（已修）
+
+`web/index.html` 与 `web/manifest.json` 一直留着脚手架生成的东西：
+
+```
+<title>hupo_app</title>                       ← 浏览器标签页
+"name": "hupo_app", "short_name": "hupo_app"  ← **"添加到主屏幕"之后的图标名**
+"description": "A new Flutter project."       ← 分享出去时显示的描述
+```
+
+⚠️ **平板用户最可能看见的就是那个图标名**。已改成：标题与主屏幕名 = **助手**，
+描述 = 那句已经过了禁用词闸的实话「你说的事它真会去做，不只是陪聊。」，
+并加了一条 `test/unit/web_shell_test.dart`（同 `android_manifest_test.dart` 那一类：**配置断言**，
+不许再出现 `hupo_app` / `A new Flutter project.`）。
+公网核实：`<title>助手</title>`、`manifest.name = 助手` ✅。

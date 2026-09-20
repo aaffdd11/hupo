@@ -1,11 +1,11 @@
 {
-    "name": "hupo_app",
-    "short_name": "hupo_app",
+    "name": "助手",
+    "short_name": "助手",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "你说的事它真会去做，不只是陪聊。",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
