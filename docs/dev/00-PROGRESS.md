@@ -438,6 +438,19 @@ $ bash scripts/check-apk.sh
 | 5 | **`AGENTS.md` §5.1（改客户端那条流程）** | 加一行：**浏览器那条路的端到端检查** —— `HUPO_TOKEN=<令牌> node scripts/check-web-browser.mjs`（本机浏览器已装在 `~/.cache/hupo-chrome`，不用参数；它验"页面自己那条 WS"+"续期有没有换新"，还可 `--shot` 截图） | 这是"客户端自己算出来的东西"那一侧的闸（V13），**下一个改客户端的人该知道它存在** | 现在只写在 `22-DEBTS.md` §一 |
 | 6 | **`05-DECISIONS.md` A 组 + `06-OPERATIONS.md` §3.2** | 同上：加"开发期 / 部署期"两档，并把"摘够"那条限定成**部署期** | 同 3 | 同 3 |
 
+> ✅ **补丁已备好，只等主人跑两条命令**（2026-09-21）：
+> `proposals/2026-09-21-dev-vs-deploy.patch` —— 一个补丁覆盖上表 **#1 / #3 / #4 / #5 / #6**，
+> 外加 `scripts/push-changes.sh` 改成**必须显式给路径**（旧版 `git add -A` 已经顺带提交过 4 次别人的活）。
+> 打它与重建清单：
+> ```bash
+> scripts/apply-change.sh proposals/2026-09-21-dev-vs-deploy.patch
+> sudo /home/deploy/.nvm/versions/node/v24.15.0/bin/node scripts/verify-integrity.mjs --build
+> ```
+> ⚠️ **第二条不打的话，下次重启会拒绝启动**（补丁动的是 `strict` 那几样）。
+> ⚠️ 补丁已做**正反两面实测**（不点路径 ⇒ 拒绝；点名之外的脏路径 ⇒ 拒绝；干净树有未推提交 ⇒ 推上去；
+> `data/` ⇒ 在 `git add` 之前就拒绝），全程在**临时仓库**里验的，没碰这个仓库。
+> ⇒ **上面这张表在补丁落地前仍然有效**（它就是"欠着的那几处"的清单）。
+
 ---
 
 ## 十、提交信息与内容不符的两条（**我自己造成的**，2026-09-21）
