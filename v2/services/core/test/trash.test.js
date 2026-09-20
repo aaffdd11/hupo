@@ -372,3 +372,41 @@ test('没开回收站的部署 ⇒ 这些路由 404（不是 500）', async () =
   assert.equal(r.status, 401, '先撞鉴权（fail-closed）');
   await close();
 });
+
+// ── 六、恢复要**重发一遍**（两半交界处那条缝：删 → 冷启动 → 恢复）──────
+
+test('🔴 恢复之后，**冷启动的客户端也拿得到**（重发的必须是新号）', () => {
+  const b = bench();
+  b.trash.remove(b.ids);
+  // 模拟"删之前客户端已经读到哪儿了"
+  const lastSeqBefore = b.store.readAll('main').at(-1).seq;
+
+  b.trash.restore(b.ids);
+
+  // ① 盘上：`turn/restored` 之后，**内容又出现了一次，而且是新号**
+  const all = b.store.readAll('main');
+  const restoredAt = all.findIndex((e) => e.type === 'turn/restored');
+  assert.ok(restoredAt >= 0);
+  const resent = all.slice(restoredAt + 1).filter((e) => e.messageId === ID_ANSWER);
+  assert.ok(resent.length >= 2, '★ 内容必须被重发（不然冷启动回不来）');
+  assert.ok(
+    resent.some((e) => e.seq > lastSeqBefore),
+    '★ 重发的号必须**比删之前的游标新** —— 否则落在补发窗口外面，等于没发',
+  );
+
+  // ② 号仍然连号（N22 不受影响）
+  b.store.verifyMonotonic('main');
+  // ③ 重发的那几条 `at` 保留原值（显示用发生时刻，N22）
+  assert.ok(resent.every((e) => typeof e.at === 'number'));
+});
+
+test('恢复之后再真删 ⇒ 两份内容一起没（不许留一份在盘上）', () => {
+  const b = bench();
+  b.trash.remove(b.ids);
+  b.trash.restore(b.ids);
+  assert.ok(raw(b.store).includes(SECRET));
+  b.trash.purge(b.ids);
+  const text = raw(b.store);
+  assert.ok(!text.includes(SECRET), '★ 重发的那一份也必须一起压实掉');
+  assert.ok(text.includes(KEEP));
+});

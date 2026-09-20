@@ -268,13 +268,37 @@ export class Trash {
     return rec;
   }
 
-  /** **恢复**：从回收站拿回来（落一条撤销墓碑）。 */
+  /**
+   * **恢复**：从回收站拿回来。三步，顺序有意：
+   *   ① 落撤销墓碑（**先取消隐藏** —— 客户端才有地方接）；
+   *   ② 把这一轮的**内容事件重新追加一遍**（**新号**，`at` 保留原值）；
+   *   ③ 从回收站移出去。
+   *
+   * ⚠️ **为什么非重发不可**（这是两半交界处实测出来的缝）：
+   *    客户端"删掉"时按契约 §四**把本机缓存里那几条清了**，
+   *    而它重连只补"比自己 `lastSeq` 更新的"⇒ 冷启动之后再恢复，
+   *    光靠"盘上还留着"**回不来**（那些号比它的游标旧，补发窗口不含它们）。
+   *    重发用的是**新号** ⇒ 落在任何客户端（冷的、活的）的补发窗口里。
+   *
+   * ⚠️ 代价先认：同一个 `messageId` 的内容在日志里会有**两份**（旧号 + 新号）。
+   *    客户端得按 `(messageId, block, seqInBlock)` 去重才不会被印两遍 ——
+   *    **那一条闸在客户端那一侧**（契约 §8.3）。
+   */
   restore(messageIds) {
     const ids = normIds(messageIds);
     if (ids.length === 0) throw new TrashError('没说恢复哪一条');
     const k = keyOf(ids);
     if (!this.#bin.has(k)) return false;
+    // ★ 先把要重发的内容抄下来（`emit` 之后日志会变长，边读边写会出事）
+    const mine = this.#store
+      .readAll(this.#timelineId)
+      .filter((e) => isId(e?.messageId) && ids.includes(e.messageId));
     this.#timeline.emit({ type: TOMB_RESTORED, messageIds: ids });
+    for (const e of mine) {
+      const copy = { ...e };
+      delete copy.seq; // 号由 `emit` 重取；**at 保留原值**（N22：显示用发生时刻）
+      this.#timeline.emit(copy);
+    }
     this.#bin.delete(k);
     return true;
   }
