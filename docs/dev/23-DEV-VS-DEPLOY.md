@@ -102,9 +102,57 @@ deploy ALL=(root) NOPASSWD: /usr/bin/apt-get install -y *
 * ⚠️ 最后一条**很宽**（装包等于能装任何东西）—— 只在你接受"开发期就这样"时才加。
 * 完全不想放开 `apt` 的话，那就留着：**需要装东西时主人自己跑一次**。
 
-**两条路都行**，但我要把差别说明白：
-**白名单** = 我能做的**恰好是那几件事**，其余一律照旧要你；**给口令** = 这台机器上我说了算。
-开发期你觉得哪个合适就哪个 —— 但我不该替你选这个。
+### 5.1 ⚠️ 先看这条硬事实：**这样一个白名单实际上仍然是 root**
+
+`scripts/verify-integrity.mjs` 在 `deploy` **可写**的树里 ⇒ 放开
+`sudo node scripts/verify-integrity.mjs --build`，我只要**改一下那个脚本**，
+那条就变成"以 root 跑任何东西"。`apt-get install` 同理（装包 = 以 root 跑维护脚本）。
+
+> **这是 sudoers 的经典陷阱：永远不要白名单一个"被授权者能改"的脚本。**
+
+⇒ 所以这份白名单的**真实价值是留痕**（`sudo` 日志里记着我到底跑过哪几条命令），
+**不是"圈住"**。要**真的**圈住，只有 5.3 那条路。**我把话说在前面，你自己权衡。**
+
+### 5.2 可以直接粘的那一段（**A：快，但等于 root**）
+
+```bash
+sudo visudo -f /etc/sudoers.d/hupo-dev     # 把下面四行粘进去，存盘
+```
+```
+# 开发期给助手的特权（主人 2026-09-21 决定）· 详见 docs/dev/23-DEV-VS-DEPLOY.md §五
+# ⚠️ 这几条**实际上是 root**（脚本/apt 都在助手可写的地方）——价值是留痕，不是圈住。
+# 撤销：sudo rm /etc/sudoers.d/hupo-dev   （立刻生效，不留后手）
+deploy ALL=(root) NOPASSWD: /home/deploy/.nvm/versions/node/v24.15.0/bin/node /home/deploy/proj/hupo/scripts/verify-integrity.mjs --build
+deploy ALL=(root) NOPASSWD: /usr/bin/apt-get update
+deploy ALL=(root) NOPASSWD: /usr/bin/apt-get install -y chromium-browser
+deploy ALL=(root) NOPASSWD: /usr/bin/apt-get install -y ripgrep
+```
+
+改完之后**我能自己重建清单了** ⇒ 以后我改人格/手册/`AGENTS.md` 就**不用每次来烦你**，
+但**每一次重建都要在这里留一行痕**（谁、什么时候、动了哪几个文件）—— 见 5.4。
+
+### 5.3 **B：真的圈住**（要多花一点功夫，但它是唯一有意义的"白名单"）
+
+把"重建清单"这件特权**冻住**：做一个 **root 所有、且不 import 我这边任何代码**的小工具
+（自带路径清单、只用 `/usr/bin/sha256sum`），然后白名单**它**：
+
+```
+/usr/local/sbin/hupo-integrity-build        # root:root 0555，冻住
+deploy ALL=(root) NOPASSWD: /usr/local/sbin/hupo-integrity-build
+```
+
+* 我**改不动**它 ⇒ 这条白名单是**真的**圈住了。
+* 代价：**受保护路径清单从"代码里"搬到"那个冻住的文件里"** ⇒
+  以后要加一条受保护路径，得主人重新装一次那个工具（一次 `sudo`）。
+* 防漂移：加一条测试，读那个 root 文件（`0444` 世界可读）跟代码里的 `protectedPaths()` 对一遍 ——
+  对不上就红，提醒"该重装那个冻住的工具了"。
+
+⇒ **要 B 的话说一声，我把那个工具 + 测试写好，你装一次。**
+
+### 5.4 留痕（不管 A 还是 B 都要）
+
+每次重建之后，我在 `docs/dev/00-PROGRESS.md` §九 下面记一行（时间 / 为什么重建 / 受影响的文件）。
+**"开发期护栏降级为审计"这句话，就靠这一行一行撑着** —— 没有它，降级就等于拆掉。
 
 ## 六、我**没有**做的事（写在明处）
 
