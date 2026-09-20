@@ -23,9 +23,13 @@ import '../services/api.dart';
 import '../services/chat_controller.dart';
 
 class ExportScreen extends StatefulWidget {
-  const ExportScreen({super.key, required this.controller, this.copy});
+  const ExportScreen({super.key, required this.controller, this.copy, required this.onLoggedOut});
 
   final ChatController controller;
+
+  /// 令牌不行了（401）时叫它：上层会把主界面换成登录页（欠账 **#25**）。
+  /// ⚠️ 和回收站那一页同一个理由：只说话不回去 = 停在一个读不出来的页面上。
+  final VoidCallback onLoggedOut;
 
   /// 复制那一下。默认走**真剪贴板**；测试可以注入一个假的
   /// （widget 测试里没必要去敲平台通道）。
@@ -53,11 +57,19 @@ class _ExportScreenState extends State<ExportScreen> {
     });
     final a = await widget.controller.loadExport();
     if (!mounted) return;
+    if (a is TrashUnauthorized) {
+      // ★ 401：**说一句 + 退回登录页**（欠账 #25，与回收站同一套）。
+      _say(trashUnauthorizedLine);
+      Navigator.of(context).popUntil((r) => r.isFirst);
+      widget.onLoggedOut();
+      return;
+    }
     setState(() {
       switch (a) {
         case TrashOk(:final value):
           _doc = value;
         case TrashUnauthorized():
+          break; // 上面已经处理并返回（switch 要穷尽）
         case TrashFailed():
           _failed = a;
       }

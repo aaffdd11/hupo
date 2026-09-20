@@ -121,7 +121,9 @@ class _ChatScreenState extends State<ChatScreen> {
           IconButton(
             tooltip: trashTooltip,
             onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => TrashScreen(controller: c)),
+              MaterialPageRoute<void>(
+                builder: (_) => TrashScreen(controller: c, onLoggedOut: widget.onLoggedOut),
+              ),
             ),
             icon: const Icon(Icons.delete_outline),
           ),
@@ -131,7 +133,9 @@ class _ChatScreenState extends State<ChatScreen> {
           IconButton(
             tooltip: exportTooltip,
             onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => ExportScreen(controller: c)),
+              MaterialPageRoute<void>(
+                builder: (_) => ExportScreen(controller: c, onLoggedOut: widget.onLoggedOut),
+              ),
             ),
             icon: const Icon(Icons.copy_all_outlined),
           ),
@@ -300,10 +304,21 @@ class _ChatScreenState extends State<ChatScreen> {
       case TrashOk():
         _say(trashRestoredLine);
       case TrashUnauthorized():
-        _say(trashUnauthorizedLine);
+        _unauthorized();
       case TrashFailed():
         _say(trashRestoreFailedLine);
     }
+  }
+
+  /// 401：**说一句 + 回登录页**（欠账 **#25**）。
+  ///
+  /// ⚠️ 只说话不回去 = 用户停在一个永远读不出来的界面上，反复点重试
+  ///    （"令牌过期了"不是一个能靠重试解决的问题，得重新登录）。
+  /// ⚠️ 顺序：**先说话再走** —— 那句话挂在**根**的 `ScaffoldMessenger` 上，
+  ///    所以换成登录页之后它仍然看得见（用户得知道**为什么**被退回来）。
+  void _unauthorized() {
+    _say(trashUnauthorizedLine);
+    widget.onLoggedOut();
   }
 
   /// 一条回答：气泡 + （第 ④ 档时）**它自己那条**的思考原文。
@@ -363,12 +378,12 @@ class _ChatScreenState extends State<ChatScreen> {
           case TrashOk():
             _say(trashDeletedLine);
           case TrashUnauthorized():
-            _say(trashUnauthorizedLine);
+            _unauthorized();
           case TrashFailed():
             _say(trashDeleteFailedLine);
         }
       case TrashUnauthorized():
-        _say(trashUnauthorizedLine);
+        _unauthorized();
       case TrashFailed():
         // ⚠️ 清单都拿不到 ⇒ **一个字都不许删**（"先看清单"这一步不许绕）。
         _say(trashPlanFailedLine);

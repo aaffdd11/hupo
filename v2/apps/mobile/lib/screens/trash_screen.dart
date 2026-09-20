@@ -20,9 +20,15 @@ import '../services/api.dart';
 import '../services/chat_controller.dart';
 
 class TrashScreen extends StatefulWidget {
-  const TrashScreen({super.key, required this.controller});
+  const TrashScreen({super.key, required this.controller, required this.onLoggedOut});
 
   final ChatController controller;
+
+  /// 令牌不行了（401）时叫它：上层会把主界面换成登录页。
+  ///
+  /// ⚠️ 没有它的时候这一页**只能干说话**（欠账 **#25**）——
+  ///    用户会停在一个永远读不出来的页面上反复点重试。
+  final VoidCallback onLoggedOut;
 
   @override
   State<TrashScreen> createState() => _TrashScreenState();
@@ -46,11 +52,16 @@ class _TrashScreenState extends State<TrashScreen> {
     });
     final a = await widget.controller.loadTrash();
     if (!mounted) return;
+    if (a is TrashUnauthorized) {
+      _unauthorized();
+      return;
+    }
     setState(() {
       switch (a) {
         case TrashOk(:final value):
           _entries = value;
         case TrashUnauthorized():
+          break; // 上面已经处理并返回（switch 要穷尽）
         case TrashFailed():
           _failed = a;
       }
@@ -63,18 +74,51 @@ class _TrashScreenState extends State<TrashScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(line)));
   }
 
+  /// 401：**说一句 + 退回登录页**（欠账 **#25**）。
+  ///
+  /// ⚠️ 三步顺序是有意的：
+  ///   ① **先说话**：那句话挂在**根**的 `ScaffoldMessenger` 上
+  ///      ⇒ 退回登录页之后仍然看得见（用户得知道**为什么**被退回来）；
+  ///   ② 再把这页弹掉：不弹的话它压在最上面，用户停在一个永远读不出来的页面上；
+  ///   ③ 最后通知上层（它把主界面换成登录页）。
+  void _unauthorized() {
+    _say(trashUnauthorizedLine);
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    widget.onLoggedOut();
+  }
+
+  /// 本地先把这一组拿走（欠账 **#26**）。
+  ///
+  /// ⚠️ 为什么不接着整页重拉（原来就是这么写的）：
+  ///    重拉会先 `_entries = null` ⇒ 屏幕闪一下加载圈，
+  ///    而且服务端哪天做成异步，重拉拿到的是**旧快照** —— 用户会以为没删掉。
+  ///    拿不准的（**失败**）才重拉：那时状态确实不明，问服务端才对。
+  void _dropLocally(List<String> messageIds) {
+    final list = _entries;
+    if (list == null) return;
+    final gone = messageIds.toSet();
+    setState(() {
+      _entries = list.where((e) => !e.messageIds.any(gone.contains)).toList();
+    });
+  }
+
   Future<void> _restore(List<String> messageIds) async {
     final a = await widget.controller.restoreTurn(messageIds);
     if (!mounted) return;
+    if (a is TrashUnauthorized) {
+      _unauthorized();
+      return;
+    }
     switch (a) {
       case TrashOk():
         _say(trashRestoredLine);
+        _dropLocally(messageIds);
       case TrashUnauthorized():
-        _say(trashUnauthorizedLine);
+        break; // 上面已经处理并返回
       case TrashFailed():
         _say(trashRestoreFailedLine);
+        await _load(); // 失败了 ⇒ 盘上到底是什么样不知道，重拉
     }
-    await _load();
   }
 
   Future<void> _purge(List<String> messageIds) async {
@@ -102,15 +146,20 @@ class _TrashScreenState extends State<TrashScreen> {
     if (yes != true || !mounted) return;
     final a = await widget.controller.purgeTurn(messageIds);
     if (!mounted) return;
+    if (a is TrashUnauthorized) {
+      _unauthorized();
+      return;
+    }
     switch (a) {
       case TrashOk():
         _say(trashPurgedLine);
+        _dropLocally(messageIds);
       case TrashUnauthorized():
-        _say(trashUnauthorizedLine);
+        break; // 上面已经处理并返回
       case TrashFailed():
         _say(trashPurgeFailedLine);
+        await _load();
     }
-    await _load();
   }
 
   @override

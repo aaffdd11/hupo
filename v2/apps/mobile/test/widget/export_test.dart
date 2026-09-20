@@ -39,7 +39,7 @@ Future<void> _pump(
   Future<void> Function(String)? copy,
 }) async {
   await tester.pumpWidget(
-    MaterialApp(home: ExportScreen(controller: c, copy: copy)),
+    MaterialApp(home: ExportScreen(controller: c, copy: copy, onLoggedOut: () {})),
   );
   await tester.pumpAndSettle();
 }
@@ -90,14 +90,28 @@ void main() {
     expect(find.text(exportCopyFailedLine), findsOneWidget);
   });
 
-  testWidgets('令牌不行 ⇒ 说"登录过期了" + 给"再试一次"（不是"网不好"）', (tester) async {
+  testWidgets('令牌不行 ⇒ 说"登录过期了"，而且**离开这一页**（不再给"再试一次"）', (tester) async {
+    // ⚠️ 2026-09-21 改的（欠账 **#25**）：令牌过期**重试解决不了**。
+    //    原来这一页只飘一句话、把人留在一个永远读不出来的界面上；
+    //    现在它和回收站同一套：说话 + 回登录页。
+    //    ⇒ "网不好"那一档**不变**（见下一条：那一档才是该重试的）。
+    var loggedOut = 0;
     final c = _controller('{}', status: 401);
     addTearDown(c.dispose);
-    await _pump(tester, c);
+    // ⚠️ 这里**不能用 `_pump`（它 pumpAndSettle）**：401 之后这一页正在**被离开**
+    //    （真实那一侧:上层把主界面换成登录页；这个用例里 `onLoggedOut` 只是记个数），
+    //    于是它还停在自己的加载态上 —— 那个转圈**永远不会停** ⇒ `pumpAndSettle` 会超时。
+    //    这不是界面坏了，是"它正要走"的形状；所以只 pump 两下把那一帧推出来。
+    await tester.pumpWidget(MaterialApp(
+      home: ExportScreen(controller: c, onLoggedOut: () => loggedOut += 1),
+    ));
+    await tester.pump();
+    await tester.pump();
 
+    expect(loggedOut, 1, reason: '★ 必须通知上层：令牌过期得回登录页');
     expect(find.text(trashUnauthorizedLine), findsOneWidget);
     expect(find.text(exportLoadFailedLine), findsNothing);
-    expect(find.text(trashRetry), findsOneWidget);
+    expect(find.text(trashRetry), findsNothing, reason: '★ 重试解决不了令牌过期');
   });
 
   testWidgets('网不好 ⇒ 说"没拿到" + 给"再试一次"', (tester) async {
