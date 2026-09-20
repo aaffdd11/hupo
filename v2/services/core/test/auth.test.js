@@ -180,3 +180,96 @@ test('★ 令牌**绝不**从 URL 取（URL 会进日志、进 Referer、进浏�
   const req = { headers: {}, url: '/api/say?token=abc.def' };
   assert.equal(tokenFromRequest(req), null);
 });
+
+// ── 自动重载（set-pass 是另一个进程在改文件）────────────────
+
+test('★ 改了密码文件，跑着的进程要能发现（不用重启）', () => {
+  let t = 1_000_000;
+  const dir = tmp();
+  const running = new Auth({ dataDir: dir, now: () => t }); // 假装这是跑着的服务
+  assert.equal(running.needsSetup, true, '一开始没密码');
+
+  // 另一个进程（就是 auth-cli）把密码写上
+  const cli = new Auth({ dataDir: dir, now: () => t });
+  cli.setPassword('另一个人设的密码');
+
+  // 节流是一秒一次：先跳过一拍
+  t += 1500;
+  assert.equal(running.needsSetup, false, '★ 该自己发现，不该等重启');
+  assert.equal(running.verifyPassword('另一个人设的密码'), true);
+});
+
+test('★ 撤销也同理：另一个进程撤销后，跑着的进程要认', () => {
+  let t = 1_000_000;
+  const dir = tmp();
+  const running = new Auth({ dataDir: dir, now: () => t });
+  running.setPassword('一二三四五六');
+  const { token } = running.issue();
+  assert.ok(running.verify(token));
+
+  const cli = new Auth({ dataDir: dir, now: () => t });
+  assert.equal(cli.revoke(token), true);
+
+  t += 1500;
+  assert.equal(running.verify(token), null, '★ 撤销也要自己生效');
+});
+
+test('节流：一秒内的多次询问不会反复 stat 磁盘', () => {
+  let t = 1_000_000;
+  const auth = new Auth({ dataDir: tmp(), now: () => t });
+  // 只是证明它不会炸；节流本身是性能优化，不是正确性
+  for (let i = 0; i < 50; i += 1) assert.equal(auth.needsSetup, true);
+  t += 1500;
+  assert.equal(auth.needsSetup, true);
+});
+
+// ── 回归：这个 bug 真发生过 ────────────────────────────────
+
+test('★★ 服务进程写运行时状态，绝不许抹掉 CLI 刚设的密码', () => {
+  const dir = tmp();
+  let t = 1_000_000;
+
+  // 服务先起来（此时还没密码）
+  const server = new Auth({ dataDir: dir, now: () => t });
+  assert.equal(server.needsSetup, true);
+
+  // 另一个人（CLI）设了密码
+  new Auth({ dataDir: dir, now: () => t }).setPassword('刚设的密码啊');
+
+  // 服务这边紧接着发生一次登录失败 —— 它会 persist 运行时状态。
+  // ⚠️ 修复前：这一下会把服务内存里那份**过期的 passwordHash: null** 写回去，
+  //    把刚设的密码**抹掉**，而现象只是"设了密码却还是 503"。
+  server.recordLoginFailure('1.2.3.4');
+
+  // 密码必须还在
+  const fresh = new Auth({ dataDir: dir, now: () => t });
+  assert.equal(fresh.needsSetup, false, '★ 密码被服务进程抹掉了');
+  assert.equal(fresh.verifyPassword('刚设的密码啊'), true);
+});
+
+test('★ 撤销表是"并集写"：CLI 撤的不会被服务写回去复活', () => {
+  const dir = tmp();
+  let t = 1_000_000;
+  const server = new Auth({ dataDir: dir, now: () => t });
+  server.setPassword('一二三四五六');
+  const { token } = server.issue();
+  server.recordLoginSuccess('9.9.9.9'); // 服务有自己的运行时状态
+
+  // 另一个进程撤销
+  new Auth({ dataDir: dir, now: () => t }).revoke(token);
+
+  // 服务再写一次运行时状态（并集写 ⇒ 不该把那个撤销挤掉）
+  server.recordLoginFailure('8.8.8.8');
+
+  const fresh = new Auth({ dataDir: dir, now: () => t });
+  assert.equal(fresh.verify(token), null, '★ 撤销被复活了');
+});
+
+test('密码文件与运行时文件是两个（服务不碰密码那一个）', () => {
+  const dir = tmp();
+  const a = new Auth({ dataDir: dir });
+  a.setPassword('一二三四五六');
+  a.recordLoginFailure('7.7.7.7');
+  const files = nodeFs.readdirSync(dir).sort();
+  assert.deepEqual(files, ['auth-runtime.json', 'auth.json']);
+});

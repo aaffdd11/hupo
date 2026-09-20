@@ -19,9 +19,10 @@ const auth = new Auth({ dataDir: DATA });
 
 function usage() {
   console.log(`用法：
-  npm run set-pass -- "你的密码"     设（或改）密码
-  npm run revoke -- <令牌>           撤销一个令牌
-  npm run auth-status                看当前状态
+  npm run set-pass                    ← 从标准输入读（推荐，密码不进 ps / 历史）
+  npm run set-pass -- "你的密码"        ← 直接给（⚠️ 会短暂出现在 ps 与 shell 历史里）
+  npm run revoke -- <令牌>             撤销一个令牌
+  npm run auth-status                 看当前状态
 
 说明：
   · 密码至少 6 位（按**码点**数，一个汉字算一位）。
@@ -30,16 +31,37 @@ function usage() {
 `);
 }
 
+/**
+ * 取密码。
+ *
+ * ⚠️ 优先走 stdin：**命令行参数会出现在 `ps` 的输出里**（同机其他用户能看到），
+ *    也会被 shell 历史记下来。stdin 不会。
+ */
+async function readPassword() {
+  const arg = rest[0];
+  if (arg) {
+    console.error('⚠️ 密码是命令行参数传进来的——它会出现在 ps 与 shell 历史里。');
+    console.error('   下次可以用：cat | npm run set-pass（或 echo 管道）');
+    return arg;
+  }
+  if (process.stdin.isTTY) return null;
+  const chunks = [];
+  for await (const c of process.stdin) chunks.push(c);
+  return Buffer.concat(chunks)
+    .toString('utf8')
+    .replace(/\r?\n$/, '');
+}
+
 switch (cmd) {
   case 'set': {
-    const password = rest[0];
+    const password = await readPassword();
     if (!password) {
-      console.error('✗ 没给密码。用法：npm run set-pass -- "你的密码"');
+      console.error('✗ 没给密码。用法：npm run set-pass（从 stdin 读）');
       process.exit(2);
     }
     auth.setPassword(password);
-    console.log('✓ 密码已设。现在服务不再是 fail-closed 状态了。');
-    console.log('  ⚠️ 已经有令牌的人不需要重新登录；要踢掉谁，用 npm run revoke -- <令牌>。');
+    console.log('✓ 密码已设。服务**不用重启**——它会在 1 秒内自己发现（按文件 mtime）。');
+    console.log(`  ⚠️ 已经有令牌的人不需要重新登录；要踢掉谁，用 npm run revoke -- <令牌>。`);
     break;
   }
   case 'revoke': {

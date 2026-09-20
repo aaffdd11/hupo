@@ -14,6 +14,18 @@
 // 为什么 fail-closed 是硬要求：默认放行的话，一次"忘了设口令"的部署
 // 就等于把整台机器（含 shell）公开发布出去——而部署者不会察觉，
 // 因为**一切看起来都在正常工作**。
+//
+// ⚠️ **两个文件，各有各的主人**（这条是被一个真 bug 逼出来的）：
+//
+//   auth.json          {secret, passwordHash}   ← **只有 CLI 写**（set-pass）
+//   auth-runtime.json  {revoked, failures}      ← 跑着的服务写
+//
+// 为什么必须分开：原先只有一个文件，于是——
+// 服务的进程在启动时读到"还没密码"，之后**每次登录失败**都会 persist 一次，
+// 把它内存里那份**过期的 passwordHash: null 写回去**，
+// **把 CLI 刚设的密码抹掉**。
+// ⇒ 根因不是"重载不及时"，是**两个进程共用一个文件、各写各的**。
+//   分开之后，**服务根本不碰 passwordHash**，所以不可能再覆盖它。
 
 import crypto from 'node:crypto';
 import nodeFs from 'node:fs';
@@ -39,6 +51,8 @@ export class Auth {
   #revoked = new Set();
   #failures = new Map(); // ip → { count, until }
   #audit = [];
+  #mtime = 0;
+  #lastCheck = 0;
 
   /**
    * @param {object} o
@@ -57,6 +71,8 @@ export class Auth {
     this.#lockMs = lockMs ?? DEFAULT_LOCK_MS;
     this.#fs.mkdirSync(this.#dataDir, { recursive: true });
     const state = this.#load();
+    this.#mtime = this.#statMtime();
+    this.#lastCheck = 0;
     this.#secret = state.secret;
     this.#revoked = new Set(state.revoked ?? []);
     this.#passwordHash = passwordHash !== undefined ? passwordHash : (state.passwordHash ?? null);
@@ -69,31 +85,40 @@ export class Auth {
     return nodePath.join(this.#dataDir, 'auth.json');
   }
 
-  #load() {
+  /** 易变的那部分（撤销表 / 失败计数）单独一个文件——**服务只写这个**。 */
+  #runtimePath() {
+    return nodePath.join(this.#dataDir, 'auth-runtime.json');
+  }
+
+  #readJson(file, { required = false } = {}) {
     try {
-      const raw = this.#fs.readFileSync(this.#statePath(), 'utf8');
-      const parsed = JSON.parse(raw);
-      if (!parsed.secret) throw new Error('缺 secret');
+      const parsed = JSON.parse(this.#fs.readFileSync(file, 'utf8'));
+      if (required && !parsed.secret) throw new Error('缺 secret');
       return parsed;
     } catch (err) {
-      if (err?.code !== 'ENOENT') {
-        // 读到了但坏了 —— **必须抛**，不能悄悄新建一个（那会把所有人的登录态作废）
-        throw new Error(`auth.json 读不了或坏了：${err.message}`);
-      }
-      // 第一次跑：生成密钥
-      const fresh = { secret: crypto.randomBytes(32).toString('hex'), revoked: [], failures: {} };
-      this.#writeState(fresh);
-      return fresh;
+      if (err?.code === 'ENOENT') return null;
+      // 读到了但坏了 —— **必须抛**，不能悄悄新建一个（那会把所有人的登录态作废）
+      throw new Error(`${nodePath.basename(file)} 读不了或坏了：${err.message}`);
     }
   }
 
-  #writeState(override) {
-    const state = override ?? {
-      secret: this.#secret,
-      revoked: [...this.#revoked],
-      failures: Object.fromEntries(this.#failures),
-      passwordHash: this.#passwordHash,
+  #load() {
+    let state = this.#readJson(this.#statePath(), { required: true });
+    if (!state) {
+      // 第一次跑：生成密钥，写 auth.json（只有 CLI 与这一次会写它）
+      state = { secret: crypto.randomBytes(32).toString('hex'), passwordHash: null };
+      this.#writeStateFile(state);
+    }
+    const runtime = this.#readJson(this.#runtimePath()) ?? {};
+    return {
+      secret: state.secret,
+      passwordHash: state.passwordHash ?? null,
+      revoked: runtime.revoked ?? [],
+      failures: runtime.failures ?? {},
     };
+  }
+
+  #writeStateFile(state) {
     const file = this.#statePath();
     this.#fs.writeFileSync(file, JSON.stringify(state, null, 2), { mode: 0o600 });
     try {
@@ -101,10 +126,82 @@ export class Auth {
     } catch {
       /* 有些 fs 不支持，忽略 */
     }
+    this.#mtime = this.#statMtime();
   }
 
-  #persist() {
-    this.#writeState();
+  /**
+   * 写运行时状态（撤销表 / 失败计数）。
+   *
+   * ⚠️ **撤销表是"并集"写**：CLI 可能刚在另一个进程里撤销了一个令牌，
+   *    如果直接拿内存里那份覆盖，那个撤销会被**复活**。
+   *    （密码不在这里——服务根本不碰它，所以不可能抹掉。）
+   */
+  #persistRuntime() {
+    const disk = this.#readJson(this.#runtimePath()) ?? {};
+    const revoked = new Set([...(disk.revoked ?? []), ...this.#revoked]);
+    this.#revoked = revoked;
+    this.#fs.writeFileSync(
+      this.#runtimePath(),
+      JSON.stringify(
+        { revoked: [...revoked], failures: Object.fromEntries(this.#failures) },
+        null,
+        2,
+      ),
+      { mode: 0o600 },
+    );
+  }
+
+  /**
+   * 只写 `passwordHash` 那半（CLI 专用）。
+   * **先读再写，保住 secret**；而且**只写这两个键**——
+   * 读-改-写会把旧版本遗留的键（revoked/failures）一起带进来，
+   * 那些键属于运行时文件，留在这里只会让人分不清谁归谁。
+   */
+  #persistPassword() {
+    const prev = this.#readJson(this.#statePath(), { required: true }) ?? {};
+    this.#writeStateFile({
+      secret: prev.secret ?? this.#secret,
+      passwordHash: this.#passwordHash,
+    });
+  }
+
+  #statMtime() {
+    try {
+      const a = this.#fs.statSync(this.#statePath()).mtimeMs;
+      let b = 0;
+      try {
+        b = this.#fs.statSync(this.#runtimePath()).mtimeMs;
+      } catch {
+        /* 还没有运行时文件 */
+      }
+      return a + b; // 两个都要盯
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * 磁盘上的鉴权状态变了吗？变了就重载。
+   *
+   * 为什么必须有这个：`set-pass` 是**另一个进程**在改文件，
+   * 而跑着的服务在启动时就把状态读进内存了。
+   * 没有这一步，改完密码**必须重启服务**才生效——
+   * 那不只是麻烦：它会让人以为"设了密码但还是 503"，然后去怀疑别的地方。
+   *
+   * 节流到一秒一次：`needsSetup` 在**每个请求**上都会被问一次。
+   */
+  #maybeReload() {
+    const now = this.#now();
+    if (now - this.#lastCheck < 1000) return;
+    this.#lastCheck = now;
+    const m = this.#statMtime();
+    if (m === this.#mtime) return;
+    this.#mtime = m;
+    const state = this.#load();
+    this.#secret = state.secret;
+    this.#revoked = new Set(state.revoked ?? []);
+    this.#passwordHash = state.passwordHash ?? null;
+    this.#failures = new Map(Object.entries(state.failures ?? {}));
   }
 
   // ── 口令 ────────────────────────────────────────────────
@@ -116,6 +213,7 @@ export class Auth {
 
   /** **还没设口令** ⇒ 服务必须 fail-closed。 */
   get needsSetup() {
+    this.#maybeReload();
     return this.#passwordHash === null;
   }
 
@@ -128,10 +226,11 @@ export class Auth {
       throw new Error(`口令太短（至少 6 位，现在 ${len} 位）`);
     }
     this.#passwordHash = Auth.hashPassword(text);
-    this.#persist();
+    this.#persistPassword(); // ← 只写密码那半。**绝不碰运行时文件**
   }
 
   verifyPassword(password) {
+    this.#maybeReload();
     if (this.needsSetup) return false;
     const [, saltHex, hashHex] = this.#passwordHash.split('$');
     const expected = Buffer.from(hashHex, 'hex');
@@ -147,7 +246,7 @@ export class Auth {
     if (rec.until && rec.until > this.#now()) return true;
     if (rec.until && rec.until <= this.#now()) {
       this.#failures.delete(ip);
-      this.#persist();
+      this.#persistRuntime();
     }
     return false;
   }
@@ -166,14 +265,14 @@ export class Auth {
       rec.count = 0;
     }
     this.#failures.set(ip, rec);
-    this.#persist();
+    this.#persistRuntime();
     this.#log({ result: 'fail', ip });
     return this.isLocked(ip);
   }
 
   recordLoginSuccess(ip) {
     this.#failures.delete(ip);
-    this.#persist();
+    this.#persistRuntime();
     this.#log({ result: 'ok', ip });
   }
 
@@ -220,7 +319,7 @@ export class Auth {
     const payload = this.verify(token);
     if (!payload) return false;
     this.#revoked.add(payload.jti);
-    this.#persist();
+    this.#persistRuntime();
     return true;
   }
 
