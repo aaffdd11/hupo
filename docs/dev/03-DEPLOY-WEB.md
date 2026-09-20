@@ -1,5 +1,58 @@
 # 03 · 在 `w.stalkerai.cn` 上部署（Flutter web 优先）
 
+> ## ✅ **已上线**（2026-09-20）
+>
+> **打开：<https://w.stalkerai.cn>**
+> 现在是**输入法探针**页，而且服务是 **fail-closed**（还没设密码）——
+> 探针能打开、能输入、能看事件流水；点"发送"会回 **503**，**那是对的**。
+>
+> ### 铺了什么（可核对）
+>
+> | 位置 | 东西 |
+> |---|---|
+> | **本机** | `node src/serve.js` 监听 `127.0.0.1:8020`（PID 在 `v2/services/core/serve.pid`） |
+> | **本机** | `~/.local/frp/frpc-w.toml`（stcp proxy `hupo-w`，`localPort=8020`） |
+> | **本机** | Flutter web 产物在 `v2/services/core/web/`（30M） |
+> | **VPS** | `/opt/frp/frpc-visitor-w.toml`（visitor 绑 `127.0.0.1:3084`） |
+> | **VPS** | `frpc-visitor-w.service`（systemd，已 enable） |
+> | **VPS** | `/etc/nginx/conf.d/w-stalkerai.conf`（**新增**，没碰任何已有 conf） |
+> | **VPS** | 证书 `/etc/letsencrypt/live/w.stalkerai.cn/`（到期 **2026-12-19**，自动续期） |
+>
+> ### 验过的（都是实测，不是推断）
+>
+> - `https://w.stalkerai.cn/` → 200，`cache-control: no-cache`（入口不缓存 ✓）
+> - `main.dart.js` → 200，`immutable`（产物可长缓存 ✓）
+> - `/api/version` → `{"buildId":"probe-1",...}`
+> - `/api/say` → **503**（fail-closed 穿过整条链仍然生效 ✓）
+> - **WS 升级路径**：公网打 `/api/stream` 收到的 503 **是我服务的 JSON body**
+>   ⇒ nginx 的 Upgrade 分支确实通到了本机 ✓
+>
+> ### ⚠️ 一件必须知道的事：**本机侧没有 systemd**
+>
+> 本机的 `node` 与 `frpc` 是 `setsid nohup` 起的（**sudo 要密码，装不了单元**）。
+> ⇒ **这台机器一重启，服务就掉了**，`w.stalkerai.cn` 会变成 502/504。
+>
+> **重启后怎么拉起来**：
+> ```bash
+> # 1) 服务
+> cd /home/deploy/proj/hupo/v2/services/core
+> setsid nohup env HUPO_DATA="$PWD/data" HUPO_PORT=8020 HUPO_WEB="$PWD/web" \
+>   node src/serve.js > serve.log 2>&1 < /dev/null & echo $! > serve.pid
+> # 2) 隧道
+> setsid nohup ~/.local/frp/frpc -c ~/.local/frp/frpc-w.toml > /dev/null 2>&1 < /dev/null &
+> ```
+> （VPS 侧那个 visitor 是 systemd 管的，会自己起来。）
+>
+> ### 怎么设密码（**在机器上做，不在网页上**）
+>
+> ```bash
+> cd /home/deploy/proj/hupo/v2/services/core
+> npm run set-pass -- "你的密码"
+> ```
+> 设完不用重启服务。设之前，除了 `/api/version`、`/api/auth`、`/api/login`，
+> **所有接口都是 503**。
+
+
 > **结论：可以，而且条件是具体的、很少的。** 现成的模板已经跑着两个站（`u.` 和 `v.`），
 > 我把它读了一遍，`w.` 照抄即可。
 >
@@ -60,13 +113,19 @@ stcp 只让本机的 `frpc` 和 VPS 上的 `visitor` 对话，**中间那一跳�
 
 | # | 要做 | 在哪 | 谁做 |
 |---|---|---|---|
-| 1 | 本机服务监听 `127.0.0.1:8020`（就是 `v2/services/core`） | 本机 | 我 |
-| 2 | Flutter web 产物放进 `webRoot`，由同一个服务静态服务 | 本机 | 我 |
-| 3 | `~/.local/frp/frpc-w.toml`（stcp，`localPort=8020`） | 本机 | 我 |
-| 4 | `/opt/frp/frpc-visitor-w.toml`（visitor，`bindPort=3084`） | VPS | 我（要 root） |
-| 5 | `frpc-visitor-w.service` | VPS | 我（要 root） |
-| 6 | `certbot` 给 `w.stalkerai.cn` 签证书 | VPS | 我（要 root） |
-| 7 | `/etc/nginx/conf.d/w-stalkerai.conf` | VPS | 我（要 root） |
+| 1 | 本机服务监听 `127.0.0.1:8020` | 本机 | ✅ 已做 |
+| 2 | Flutter web 产物放进 `webRoot` | 本机 | ✅ 已做 |
+| 3 | `~/.local/frp/frpc-w.toml`（stcp，`localPort=8020`） | 本机 | ✅ 已做 |
+| 4 | `/opt/frp/frpc-visitor-w.toml`（visitor，`bindPort=3084`） | VPS | ✅ 已做 |
+| 5 | `frpc-visitor-w.service` | VPS | ✅ 已做 |
+| 6 | `certbot` 签证书 | VPS | ✅ 已做（到期 2026-12-19） |
+| 7 | `/etc/nginx/conf.d/w-stalkerai.conf` | VPS | ✅ 已做 |
+
+⚠️ **过程中踩到的两个坑（记下来免得下次再踩）**：
+1. VPS 上的配置文件**属主必须是 `deploy`**——用 root 写出来的是 `root:root 600`，
+   而服务以 `User=deploy` 跑 ⇒ `permission denied` ⇒ 无限重启。
+2. WS 的拒绝响应**原先不带 body**，于是从公网看，"我的 503" 和 "nginx 的 503"
+   **分不出来**（nginx 对代理响应也会加 `Server` 头）。已改成带 JSON body ⇒ 一眼可辨。
 
 **`secretKey` 要生成一个新的**（不是复用 `u`/`v` 的）——它们是隔离用的，
 共用一个等于把三个站绑在一根绳上。

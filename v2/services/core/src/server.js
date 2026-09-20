@@ -187,6 +187,26 @@ export function createServer({
 
   // ── WebSocket ───────────────────────────────────────────
 
+  /**
+   * 拒绝一次 WS 升级。
+   *
+   * ⚠️ 要带 **body 与 content-type**：裸的 `HTTP/1.1 401` 客户端什么也读不到，
+   * 排障时**分不清是"没令牌"还是"中间有人挡了"**（nginx 也会回 401/503）。
+   * 带上 JSON 之后，"这个响应到底出自我这儿还是出自代理"一眼可辨。
+   */
+  function rejectUpgrade(socket, status, reason, payload) {
+    const body = JSON.stringify(payload);
+    socket.write(
+      `HTTP/1.1 ${status} ${reason}\r\n` +
+        'content-type: application/json; charset=utf-8\r\n' +
+        `content-length: ${Buffer.byteLength(body)}\r\n` +
+        'connection: close\r\n' +
+        '\r\n' +
+        body,
+    );
+    socket.destroy();
+  }
+
   const wss = new WebSocketServer({
     noServer: true,
     // 只认 `bearer` 这一个子协议名；**回显的是名字，不是令牌**
@@ -197,12 +217,13 @@ export function createServer({
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     if (url.pathname !== '/api/stream') {
-      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
-      return socket.destroy();
+      return rejectUpgrade(socket, 404, 'Not Found', { error: 'not-found' });
     }
     if (auth.needsSetup) {
-      socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
-      return socket.destroy();
+      return rejectUpgrade(socket, 503, 'Service Unavailable', {
+        error: 'not-setup',
+        text: '这台机器还没设密码，先设好再用。',
+      });
     }
     // 令牌走**子协议**：`['bearer', <token>]`（手册 §2.1）
     const proto = req.headers['sec-websocket-protocol'];
@@ -215,8 +236,7 @@ export function createServer({
     const claim = token ? auth.verify(token) : null;
     if (!claim) {
       // ⚠️ 在**握手阶段**拒，不要"先连上再关"
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      return socket.destroy();
+      return rejectUpgrade(socket, 401, 'Unauthorized', { error: 'unauthorized' });
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       onStream(ws, url, claim);

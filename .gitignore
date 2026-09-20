@@ -23,3 +23,5 @@ auth.json
 v2/services/core/node_modules/
 v2/services/core/data/
 v2/services/core/web/
+v2/services/core/serve.pid
+v2/services/core/serve.log
