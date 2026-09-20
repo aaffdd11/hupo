@@ -25,6 +25,7 @@ import { Timeline } from './timeline.js';
 import { createServer } from './server.js';
 import { loadConfig, preflight } from './config.js';
 import { integrityReport } from './integrity.js';
+import { describeAdmission, readAdmission } from './admission.js';
 import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
 
 
@@ -41,6 +42,9 @@ const { problems, notes } = preflight(cfg);
 //      那会逼着下一个人把这道闸从测试里绕开。**闸要拦的是"开机"，不是"跑测试"。**
 //   ⚠️ 仓库根从 `serve.js` 自己的位置推（`v2/services/core/src/serve.js`），
 //      不依赖 cwd —— 从哪儿起的进程都算得对。
+// ★ **准入闸**：开机读一次，横幅里**如实**写它现在算不算得出判据（手册 §9.1）。
+const adm = readAdmission();
+
 const ig = integrityReport({
   repo: nodePath.resolve(import.meta.dirname, '../../..'),
   home: nodeOs.homedir(),
@@ -144,6 +148,7 @@ console.log(`  界面     ${webRoot ?? '（没有 web 产物，只服务 API）'
 console.log(`  构建     ${cfg.buildId}`);
 // ⚠️ 这一行必须**如实**：清单还没建的时候，这道闸是**没有**的。
 //    报成"OK"就是"看起来有闸、其实没有"——比不设更坏。
+console.log(`  准入     ${describeAdmission(adm)}`);
 console.log(
   `  完整性   ${
     ig.state === 'ok'

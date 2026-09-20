@@ -233,6 +233,16 @@ class ChatController extends ChangeNotifier {
       case SayLocked(:final retryAfterSec):
         timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '试得太频繁，${(retryAfterSec / 60).ceil()} 分钟后再试';
+      case SayBusy():
+        // 服务端**明说这一句没收下**（它满了，不是网的事、也不是令牌的事）
+        // ⇒ 落 `failed`：屏幕上就是「没发出去」+「重发」，
+        //   **用户可以就地重来**——那正是 N11 要的"可重试"。
+        timeline.setLocalState(messageId, MessageState.failed);
+        // 顶部状态条要说出**为什么**（N11：拒绝必须给人话，不是静默）。
+        // ⚠️ 用词两条线：① 不许有内部词（`forbidden_words.dart` 那道闸守着）；
+        //    ② **不许说成"网断了"**——网是通的，那是另一回事，说错了就是把排查带偏。
+        //    阈值/占用比**只说在服务端**，这里一个字都不提。
+        _lastError = '它现在忙不过来，过一会儿再发一次';
       case SayRejected(:final message):
         timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '服务器没收下：$message';

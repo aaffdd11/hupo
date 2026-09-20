@@ -17,6 +17,7 @@ import { WebSocketServer } from 'ws';
 
 import { PUBLIC_ROUTES, clientIp, tokenFromRequest } from './auth.js';
 import { SayError } from './say.js';
+import { ADMIT_RATIO, readAdmission } from './admission.js';
 import { CATCHUP_RENDER, markCatchUp, planResume } from './resume.js';
 
 const MIME = {
@@ -77,6 +78,8 @@ export function createServer({
   buildId = 'dev',
   now = Date.now,
   log = () => {},
+  /** 准入闸。默认读这台机器的 cgroup；测试注入一个"一定拒"的就行。 */
+  admit = readAdmission,
 }) {
   const server = http.createServer((req, res) => {
     handleRequest(req, res).catch((err) => {
@@ -163,6 +166,19 @@ export function createServer({
       return sendJson(res, 400, { error: 'bad-json' });
     }
     try {
+      // ★ **准入闸**（手册 §9.1）：满了就明确拒绝，而且要在**落盘之前**判。
+      //   ⚠️ 重发（duplicate）**不判**：那一句早就落盘了，拿"忙"拒它会让界面说假话
+      //      （显示"没发出去"，而服务端其实收下了，那一轮还在跑）。
+      //   ⚠️ 拒了 ⇒ **什么都没写**（`say.say()` 根本没被调用）——这就是
+      //      §9.1 那句"不建空 jsonl 文件"的落点。
+      if (!say.isDuplicate(body?.messageId)) {
+        const adm = admit();
+        if (!adm.ok) {
+          log(`[准入] 拒了一句（内存 ${Math.round((adm.ratio ?? 0) * 100)}% ≥ ${Math.round(ADMIT_RATIO * 100)}%）`);
+          return sendJson(res, 429, { error: 'busy' });
+        }
+      }
+
       const result = say.say({
         messageId: body?.messageId,
         text: body?.text,

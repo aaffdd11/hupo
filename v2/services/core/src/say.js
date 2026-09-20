@@ -46,6 +46,18 @@ export class SayService {
    * @param {number} [o.clientAt] 客户端自己的钟（**只用来记录，不参与排序**）
    * @returns {{duplicate: boolean, event?: object}}
    */
+  /**
+   * 这一句**是不是重发**（同一个 `messageId` 之前收过）。
+   *
+   * ⚠️ 为什么准入闸需要它：**重发绝不能被拒**。
+   *    重发的意思是"我没收到你的回执，再说一遍"——那一句**早就落盘了**。
+   *    要是拿"忙"把它拒掉，界面上会显示"没发出去"，而服务端其实收下了 ⇒
+   *    用户会再发一遍，**界面在说假话**（而且那一轮已经在跑了）。
+   */
+  isDuplicate(messageId) {
+    return typeof messageId === 'string' && this.#seen.has(messageId);
+  }
+
   say({ messageId, text, clientAt }) {
     if (!messageId || typeof messageId !== 'string') {
       throw new SayError('缺 messageId', 400);

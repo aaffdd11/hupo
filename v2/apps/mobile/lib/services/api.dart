@@ -35,6 +35,13 @@ class SayNotSetup extends SayOutcome {
 }
 
 /// 试得太频繁。→ 要告诉用户**还有多久**（手册 D2：只说"太频繁"等于没说）。
+///
+/// ⚠️ **今天没有生产者**：`/api/say` 上的 429 归 [SayBusy]（忙不过来），
+///    登录那条路（"试得太频繁、锁住了"）走的是 [login] 的 [LoginResult]，
+///    根本不经过 [SayOutcome]。
+///    留着它是因为**这件事本身还在**（登录就在限流）：哪天说话这条路也要限流，
+///    那句话已经在这儿了，不用重新发明；而且它是 sealed 家族的一员，
+///    删掉等于顺手改了"结果有哪几种"。
 class SayLocked extends SayOutcome {
   const SayLocked(this.retryAfterSec);
   final int retryAfterSec;
@@ -49,6 +56,21 @@ class SayRejected extends SayOutcome {
 class SayNetworkError extends SayOutcome {
   const SayNetworkError(this.detail);
   final String detail;
+}
+
+/// 它现在**忙不过来**：这一句**没收下**（按内存准入闸拒的，手册 `08-SPEC.md` §9.1）。
+///
+/// ⚠️ 和另外两种"没发出去"分清楚，对用户说的话完全不一样：
+///   * **不是** [SayNetworkError]：网是通的，不许说"网断了"（那是假话）；
+///   * **不是** [SayLocked]：那不是"你试得太频繁"，是它自己满了。
+///
+/// 对用户的意思就一句：**过一会儿再发一次**——所以本地那条要落 `failed`，
+/// 屏幕上才有「重发」这个入口（不变量 N11：拒绝必须给人话 + 可重试）。
+///
+/// 真正的理由（内存占用比、阈值）**只住在服务端与手册里**——
+/// 客户端不复制那个判断，也不知道那个数（客户端是哑的）。
+class SayBusy extends SayOutcome {
+  const SayBusy();
 }
 
 class Api {
@@ -114,23 +136,9 @@ class Api {
             }),
           )
           .timeout(const Duration(seconds: 20));
-      switch (r.statusCode) {
-        case 200:
-          final j = jsonDecode(r.body) as Map;
-          return SayOk(
-            duplicate: j['duplicate'] == true,
-            seq: (j['seq'] as num?)?.toInt(),
-          );
-        case 401:
-          return const SayUnauthorized();
-        case 503:
-          return const SayNotSetup();
-        case 429:
-          final j = jsonDecode(r.body) as Map;
-          return SayLocked((j['retryAfterSec'] as num?)?.toInt() ?? 0);
-        default:
-          return SayRejected('HTTP ${r.statusCode}');
-      }
+      // 分情况那一段提成了纯函数 [sayOutcomeOf]：协议语义**只有那一处**，
+      // 于是它能进 `test/unit` 被逐码钉住（改错一个码 = 屏幕上换一句话）。
+      return sayOutcomeOf(r.statusCode, r.body);
     } catch (e) {
       return SayNetworkError('$e');
     }
@@ -169,6 +177,44 @@ class Api {
   }
 
   void close() => _c.close();
+}
+
+/// `/api/say` 的回执 → 结果。**纯函数**（不起网络、不碰界面、不看钟）——
+/// ⇒ 它能进 `test/unit` 硬闸，逐条对表。
+///
+/// ⚠️ 为什么要提出来：这几个码的语义**一旦上线就冻结**（`03-DEVELOPMENT.md` §三，
+///    旧客户端还在跑）。以前它们散在 `say()` 的 `switch` 里，只有"起个假 HTTP
+///    对一遍"才测得到 ⇒ 最容易在某次顺手改里被改坏而闸不响。
+///
+/// 状态码的分工（**不许互相串**；同一个码在两个端点上可以是两件事）：
+///   200 收下了 ｜ 401 令牌不行 ｜ 503 这台机器还没设密码 ｜
+///   429 **这条路（`/api/say`）上只有一个意思：它忙不过来** ｜
+///   其余 = 没细分，交给上层说"服务器没收下：HTTP xxx"。
+///
+/// ⚠️ **429 在 `/api/login` 上不是这个意思**（那边是"试得太频繁、锁住了"，
+///    还要读 `retryAfterSec` 告诉用户等多久）。那条路走的是 [Api.login]，
+///    **不经过这里**——两件事共用一个状态码，靠"是哪个端点"分开，
+///    不靠猜 body（猜 body 等于把协议变成模糊的）。
+SayOutcome sayOutcomeOf(int status, String body) {
+  switch (status) {
+    case 200:
+      final j = jsonDecode(body) as Map;
+      return SayOk(
+        duplicate: j['duplicate'] == true,
+        seq: (j['seq'] as num?)?.toInt(),
+      );
+    case 401:
+      return const SayUnauthorized();
+    case 503:
+      return const SayNotSetup();
+    case 429:
+      // 内存准入闸拒的："我满了，这一句没收下"（手册 `08-SPEC.md` §9.1）。
+      // ⚠️ 那边的阈值/占用比**不住在客户端**——这里只认"没收下"这个事实，
+      //    以及"可以再发一次"这个结论（N11）。
+      return const SayBusy();
+    default:
+      return SayRejected('HTTP $status');
+  }
 }
 
 /// 令牌状态探针。
