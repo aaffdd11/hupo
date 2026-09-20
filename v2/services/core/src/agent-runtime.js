@@ -293,14 +293,25 @@ export class DshAgent extends EventEmitter {
     this.ready = true;
   }
 
-  /** 说一句。**立刻返回**，答案从 `session-event` 流回来。 */
-  async prompt(text) {
+  /**
+   * 说一句。**立刻返回**，答案从 `session-event` 流回来。
+   *
+   * @param {string|{type:'text',text:string}[]} input
+   *        一个字符串，或**一组内容块**。
+   *        ⚠️ 内容块这条路是给"跨重启接记忆"用的：背景**单独一块**，
+   *        主人现在这句**另一块**——拼成一个字符串的话，模型分不清
+   *        哪句是背景、哪句是现在这句。
+   */
+  async prompt(input) {
     await this.start();
     this.lastUsedAt = Date.now();
+    const contentBlocks = Array.isArray(input)
+      ? input.map((b) => ({ type: 'text', text: String(b?.text ?? '') }))
+      : [{ type: 'text', text: String(input ?? '') }];
     return this.#request('session/prompt', {
       // ★ 用带 bootId 的那个 id，否则重启后第一句就报 already exists
       sessionId: this.#dshSessionId,
-      contentBlocks: [{ type: 'text', text }],
+      contentBlocks,
     });
   }
 

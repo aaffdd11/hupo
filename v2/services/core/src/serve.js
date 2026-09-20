@@ -54,7 +54,7 @@ const runtime = new AgentRuntime({
   cfg,
   onEvict: (sessionId) => dispatcher.onEvict(sessionId),
 });
-const dispatcher = new Dispatcher({ timeline, runtime, scopeId: timeline.id });
+const dispatcher = new Dispatcher({ timeline, runtime, scopeId: timeline.id, store, recap: cfg.recap });
 
 // 出事谁接：进程级兜底（手册 §5.2 第 3 层）
 installProcessGuard({ timeline });
@@ -76,6 +76,12 @@ console.log(`  界面     ${webRoot ?? '（没有 web 产物，只服务 API）'
 console.log(`  构建     ${cfg.buildId}`);
 console.log(`  agent    ${cfg.dshBin} --profile ${cfg.agentProfile}（最多 ${cfg.agentMaxProcesses} 个）`);
 console.log(`  工作目录 ${cfg.agentCwd}`);
+console.log(
+  // ⚠️ 这一行必须说**它到底记不记得**——那是用户最先会问的问题。
+  //    所以报的是"额度"（能记多少），不是"功能已启用"这种口号。
+  `  接记忆   起 agent 时喂回最近 ${cfg.recap.maxEntries} 句 / 最多 ${cfg.recap.maxChars} 字` +
+    `（单条 ${cfg.recap.maxEntryChars} 字封顶）`,
+);
 console.log(
   auth.needsSetup
     // fail-closed 不是"警告"，是**当前状态**——所以要说清楚它现在拒绝服务

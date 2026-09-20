@@ -84,6 +84,14 @@ function onMessage(msg) {
     return;
   }
   if (msg.method === 'session/prompt') {
+    // ★ 真 agent 会发 `user/message`（把收到的那几个内容块回显出来），
+    //   假 agent 也发——这样"我们到底喂了什么进去"可以在**真 stdio 上**验，
+    //   而不用去猜。翻译层会忽略它（它不进产品事件）。
+    notifyEvent('user/message', {
+      content: msg.params?.contentBlocks ?? [],
+      role: 'user',
+      id: `pm_${seq}`,
+    });
     reply(msg.id, { messageId: `pm_${seq}` });
     turn += 1;
     runScenario(turn);

@@ -1,10 +1,10 @@
 # 03 · 在 `w.stalkerai.cn` 上部署（Flutter web 优先）
 
-> ## ✅ **已上线**（2026-09-20）
+> ## ✅ **已上线，而且已经在干活**（2026-09-20）
 >
-> **打开：<https://w.stalkerai.cn>**
-> 现在是**输入法探针**页，而且服务是 **fail-closed**（还没设密码）——
-> 探针能打开、能输入、能看事件流水；点"发送"会回 **503**，**那是对的**。
+> **打开：<https://w.stalkerai.cn>** —— 密码 `Betty102`。
+> 现在是**真界面**：登录 + 聊天 + 四态确认 + 断线续传，
+> 而且**它真的会答话、重启之后真的还记得**（见 `06-RECAP.md` §5）。
 >
 > ### 铺了什么（可核对）
 >
@@ -12,36 +12,31 @@
 > |---|---|
 > | **本机** | `node src/serve.js` 监听 `127.0.0.1:8020`（PID 在 `v2/services/core/serve.pid`） |
 > | **本机** | `~/.local/frp/frpc-w.toml`（stcp proxy `hupo-w`，`localPort=8020`） |
-> | **本机** | Flutter web 产物在 `v2/services/core/web/`（30M） |
+> | **本机** | Flutter web 产物在 `v2/services/core/web/` |
 > | **VPS** | `/opt/frp/frpc-visitor-w.toml`（visitor 绑 `127.0.0.1:3084`） |
 > | **VPS** | `frpc-visitor-w.service`（systemd，已 enable） |
 > | **VPS** | `/etc/nginx/conf.d/w-stalkerai.conf`（**新增**，没碰任何已有 conf） |
 > | **VPS** | 证书 `/etc/letsencrypt/live/w.stalkerai.cn/`（到期 **2026-12-19**，自动续期） |
->
-> ### 验过的（都是实测，不是推断）
->
-> - `https://w.stalkerai.cn/` → 200，`cache-control: no-cache`（入口不缓存 ✓）
-> - `main.dart.js` → 200，`immutable`（产物可长缓存 ✓）
-> - `/api/version` → `{"buildId":"probe-1",...}`
-> - `/api/say` → **503**（fail-closed 穿过整条链仍然生效 ✓）
-> - **WS 升级路径**：公网打 `/api/stream` 收到的 503 **是我服务的 JSON body**
->   ⇒ nginx 的 Upgrade 分支确实通到了本机 ✓
 >
 > ### ⚠️ 一件必须知道的事：**本机侧没有 systemd**
 >
 > 本机的 `node` 与 `frpc` 是 `setsid nohup` 起的（**sudo 要密码，装不了单元**）。
 > ⇒ **这台机器一重启，服务就掉了**，`w.stalkerai.cn` 会变成 502/504。
 >
-> **重启后怎么拉起来**：
+> **重启后怎么拉起来 —— 用仓库里那个脚本，别手打**：
+>
 > ```bash
-> # 1) 服务
-> cd /home/deploy/proj/hupo/v2/services/core
-> setsid nohup env HUPO_DATA="$PWD/data" HUPO_PORT=8020 HUPO_WEB="$PWD/web" \
->   node src/serve.js > serve.log 2>&1 < /dev/null & echo $! > serve.pid
-> # 2) 隧道
-> setsid nohup ~/.local/frp/frpc -c ~/.local/frp/frpc-w.toml > /dev/null 2>&1 < /dev/null &
+> cd /home/deploy/proj/hupo
+> scripts/restart-core.sh                     # 服务（⚠️ 默认**保留日志**）
+> setsid nohup ~/.local/frp/frpc -c ~/.local/frp/frpc-w.toml >/dev/null 2>&1 </dev/null &
 > ```
-> （VPS 侧那个 visitor 是 systemd 管的，会自己起来。）
+>
+> ⚠️ **脚本为什么值得存在**（两条都是踩出来的）：
+> 1. **不许 `pkill -f` / `pgrep -f`**——`-f` 匹配整条命令行，而运行它的 shell
+>    自己命令行里就带着那个模式 ⇒ **把自己杀掉**。本项目踩过两次。
+> 2. **不许"看到 `dsh` 就杀"**——这台机器是主人的桌面，上面有主人自己的几百个会话。
+>    我们的 agent 是本服务的**子进程**；优雅 SIGTERM 服务本身，
+>    `serve.js` 会 `dispatcher.shutdown()` → `runtime.shutdown()` 把它们带走。
 >
 > ### 怎么设密码（**在机器上做，不在网页上**）
 >
@@ -49,8 +44,10 @@
 > cd /home/deploy/proj/hupo/v2/services/core
 > npm run set-pass -- "你的密码"
 > ```
-> 设完不用重启服务。设之前，除了 `/api/version`、`/api/auth`、`/api/login`，
-> **所有接口都是 503**。
+> 设完不用重启服务（服务会按文件 mtime 自己重载）。
+> 设之前，除了 `/api/version`、`/api/auth`、`/api/login`，**所有接口都是 503**。
+>
+> ⚠️ **网页上故意没有设密码的地方**——这一步是最高权限，必须在机器上做。
 
 
 > **结论：可以，而且条件是具体的、很少的。** 现成的模板已经跑着两个站（`u.` 和 `v.`），
@@ -214,3 +211,45 @@ Flutter web 的文本输入在中文 IME 上**历史性地出现过合成/光标
 
 **Flutter web 前端本身**还没写——那是接下来的活（`v2/` 下新建 app）。
 先铺路还是先写前端，你定；**我建议先铺路**，因为**越早能公网打开，越早能发现真问题**。
+
+---
+
+## 七、出新版界面怎么上（**这一步现在是常规操作了**）
+
+```bash
+cd /home/deploy/proj/hupo/v2/apps/mobile
+~/sdk/flutter/bin/flutter analyze            # 硬闸
+~/sdk/flutter/bin/flutter test test/unit     # 硬闸
+~/sdk/flutter/bin/flutter build web --release --pwa-strategy=none
+rm -rf ../../services/core/web && mkdir -p ../../services/core/web
+cp -r build/web/. ../../services/core/web/
+cd /home/deploy/proj/hupo && scripts/restart-core.sh      # 重启服务（保留日志）
+```
+
+**两条为什么这样做：**
+
+| # | 做法 | 为什么 |
+|---|---|---|
+| 1 | `--pwa-strategy=none` | 带 Service Worker 的话浏览器会一直用缓存里的旧 `main.dart.js`——**部署了新版本用户也看不到**（而且看起来像"没生效"，查半天）。开发期必须关。 |
+| 2 | 产物**整棵换掉**（`rm -rf` 再 `cp`） | 旧版残留的 chunk 会和新版混在一起。服务端对 `main.dart.js` 发的是 `immutable`——**混着的旧文件会被长期缓存**。 |
+
+⚠️ **重启服务严格说不是必须的**（实测读了一遍 `serveStatic`）：静态文件是**每个请求现读盘**的，
+`webRoot` 只在启动时判一次"有没有 `index.html`"。
+所以产物换掉之后，**下一个请求就是新的**。
+
+**那为什么还是建议重启**：
+
+| 情形 | 要不要重启 |
+|---|---|
+| 平时换界面产物 | 不用。刷新页面就是新的 |
+| **启动时 `web/` 里没有 `index.html`** | **要**。那一刻 `webRoot` 被判成 `null`，之后**整个界面路由都不存在** |
+| 改了服务端代码（`src/*.js`） | **要**。Node 不会热加载 |
+
+⇒ **统一都重启一次最省心**，也顺手把那句状态横幅（构建指纹、接记忆额度）刷新到最新。
+
+**验一下**（不用装 App，手机浏览器直接开）：
+
+```bash
+curl -s https://w.stalkerai.cn/api/version       # 看 buildId 是不是新的
+curl -sI https://w.stalkerai.cn/ | head -1       # 200
+```

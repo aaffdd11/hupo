@@ -149,7 +149,7 @@ export function createServer({
       if (!result.duplicate && dispatcher) {
         // 投递是异步的（`session/prompt` 立刻返回，答案从事件流回来），
         // 所以**不等它**——等它会把 HTTP 响应也拖住。
-        dispatcher.deliver(body?.text).catch((err) => {
+        dispatcher.deliver(body?.text, { messageId: body?.messageId }).catch((err) => {
           log(`[dispatch] 投递失败：${err?.message ?? err}`);
         });
       }

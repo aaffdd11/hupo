@@ -44,11 +44,13 @@ function cfg(over = {}) {
   };
 }
 
-async function setup({ scenario = 'normal', over = {} } = {}) {
-  const store = new Store({ dataDir: nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-tl-')), fsync: false });
+async function setup({ scenario = 'normal', over = {}, store: given = null } = {}) {
+  const store =
+    given ??
+    new Store({ dataDir: nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-tl-')), fsync: false });
   const timeline = new Timeline({ id: 'main', store });
   const runtime = new AgentRuntime({ cfg: cfg(over), spawnFn: fakeSpawn(scenario) });
-  const dispatcher = new Dispatcher({ timeline, runtime });
+  const dispatcher = new Dispatcher({ timeline, runtime, store });
   return { store, timeline, runtime, dispatcher };
 }
 

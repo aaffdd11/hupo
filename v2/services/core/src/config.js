@@ -8,6 +8,8 @@ import nodeFs from 'node:fs';
 import nodeOs from 'node:os';
 import nodePath from 'node:path';
 
+import { RECAP_DEFAULTS } from './recap.js';
+
 export function loadConfig(env = process.env, cwd = process.cwd()) {
   const dataDir = env.HUPO_DATA ?? nodePath.resolve(cwd, 'data');
 
@@ -62,6 +64,19 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
 
     /** 进程死了要不要在下次说话时重起。 */
     agentRestartOnDemand: true,
+
+    // ── 跨重启接记忆 ──
+    // ⚠️ 默认值**住在 `recap.js`**（阈值只该有一个出处），这里只负责能改。
+    //    为什么要能改：额度是"记忆多长"的直接旋钮，
+    //    而多长合适要看真实使用——不该为了改它去动代码。
+    recap: {
+      maxEntries: Number.parseInt(env.HUPO_RECAP_MAX_ENTRIES ?? String(RECAP_DEFAULTS.maxEntries), 10),
+      maxChars: Number.parseInt(env.HUPO_RECAP_MAX_CHARS ?? String(RECAP_DEFAULTS.maxChars), 10),
+      maxEntryChars: Number.parseInt(
+        env.HUPO_RECAP_MAX_ENTRY_CHARS ?? String(RECAP_DEFAULTS.maxEntryChars),
+        10,
+      ),
+    },
   };
 }
 
@@ -87,6 +102,22 @@ export function preflight(cfg) {
   }
   if (!nodeFs.existsSync(cfg.dshHome)) {
     notes.push(`DSH_HOME 不存在：${cfg.dshHome}（agent 起来时才可能报错）`);
+  }
+
+  // 跨重启接记忆的额度：**说不通就起不来**，别让它悄悄生效。
+  // ⚠️ `maxEntryChars > maxChars` 时单条上限比总额度还大 ⇒ 额度形同虚设，
+  //    而现场看起来只是"它记性好得反常"（其实是把一整条长回答全喂了）。
+  const rc = cfg.recap ?? {};
+  if (!(rc.maxEntries >= 1)) {
+    problems.push(`recap.maxEntries 必须 ≥1，收到 ${rc.maxEntries}`);
+  }
+  if (!(rc.maxChars >= 1)) {
+    problems.push(`recap.maxChars 必须 ≥1，收到 ${rc.maxChars}`);
+  }
+  if (!(rc.maxEntryChars >= 1) || rc.maxEntryChars > rc.maxChars) {
+    problems.push(
+      `recap.maxEntryChars 必须在 1..maxChars 之间，收到 ${rc.maxEntryChars}（maxChars=${rc.maxChars}）`,
+    );
   }
   return { problems, notes };
 }

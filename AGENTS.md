@@ -101,9 +101,9 @@ docs/handbook/            要什么、为什么（冻结，唯一权威）
 cd v2/services/core && npm test && npm run demo
 ```
 
-**进度**：地基（落盘 + 取号 + 收口 + 出事谁接）**已建完**，47 条验收全过。
-**下一步**：把这条路接到真连接上（HTTP `/api/say` + WS `/api/stream` + 认证 + 续传）。
-⚠️ **认证做出来之前，不要开对外监听的端口**（手册把"没设口令 ⇒ 除三个公开路由外一律 503"写成硬要求）。
+**进度**：**六批已落地**（见 §四的表）。硬闸是 `cd v2/services/core && npm test`，
+现在 **152 条全过**。线上是 <https://w.stalkerai.cn>。
+**下一步**：**超时硬收口**——现在 agent 卡住就是永远卡住。
 
 ⚠️ **最容易犯的错**：拿旧代码顺手改一改（"反正只差几行"）。
 **那样做出来的东西，会同时继承旧代码里那些我们已经判定为缺陷的东西**——
@@ -116,8 +116,20 @@ cd v2/services/core && npm test && npm run demo
 | 项 | 状态 |
 |---|---|
 | **规划** | ✅ **完成**。76 条决策全部拍板；两轮独立评审（各三席）已收口；**批 0 整个关闭** |
-| **实现** | 🚧 **进行中**——地基已建完（`v2/services/core`，47 条验收全过） |
-| **下一步** | 接真连接：HTTP + WS + 认证 + 续传（见 `docs/dev/01-FOUNDATION.md` §六） |
+| **实现** | 🚧 **进行中**——**六批已落地**，`v2/services/core` **152 条验收全过** |
+| **线上** | ✅ <https://w.stalkerai.cn> —— 登录 + 聊天 + 会答话 + **重启还记得** |
+| **下一步** | **超时硬收口**（agent 卡住 = 永远卡住，见 `docs/dev/05-AGENT.md` §七） |
+
+**已经建完的，一件一行**（每件都有对应的 `docs/dev/` 文档，**动手前先读那一份**）：
+
+| 批 | 建了什么 | 文档 | 验收条数 |
+|---|---|---|---|
+| 1 | 可见时间线内核：落盘 / 取号 / 收口 / 出事谁接 | `01-FOUNDATION.md` | 47 |
+| 2 | 服务面：HTTP + WS + 认证 + 续传 | `02-SERVER-SURFACE.md` | 108 |
+| 3 | 铺通 `w.stalkerai.cn`（stcp 隧道 + 证书 + nginx） | `03-DEPLOY-WEB.md` | —— |
+| 4 | 真界面：登录 + 聊天 + 四态 + 续传 | `04-CLIENT.md` | 32 |
+| 5 | 接上 agent：一个会话一个真进程 | `05-AGENT.md` | 131 |
+| 6 | **跨重启接记忆**（按来源分节喂回去） | `06-RECAP.md` | **152** |
 
 **批 1 里有四件是"今天就该修的"**——⚠️ 既然是全新建立，
 **这四件不是"去旧代码里改"，而是"在新代码里从一开始就对"**。
@@ -130,8 +142,6 @@ cd v2/services/core && npm test && npm run demo
 | **S8** | 瞬态事件**不占号** | 修前"磁盘无空洞"是假话 |
 | **S10** | **连接生命周期** | **退一个会话会打死全站连接，且不自恢复** |
 
-⇒ **建议从 S1 + S9 开始**（约 50–80 行，能直接进 CI）。
-
 ⚠️ **动手前先读** `03-DEVELOPMENT.md` §5.2（谁接）与 §5.3（`turns` 键）——
 **那两处的根因不明显，照直觉改会改错地方。**
 
@@ -139,14 +149,14 @@ cd v2/services/core && npm test && npm run demo
 
 ## 五、干活的标准流程
 
-### 5.1 改客户端（`apps/mobile/`）
+### 5.1 改客户端（**`v2/apps/mobile/` 是新实现**）
 
 ```bash
-cd apps/mobile
+cd v2/apps/mobile
 ~/sdk/flutter/bin/flutter analyze          # 硬闸：编译
 ~/sdk/flutter/bin/flutter test test/unit   # 硬闸：协议 / 状态机 / 纯逻辑
 ~/sdk/flutter/bin/flutter test test/widget # ⚠️ 只是提示，不是闸
-~/sdk/flutter/bin/flutter build apk --release
+~/sdk/flutter/bin/flutter build web --release --pwa-strategy=none   # 出产物
 ```
 
 ⚠️ **`test/widget` 挂了不要卡在那里**——它断言的是布局（像素坐标、控件 key），
@@ -157,14 +167,23 @@ cd apps/mobile
 ⚠️ **但 `flutter analyze` 与 `test/unit` 挂了必须修干净**——它们守的是协议与状态机。
 想清楚：是真的改了协议，还是把状态机改坏了。
 
+⚠️ **`apps/mobile/`（没有 `v2/` 的那个）是旧实现，不改**——只当参考。
+
 ### 5.2 改服务端（**`v2/services/core/` 是新实现**）
 
 ```bash
-cd v2/services/core && npm test     # 硬闸（地基现 47 条全过）
+cd v2/services/core && npm test     # 硬闸（现 152 条全过）
 cd v2/services/core && npm run demo # 肉眼过一遍地基
 ```
 
-> `services/core/`（旧实现）**不改**，只当参考——除非是要去**查证**某个 DSH 行为。
+**重启线上那个服务**（本机 8020，`w.stalkerai.cn` 就是它）：
+
+```bash
+scripts/restart-core.sh            # ⚠️ 默认**保留日志**——跨重启接记忆靠它
+scripts/restart-core.sh --fresh    # 清空日志（"从我们刚认识开始"）
+```
+
+> `services/core/`、`apps/mobile/`（旧实现）**不改**，只当参考——除非是要去**查证**某个 DSH 行为。
 
 ### 5.3 提交
 
