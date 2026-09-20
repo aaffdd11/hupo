@@ -17,6 +17,7 @@ import { Auth } from './auth.js';
 import { Dispatcher } from './dispatcher.js';
 import { SayService } from './say.js';
 import { Store } from './store.js';
+import { reconcileOnBoot } from './reconcile.js';
 import { Timeline } from './timeline.js';
 import { createServer } from './server.js';
 import { loadConfig, preflight } from './config.js';
@@ -44,6 +45,19 @@ const timeline = new Timeline({
     console.error(`[timeline] 订阅者出错（${event.type}）：${err?.message ?? err}`);
   },
 });
+// ★ **开机对账**：把上一次没说完的话收干净，并告诉用户"可能没做完"。
+// ⚠️ 位置就在这儿：**在服务开始收请求之前**。晚一步的话，
+//    客户端可能已经连上、把那条没收口的气泡渲染成"还在做"了。
+// ⚠️ 而且它**不许阻断启动**（手册 §15.3）——函数内部自己包住了。
+const reconciled = reconcileOnBoot({
+  timeline,
+  store,
+  log: (m) => console.warn(m),
+});
+if (!reconciled.ok) {
+  console.warn(`  ⚠️ 开机对账没做成：${reconciled.error}（**不影响启动**）`);
+}
+
 const auth = new Auth({ dataDir: cfg.dataDir });
 const say = new SayService({ timeline, store, timelineId: 'main' });
 
@@ -105,6 +119,17 @@ console.log(
     ? '  鉴权     ⚠️ 还没设密码 ⇒ **除三个公开路由外一律 503**（fail-closed）\n' +
       '           设密码：npm run set-pass -- "你的密码"'
     : '  鉴权     ✓ 已设密码（fail-closed 生效）',
+);
+console.log(
+  // ⚠️ 这一行必须说**上一轮是怎么结束的**——否则"它上次是不是被硬杀的"
+  //    只能靠猜，而那是排障时第一个要问的问题。
+  `  上次收尾 ${
+    reconciled.closed === 0
+      ? '干净（没有未说完的话）'
+      : `⚠️ 有 ${reconciled.closed} 条没说完 —— 已收口${
+          reconciled.told > 0 ? `，并告诉了用户 ${reconciled.told} 次` : '（太旧，没打扰用户）'
+        }`
+  }`,
 );
 console.log(`  时间线   已有事件 ${timeline.seq} 条`);
 console.log('──────────────────────────────────────────────');
