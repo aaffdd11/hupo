@@ -24,26 +24,43 @@ v2/
   README.md                  本文
   services/core/             调度器（L2）
     src/
+      —— 地基 ——
       store.js               落盘：append-only，**失败必须上抛**
       timeline.js            可见时间线：**唯一的取号点** + 推订阅者
       message-writer.js      一条消息：start → text* → end
       process-guard.js       出事谁接：进程级兜底 + 崩溃环判定
-      index.js               可跑的演示（npm run demo）
-    test/                    验收测试（47 条）
+      —— 服务面 ——
+      auth.js                口令 / 令牌 / 限速 / 审计（**fail-closed**）
+      resume.js              续传与补发（纯函数；`catchUp` 只在重连时标）
+      say.js                 `POST /api/say` + **跨重启的幂等**
+      server.js              HTTP 路由 / 静态 / WebSocket
+      serve.js               服务入口（npm start）
+      auth-cli.mjs           设密码 / 撤销令牌（**在机器上做，不在网页上**）
+      index.js               地基演示（npm run demo）
+    test/                    验收测试（**108 条**）
 ```
 
 ## 怎么跑
 
 ```bash
 cd v2/services/core
-npm run demo     # 看地基跑通：一条消息进来 → 落盘 → 推出去
-npm test         # 47 条验收
+npm test                          # 108 条验收
+npm run demo                      # 地基演示：一条消息进来 → 落盘 → 推出去
+npm start                         # 起服务（127.0.0.1:8020，没设密码时 fail-closed）
+npm run set-pass -- "你的密码"      # 设密码（在机器上做）
 ```
+
+## 前端在哪
+
+**还没写。** 计划是 Flutter web 优先，见
+[`docs/dev/03-DEPLOY-WEB.md`](../../docs/dev/03-DEPLOY-WEB.md)。
 
 ## 开发文档
 
 - **手册（定档，唯一权威）**：`docs/handbook/`
-- **本批的模块设计**：[`docs/dev/01-FOUNDATION.md`](../../docs/dev/01-FOUNDATION.md)
+- 地基：[`docs/dev/01-FOUNDATION.md`](../../docs/dev/01-FOUNDATION.md)
+- 服务面：[`docs/dev/02-SERVER-SURFACE.md`](../../docs/dev/02-SERVER-SURFACE.md)
+- 部署（`w.stalkerai.cn`）：[`docs/dev/03-DEPLOY-WEB.md`](../../docs/dev/03-DEPLOY-WEB.md)
 
 > 分工：`docs/handbook/` 回答"**要什么、为什么**"（冻结）；
 > `docs/dev/` 回答"**这一批怎么实现、验收怎么过**"（随代码长）。

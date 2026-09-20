@@ -18,3 +18,8 @@ auth.json
 .idea/
 *.iml
 .vscode/
+
+# v2 运行时数据与本地依赖
+v2/services/core/node_modules/
+v2/services/core/data/
+v2/services/core/web/

@@ -9,8 +9,15 @@
     "node": ">=20"
   },
   "scripts": {
+    "start": "node src/serve.js",
     "demo": "node src/index.js",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "set-pass": "node src/auth-cli.mjs set",
+    "revoke": "node src/auth-cli.mjs revoke",
+    "auth-status": "node src/auth-cli.mjs status"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.21.3"
+  }
 }
