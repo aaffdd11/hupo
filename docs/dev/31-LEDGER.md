@@ -50,6 +50,34 @@ D6.4 说"只认**明说的**『记一笔』"、D6.5 说"**不确认不写**"。�
 ⚠️ 代价要认：**要动 agent 那侧的 patch / 工具登记**
 （`08-SPEC.md` §12.1 role 三类 + §12.2 逐工具能力矩阵）。**这是这一批最大的一块。**
 
+### 三·补 ✅ 那"怎么落地"实测清楚了（2026-09-21，读 DSH 本体）
+
+写契约的时候我**不知道 host 怎么给 agent 一个自定义能力**（我们今天是**一个都没给**），
+所以去读了 DSH 本体（`~/.nvm/…/@deepseek-ai/dsh/`）。结论：
+
+| 事实 | 出处 |
+|---|---|
+| DSH 是 **cordis 插件框架**：**工具就是插件**（`@deepseek-ai/dsh-tool-*`），profile 是**插件栈** + 一份用户层 `cordis.patch.yml` | `dsh/package.json` 的依赖表 + README |
+| **可以装树外插件**：`dsh plugin --profile <名> <pnpm args>` | README §"Manage a profile's plugins" |
+| ✅ **更轻的一条：`@deepseek-ai/dsh-mcp-client`** —— 让模型把**外部 MCP 服务器的工具当原生工具调用**。一台服务器**一条配置**（`serverName` + `transport: stdio`/`Streamable HTTP` + `command`），工具以 **`mcp__<服务名>__<工具>`** 出现 | `dsh-mcp-client/README.zh.md` §"使用本包/最小配置" |
+
+⇒ **推荐走 MCP 那条**，于是"甲"落成：
+
+```
+我们写一个小 MCP stdio 服务器（工具名如 ledger_write）
+  ⇒ 校验（6 个字段 / 只追加 / 失败语义）**全在我们这边**
+  ⇒ 模型只能"提一条要写的"，**写不写由宿主说了算**（正是 §三 第 5 条）
+  ⇒ profile 那边加一条 dsh-mcp-client 配置，把它挂上
+```
+
+⚠️ **三个要先认的代价**（不留到动手时才发现）：
+1. **profile 的 patch 层在 `/root/.dsh/profiles/**` ⇒ 那是开机清单里的 `strict`**
+   ⇒ 改完**必须重建清单**（授权有：主人 2026-09-21「继续批准使用sudo」）。
+2. **工具定义会为每次模型请求增加 token**（README 原话）⇒ 能力登记表里的**额度字段**要算进去。
+3. ⚠️ **我这次只读了"最小配置"那一段**，**没读全文**、**没读过 profile 的实际布局**
+   （`/root/.dsh/profiles/` 我用 sudo 看过一次，没展开）⇒ **动手前先把这两处读全**，
+   **别照这一节猜**。另一条路（自己写树外 cordis 工具插件、用 `dsh plugin` 装）更重，不推荐先走。
+
 ## 四、能力契约层的登记表要登记什么（P4 原话那四样）
 
 | 字段 | 这一条（工时账）填什么 |
