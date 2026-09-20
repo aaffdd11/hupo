@@ -4,7 +4,7 @@
 // 两种用法：
 //
 //   node scripts/verify-integrity.mjs                  # 核对（谁都能跑）
-//   sudo node scripts/verify-integrity.mjs --build     # 重建清单（**只有主人能跑**）
+//   sudo <node 的绝对路径> scripts/verify-integrity.mjs --build   # 重建清单（**只有主人能跑**）
 //
 // ⚠️ **路径写死、不看环境变量**：服务是助手自己重启的，闸要是能靠环境变量关掉，
 //    那就等于给助手一个关闸开关（理由写在 `integrity.js` 的文件头）。
@@ -45,7 +45,7 @@ if (has('--help') || has('-h')) {
       '用法：',
       '  node scripts/verify-integrity.mjs                    # 核对，对不上退出码 2',
       '  node scripts/verify-integrity.mjs --list             # **不用 root**：先看要钉住哪些东西',
-      '  sudo node scripts/verify-integrity.mjs --build       # 重建清单（写 /etc/hupo/integrity.json）',
+      '  sudo <node 的绝对路径> scripts/verify-integrity.mjs --build   # 重建清单（写 /etc/hupo/integrity.json）',
       '',
       '可选（只给这个工具用，服务本体不认）：',
       '  --repo <路径>  --home <路径>  --baseline <文件>',
@@ -79,7 +79,7 @@ if (has('--build')) {
   if (typeof nodeProcess.getuid === 'function' && nodeProcess.getuid() !== 0) {
     console.error(
       '✗ 要 root 才能写这份清单（清单必须 root 所有，助手碰不到才作数）。\n' +
-        `   请这样跑：sudo node scripts/verify-integrity.mjs --build`,
+        `   请这样跑：sudo ${nodeProcess.execPath} ${nodeProcess.argv[1]} --build`,
     );
     nodeProcess.exit(2);
   }
@@ -122,7 +122,7 @@ console.log(`   ${total} 处：${r.blocked.length} 处会**拒绝启动**，${r.
 for (const c of r.blocked) console.log(`   [拦] ${c.file} —— ${c.what}（${c.why}）`);
 for (const c of r.warnings) console.log(`   [报] ${c.file} —— ${c.what}（${c.why}）`);
 console.log('\n▶ 怎么收拾：');
-console.log('   · 是你自己（或主人）刚改的  ⇒ sudo node scripts/verify-integrity.mjs --build');
+console.log(`   · 是你自己（或主人）刚改的  ⇒ sudo ${nodeProcess.execPath} ${nodeProcess.argv[1]} --build`);
 console.log('   · 不是你改的                ⇒ git revert 那一次改动，或把文件改回去');
 if (r.blocked.length === 0) {
   console.log('   （只有"只报不拦"的条目动过 ⇒ **服务照常起**，但要知道这件事）');

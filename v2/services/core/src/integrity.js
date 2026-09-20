@@ -146,7 +146,7 @@ export function filesUnder(entry) {
 }
 
 /**
- * 按当前磁盘状态**重建**清单。由**主人**跑（`sudo node scripts/verify-integrity.mjs --build`）。
+ * 按当前磁盘状态**重建**清单。由**主人**跑（命令别手打：用 [rebuildCommand] 拼的那种绝对路径写法）。
  */
 export function buildBaseline({ repo, home, now = Date.now(), builtBy = 'root' }) {
   const entries = {};
