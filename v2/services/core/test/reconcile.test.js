@@ -13,7 +13,13 @@ import nodeFs from 'node:fs';
 import nodeOs from 'node:os';
 import nodePath from 'node:path';
 
-import { INTERRUPTED_LINE, RECONCILE_WINDOW_MS, findInterrupted, reconcileOnBoot } from '../src/reconcile.js';
+import {
+  INTERRUPTED_LINE,
+  INTERRUPTED_TOUCHED_LINE,
+  RECONCILE_WINDOW_MS,
+  findInterrupted,
+  reconcileOnBoot,
+} from '../src/reconcile.js';
 import { Store } from '../src/store.js';
 import { Timeline } from '../src/timeline.js';
 
@@ -33,6 +39,15 @@ function turn(seq, { messageId = `m_${seq}`, at = NOW, text = '收到，我去�
 
 function flat(...chunks) {
   return chunks.flat().sort((a, b) => a.seq - b.seq);
+}
+
+/** 抓**最后一条**消息的正文（对账那条新起的气泡）。 */
+function noticeText(store) {
+  const evs = store.readAll('main');
+  const starts = evs.filter((e) => e.type === 'message/start');
+  if (starts.length === 0) return '';
+  const id = starts[starts.length - 1].messageId;
+  return evs.filter((e) => e.type === 'message/text' && e.messageId === id).map((e) => e.text).join('');
 }
 
 function fresh() {
@@ -286,8 +301,7 @@ test('🔴 死了在开口之前 ⇒ 没有气泡可收，但那句话要说出�
   const r = reconcileOnBoot({ timeline, store, now: Date.now() });
   assert.equal(r.closed, 0, '没有气泡');
   assert.equal(r.told, 1, '★ 但他得听见一声 —— 不然就是一直等');
-  const texts = store.readAll('main').filter((e) => e.type === 'message/text').map((e) => e.text);
-  assert.deepEqual(texts, [INTERRUPTED_LINE]);
+  assert.equal(noticeText(store), INTERRUPTED_LINE);
 });
 
 test('🔴 这样也不会重复唠叨（事故二）', () => {
@@ -295,4 +309,68 @@ test('🔴 这样也不会重复唠叨（事故二）', () => {
   timeline.emit({ type: 'user/echo', messageId: 'u_1', text: '帮我查一下' });
   assert.equal(reconcileOnBoot({ timeline, store, now: Date.now() }).told, 1);
   assert.equal(reconcileOnBoot({ timeline, store, now: Date.now() }).told, 0, '★ 第二次不说了');
+});
+
+// ── ③ 「动过东西没有」—— 决策 D10.1 ────────────────────────
+//
+// 「续做」= 重新派一遍 ⇒ 会把副作用再做一遍。所以**动过东西的活不许自动重来**，
+// 而且对主人要说实话：「它可能已经改过东西了，所以我没有自己重来」。
+
+test('🔴 动过东西的活被认出来（归属到主人那句话）', () => {
+  const events = flat(
+    { type: 'user/echo', messageId: 'u_1', text: '把那个文件改一下', seq: 1, at: NOW - 90_000 },
+    { type: 'task/mutated', ref: 'u_1', turn: 1, seq: 2, at: NOW - 85_000 },
+    { type: 'message/start', messageId: 'm_1', at: NOW - 80_000, seq: 3 },
+  );
+  const r = findInterrupted(events, { now: NOW });
+  assert.equal(r.orphans[0].mutated, true);
+  assert.equal(r.anyMutated, true);
+});
+
+test('只读过东西的活**不算**动过（不然"只读"就没意义了）', () => {
+  const events = flat(
+    { type: 'user/echo', messageId: 'u_1', text: '查一下天气', seq: 1, at: NOW - 90_000 },
+    { type: 'message/start', messageId: 'm_1', at: NOW - 80_000, seq: 2 },
+  );
+  const r = findInterrupted(events, { now: NOW });
+  assert.equal(r.orphans[0].mutated, false);
+  assert.equal(r.anyMutated, false);
+});
+
+test('🔴 归属不明的那条（`ref: null`）⇒ **保守算动过**（不许往危险方向猜）', () => {
+  const events = flat(
+    { type: 'user/echo', messageId: 'u_1', text: '干点什么', seq: 1, at: NOW - 90_000 },
+    { type: 'task/mutated', ref: null, turn: 1, seq: 2, at: NOW - 85_000 },
+    { type: 'message/start', messageId: 'm_1', at: NOW - 80_000, seq: 3 },
+  );
+  const r = findInterrupted(events, { now: NOW });
+  assert.equal(r.anyMutated, true, '★ 认不出归属时，宁可当它动过');
+});
+
+test('🔴 对账那句话说清了"动过东西、我没敢自己重来"', () => {
+  const { store, timeline } = fresh();
+  timeline.emit({ type: 'user/echo', messageId: 'u_1', text: '把文件改一下' });
+  timeline.emit({ type: 'task/mutated', ref: 'u_1', turn: 1 });
+  timeline.emit({ type: 'message/start', messageId: 'm_1', agent: 'agent', origin: 'reactive', re: [] });
+  timeline.emit({ type: 'message/text', messageId: 'm_1', block: 'quick', seqInBlock: 1, text: '正在改…' });
+
+  const r = reconcileOnBoot({ timeline, store, now: Date.now() });
+  assert.equal(r.told, 1);
+  assert.equal(r.mutated, 1);
+  // ⚠️ 只取**对账那条新消息**的正文 —— 上一条是它自己说的"正在改…"，
+  //    把全盘的 message/text 串起来会把它也串进来。
+  const said = noticeText(store);
+  assert.equal(said, INTERRUPTED_TOUCHED_LINE);
+  assert.ok(/改过东西/.test(said), '要说清它动过东西');
+  assert.ok(/没有自己重来/.test(said), '★ 而且要说清**为什么**没自动重来');
+});
+
+test('🔴 只说"重新来一遍"是不够的 —— 那一版**不能**用在动过东西的活上', () => {
+  // 两句话必须是不同的：一句让人放心重来，一句让人**先去看一眼**。
+  assert.notEqual(INTERRUPTED_LINE, INTERRUPTED_TOUCHED_LINE);
+  assert.ok(!INTERRUPTED_LINE.includes('改过东西'));
+  for (const w of ['工作区', '口令', '客户端', '云端', '服务器', '调度器', '时间线', '会话', '工具', '系统提示']) {
+    assert.ok(!INTERRUPTED_TOUCHED_LINE.includes(w), `那句话里出现了内部词「${w}」`);
+  }
+  assert.ok(INTERRUPTED_TOUCHED_LINE.includes('可能没做完'), '照样只说"可能"');
 });

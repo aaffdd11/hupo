@@ -62,6 +62,16 @@ export const RECONCILE_WINDOW_MS = 6 * 60 * 60 * 1000;
  *    `apps/mobile/lib/models/forbidden_words.dart` 那道闸管的是界面文案，
  *    这一句**就是**界面文案，所以同样受它管。
  */
+export const INTERRUPTED_TOUCHED_LINE =
+  '你刚才让我做的那件事，可能没做完 —— 中间我被打断了。' +
+  '它可能已经改过东西了（写过文件、或者跑过命令），所以我没有自己重来。' +
+  '你看一眼，要不要再做一遍。';
+
+/**
+ * 对用户说的那句话（**只读过东西**那一版）。
+ *
+ * ⚠️ 两个"必须"都在里面：**说清是"可能"**（我们不知道）、**给出下一步**（N11）。
+ */
 export const INTERRUPTED_LINE =
   '你刚才让我做的那件事，可能没做完 —— 中间我被打断了，做到哪儿我也不知道。' +
   '你说一声，我重新来一遍。';
@@ -86,27 +96,40 @@ export const INTERRUPTED_LINE =
  * @returns {{orphans: Array<object>, unanswered: Array<object>, tell: boolean, total: number}}
  */
 export function findInterrupted(events, { now = Date.now(), windowMs = RECONCILE_WINDOW_MS } = {}) {
-  const opened = new Map(); // messageId → { at }
+  const opened = new Map(); // messageId → { at, ref }
   let lastEndSeq = 0;
   let seqOf = 0;
   const echoes = []; // { messageId, text, at, seq }
+  /** 主人哪句话引起来的活里**动过东西**（决策 D10.1）。`null` = 归属不明（保守当"动过"） */
+  const mutatedRefs = new Set();
+  let lastEchoRef = null;
 
   for (const e of events) {
     if (!e || typeof e.type !== 'string') continue;
     if (typeof e.seq === 'number') seqOf = e.seq;
     switch (e.type) {
       case 'user/echo':
+        lastEchoRef = typeof e.messageId === 'string' ? e.messageId : null;
         echoes.push({
-          messageId: typeof e.messageId === 'string' ? e.messageId : null,
+          messageId: lastEchoRef,
           text: typeof e.text === 'string' ? e.text : null,
           at: typeof e.at === 'number' ? e.at : now,
           seq: seqOf,
         });
         break;
+      case 'task/mutated':
+        // ⚠️ 归属是 `null` 时**照样记**（记成"有一条归属不明的"）——
+        //    算成"没动过"就是往危险的方向猜。
+        mutatedRefs.add(typeof e.ref === 'string' ? e.ref : null);
+        break;
       case 'message/start':
         if (typeof e.messageId === 'string') {
           // 同一条 id 再次开口 ⇒ 重新计时（那不是"上一次没收口"）
-          opened.set(e.messageId, { at: typeof e.at === 'number' ? e.at : now });
+          opened.set(e.messageId, {
+            at: typeof e.at === 'number' ? e.at : now,
+            // 这一轮是主人哪句话引起来的（用来对上"动过东西"那份记录）
+            ref: lastEchoRef,
+          });
         }
         break;
       case 'message/end':
@@ -118,12 +141,21 @@ export function findInterrupted(events, { now = Date.now(), windowMs = RECONCILE
     }
   }
 
+  // 归属不明的那一条：保守起见，**任何**没被明确记为"没动过"的都算动过。
+  const unattributedMutation = mutatedRefs.has(null);
+  const touched = (ref) =>
+    unattributedMutation || (ref !== null && mutatedRefs.has(ref)) || (ref === null && mutatedRefs.size > 0);
+
   const orphans = [...opened.entries()]
     .map(([messageId, info]) => ({
       messageId,
+      ref: info.ref ?? null,
       at: info.at,
       ageMs: Math.max(0, now - info.at),
       tell: now - info.at <= windowMs, // ⚠️ 只对最近 6 小时内的说话
+      // ⚠️ **动过东西的，不许自动重来**（D10.1）。这个字段现在只用来说话，
+      //    等"续做"落地时它就是那道闸的判据。
+      mutated: touched(info.ref ?? null),
     }))
     .sort((a, b) => a.at - b.at); // 老的先收，日志读起来顺着时间
 
@@ -131,21 +163,40 @@ export function findInterrupted(events, { now = Date.now(), windowMs = RECONCILE
     .filter((e) => e.seq > lastEndSeq)
     .map((e) => ({
       messageId: e.messageId,
+      ref: e.messageId,
       text: e.text,
       at: e.at,
       ageMs: Math.max(0, now - e.at),
       tell: now - e.at <= windowMs,
+      mutated: touched(e.messageId),
     }))
     .sort((a, b) => a.at - b.at);
+
+  // 只要有一条动过东西，就说"动过东西"那一版 —— 那是**风险更高的信息**
+  const anyMutated = orphans.some((o) => o.mutated) || unanswered.some((u) => u.mutated);
+
+  // ⚠️ **同一次打断常常两种形状都命中**（它先应了一声、然后被杀）：
+  //    一个未收口的气泡 + 一句没人答的话，说的是**同一件事**。
+  //    按形状加总数会报成"2 处"，而排障的人会以为出了两次事。
+  //    ⇒ 按**归属**去重（`ref` = 主人那句话；认不出归属的就按它自己算一条）。
+  const distinct = new Map();
+  for (const f of [...orphans, ...unanswered]) {
+    const k = f.ref ?? `!${f.messageId ?? f.at}`;
+    distinct.set(k, (distinct.get(k) ?? false) || f.mutated);
+  }
 
   return {
     orphans,
     unanswered,
+    anyMutated,
     // ⚠️ 只要**有任何一条**在窗口里就出声，而且**只出一声** ——
     //    ① 和 ② 常常是同一件事的两面（它开口说了半句、就被杀了），
     //    分别出声就是对着同一次打断说两遍。
     tell: orphans.some((o) => o.tell) || unanswered.some((u) => u.tell),
-    total: orphans.length + unanswered.length,
+    /** **出了几回事**（按归属去重）—— 这才是排障时该报的数 */
+    incidents: distinct.size,
+    /** 其中**动过东西**的有几处（那些不许自动重来，D10.1） */
+    mutatedIncidents: [...distinct.values()].filter(Boolean).length,
   };
 }
 
@@ -184,7 +235,7 @@ export function reconcileOnBoot({
   } catch (err) {
     return { ok: false, closed: 0, told: 0, total: 0, error: `读日志失败：${err?.message ?? err}` };
   }
-  if (found.total === 0) return { ok: true, closed: 0, told: 0, total: 0 };
+  if (found.incidents === 0) return { ok: true, closed: 0, told: 0, total: 0, mutated: 0 };
 
   let closed = 0;
   const failures = [];
@@ -212,7 +263,9 @@ export function reconcileOnBoot({
   if (found.tell) {
     try {
       const w = new MessageWriter({ timeline, agent: 'agent', origin: 'proactive' });
-      w.chunk('deep', INTERRUPTED_LINE);
+      // ★ **动过东西的要说清"我没敢自己重来"** —— 那是主人该知道的事
+      //   （他得去看一眼那些文件）。只说"我重新来一遍"会让他以为没什么要紧。
+      w.chunk('deep', found.anyMutated ? INTERRUPTED_TOUCHED_LINE : INTERRUPTED_LINE);
       w.end('completed');
       told = 1;
     } catch (err) {
@@ -225,10 +278,13 @@ export function reconcileOnBoot({
     ok: failures.length === 0,
     closed,
     told,
-    total: found.total,
+    /** **出了几回事**（按归属去重 —— 同一次打断的两种形状只算一处） */
+    total: found.incidents,
     /** 未收口的气泡**找到了几条**（`closed` 是**收成功了几条**——收失败会不一样） */
     orphans: found.orphans.length,
     unanswered: found.unanswered.length,
+    /** 其中动过东西的有几处（那些**不许自动重来**，见 D10.1） */
+    mutated: found.mutatedIncidents,
     ...(failures.length > 0 ? { error: failures.join('；') } : {}),
   };
 }

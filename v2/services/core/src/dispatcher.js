@@ -59,6 +59,15 @@ export class Dispatcher {
    * 一轮开始 = 消费一条投递（今天的轮**全部**由投递引起）。
    */
   #delivered = [];
+  /**
+   * turn 号 → **是主人哪句话引起来的**（我们这边的 `messageId`）。
+   *
+   * ⚠️ 为什么要它：产品事件里**没有轮号**（`message/start` 只带 messageId）。
+   *    而"对账"要在重启之后回答"**那件活动过东西没有**"——
+   *    它手里的东西是"未收口的气泡"和"没人答的那句话"，**都不是轮号**。
+   *    ⇒ 落盘时就得把它翻译成**某条主人消息**，否则那条记录永远对不上。
+   */
+  #turnOwner = new Map();
 
   constructor({ timeline, runtime, scopeId = null, store, recap = {}, turnDeadlineMs = TURN_DEADLINE_MS }) {
     if (!store) {
@@ -77,10 +86,27 @@ export class Dispatcher {
 
     // 超时硬收口：轮的起讫从翻译层来（它才知道"这一轮开始了没有"）
     this.#translator.on('turn-start', (turn) => {
-      // 一轮开始 = 消化掉一条投递
-      this.#delivered.shift();
+      // 一轮开始 = 消化掉一条投递。**顺手记住是哪句话引起来的**（见 `#turnOwner`）
+      const owner = this.#delivered.shift();
+      this.#turnOwner.set(turn, owner?.messageId ?? null);
       this.#armDeadline(turn);
       this.#announceTurn(turn);
+    });
+
+    // ★ 这一轮动过东西 ⇒ **落一条盘**。重启之后只有盘上这份能告诉对账：
+    //   "这件事**不能**自己重来"（决策 D10.1）。
+    //   ⚠️ 事件里**没有工具名、没有参数** —— 只一个归属，见 `#turnOwner`。
+    this.#translator.on('mutated', ({ turn }) => {
+      try {
+        this.#timeline.emit({
+          type: 'task/mutated',
+          ref: this.#turnOwner.get(turn) ?? null,
+          turn,
+        });
+      } catch (err) {
+        // 落不下去不能让 agent 死；但**必须报出来**
+        this.#lastError = `动过东西这件事没记下来：${err?.message ?? err}`;
+      }
     });
     this.#translator.on('turn-end', ({ turn }) => this.#clearDeadline(turn));
   }

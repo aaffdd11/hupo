@@ -74,10 +74,16 @@ opened={e['messageId'] for e in evs if e['type']=='message/start'}
 closed={e['messageId'] for e in evs if e['type']=='message/end'}
 left=opened-closed
 texts=[e['text'] for e in evs if e['type']=='message/text']
+# ⚠️ 这个场景用的是 `bash` 跑 sleep —— 而 **`bash` 不在只读白名单里**（D10.2）。
+#    所以它**必须**被认成"动过东西"，而且那句话要说清"我没敢自己重来"。
+#    （"只读过"那一版走单测 —— 那条路要真 agent 只碰只读工具，不可靠。）
+mutated=[e for e in evs if e['type']=='task/mutated']
 checks=[
   ('未收口的气泡被收掉了', not left),
   ('对用户说了"可能没做完"', any('可能没做完' in t for t in texts)),
-  ('说的是"重新来一遍"（不是"接着做"）', any('重新来一遍' in t for t in texts)),
+  ('🔴 认出了"这一轮动过东西"（真 agent 的 tool/call 真的到了）', len(mutated)>=1),
+  ('🔴 而且那句话是"动过东西"那一版', any('改过东西' in t for t in texts)),
+  ('🔴 说清了"我没有自己重来"', any('没有自己重来' in t for t in texts)),
   ('收口理由记成 failed（没善终）', any(e['type']=='message/end' and e.get('reason')=='failed' for e in evs)),
 ]
 bad=0

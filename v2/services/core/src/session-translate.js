@@ -28,6 +28,7 @@
 import { EventEmitter } from 'node:events';
 
 import { MessageWriter } from './message-writer.js';
+import { isReadOnlyTool } from './tools.js';
 
 /** 被截断时补的那句话。**必须是人话**，而且要说清"我没说完"。 */
 const TRUNCATED_LINE = '这条我说太长了，被长度限制截断，剩下的我没说完。';
@@ -65,6 +66,8 @@ export class TurnTranslator extends EventEmitter {
   #turns = new Map(); // **turn 号** → 这一轮的账
   #lastTitle = null;
   #reasoningSeen = 0;
+  /** 已经报过"动过东西"的轮号（一轮只报一次） */
+  #mutatedTurns = new Set();
 
   constructor({ timeline, scopeId = null }) {
     super();
@@ -112,6 +115,9 @@ export class TurnTranslator extends EventEmitter {
         this.#lastTitle = data.title ?? null;
         this.emit('title', this.#lastTitle);
         break;
+      case 'tool/call':
+        this.#onToolCall(data);
+        break;
       case 'step/start':
       case 'step/end':
         // D7 的"在做什么"以后从这里来。**现在不推给用户**——
@@ -122,6 +128,32 @@ export class TurnTranslator extends EventEmitter {
         // 其它（request/*、permission/*、sandbox/*、agent/inbox/*…）安静忽略
         break;
     }
+  }
+
+  /**
+   * 一次工具调用。
+   *
+   * ⚠️ 我们**只关心"它会不会改东西"这一个布尔**（决策 D10.1/D10.2），
+   *    不关心工具叫什么、更不关心参数是什么。
+   *    ⇒ 报出去的事件里**没有工具名、没有参数**——那些是内部词，
+   *      而事件是**要落盘、会被 replay 给客户端**的（D7 的边界在这儿）。
+   *
+   * ⚠️ **一轮只报一次**：第一次碰上"会改东西"的工具就报，之后不再报。
+   *    判据是"整轮**有没有**碰过写类工具"，不是"碰了几次"。
+   */
+  #onToolCall(data) {
+    const turn = data?.turn;
+    if (typeof turn !== 'number') return;
+    if (this.#mutatedTurns.has(turn)) return;
+    if (isReadOnlyTool(data?.name)) return;
+    this.#mutatedTurns.add(turn);
+    // 派给外面（dispatcher 知道这一轮是主人哪句话引起来的，它去落盘）
+    this.emit('mutated', { turn });
+  }
+
+  /** 这一轮动过东西吗？（给测试与诊断用） */
+  turnTouchedSomething(turn) {
+    return this.#mutatedTurns.has(turn);
   }
 
   #onTurnStart(data, ev) {
@@ -221,6 +253,7 @@ export class TurnTranslator extends EventEmitter {
    */
   reset() {
     this.#turns.clear();
+    this.#mutatedTurns.clear(); // 轮号在新进程里从 1 重来 ⇒ 这份账也是新的
   }
 
   /**

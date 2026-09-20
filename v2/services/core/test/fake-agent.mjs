@@ -15,6 +15,10 @@
 //   hang-talk  hang 的变体：**先说半句**再不结束（验"已经说了一半"那种超时）
 //   hang-die   一轮开起来、**一个字都没说**，然后进程直接死
 //              （验 forceClose 那条"没有 writer 也要说话"的路 —— N19）
+//   tool-read  一轮里用了一个**只读**工具（`read`），正常收尾
+//   tool-write 一轮里用了一个**会改东西**的工具（`write`），正常收尾
+//   tool-write-die  用了会改东西的工具、说了半句，然后进程死
+//              （验"动过东西的活不许自动重来"那条 —— 决策 D10.1）
 
 import fs from 'node:fs';
 
@@ -94,6 +98,19 @@ const notifyStatus = (status) =>
   process.stdout.write(
     `${JSON.stringify({ jsonrpc: '2.0', method: 'session/status', params: { sessionId: 'fake', status } })}\n`,
   );
+
+/**
+ * 一次工具调用。字段形状按**实测**的真帧（`tool/call {turn, step, callId, name, arguments}`）。
+ * ⚠️ 只发名字，不发参数 —— 我们这边也只看名字（决策 D10.2）。
+ */
+const notifyToolCall = (t, step, name) =>
+  notifyEvent('tool/call', {
+    turn: t,
+    step,
+    callId: `call_${name}_${seq}`,
+    name,
+    arguments: '{}',
+  });
 
 /** 一条 assistant 消息：**推理原文和正文在同一个数组里**（和真 agent 一样）。 */
 const assistantMessage = (t, step, text, reasoning) =>
@@ -226,6 +243,38 @@ function runScenario(t) {
       notifyEvent('step/start', { turn: t, step: 1 });
       assistantMessage(t, 1, '我正在查…', '先调用工具');
       notifyEvent('step/end', { turn: t, step: 1 });
+      break;
+
+    case 'tool-read':
+      notifyEvent('step/start', { turn: t, step: 1 });
+      notifyToolCall(t, 1, 'read');
+      notifyEvent('step/end', { turn: t, step: 1 });
+      notifyEvent('step/start', { turn: t, step: 2 });
+      assistantMessage(t, 2, '查到了。', null);
+      notifyEvent('step/end', { turn: t, step: 2 });
+      notifyEvent('turn/end', { turn: t, reason: { kind: 'completed' } });
+      notifyStatus('idle');
+      break;
+
+    case 'tool-write':
+      notifyEvent('step/start', { turn: t, step: 1 });
+      notifyToolCall(t, 1, 'write');
+      notifyEvent('step/end', { turn: t, step: 1 });
+      notifyEvent('step/start', { turn: t, step: 2 });
+      assistantMessage(t, 2, '改好了。', null);
+      notifyEvent('step/end', { turn: t, step: 2 });
+      notifyEvent('turn/end', { turn: t, reason: { kind: 'completed' } });
+      notifyStatus('idle');
+      break;
+
+    case 'tool-write-die':
+      notifyEvent('step/start', { turn: t, step: 1 });
+      notifyToolCall(t, 1, 'write');
+      notifyEvent('step/end', { turn: t, step: 1 });
+      notifyEvent('step/start', { turn: t, step: 2 });
+      assistantMessage(t, 2, '我正在改…', null);
+      notifyEvent('step/end', { turn: t, step: 2 });
+      timers.push(setTimeout(() => process.exit(9), 30));
       break;
 
     case 'normal':
