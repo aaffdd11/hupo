@@ -1,0 +1,59 @@
+// 「我和它之间这条线现在怎么样」——以及**屏幕上该怎么如实说**。
+//
+// 纯逻辑，不许 import flutter/material（`message_state.dart` 同一条纪律）。
+//
+// ⚠️ **这里出过一次"页面在说假话"。** 原来只有 `reconnecting` 一个状态，
+//    屏幕上永远显示「网断了，我在等它回来」。
+//    可那个状态是**探针失败之后**才下的判断：
+//
+//      · `/api/health` 问不通      ⇒ 网真的断了 ⇒ 「网断了…」是**真话**
+//      · `/api/health` 200（服务端在）⇒ 网是好的 ⇒ 再说「网断了…」就是**假话**
+//
+//    假话的代价不只是不礼貌：它**把排查带偏**——看起来像用户的网络问题，
+//    而真实原因是浏览器把这一跳拒了（见 `services/stream_uri.dart` 记的那次事故）。
+//    ⇒ 网是通的、只是实时这条接不上，就必须**另说一句**。
+
+/// 「我和它之间这条线」的状态。
+enum ConnState {
+  /// 没在连（还没开始，或者已经主动停掉）。
+  idle,
+
+  /// 正在连（第一次）。
+  connecting,
+
+  /// 连着。
+  connected,
+
+  /// 断了，正在退避重连——**并且探针说网也不通**。
+  reconnecting,
+
+  /// ⚠️ 服务端明明在（`/api/health` 答 200）、网是通的，
+  /// 但**实时这一条接不上**（浏览器/中间设备把它拒了，或者它自己没起来）。
+  ///
+  /// 和 [reconnecting] 分开，是因为**对用户说的话不一样**：
+  /// 一个该说"网断了"，另一个说"网没断"。
+  streamBlocked,
+
+  /// ⚠️ 令牌不行。**不再重试**——重试一万次也不会好，只会一直失败。
+  unauthorized,
+
+  /// 这台机器还没设密码。
+  notSetup,
+}
+
+/// 顶部状态条上那句话。`(话, 是不是出错了)`；话为 `null` = **不占地方**。
+///
+/// 一切正常时返回 `null`：状态条只在"需要用户知道点什么"的时候出现，
+/// 常驻会变成一种噪音。
+(String?, bool) statusLine(ConnState s, {String? error}) => switch (s) {
+      // 连上了：只有"连上之前留下过一句话"才继续显示
+      ConnState.connected => (error, error != null),
+      ConnState.connecting => ('正在连上…', false),
+      // ★ 这个词组是刻意的：不说"正在恢复连接"（那会被读成"它坏了"）
+      ConnState.reconnecting => ('网断了，我在等它回来', false),
+      // ⚠️ 网是通的 ⇒ **不许**说"网断了"（那就是上面记的那次假话）
+      ConnState.streamBlocked => ('网是通的，只是我还接不上它，在重试', false),
+      ConnState.unauthorized => ('登录过期了，重新登录一下', true),
+      ConnState.notSetup => ('这台机器还没设密码', true),
+      ConnState.idle => ('还没连上', false),
+    };

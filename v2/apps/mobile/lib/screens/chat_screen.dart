@@ -16,9 +16,9 @@
 
 import 'package:flutter/material.dart';
 
+import '../models/conn_state.dart';
 import '../models/timeline.dart';
 import '../services/chat_controller.dart';
-import '../services/stream.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/composer.dart';
 import 'about_screen.dart';
@@ -152,15 +152,9 @@ class _StatusStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final (String? text, bool isError) = switch (state) {
-      ConnState.connected => (error, error != null),
-      ConnState.connecting => ('正在连上…', false),
-      // ★ 这个词组是刻意的：不说"正在恢复连接"（那会被读成"它坏了"）
-      ConnState.reconnecting => ('网断了，我在等它回来', false),
-      ConnState.unauthorized => ('登录过期了，重新登录一下', true),
-      ConnState.notSetup => ('这台机器还没设密码', true),
-      ConnState.idle => ('还没连上', false),
-    };
+    // 屏幕上那句话在 `models/conn_state.dart` 里（纯函数，进硬闸）——
+    // ⚠️ 别在这里直接写死："网断了"这句话曾经在网没断的时候也显示（那是一次事故）。
+    final (String? text, bool isError) = statusLine(state, error: error);
     if (text == null) return const SizedBox.shrink();
     return Container(
       width: double.infinity,

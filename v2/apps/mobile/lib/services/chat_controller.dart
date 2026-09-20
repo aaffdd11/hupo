@@ -9,6 +9,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../models/conn_state.dart';
 import '../models/message_state.dart';
 import '../models/timeline.dart';
 import 'api.dart';

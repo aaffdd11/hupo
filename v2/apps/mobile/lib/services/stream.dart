@@ -18,27 +18,10 @@ import 'dart:convert';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'stream_uri.dart';
+
 import 'api.dart';
-
-enum ConnState {
-  /// 没在连（还没开始，或者已经主动停掉）。
-  idle,
-
-  /// 正在连（第一次）。
-  connecting,
-
-  /// 连着。
-  connected,
-
-  /// 断了，正在退避重连。
-  reconnecting,
-
-  /// ⚠️ 令牌不行。**不再重试**——重试一万次也不会好，只会一直失败。
-  unauthorized,
-
-  /// 这台机器还没设密码。
-  notSetup,
-}
+import '../models/conn_state.dart';
 
 class StreamClient {
   StreamClient({
@@ -62,6 +45,10 @@ class StreamClient {
   Timer? _pingWatch;
   int _attempt = 0;
   int _sinceSeq = 0;
+
+  /// 上一回**探明**的失败原因。重试时用它，而不是每次都退回"网断了"——
+  /// 否则状态条会在真话和假话之间来回跳（每次重试都先把假话打出来）。
+  ConnState _retryState = ConnState.reconnecting;
   bool _wantOpen = false;
   ConnState _state = ConnState.idle;
 
@@ -94,11 +81,11 @@ class StreamClient {
   Future<void> _connect() async {
     if (!_wantOpen) return;
     _retry?.cancel();
-    _set(_attempt == 0 ? ConnState.connecting : ConnState.reconnecting);
+    _set(_attempt == 0 ? ConnState.connecting : _retryState);
 
-    final scheme = base.startsWith('https') ? 'wss' : 'ws';
-    final host = base.isEmpty ? _sameOriginHost() : base.replaceFirst(RegExp(r'^https?'), '');
-    final uri = Uri.parse('$scheme://$host/api/stream?sinceSeq=$_sinceSeq');
+    // ⚠️ 别在这里自己拼协议：同源时必须看**页面**的协议，
+    //    否则会在 https 页面上拼出 ws:// 并被浏览器拦掉（`stream_uri.dart` 记着这次事故）。
+    final uri = streamUri(base: base, page: Uri.base, sinceSeq: _sinceSeq);
 
     try {
       // 令牌走**子协议**（手册 §2.1）——不进 URL。
@@ -107,6 +94,7 @@ class StreamClient {
       await ch.ready;
       // ★ 只有连成功才归零退避（B5 的修法）
       _attempt = 0;
+      _retryState = ConnState.reconnecting;
       _set(ConnState.connected);
       _armPingWatch();
       _sub = ch.stream.listen(
@@ -118,12 +106,6 @@ class StreamClient {
     } catch (_) {
       await _onFailed();
     }
-  }
-
-  /// 同源时，浏览器知道 host 是什么；这里从当前页面推。
-  String _sameOriginHost() {
-    final u = Uri.base;
-    return '${u.host}${u.hasPort ? ':${u.port}' : ''}';
   }
 
   void _onFrame(dynamic raw) {
@@ -177,6 +159,8 @@ class StreamClient {
     _sub = null;
     _ch = null;
     if (!_wantOpen) return;
+    // 掉线的第一句先按"网断了"说（这会儿还没问过），
+    // 下一个回合 `_onFailed` 会拿探针的结果改口——最多一个退避周期。
     _scheduleRetry();
   }
 
@@ -185,11 +169,15 @@ class StreamClient {
   /// ⚠️ WS 握手失败在客户端拿不到 HTTP 状态码，所以用一次
   /// **带令牌的普通请求**去问——401 就是令牌不行。
   /// 不分清的话，坏令牌会变成一个永远转圈的界面（B1）。
+  ///
+  /// ⚠️ 这一问还顺带回答了**另一个问题：网到底通不通**。
+  ///    答 200 ⇒ 服务端明明在 ⇒ 屏幕上**不许**说"网断了"（`models/conn_state.dart`）。
   Future<void> _onFailed() async {
     _ch = null;
     if (!_wantOpen) return;
 
-    switch (await api.health(token)) {
+    final probe = await api.health(token);
+    switch (probe) {
       case TokenProbe.unauthorized:
         _wantOpen = false;
         _set(ConnState.unauthorized);
@@ -202,14 +190,19 @@ class StreamClient {
       case TokenProbe.unknown:
         break;
     }
-    _scheduleRetry();
+    _scheduleRetry(
+      state: probe == TokenProbe.ok ? ConnState.streamBlocked : ConnState.reconnecting,
+    );
   }
 
   /// 退避：2 / 4 / 6 / 8 / 8 …（封顶 8 秒），**不限次**。
   ///
   /// ⚠️ `_attempt` **不在这里归零**——只在连成功时归零（B5）。
-  void _scheduleRetry() {
-    _set(ConnState.reconnecting);
+  /// ⚠️ [state] 要一路带到下一次重试（`_retryState`），否则每次重试都会
+  ///    先把"网断了"打出来再改口，状态条会闪。
+  void _scheduleRetry({ConnState state = ConnState.reconnecting}) {
+    _retryState = state;
+    _set(state);
     _attempt += 1;
     final secs = (_attempt * 2).clamp(1, 8);
     _retry?.cancel();
