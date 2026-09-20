@@ -19,6 +19,7 @@ import { PUBLIC_ROUTES, clientIp, tokenFromRequest } from './auth.js';
 import { SayError } from './say.js';
 import { ADMIT_RATIO, readAdmission } from './admission.js';
 import { CATCHUP_RENDER, markCatchUp, planResume } from './resume.js';
+import { buildExport } from './export.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -249,6 +250,19 @@ export function createServer({
       }
       if (path === '/api/audit' && req.method === 'GET') {
         return sendJson(res, 200, { entries: auth.auditLog });
+      }
+      // ── 导出（批 3 欠的最后一件 · 契约 `docs/dev/30-EXPORT.md`）──────────
+      // ⚠️ **只读**：它只是把用户自己的话还给他，不是破坏性动作 ⇒ **不要 `confirm`**
+      //    （和 `/api/trash/plan` 同一条规矩：能白看的东西不许有门槛）。
+      // ⚠️ 回收站里那些**不算进来**，但**条数要如实报**（契约 §三）——
+      //    `trash.list()` 是唯一知道"谁被删过"的地方，所以这道闸打在这儿。
+      // ⚠️ 没开回收站的部署也照样导得出（只是没有"被删掉的那几条"要报）。
+      if (path === '/api/export' && req.method === 'GET') {
+        const bin = trash ? trash.list() : [];
+        return sendJson(res, 200, buildExport(store.readAll(timeline.id), {
+          hiddenIds: bin.flatMap((t) => t.messageIds),
+          hiddenCount: bin.length,
+        }));
       }
       // ── 回收站（批 3 第二件 · 契约 `docs/dev/28-DELETE.md` §8.2）────────
       // ⚠️ 键是 `messageIds`（不是轮号）：盘上没有轮号，见契约 §三·补。

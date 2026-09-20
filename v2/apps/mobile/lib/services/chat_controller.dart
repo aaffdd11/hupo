@@ -10,6 +10,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../models/conn_state.dart';
+import '../models/export.dart';
 import '../models/message_state.dart';
 import '../models/notice.dart';
 import '../models/process_levels.dart';
@@ -668,6 +669,18 @@ class ChatController extends ChangeNotifier {
     final r = await api.trashPurge(messageIds: messageIds, token: t);
     if (r is TrashOk<bool>) await _forgetTurn(messageIds, purge: true);
     return r;
+  }
+
+  /// **导出**：拿那一段能粘走的文字（契约 `docs/dev/30-EXPORT.md`）。
+  ///
+  /// ⚠️ **不在这一侧拼**：那段文字由服务端渲染（§六）——
+  ///    只有它知道回收站里删过谁（§三：那些不算进来，但条数要报）。
+  ///    客户端拿到成品，只负责显示与复制。
+  /// ⚠️ 没有令牌 ⇒ 直接 [TrashUnauthorized]（**不是**"网不好"）。
+  Future<TrashAnswer<ExportDoc>> loadExport() async {
+    final t = _token;
+    if (t == null) return const TrashUnauthorized<ExportDoc>();
+    return api.exportText(token: t);
   }
 
   /// 就地收拾"这一轮已经不在了"：藏起来（或丢掉）+ **清本机那两份**。

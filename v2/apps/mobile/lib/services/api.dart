@@ -10,6 +10,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../models/export.dart';
 import '../models/trash.dart';
 
 /// 说话的结果。**把"为什么没成功"分清楚**——
@@ -316,6 +317,29 @@ extension TrashApi on Api {
     required String token,
   }) =>
       _post('/api/trash/purge', {'messageIds': messageIds, 'confirm': true}, token, (_) => true);
+}
+
+/// **导出**那一条路（契约 `docs/dev/30-EXPORT.md`）。
+///
+/// ⚠️ 它复用 [TrashAnswer] 那套三态（401 / 网 / 成功）——和回收站**同一把尺子**：
+///    没有令牌就是 401（该回登录页），网不通就是失败（**什么都没发生**），
+///    只有服务端明说 200 才算拿到。导出是只读的，所以**没有**"以为导出了其实没有"
+///    那种破坏性后果，但"把 401 说成网不好"照样会把用户带去一个永远转圈的页面。
+extension ExportApi on Api {
+  /// 拿这一段能粘走的文字。**只读** ⇒ `GET`、**没有 `confirm`**
+  /// （和 `trashPlan` 同一条规矩：能白看的东西不许有门槛）。
+  ///
+  /// ⚠️ 令牌**只走 `Authorization` 头**，绝不进 URL（和别的口子同一条规矩）。
+  Future<TrashAnswer<ExportDoc>> exportText({required String token}) async {
+    try {
+      final r = await _c
+          .get(_u('/api/export'), headers: {'authorization': 'Bearer $token'})
+          .timeout(const Duration(seconds: 20));
+      return trashAnswerOf<ExportDoc>(r.statusCode, r.body, exportFrom);
+    } catch (e) {
+      return TrashFailed<ExportDoc>('$e');
+    }
+  }
 }
 
 /// `/api/say` 的回执 → 结果。**纯函数**（不起网络、不碰界面、不看钟）——

@@ -23,6 +23,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:hupo_app/models/export_words.dart';
 import 'package:hupo_app/models/message_state.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/timeline.dart';
@@ -210,6 +211,33 @@ Future<void> _openTrash(WidgetTester tester, double scale) async {
   await tester.pumpAndSettle();
 }
 
+/// 一份"导出页拿得到东西"的假服务端（批 3 欠的最后一件）。
+ChatController _exportController() {
+  final api = Api(
+    client: MockClient((r) async {
+      if (r.url.path == '/api/export') {
+        return _json(jsonEncode({
+          'text': '—— 9月21日 ——\n\n我：帮我把这周工时记一下\n\n它：这周 7 小时。\n\n'
+              '（这儿只是这条对话里你我互相说过的话。它自己记在记忆里的那一层不在里面。）',
+          'hiddenCount': 2,
+        }));
+      }
+      return _json('{}');
+    }),
+  );
+  return ChatController(api: api, tokens: TokenStore(), token: 'tok');
+}
+
+/// **像用户那样**打开导出页：从主界面点顶栏那个入口。
+///
+/// ⚠️ 契约 §五⑥ 点名要**从真入口进** —— 直接把 `ExportScreen` 当 `home` 泵出来，
+///    它没有返回键，命中区扫描会"一个能点的都没扫到"，量的也不是用户真看到的那棵树。
+Future<void> _openExport(WidgetTester tester, double scale) async {
+  await _pump(tester, ChatScreen(controller: _exportController(), onLoggedOut: () {}), scale);
+  await tester.tap(find.byTooltip(exportTooltip));
+  await tester.pumpAndSettle();
+}
+
 /// **像用户那样**长按一条回答，弹出删除菜单。
 Future<void> _openBubbleMenu(WidgetTester tester, double scale) async {
   await _pump(tester, ChatScreen(controller: _turnController(), onLoggedOut: () {}), scale);
@@ -360,6 +388,16 @@ void main() {
         }
       });
 
+      testWidgets('导出页（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 批 3 欠的最后一件（`30-EXPORT.md`）：新加的页面**必须也过这道闸**。
+        await _openExport(tester, s);
+        expect(_drain(tester), isEmpty, reason: '导出页在 ${s}x 溢出了');
+        // 负向对照：**那段字真的画出来了**才算数
+        //（只画出"没拿到"那一句的话，这道闸量的是一个空页）。
+        expect(find.byType(SelectableText), findsOneWidget,
+            reason: '★ 导出页没画出那一段字 ⇒ 这条闸漏了它');
+      });
+
       testWidgets('删前那份清单（从真入口进，含"删不掉"那一条）@ ${s}x', (tester) async {
         await _openPlan(tester, s);
         expect(_drain(tester), isEmpty, reason: '删前清单在 ${s}x 溢出了');
@@ -503,6 +541,12 @@ void main() {
       testWidgets('气泡长按菜单（从真入口进）@ ${s}x', (tester) async {
         await _openBubbleMenu(tester, s);
         await sweep(tester, '删除菜单 @${s}x');
+      });
+
+      testWidgets('导出页（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 那个"复制"按钮必须进这份扫描 —— 不然它的命中区没有任何东西守着（D3.6）。
+        await _openExport(tester, s);
+        await sweep(tester, '导出页 @${s}x');
       });
 
       testWidgets('浮窗（从真入口进）@ ${s}x', (tester) async {

@@ -72,3 +72,65 @@
 
 ⚠️ **它做完之后**：批 4 的硬前置就解了；而且批 4 的"工时账导出"**正好复用这套出口形态**
 （同一句"一段能粘进微信的文字"）—— 所以这一件不是绕路，是**先把出口修好**。
+
+---
+
+## 七、落地（两半各在哪儿）
+
+| 半 | 文件 | 做什么 |
+|---|---|---|
+| 服务端 | `v2/services/core/src/export.js` | 纯函数：`exportItems(events, {hiddenIds})` → 一条一条的话；`renderExport(items, {hiddenCount})` → 那段文字；`buildExport(events, {hiddenIds, hiddenCount})` 是取数口用的那一下 |
+| 服务端 | `v2/services/core/src/server.js` | `GET /api/export`（**只读**，要令牌，不要 `confirm`） |
+| 服务端 | `v2/services/core/test/export.test.js` | 18 条：纯函数逐条对表 + §三 的四种情形 + HTTP 那一层 |
+| 客户端 | `v2/apps/mobile/lib/models/export.dart` | `ExportDoc` + `exportFrom`（回执解析，纯逻辑） |
+| 客户端 | `v2/apps/mobile/lib/models/export_words.dart` | 这一路的人话（那样才进得了禁用词硬闸） |
+| 客户端 | `v2/apps/mobile/lib/screens/export_screen.dart` | 那一页：可全选的字框 + "复制"按钮；空对话只给一句实话 |
+| 客户端 | `v2/apps/mobile/lib/screens/chat_screen.dart` | 顶栏那个入口（挨着"回收站"——删除与导出**对称**） |
+| 客户端 | `lib/services/api.dart` · `lib/services/chat_controller.dart` | `exportText()` / `loadExport()`，复用 `TrashAnswer<T>` 那套三态 |
+| 客户端 | `test/unit/export_test.dart` · `test/widget/export_test.dart` · `test/widget/accessibility_test.dart` | 纯逻辑 / 界面 / **可访问性硬闸（从真入口进）** |
+
+**渲染住在服务端**（§六）：只有服务端手里的回收站知道"谁被删过"（§三），
+客户端拿到的是**成品文字**，只负责显示与复制 —— 不重算一遍（两处算 = 一定会漂）。
+
+## 八、HTTP（`GET /api/export`，要令牌，**只读**）
+
+```jsonc
+// 回来
+{
+  "text": "—— 9月21日 ——\n\n我：…\n\n它：…\n\n（这儿只是这条对话里你我互相说过的话。…）\n\n（有 2 条你说过要删掉的，没有算进来）",
+  "hiddenCount": 2
+}
+```
+
+⚠️ `text` 是**成品**（上面那些换行就是真换行）；`hiddenCount` 只用来对照
+（末尾那行已经写在 `text` 里，客户端**不重算、不重写**）。
+⚠️ 空对话 ⇒ `text` 是**空串**、`hiddenCount` 是 0（那句实话由客户端说）。
+
+## 九、契约没写、这一件自己定的（**给主人过目**）
+
+| # | 定的 | 为什么 |
+|---|---|---|
+| 1 | 跨天那行的形状 `—— 9月21日 ——` | §四只写了"时间戳只在跨天时出现一次"，没给形状 |
+| 2 | §二 那句话的原文（`MEMORY_NOTE`） | §二只要求"必须有一句把这件事说清"；口径与 `28-DELETE.md` §五 那条 `cannot` 对齐（说"记忆"，不说"记录"） |
+| 3 | 顶栏入口的位置（挨着回收站） | §四 明说"位置等主人看过再定，不属于契约" |
+| 4 | 空对话时**不给框、不给复制按钮** | §四说"不许给一个空白框"；按钮跟着一起去掉，否则是一个按了没东西的按钮 |
+| 5 | 一个字都没有、但有东西被删过 ⇒ **只报那一行条数** | §三要求"末尾如实说条数"，而那时没有正文可放它后面 |
+| 6 | 一天里**第一句也带日期行** | "跨天时出现一次"的最自然读法；否则第一天没有任何时间信息 |
+| 7 | `exportItems` 按 `(messageId, block, seqInBlock)` **去重** | "从回收站拿回来"会把内容**按原样重发**（`28-DELETE.md` §8.3）⇒ 盘上两份，不去重导出里会印两遍（客户端那边有同一把钥匙） |
+| 8 | 日期用**服务端本机时区** | 导出是服务端拼的；这台机器与主人在同一处 |
+
+⚠️ 「记录」**不在** `forbidden_words.dart` 那张表里（表里只有"时间线"）。
+⑳ 的教训写在 `notice_words.dart` 顶上，所以这一件**照样不许用**它 ——
+`test/unit/export_test.dart` 有一条断言**单钉**「记录 / 时间线 / 轮」这三个。
+
+## 十、§五 六条硬闸各自钉在哪儿
+
+| # | 判据 | 钉在 |
+|---|---|---|
+| 1 | 回收站里的不算 + 条数对得上 | `services/core/test/export.test.js`：正 + **负向对照** + N 从 0 循环到 3 + 恢复 + 真删；HTTP 那一层再来一遍 |
+| 2 | 文案过禁用词闸 | `test/unit/export_test.dart`（拿**真表**扫）+ 单钉「记录」；服务端那份在 `export.test.js` 里也被扫 |
+| 3 | 是文字不是表 | `export.test.js`：没有 `|` / markdown 链接 / `**` / 代码块；日期行两天只出现两次 |
+| 4 | 纯函数进 unit | `renderExport` / `exportItems` 在 `export.test.js` 逐条对表 |
+| 5 | 空对话 | 服务端 ⇒ 空串（`export.test.js`）；客户端 ⇒ 那句实话且**没有框/按钮**（`test/widget/export_test.dart`） |
+| 6 | 可访问性（**从真入口进**） | `test/widget/accessibility_test.dart`：五档不溢出 + 命中区 ≥44，都从顶栏那个入口点进去，并有"那段字真的画出来了"的负向对照 |
+

@@ -17,6 +17,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/conn_state.dart';
+import '../models/export_words.dart';
 import '../models/scroll_follow.dart';
 import '../models/timeline.dart';
 import '../models/trash_words.dart';
@@ -30,6 +31,7 @@ import '../widgets/process_level_menu.dart';
 import '../widgets/process_view.dart';
 import '../widgets/trash_plan_sheet.dart';
 import 'about_screen.dart';
+import 'export_screen.dart';
 import 'trash_screen.dart';
 
 /// "下面那一整块"的名字（状态条 + 内容 + 输入框）。
@@ -122,6 +124,16 @@ class _ChatScreenState extends State<ChatScreen> {
               MaterialPageRoute<void>(builder: (_) => TrashScreen(controller: c)),
             ),
             icon: const Icon(Icons.delete_outline),
+          ),
+          // ⚠️ **导出**（契约 `30-EXPORT.md` §四：和删除入口**对称** ——
+          //    能删掉，就能拿走）。位置**等主人看过再定，不属于契约**，
+          //    所以这一批只保证"有一个能进去的入口"。
+          IconButton(
+            tooltip: exportTooltip,
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => ExportScreen(controller: c)),
+            ),
+            icon: const Icon(Icons.copy_all_outlined),
           ),
           // ⚠️ **过程四档的入口**（契约 §五：位置等主人看过再定，
           //    所以这一批只做"能切"）。换档要重连（`level` 是连接级的）。
