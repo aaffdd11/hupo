@@ -454,8 +454,11 @@ class Timeline {
 
   /// `reasoning/delta`（第 ④ 档「推理原文」）。
   ///
-  /// ⚠️ **只在内存里拼**：契约 §二 说它一个字节都不许落盘——
-  ///    它可能含系统提示词片段，那是产品的核心资产（D7.4）。
+  /// ⚠️ **只在内存里拼**，而且是拼在**那一轮的气泡上**：契约 §二 说它一个
+  ///    字节都不许落盘（它可能含我们这边的原话，D7.4），但"不落盘"**不等于**
+  ///    "答案一到就删"——主人回头要看的就是它当时怎么想的。
+  ///    真正的边界是：**进不了任何存储**，以及 `reset()` 时**必须没**
+  ///    （重放 / 退出登录之后它不该存在于任何地方）。
   void _applyReasoning(Map<String, dynamic> event) {
     final turn = event['turn'];
     final text = event['text'];
@@ -463,7 +466,13 @@ class Timeline {
     if (_isLate(turn)) return;
     _openTurn(turn);
     _agentDead = false;
-    _reasoning += text;
+    final m = _openAssistant;
+    if (m != null) {
+      m.reasoning += text;
+    } else {
+      // 气泡还没开（推理先于正文到）⇒ 先存着，`message/start` 会把它挂上去。
+      _pendingReasoning += text;
+    }
   }
 
   /// 这一号是不是"迟到的旧轮"（比见过的旧，或者已经收口了）。
@@ -472,24 +481,28 @@ class Timeline {
   ///    "收口之后又飘回来的那几帧"——后者正是 H4 说的"永久停在正在做"的根。
   bool _isLate(int turn) => turn < _seenTurn || turn <= _closedThrough;
 
-  /// 新的一轮开始了（比见过的都新）⇒ 上一轮的过程不作数了。
+  /// 新的一轮开始了（比见过的都新）⇒ 上一轮的**步骤**不作数了。
+  ///
+  /// ⚠️ **只清步骤和"还没挂上去的那段推理"**，**不清气泡上的推理**——
+  ///    那是上一轮的内容，主人回头还要看。
   void _openTurn(int turn) {
     if (turn <= _seenTurn) return;
     _seenTurn = turn;
-    // 上一轮的步骤 / 思考本来也活不过收口；这里再清一次是为了
-    // "收口帧丢了、但下一轮已经开了"那种组合也不会把旧东西留下。
     _steps.clear();
-    _reasoning = '';
+    _pendingReasoning = '';
   }
 
-  /// 轮收口 ⇒ **清掉这一轮的过程**（契约 §三）。
+  /// 轮收口 ⇒ **清掉这一轮的步骤**（契约 §三：不许留成"永远在查资料"）。
+  ///
+  /// ⚠️ **推理原文不在清理之列**——它挂在气泡上，是内容不是过程噪音。
+  ///    `reset()` 才是它的终点（重放 / 退出登录）。
   ///
   /// ⚠️ 收口事件里没有 `turn`（见 `_closedThrough`），所以只能按
   ///    "见到的最大轮号"收。现实中轮是串行的（一次只有一轮在跑），
   ///    这个近似就是准的。
   void _closeTurn() {
     _steps.clear();
-    _reasoning = '';
+    _pendingReasoning = '';
     if (_seenTurn > _closedThrough) _closedThrough = _seenTurn;
   }
 
@@ -524,9 +537,13 @@ class Timeline {
     // 号也从头来（服务端会重发一轮轮的帧）
     _seenTurn = 0;
     _closedThrough = 0;
-    // 过程（步骤 / 思考）也是瞬态，跟着一起清
+    // 过程（步骤 + 还没挂上去的那段推理）跟着一起清
     _steps.clear();
-    _reasoning = '';
+    _pendingReasoning = '';
+    // ⚠️ 推理原文的**终点就在这儿**：重放（服务端说号不对了）与退出登录
+    //    都走 `reset()`，而它本来就不该存在于任何地方（契约 §二）。
+    //    气泡本身已经被上面清掉了（只留用户自己没确认的那几句），
+    //    所以挂在气泡上的推理随之消失——**不需要另立一份"要清的东西"清单**。
     // 本地那条的号要重新借（现在最大号是 0）
     for (var i = 0; i < _items.length; i += 1) {
       final u = _items[i] as UserUtterance;

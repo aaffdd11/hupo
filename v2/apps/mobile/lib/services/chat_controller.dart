@@ -106,13 +106,22 @@ class ChatController extends ChangeNotifier {
           ? timeline.steps
           : const [];
 
-  /// 第 ④ 档要画的思考原文（其余档位返回空）。
-  String get reasoning =>
-      _level == ProcessLevel.reasoning ? timeline.reasoning : '';
+  /// 第 ④ 档要看的思考原文 —— **挂在它那条气泡上**（`AssistantMessage.reasoning`）。
+  ///
+  /// ⚠️ 只**不显示**，不删：换出第 ④ 档之后它还在内存里，
+  ///    换回来还看得见（那是"回头看它当时怎么想的"这条路）。
+  ///    真正让它消失的是 `Timeline.reset()`（重放 / 退出登录）。
+  ///
+  /// ⚠️ 闸必须打在这一层（和 [agentLine] 同一条理由）：界面是哑的，
+  ///    而"现在是不是第 ④ 档"只有这里有。
+  String reasoningOf(AssistantMessage m) =>
+      _level == ProcessLevel.reasoning ? m.reasoning : '';
 
   /// 屏幕上有没有**过程**可画（决定列表尾巴那一条要不要占位置）。
-  bool get hasProcess =>
-      agentLine != null || steps.isNotEmpty || reasoning.isNotEmpty;
+  ///
+  /// ⚠️ **推理原文不算在内**：它挂在气泡上、由 `_render` 那条路画，
+  ///    不在尾巴上（批 3 改过一次，见 `AssistantMessage.reasoning`）。
+  bool get hasProcess => agentLine != null || steps.isNotEmpty;
 
   /// 登录后启动：**先画本地一屏**（连用户自己打了一半的话一起），再连流。
   ///
