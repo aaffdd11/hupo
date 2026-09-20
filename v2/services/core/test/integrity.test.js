@@ -359,3 +359,32 @@ test('🔴 `profiles/` 只认"就是那条指令"的那两个文件（安装产�
     f.cleanup();
   }
 });
+
+test('🔴 受保护目录里的东西**不许被静默跳过**（哪怕它叫 sessions）', () => {
+  // ⚠️ 这是一次实测踩坑的回归条：`ALWAYS_SKIP` 里曾经有 `sessions` 这个名字，
+  //    于是 `~/.dsh/storages/session_projcache/sessions/*.json`（1.7M）
+  //    被整层静默跳过 —— 那一条在清单里"看着有"，其实只算到 1 个文件。
+  const f = fixture();
+  try {
+    f.w('storages/session_projcache/sessions/a.json', '{"a":1}\n');
+    f.w('storages/session_projcache/sessions/b.json', '{"b":2}\n');
+    const list = protectedPaths({ repo: f.repo, home: f.home });
+    // 直接对一个"受保护的目录"验遍历（用一个只认 json 的目录条目）
+    const under = filesUnder({ path: nodePath.join(f.home, '.dsh/storages'), kind: 'dir' });
+    const rel = under.map((x) => nodePath.relative(f.home, x));
+    assert.ok(
+      rel.some((r) => r.endsWith('sessions/a.json')) && rel.some((r) => r.endsWith('sessions/b.json')),
+      `嵌套 sessions/ 下的文件被跳过了：${JSON.stringify(rel)}`,
+    );
+    // 而依赖目录仍然要跳过（那是真该跳的）
+    f.w('storages/node_modules/x/y.json', '{}\n');
+    const under2 = filesUnder({ path: nodePath.join(f.home, '.dsh/storages'), kind: 'dir' });
+    assert.ok(
+      !under2.some((x) => x.includes('node_modules')),
+      'node_modules 该跳',
+    );
+    assert.ok(list.length > 0);
+  } finally {
+    f.cleanup();
+  }
+});

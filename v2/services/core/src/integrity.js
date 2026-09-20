@@ -34,8 +34,18 @@ export const BASELINE_PATH = '/etc/hupo/integrity.json';
 
 export const BASELINE_VERSION = 1;
 
-/** 目录递归时永远不看的东西（依赖、运行时数据、版本库）。 */
-const ALWAYS_SKIP = new Set(['node_modules', '.git', 'sessions', '.cache']);
+/**
+ * 目录递归时永远不看的**目录名**（依赖、版本库、缓存）。
+ *
+ * ⚠️ **别把 `sessions` 这类名字加进来**：那是按名字整层跳过，
+ *    而同一个名字在不同地方可以是完全不同的东西——
+ *    `~/.dsh/sessions/`（40M 运行时流水，本来就不在清单里）
+ *    vs `~/.dsh/storages/session_projcache/sessions/*.json`（**在**清单里，1.7M）。
+ *    2026-09-21 实测踩到：加了这个名字之后，`storages` 那一条**只算到 1 个文件**，
+ *    其余全被静默跳过 —— 也就是"看起来在查、其实没查"。
+ *    ⇒ 想排除某个具体路径，就**别把它放进 `protectedPaths()`**，不要按名字连坐。
+ */
+const ALWAYS_SKIP = new Set(['node_modules', '.git', '.cache']);
 
 /**
  * 清单该覆盖哪些路径。
@@ -89,7 +99,16 @@ export function protectedPaths({ repo, home = nodeOs.homedir() }) {
     { path: p('docs/handbook'), kind: 'dir', mode: 'strict', why: '手册就是判据：能随手改判据，任何闸都白设' },
     // 本来就该变的安全数据：只报不拦
     { path: p('v2/services/core/data/auth.json'), mode: 'report', why: '口令与撤销表（主人换口令是正常动作，不该因此起不来，但要知道它动过）' },
-    { path: d('storages'), kind: 'dir', mode: 'report', why: '运行时数据，不是指令；被动过要看得见' },
+    // ⚠️ `~/.dsh/storages/**` **故意不在清单里**（这是一个取舍，写下来免得下一个人以为是漏了）：
+    //    · 它是**运行时数据**（会话缓存），agent 每一轮都在写它
+    //    ⇒ 放进清单只会有两种结果：
+    //      ① strict —— 每轮之后开机都"对不上" ⇒ 服务天天拒绝启动（荒谬）
+    //      ② report —— 每次开机都报一句"它动过" ⇒ **每次都响的报警等于没有报警**，
+    //         而且会把主人的注意力训练成"忽略这一栏"
+    //    ⇒ 取舍：**不进清单**。代价是"有人往 KV 里塞东西"这条路**没有被覆盖**——
+    //      真要覆盖它得看**内容**而不是**摘要**（那是另一件事，记在
+    //      `docs/dev/00-PROGRESS.md` §六 第 23 条）。
+    //    依据：决策 **C1**（"KV 是运行时数据不是源码 ⇒ 判据改成'清单里没有可写路径'"）。
   ];
 }
 

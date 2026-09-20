@@ -23,6 +23,7 @@ import {
   BASELINE_PATH,
   buildBaseline,
   checkAgainstDisk,
+  filesUnder,
   protectedPaths,
   writeBaselineFile,
 } from '../v2/services/core/src/integrity.js';
@@ -43,6 +44,7 @@ if (has('--help') || has('-h')) {
     [
       '用法：',
       '  node scripts/verify-integrity.mjs                    # 核对，对不上退出码 2',
+      '  node scripts/verify-integrity.mjs --list             # **不用 root**：先看要钉住哪些东西',
       '  sudo node scripts/verify-integrity.mjs --build       # 重建清单（写 /etc/hupo/integrity.json）',
       '',
       '可选（只给这个工具用，服务本体不认）：',
@@ -53,6 +55,23 @@ if (has('--help') || has('-h')) {
 }
 
 const list = protectedPaths({ repo, ...(home ? { home } : {}) });
+
+if (has('--list')) {
+  // ⚠️ 这是给主人"**看一眼再签**"用的（P2 甲的安全性 = 主人真的看一眼）：
+  //    不用 root、不写任何东西，只把"按下 --build 之后会被钉住的东西"列出来。
+  let files = 0;
+  for (const e of list) {
+    const under = e.kind === 'dir' ? filesUnder(e) : [e.path];
+    files += under.length;
+    console.log(`[${e.mode === 'strict' ? '拦' : '报'}] ${e.path}  （${under.length} 个文件）`);
+    console.log(`      ${e.why}`);
+  }
+  console.log(`\n合计 ${list.length} 条、${files} 个文件。`);
+  console.log('拦 = 对不上就**拒绝启动**；报 = 只记一笔，服务照起。');
+  console.log('看清楚了再建：sudo node scripts/verify-integrity.mjs --build');
+  nodeProcess.exit(0);
+}
+
 
 if (has('--build')) {
   // ⚠️ 拒绝非 root：清单**必须** root 所有（`root:root 0444`），
