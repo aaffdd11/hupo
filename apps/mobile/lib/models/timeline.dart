@@ -110,7 +110,7 @@ class DispatcherMessage extends TimelineItem {
   String get deepText => _deep.toString();
 
   /// 用户看到的完整文本：快答在前，深答接上，**中间不加连接词**。
-  /// 承接由服务端生成（见 ARCHITECTURE-seamless.md §2）。
+  /// 承接由服务端生成（见 docs/handbook/08-SPEC.md §1.2「两块回答必须是一个人说的」）。
   String get displayText {
     final q = _quick.toString();
     final d = _deep.toString();

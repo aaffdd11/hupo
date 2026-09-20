@@ -21,7 +21,7 @@
 | **[`05-DECISIONS.md`](05-DECISIONS.md)** | **已经拍板了什么**——76 条决策，带最强理由与连带动作 | 想知道"为什么不能那样做"的人 |
 | **[`06-OPERATIONS.md`](06-OPERATIONS.md)** | **怎么跑起来、怎么保证不出事**——部署、容器、完整性、备份、供给上限 | 运维与安全 |
 | **[`07-APPENDIX.md`](07-APPENDIX.md)** | **现状有哪些坑、术语怎么统一、评审经历过什么** | 查证据的人 |
-| **[`08-SPEC.md`](08-SPEC.md)** | **顺手要用的规范**——继承的不变量 N1–N11、接口表、spawn 契约、安全模型、成本与告警、iOS 与 Web 构建 | 写代码 / 部署的人 |
+| **[`08-SPEC.md`](08-SPEC.md)** | **规范与判据**（15 节）——不变量 N1–N11 · 接口表 · 数据存储 · 安全模型 · 成本与告警 · **浮窗铁律** · iOS/Web 构建 · 部署单元 · **阈值总表** · **运行机制（崩溃守护/回退/备份/审计/保留期）** · **L3 契约（工具矩阵/记忆闸门/人格）** · **容器与上线验收** · **小程序沙箱与制品** · **L2 实现约束** | 写代码 / 部署 / 验收的人 |
 
 ---
 
@@ -98,10 +98,48 @@
 > git show <commit>:docs/ux/06-retiree.md # 例：那位不会拼音的用户的原话
 > ```
 
-| 想找什么（**先确认手册里真没有**） | 在历史里的路径 |
+### 6.1 先说结论：**这些东西已经在手册里了，不用去翻历史**
+
+| 想找什么 | 手册出处 |
 |---|---|
-| 不变量 N1–N11、接口表、安全模型 | ✅ **已在手册**：`08-SPEC.md` |
-| iOS 构建、Web 部署、`hupo.chat` 的备案坑 | ✅ **已在手册**：`08-SPEC.md` §七 |
+| 不变量 N1–N11 | `08-SPEC.md` §一 |
+| 接口表 / spawn 契约 / 模块清单 | `08-SPEC.md` §二 |
+| 数据与存储总表 | `08-SPEC.md` §三 |
+| 安全模型（来源分级 × 两档能力） | `08-SPEC.md` §四 |
+| 成本三级 / trace / 告警 | `08-SPEC.md` §五 |
+| **浮窗铁律**（Z1–Z3、手势、无障碍） | `08-SPEC.md` §六 |
+| **阈值与数字总表**（含覆盖退让那组） | `08-SPEC.md` §十 |
+| **崩溃守护 / 回退锚点 / 备份 / 审计 / 保留期** | `08-SPEC.md` §十一 |
+| **L3 role patch / 工具能力矩阵 / 记忆五道写闸门 / 人格 9 条** | `08-SPEC.md` §十二 |
+| **容器与上线的可执行验收**（V1–V12） | `08-SPEC.md` §十三 |
+| **小程序沙箱与制品管线**（本轮不建，但是 N1/N2 的前提） | `08-SPEC.md` §十四 |
+| **L2 实现约束**（启动十步 / 准入 / 熔断 / 鉴权九条） | `08-SPEC.md` §十五 |
+| **备份完整策略 / 审计 schema / 保留期** | `08-SPEC.md` §11.5–11.8 |
+| v6 代仍有效的规范（含**三起"页面在说假话"事故**） | `08-SPEC.md` §1.2 |
+| iOS 构建 / Web 部署 / `hupo.chat` 的备案坑 | `08-SPEC.md` §八 |
+
+### 6.2 确实只在历史里的（**按主题查这张表**）
+
+> ⚠️ **"可逆"不等于"可发现"**——快照在，但如果你不知道文件名，就等于没有。
+> **下面这张表就是"主题 → 路径"的对照**，按你在找的东西查。
+
+| 你在找什么 | 历史路径（配 `git show f93f296:<path>`） |
+|---|---|
+| **十个用户的逐字原话**（手册只留了约 30 句） | `docs/ux/01-owner.md` … `10-tablet.md`（**共 3167 行**） |
+| 那批走查怎么合成结论的 | `docs/ux/SYNTHESIS.md`、`docs/ux/SOLUTIONS.md`（含**六件待拍板**） |
+| **76 条决策的完整辩论**（席位立场、备选方案、乙/丙代价） | `docs/pm-panel/R2-01…03-*.md`、`R2-SYNTHESIS.md`、`R2-DECISIONS.md` |
+| **被否决的方案全集**（手册 §三 只列了 13 条，原文有约 40 类） | 同上 + `docs/pm-panel/DECISIONS.md` |
+| 协议 v1 的完整条文 R1–R14 | ✅ **不用翻历史**：`packages/protocol/PROTOCOL.md` 还在 |
+| **实测事实 M1–M9 的原始出处**（含 API 签名、错误码、三条仍待验） | `docs/design/R2-verification.md` |
+| **两轮评审的完整发现** | `docs/design/R2-plan-review.md`、`R2-ENGINEERING-review.md` |
+| v5 代那三份单人评审（**含 13 条实测环境事实、上线门禁清单**） | `REVIEW-eng.md`、`REVIEW-pm.md`、`REVIEW-appdev.md` |
+| 单用户那一代的子架构（机制与阈值总表） | `docs/design/L1-terminal.md`、`L2-dispatcher.md`、`L3-worker.md` |
+| **那几张总表**（跨模块接口"不许传什么"、谁写谁读、状态机、事件目录） | `docs/design/README.md` §二/§三/§四/§六 |
+| v6 代的对辩（级联 / 说话人 / 停流 / 交付形态） | `ARCHITECTURE-v6.md`、`DEBATE-*.md`(6)、`DISCUSS-*.md`(3) |
+| 旧的总架构 | `ARCHITECTURE-v7.md`（及其前身 `-v2…-v6`） |
+| 三份专文（无缝衔接 / 说话人 / 交付面） | `ARCHITECTURE-seamless.md`、`-speaker.md`、`-delivery.md` |
+| 旧的设计稿与架构图 | `docs/UI-terminal-floating-chat.md`、`docs/diagrams*.html`、`docs/img/*.svg` |
+| v1 原型代码（Reflex / Cortex / Handoff） | `src/`、`test/`、`package.json` |
 | 十个用户走查的**逐字原文** | `docs/ux/01-owner.md` … `10-tablet.md` |
 | 76 条决策的**完整辩论过程** | `docs/pm-panel/R2-SYNTHESIS.md`、`R2-0{1,2,3}-*.md` |
 | 两轮评审的**完整发现** | `docs/design/R2-plan-review.md`、`R2-ENGINEERING-review.md` |
