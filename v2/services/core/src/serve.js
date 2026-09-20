@@ -27,6 +27,7 @@ import { loadConfig, preflight } from './config.js';
 import { integrityReport } from './integrity.js';
 import { describeAdmission, readAdmission } from './admission.js';
 import { applyPrune, groupSlugFor, planPrune, scanEntries, summarize } from './prune.js';
+import { createTurnStatus, statusPath } from './turn-status.js';
 import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
 
 
@@ -136,6 +137,21 @@ installProcessGuard({ timeline });
 
 const webRoot = nodeFs.existsSync(nodePath.join(cfg.webRoot, 'index.html')) ? cfg.webRoot : null;
 
+// ★ **"手上还有没有没说完的话"** —— 写一个每秒刷新的小文件（`data/status.json`）。
+//   为什么：重启（部署、改配置）**不该把正在说的那一轮切掉**（手册 `06-OPERATIONS.md` §8.3）。
+//   `scripts/restart-core.sh` 默认会等它变成"不忙"再动手。
+//   ⚠️ 它**只是旁路信息**：写不进去也不许影响服务（`createTurnStatus` 自己吞掉异常）。
+const turnStatus = createTurnStatus({
+  file: statusPath(cfg.dataDir),
+  snapshot: () => ({
+    openMessageId: timeline.openMessageId,
+    pending: dispatcher?.pendingDeliveries ?? 0,
+    // ⚠️ "轮已经宣布、但一个字都还没说"那一段也得算忙（实测有 3 秒以上）
+    turns: dispatcher?.armedDeadlines ?? 0,
+  }),
+});
+turnStatus.start();
+
 const { listen, close } = createServer({
   timeline, store, auth, say, dispatcher, webRoot, buildId: cfg.buildId,
   log: (m) => console.log(m),
@@ -236,6 +252,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     await dispatcher.shutdown();
     await runtime.shutdown();
     await close();
+    turnStatus.stop();
     // ★ 留下"这次是好好走的"标记 ⇒ 下次开机才知道上一次是不是被硬杀的
     markCleanExit(cfg.dataDir);
     process.exit(0);

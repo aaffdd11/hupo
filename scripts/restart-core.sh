@@ -4,7 +4,13 @@
 # 用法：
 #   scripts/restart-core.sh               # 重启，**日志留着**（跨重启接记忆靠它）
 #   scripts/restart-core.sh --fresh       # 重启并清空日志（从"我们刚认识"开始）
+#   scripts/restart-core.sh --now         # 不等它说完，立刻重启（**会切掉正在说的那一轮**）
 #   HUPO_BUILD_ID=xxx scripts/restart-core.sh
+#
+# ★ **默认等它把手上的话说完**（手册 `06-OPERATIONS.md` §8.3）：
+#   直接重启会把正在说话的那一轮连同回答一起杀掉，用户看到话说一半没了。
+#   服务每秒把"手上还有没有没说完的话"写进 `data/status.json`（`src/turn-status.js`），
+#   这里就等那个文件变成"不忙"再动手。
 #
 # ── 两条纪律，都是踩出来的 ────────────────────────────────────
 #
@@ -22,7 +28,65 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../v2/services/core" && pwd)"
 cd "$DIR" || exit 1
 
 FRESH=0
-[ "${1:-}" = "--fresh" ] && FRESH=1
+NOW=0
+for arg in "$@"; do
+  case "$arg" in
+    --fresh) FRESH=1 ;;
+    --now) NOW=1 ;;
+    -h|--help)
+      # ⚠️ 不用 `sed "$0"`：这时已经 `cd` 进服务目录了，`$0` 是相对路径、读不到。
+      cat <<'USAGE'
+用法：
+  scripts/restart-core.sh           重启，**日志留着**（跨重启接记忆靠它）
+  scripts/restart-core.sh --fresh   重启并清空日志（从"我们刚认识"开始）
+  scripts/restart-core.sh --now     不等它说完，立刻重启（**会切掉正在说的那一轮**）
+  HUPO_BUILD_ID=xxx scripts/restart-core.sh
+
+默认会先等它把手上的话说完（服务每秒钟把这件事写进 data/status.json）。
+等太久（上限见脚本里的 MAX_WAIT_SEC）就照样重启，并把这件事说出来。
+USAGE
+      exit 0
+      ;;
+    *) echo "✗ 不认识的选项：$arg" >&2; exit 2 ;;
+  esac
+done
+
+# 等它说完的两个量：**轮询间隔**与**最长等多久**。
+# ⚠️ 为什么有上限：**等一个已经死掉的服务 = 重启脚本永远卡住**，那比切一轮话更坏。
+#    上限到了就照常重启，并把这件事**说出来**。
+POLL_SEC=2
+MAX_WAIT_SEC=180
+
+# ── 0.5) **先等它把手上的话说完**（默认；`--now` 跳过）────────
+STATUS="$DIR/data/status.json"
+if [ "$NOW" = "1" ]; then
+  echo "▶ --now：不等了（**正在说的那一轮会被切掉**）"
+elif [ ! -f "$STATUS" ]; then
+  echo "▶ 没有 $STATUS（服务没在写状态？）——不等，直接重启"
+else
+  waited=0
+  while [ "$waited" -lt "$MAX_WAIT_SEC" ]; do
+    grep -q '"busy"[[:space:]]*:[[:space:]]*true' "$STATUS" 2>/dev/null || break
+    # ⚠️ 还要看这行状态是不是**陈的**：服务已经死了的话没人再更新它，
+    #    拿一句旧话永远等下去 = 脚本卡死。
+    UPD="$(sed -n 's/.*"updatedAt"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$STATUS" 2>/dev/null | head -1)"
+    NOWMS="$(date +%s%3N)"
+    if [ -n "$UPD" ] && [ "$((NOWMS - UPD))" -gt 5000 ]; then
+      echo "▶ 状态已经 $(( (NOWMS - UPD) / 1000 )) 秒没更新（服务可能已经不在了）——不等了"
+      break
+    fi
+    [ "$waited" = "0" ] && echo "▶ 它手上还有话，等它说完（最多 ${MAX_WAIT_SEC} 秒）…"
+    sleep "$POLL_SEC"
+    waited=$((waited + POLL_SEC))
+  done
+  if [ "$waited" -gt 0 ]; then
+    if [ "$waited" -ge "$MAX_WAIT_SEC" ]; then
+      echo "⚠️ 等了 ${waited} 秒还没说完 ⇒ **照样重启**（等一个卡住的服务更坏）"
+    else
+      echo "✓ 它说完了（等了 ${waited} 秒）"
+    fi
+  fi
+fi
 
 # ── 1) 停 ────────────────────────────────────────────────────
 if [ -f serve.pid ]; then
