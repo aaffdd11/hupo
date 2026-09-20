@@ -1,4 +1,20 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- ⚠️ 这一行**必须在 main 里**，不能只靠 src/debug 与 src/profile 那两个 manifest。
+
+         Flutter 模板只在后两者里声明 INTERNET（那是给 hot reload 用的），
+         所以 **release 构建出来的包没有联网权限** —— 装到手机上会停在登录页，
+         每个请求都失败，**而且不会有任何提示说是权限问题**。
+         这个应用的全部功能都走网络（HTTPS + WSS 到调度器），所以它是必需项。
+
+         ⚠️ **这个坑在本仓库里踩过两次**：
+           第一次是旧 app（commit 3084b37 修好，还在那边留了同样的注释），
+           第二次是 v2 全新重建时——因为"新写一遍"不会自动继承**教训**。
+         ⇒ 所以现在有 `test/unit/android_manifest_test.dart` 守着它：
+           **光靠注释挡不住第三次。**
+
+         ⚠️ 改这段注释时注意：XML 注释里不能出现连续两个减号，否则整个 manifest 解析失败。 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
     <application
         android:label="hupo_app"
         android:name="${applicationName}"
