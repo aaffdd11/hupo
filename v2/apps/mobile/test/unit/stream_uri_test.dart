@@ -78,7 +78,8 @@ void main() {
       // 安卓上 `Uri.base` 是 `file:///data/user/0/…`：**没有 host**。
       // 而 `chat_controller` 现在写死 `base: ''` ⇒ 安卓那边**无处可知服务器在哪**。
       // ⇒ 这一条不是"行为契约"，是**一块路牌**：安卓那一批必须先自己把 base 传进来
-      //    （`05-AGENTS.md` 的部署地址），否则屏幕上会是"网断了"而其实什么都没发出去。
+      //    （那个地址从哪儿来、怎么存，是安卓那一批要定的事，现在没有），
+      //    否则屏幕上会是"网断了"而其实什么都没发出去。
       final u = streamUri(base: '', page: page('file:///data/user/0/cn.hupo/files'), sinceSeq: 0);
       expect(u.host, isEmpty, reason: '非 web 上没有来源——要么传 base，要么这条路走不通');
     });
