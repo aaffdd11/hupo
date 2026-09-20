@@ -63,7 +63,7 @@
 | **B3** | 发送失败与成功**视觉完全一致**（失败时连小转圈都消失） | **界面把"发不出去"显示成"发出去了"**（09：第二次直接卸） |
 | **B5** | `_open()` 每次把 `_attempt` 归零（`:165`） | 退避**恒为 2 秒**，`maxReconnectDelay: 8s` 永不生效 |
 | **B6** | `timeline` 只在内存 | 刷新/杀进程后**屏幕全空** |
-| **B2** | `chat_controller.dart:424` 注释承诺"界面提供重试" | **那个重试不存在** |
+| **B2** | `chat_controller.dart:420` 注释承诺"界面提供重试"（⚠️ 二轮评审曾把行号写成 424，**实测是 420**） | **那个重试不存在** |
 | **★ 退会话打死全站** | `conversation_list_screen.dart:88` → `chat_controller.dart:442` → `websocket_transport.dart:306-308` **关掉共享 transport 的 `_events`**（`_disposed` 后 `_open():155` 永不重连） | **退出「会话」里任意一个会话，主屏从此收不到任何消息，且不自恢复** |
 | **无上限** | `server.js:99` 每条 WS 连上都 `warm()`；`conversationId` 来自 URL 且无上限 | **`?conv=N` 就是 N×195MB** |
 | **无淘汰** | `agentMaxProcesses` **全库不存在**；TTL 是 **30 分钟** | 1G 机只顶 **4 个** |
@@ -71,7 +71,7 @@
 | **不落盘前就推** | `store.append` **静默吞异常**（`store.js:22-28`） | 重启后 **seq 号回退** ⇒ 丢消息（唯一会**永久丢数据**的根） |
 | **★ 收口失效** | `dispatcher.js:617` 以 `info.writer.messageId` 存 `this.turns`，而 `#escalate(:700)` **换掉了 writer** ⇒ `:604/:611` 守卫**永不匹配**、`:623/:759` delete 落空 | **升格过的轮次，180s 硬收口彻底失效** ⇒ N19 与 D7 超时收敛同时落空 |
 | **★ 序号有空洞** | `conversation.js:72` 的 `emitTransient` **也发号**（`server.js:138` 的 `client/reload` 就走它），但**不落盘** | **N22"磁盘上不得出现空洞"今天就假** |
-| **状态没人看** | `message/status` 推了，但 working/thinking/handoff **全库没有 UI 读** | D7 没有现成出口；"在处理"可能永久挂着 |
+| **状态挂不上** | ⚠️ **归因曾写错**：不是"没有 UI 读"——`answer_bubble.dart:27/52/176-181` 有一个 `_StatusLine`，**四态都渲染**。真断链是 `dispatcher.js:567` 发 **`messageId: ''`** ⇒ `chat_controller.dart:378 _messageOf('')` 恒 null ⇒ `message.status` 永远 null | **四态提示根本显示不出来** ⇒ D7 没有现成出口——**必须先把取号（S2）修好** |
 | **假承诺** | "正在听…"（那是"它不出声"，不是听你） | 06 对着手机说话，然后以为是自己笨 |
 | **写死尺寸** | `_collapsedH = 124`、图标名 `11`、`_columns = 4` | 字号 ≥**1.75 必崩**（周慎实测：1.75 溢 0.5px、3.1 溢 33px） |
 
@@ -151,11 +151,11 @@
 | **S3** | **R1 全部** | `chat_controller.dart`（四态 `queued/sent/confirmed/failed` + `resend` + 200ms 应声定时器）、`chat_screen.dart:746-793`（`_UserBubble` 四态可视 + 失败行 + **收起态也显示**） | **8/10 的放弃点压在这**，且**零依赖** |
 | **S3'** | ⚠️ R1.2 的应声**必须先判 `connected`** | `chat_controller.dart` | 否则无网时先出"在处理"、2 秒后出"失败"——**正是 09 最恨的形态**（评审 G3） |
 | **S3''** | ⚠️ 本地应声**挂谁的 id** 要定死 | `chat_controller.dart` + `dispatcher.js` | 不然应声**永久孤儿**（评审 G4） |
-| **S4** | **失败必须可见** | `websocket_transport.dart:112-115`、`chat_controller.dart:424`、`chat_screen.dart:778` | 09 的"看着像发出去了" |
+| **S4** | **失败必须可见** | `websocket_transport.dart:112-115`、`chat_controller.dart:420`、`chat_screen.dart:778` | 09 的"看着像发出去了" |
 | **S5a** | **B1 真根：WS 401 / 握手失败** | ⚠️ **落点更正**：401 判定在 HTTP `authStatus()`（`websocket_transport.dart:105/:110`）；握手失败走 `:170`（**空 catch**）与 `:175` | 评审 E1 + 二轮评审双改正 |
 | **S5b** | **B5 退避** | `websocket_transport.dart:165`（删 `_attempt = 0`，改握手成功后归零） | 恒 2s → 2/4/6/8/8s |
 | **S5c** | **B6 先画本地一屏** | 新增 `services/timeline_store.dart`；`connect()` 前 `restore()` | 冷启动不再空屏 |
-| **S6** | **D4 三件**（**主人明说"先用平板"**） | `answer_bubble.dart:32`（**现在 560，不是 760**）、`chat_screen.dart:143-147`（删助手消息触发的 `_maximize()`）、`chat_screen.dart:343-355`（甩判据改多条件）；⚠️ **"宽 >900 两栏"移到批 2**（与 R5 一起，它属布局不属最小集） | 平板是**主开发设备** |
+| **S6** | **D4 三件**（**主人明说"先用平板"**） | `answer_bubble.dart:32`（**现在 560，不是 760**）、`chat_screen.dart:142-146`（删助手消息触发的 `_maximize()`；⚠️ `:145` 是 `_maximize()` 那句，**二轮评审把行号写成 143-147 是错的**）、`chat_screen.dart:343-355`（甩判据改多条件）；⚠️ **"宽 >900 两栏"移到批 2**（与 R5 一起，它属布局不属最小集） | 平板是**主开发设备** |
 | **S7** ★ | **`turns` 的键改用 `info.turn`**（二轮评审"必炸第 2 条"，**今天就在咬人**；修法经复核后简化） | `dispatcher.js:604/611/617/623/759`（**五处**都用 `info.writer.messageId`） | 不修 ⇒ **升格过的轮次收口永久失效**，S3 的四态也守不住 |
 | **S8** ★ | **瞬态不发号**（N22） | `conversation.js:72`（`emitTransient` 不再 `++seq`）+ `server.js:138`（`client/reload` 去号） | 修前 N22 是假话（磁盘有空洞） |
 | **S9** ★ | **`store.append` 上抛后"谁接"** | `store.js` + `conversation.js` 的 **`emit` 统一包一层** + 进程级 `uncaughtException`（**不逐处 try——18 个 `emit` 调用点会漏**） | 不接住 = **盘满→崩→重启→再崩** |
