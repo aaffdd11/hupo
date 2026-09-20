@@ -34,6 +34,31 @@ const TRUNCATED_LINE = '这条我说太长了，被长度限制截断，剩下�
 const INTERRUPTED_LINE = '这条我没说完就断了。';
 const EMPTY_LINE = '这次我没能给出结论，你再说一次。';
 
+/**
+ * 卡住时补的那两句话（超时硬收口）。
+ *
+ * ⚠️ **必须说清"怎么办"**——手册 N11：拒绝要给人话 + **可重试**，不是静默。
+ * ⚠️ **不许出现内部词**（工具 / 超时 / 服务 / 连接 / 卡死这些都不是人话）。
+ */
+const DEADLINE_EMPTY_LINE = '这件事我卡住了，没能给你答复。你可以再说一次。';
+const DEADLINE_PARTIAL_LINE = '这条我卡住了，后面没说完。你可以让我接着说。';
+/**
+ * 第三种：**用户说了，但那一轮根本没轮到**。
+ *
+ * 实测（`/tmp/probe-queue.mjs`）：一轮还没结束时再发一句，DSH **接受并排队**
+ * （`agent/inbox/spliced {target:"next-turn"}`），等这一轮结束它才变成下一轮。
+ * ⇒ 超时踢掉进程时，**排队那句会跟着一起没**，而用户还在等。
+ *    所以必须**逐条**给它一个交代（N19）。
+ */
+const DEADLINE_QUEUED_LINE = '你刚才那句我没来得及做，就卡住了。再说一次吧。';
+
+/** 给测试用：这三句是**用户能看到的话**，所以文案本身也是验收对象。 */
+export const DEADLINE_LINES = Object.freeze({
+  empty: DEADLINE_EMPTY_LINE,
+  partial: DEADLINE_PARTIAL_LINE,
+  queued: DEADLINE_QUEUED_LINE,
+});
+
 export class TurnTranslator extends EventEmitter {
   #timeline;
   #scopeId;
@@ -186,11 +211,89 @@ export class TurnTranslator extends EventEmitter {
   }
 
   /**
+   * **换了一个 agent 进程** ⇒ 把轮账清空。
+   *
+   * ⚠️ 为什么必须有：**轮号在每个进程里都从 1 重新开始。**
+   *    上一个进程的第 1 轮如果因为什么原因没被收干净（收了尾但漏删、
+   *    或者将来多轮并行），新进程的第 1 轮就会**接到那条陈账上**——
+   *    于是新的一轮被当成旧的那轮，收口收错地方。
+   *    进程换了，轮账就该是空的——这是构造上成立的，不靠"记得清理"。
+   */
+  reset() {
+    this.#turns.clear();
+  }
+
+  /**
+   * **一轮超时**：收掉这一轮，而且**保证留下话**。
+   *
+   * 手册 N19「挂起必有收尾」——不许留下永远"马上说完"的气泡。
+   *
+   * ⚠️ 两种情形**都必须有交代**，第二种最容易漏：
+   *   ① **已经说了一半** ⇒ 补一句"卡住了"、标失败收尾。气泡要收口。
+   *   ② **一句都没说** ⇒ **主动说一句**。
+   *      早先这里（`forceClose`）是"没有 writer 就删掉、什么都不说"——
+   *      于是用户等到天荒地老（手册事故一：那行"还有件事在处理"挂了 **68 分钟**）。
+   *
+   * ⚠️ 收尾理由是 **`timeout`**，不是 `failed`——
+   *    `message/end.reason` 是时间线上"为什么结束"的**记录**（N4 记忆有出处、
+   *    N7 不拿不真实的状态污染记录）。卡住和断线是两件事，记成一样就查不出来了。
+   *    客户端对这一档是安全的：它按 `reason !== 'completed'` 判失败
+   *    （`bubbles.dart:121`），**不认识的新值自然落到"失败"那一档**。
+   *
+   * @param {number} turn
+   * @returns {boolean} 真的收了口才 true；那一轮早已收口（只是慢）⇒ false
+   */
+  turnDeadline(turn) {
+    const rec = this.#turns.get(turn);
+    if (!rec) return false;
+    this.#turns.delete(turn);
+
+    if (rec.writer && !rec.writer.ended) {
+      // ① 说了一半
+      rec.writer.chunk('deep', DEADLINE_PARTIAL_LINE);
+      rec.writer.end('timeout');
+    } else if (!rec.writer) {
+      // ② 一句都没说 —— **不许留白**
+      const w = new MessageWriter({
+        timeline: this.#timeline,
+        agent: 'agent',
+        origin: 'reactive',
+        scopeId: this.#scopeId,
+      });
+      w.chunk('deep', DEADLINE_EMPTY_LINE);
+      w.end('timeout');
+    }
+    this.emit('turn-deadline', { turn });
+    return true;
+  }
+
+  /**
+   * **一条没轮到的话**：用户说了，但那一轮压根没开始。
+   *
+   * 用在超时硬收口上：我们把 agent 卸了，排队里那些话就再也没有下一轮了。
+   * **不许让它们静默消失**——用户看到的会是一个永远等不到回答的气泡。
+   */
+  turnUndelivered({ reason = 'timeout' } = {}) {
+    const w = new MessageWriter({
+      timeline: this.#timeline,
+      agent: 'agent',
+      origin: 'reactive',
+      scopeId: this.#scopeId,
+    });
+    w.chunk('deep', DEADLINE_QUEUED_LINE);
+    w.end(reason);
+    return true;
+  }
+
+  /**
    * 强制收口（超时 / 进程死掉 / 淘汰前）。
    *
    * ⚠️ 这就是"**先收口再卸**"里的那个收口。
    *    不收的话，用户会永远等一条不会来的回答
    *    （手册事故一："还有件事在处理"一直挂着）。
+   *
+   * ⚠️ 它和 `turnDeadline` 的分工：这个是"**它不会答了**"（进程没了/被卸了），
+   *    那个是"**它答不动了**"（超时）。后者要**多说一句为什么**。
    */
   forceClose(reason = 'failed') {
     const turn = this.openTurn;

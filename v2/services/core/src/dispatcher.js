@@ -15,6 +15,14 @@
 import { RECAP_DEFAULTS, buildRecap } from './recap.js';
 import { TurnTranslator } from './session-translate.js';
 
+/**
+ * 单轮硬收口（手册 `08-SPEC.md` §10.2 给的阈值就是它）。
+ *
+ * 为什么需要：agent 卡住就是**永远卡住**——用户等一条不会来的回答。
+ * 手册事故一里那行"还有件事在处理"挂了 **68 分钟**。
+ */
+export const TURN_DEADLINE_MS = 180_000;
+
 export class Dispatcher {
   #timeline;
   #runtime;
@@ -22,13 +30,26 @@ export class Dispatcher {
   #translator;
   #store;
   #recapOptions;
+  #turnDeadlineMs;
   /** 已经挂过监听的那个实例。**永不清空**——见 `#ensureAgent()`。 */
   #wiredAgent = null;
   #lastError = null;
   #recapFedTo = null;
   #lastRecap = null;
+  /** turn → 计时器。一轮一个，所以"后一轮开始把前一轮的计时器顶掉"不会丢东西。 */
+  #deadlines = new Map();
+  /**
+   * **投出去了、还没变成一轮**的那些话（先进先出）。
+   *
+   * 为什么要记：实测一轮没结束时再发一句，DSH 会**排队**
+   * （`agent/inbox/spliced {target:"next-turn"}`）。所以超时踢进程时，
+   * 排队里的话**会跟着一起没**——不逐条收口，用户就永远在等（N19）。
+   *
+   * 一轮开始 = 消费一条投递（今天的轮**全部**由投递引起）。
+   */
+  #delivered = [];
 
-  constructor({ timeline, runtime, scopeId = null, store, recap = {} }) {
+  constructor({ timeline, runtime, scopeId = null, store, recap = {}, turnDeadlineMs = TURN_DEADLINE_MS }) {
     if (!store) {
       // ⚠️ **不许默认没有 recap 就悄悄开工。**
       //    没有 store ⇒ 每次重启的用户体验都是"它失忆了"，
@@ -40,7 +61,16 @@ export class Dispatcher {
     this.#scopeId = scopeId;
     this.#store = store;
     this.#recapOptions = { ...RECAP_DEFAULTS, ...recap };
+    this.#turnDeadlineMs = turnDeadlineMs;
     this.#translator = new TurnTranslator({ timeline, scopeId });
+
+    // 超时硬收口：轮的起讫从翻译层来（它才知道"这一轮开始了没有"）
+    this.#translator.on('turn-start', (turn) => {
+      // 一轮开始 = 消化掉一条投递
+      this.#delivered.shift();
+      this.#armDeadline(turn);
+    });
+    this.#translator.on('turn-end', ({ turn }) => this.#clearDeadline(turn));
   }
 
   get translator() {
@@ -54,6 +84,16 @@ export class Dispatcher {
   /** 上一次喂回去的那段背景（诊断用；`null` = 还没喂过）。 */
   get lastRecap() {
     return this.#lastRecap;
+  }
+
+  /** 现在还没变成轮的那些话（诊断 / 验收用）。 */
+  get pendingDeliveries() {
+    return this.#delivered.length;
+  }
+
+  /** 现在挂着几个超时计时器（诊断用）。 */
+  get armedDeadlines() {
+    return this.#deadlines.size;
   }
 
   /**
@@ -77,6 +117,88 @@ export class Dispatcher {
     return built.text;
   }
 
+  // ── 超时硬收口（N19 挂起必有收尾 + N10 收气泡 ≠ 停 agent）────────
+
+  #armDeadline(turn) {
+    if (!(this.#turnDeadlineMs > 0)) return;
+    this.#clearDeadline(turn);
+    const timer = setTimeout(() => {
+      this.#deadlines.delete(turn);
+      this.#onTurnDeadline(turn);
+    }, this.#turnDeadlineMs);
+    // ⚠️ **不许让这个计时器把进程钉住。** 忘了 `unref` 的话：
+    //    `npm test` 跑完不退出，SIGTERM 收工也要多等半分钟。
+    timer.unref?.();
+    this.#deadlines.set(turn, timer);
+  }
+
+  #clearDeadline(turn) {
+    const t = this.#deadlines.get(turn);
+    if (t) {
+      clearTimeout(t);
+      this.#deadlines.delete(turn);
+    }
+  }
+
+  #clearAllDeadlines() {
+    for (const t of this.#deadlines.values()) clearTimeout(t);
+    this.#deadlines.clear();
+  }
+
+  /**
+   * 一轮到点了还挂着 ⇒ 收口 + **回收**。
+   *
+   * 顺序是死的：
+   *   ① **收气泡**（N19）——包括"一句都没说"那种，**必须有交代**；
+   *   ② **把排队的那些也收掉**——它们再也没有下一轮了（见 `#delivered`）；
+   *   ③ **停 agent**（N10）——只收气泡不算数。
+   *
+   * ⚠️ ③ 只做一半的话有个很阴的后果：卡住的进程 `running` 一直是真的，
+   *    而 LRU 的规矩是"**跑着的不许卸**"⇒ **它永远不会被淘汰**，
+   *    永久占着 4 个位置里的一个。**收气泡 ≠ 停 agent** 这句话就是为它写的。
+   */
+  /**
+   * 把"投出去了、还没变成一轮"的那些话**逐条**收掉。
+   *
+   * 它们不会再有下一轮了（投递它的那个进程要么被踢、要么已经死了），
+   * 不收的话用户看到的是**一个永远等不到回答的气泡**——N19 就是禁这个。
+   */
+  #closeUndelivered(reason) {
+    const n = this.#delivered.length;
+    this.#delivered.length = 0;
+    for (let i = 0; i < n; i += 1) {
+      try {
+        this.#translator.turnUndelivered({ reason });
+      } catch (err) {
+        this.#lastError = `排队那句没收住：${err?.message ?? err}`;
+      }
+    }
+  }
+
+  #onTurnDeadline(turn) {
+    let closed;
+    try {
+      closed = this.#translator.turnDeadline(turn);
+    } catch (err) {
+      this.#lastError = `超时收口失败：${err?.message ?? err}`;
+      return;
+    }
+    // 那一轮早就收口了（只是慢）——不是超时，别乱动
+    if (!closed) return;
+
+    this.#lastError = `第 ${turn} 轮超过 ${this.#turnDeadlineMs}ms 没收口`;
+    console.error(`[dispatcher] ${this.#lastError} —— 收口并卸下 agent`);
+
+    // ② 排队里那些话：agent 一走，它们就再也没有下一轮了
+    this.#closeUndelivered('timeout');
+
+    // ③ 回收资源。下一个实例要重新喂背景（它同样什么都不记得）
+    this.#recapFedTo = null;
+    this.#runtime.stop(this.#timeline.id, { reason: 'turn-deadline' }).catch((err) => {
+      this.#lastError = `卸 agent 失败：${err?.message ?? err}`;
+    });
+  }
+
   /** 取 agent，并在**换了实例**时把它的三类事件接到翻译层上。 */
   /**
    * 取 agent，并在**换了实例**时把它的三类事件接到翻译层上。
@@ -96,6 +218,11 @@ export class Dispatcher {
     const agent = this.#runtime.agent(id);
     if (agent === this.#wiredAgent) return agent;
     this.#wiredAgent = agent;
+
+    // ★ **换了进程 ⇒ 轮账清空。** 轮号在每个进程里都从 1 重新开始；
+    //   不清的话，新进程的第 1 轮会接到上一个进程的陈账上（见 `TurnTranslator.reset()`）。
+    this.#translator.reset();
+    this.#clearAllDeadlines();
 
     agent.on('session-event', (params) => {
       try {
@@ -118,6 +245,9 @@ export class Dispatcher {
       this.#recapFedTo = null;
       // ★ **进程死了必须收口**——不能让用户等一个不会再来的回答
       this.#translator.forceClose('failed');
+      this.#clearAllDeadlines();
+      // 排队里那些话也跟着这个进程一起没了 —— 逐条收口（和超时那条路同一个道理）
+      this.#closeUndelivered('failed');
       this.#lastError = info?.reason ?? 'agent 退出了';
       this.#timeline.emitTransient({
         type: 'error',
@@ -156,9 +286,6 @@ export class Dispatcher {
     const needsRecap = this.#recapFedTo !== agent;
     let blocks = [{ type: 'text', text }];
     if (needsRecap) {
-      // ★ **先记账再投**：并发的两次投递不许各喂一遍背景。
-      //    喂失败（agent 起不来）时下面会把它撤回来，下次补上。
-      this.#recapFedTo = agent;
       try {
         const recap = this.#recapText(messageId);
         if (recap !== '') blocks = [{ type: 'text', text: recap }, ...blocks];
@@ -169,11 +296,24 @@ export class Dispatcher {
       }
     }
 
+    // ★ **先记账再投**。两个原因，都是实测出来的：
+    //   ① 并发的两次投递不许各喂一遍背景；
+    //   ② 帧序上 `turn/start` **可能早于 `prompt()` 返回**
+    //      （实测：`turn/start` 在 +1116ms，`prompt` 的结果在 +1122ms）。
+    //      等返回了才记账的话，那一刻 `turn-start` 已经来过了，
+    //      这一条会被"消费"掉、而队列里少了一条 ⇒ 超时时漏收一句。
+    const ticket = { messageId, at: Date.now() };
+    this.#delivered.push(ticket);
+    if (needsRecap) this.#recapFedTo = agent;
+
     try {
       const r = await agent.prompt(blocks);
       this.#lastError = null;
       return { delivered: true, messageId: r?.messageId, recapped: needsRecap };
     } catch (err) {
+      // 没进去的就从队列里摘掉（摘不掉也只是多收一条，不会漏收）
+      const i = this.#delivered.indexOf(ticket);
+      if (i !== -1) this.#delivered.splice(i, 1);
       if (needsRecap) this.#recapFedTo = null; // 没喂成 ⇒ 下次补
       this.#lastError = String(err?.message ?? err);
       // 起不来的时候**也要有个交代**——静默失败等于"它不理我"
@@ -200,12 +340,15 @@ export class Dispatcher {
   async onEvict(sessionId) {
     if (sessionId !== this.#timeline.id) return;
     this.#translator.forceClose('failed');
+    this.#closeUndelivered('failed');
+    this.#clearAllDeadlines(); // 这一轮已经收口了，计时器不该再响
     this.#recapFedTo = null;
   }
 
   /** 收工：先把话说圆，再放 agent 走。 */
   async shutdown() {
     this.#translator.forceClose('failed');
+    this.#clearAllDeadlines();
     this.#recapFedTo = null;
   }
 }

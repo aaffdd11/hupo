@@ -54,7 +54,14 @@ const runtime = new AgentRuntime({
   cfg,
   onEvict: (sessionId) => dispatcher.onEvict(sessionId),
 });
-const dispatcher = new Dispatcher({ timeline, runtime, scopeId: timeline.id, store, recap: cfg.recap });
+const dispatcher = new Dispatcher({
+  timeline,
+  runtime,
+  scopeId: timeline.id,
+  store,
+  recap: cfg.recap,
+  turnDeadlineMs: cfg.turnDeadlineMs,
+});
 
 // 出事谁接：进程级兜底（手册 §5.2 第 3 层）
 installProcessGuard({ timeline });
@@ -81,6 +88,11 @@ console.log(
   //    所以报的是"额度"（能记多少），不是"功能已启用"这种口号。
   `  接记忆   起 agent 时喂回最近 ${cfg.recap.maxEntries} 句 / 最多 ${cfg.recap.maxChars} 字` +
     `（单条 ${cfg.recap.maxEntryChars} 字封顶）`,
+);
+console.log(
+  cfg.turnDeadlineMs > 0
+    ? `  卡住收口 一轮超过 ${Math.round(cfg.turnDeadlineMs / 1000)} 秒没收口就收掉，并卸下那个 agent`
+    : '  卡住收口 ⚠️ 关掉了（turnDeadlineMs=0）——agent 卡住不会有收尾',
 );
 console.log(
   auth.needsSetup

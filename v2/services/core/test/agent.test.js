@@ -293,7 +293,7 @@ test('★ env 先做减法：只删密钥类，**PATH/HOME 一定留着**', () =
   }
 });
 
-// ── DSH 会话 id 必须带 bootId ─────────────────────────────
+// ── DSH 会话 id：**唯一性是"每个实例"，不只是"每次启动"** ──────
 //
 // 实测：`session/prompt` 对**已存在**的会话 id 直接报
 // `session "main" already exists` —— SDK 只能 create，不能 resume。
@@ -302,17 +302,37 @@ test('★ env 先做减法：只删密钥类，**PATH/HOME 一定留着**', () =
 test('★ DSH 会话 id 带 bootId，而且每次启动都不一样', () => {
   const a = new AgentRuntime({ cfg: cfg(), spawnFn: fakeSpawn('normal') });
   const b = new AgentRuntime({ cfg: cfg(), spawnFn: fakeSpawn('normal') });
-  assert.equal(a.dshSessionId('main'), `main.${a.bootId}`);
+  assert.match(a.agent('main').dshSessionId, new RegExp(`^main\\.${a.bootId}\\.`));
   assert.notEqual(a.bootId, b.bootId, '两次启动的 bootId 必须不同，否则会撞上上次留下的会话');
 });
 
-test('★ 同一进程内，同一个会话每次拿到的是同一个 DSH id（否则记忆会散）', () => {
+test('🔴★ 同一个 runtime 里换一个 agent 实例 ⇒ **必须换 DSH 会话 id**', async () => {
+  // ⚠️ 这条是**改过的**，原先它是反的（断言"同一进程内每次拿到同一个 id"），
+  //    而那个断言编码的是一个**错的**信念："id 一样才不丢记忆"。
+  //    真相：记忆在**进程**里，不在 id 里；而 DSH 的会话记录
+  //    **落在 $DSH_HOME/sessions/ 里、跨进程活着**
+  //    （实测那目录下躺着 19 个 `main.<bootId>`）。
+  //
+  //    实测复现（`/tmp/probe-session-reuse.mjs`）：
+  //      同一个 runtime：起 agent → stop() → 再起 agent → prompt
+  //      ⇒ `session "main.mu9rmdgzijr2" already exists`
+  //      ⇒ **用户接下来每一句都发不出去**，而看起来只是"它不理我了"。
+  //
+  //    触发它的正是**超时硬收口**：它会在同一个 runtime 里卸掉再起。
   const rt = new AgentRuntime({ cfg: cfg(), spawnFn: fakeSpawn('normal') });
-  assert.equal(rt.dshSessionId('main'), rt.dshSessionId('main'));
-  assert.notEqual(rt.dshSessionId('main'), rt.dshSessionId('other'));
+  const id1 = rt.agent('main').dshSessionId;
+  await rt.stop('main');
+  const id2 = rt.agent('main').dshSessionId;
+  assert.notEqual(id1, id2, '★ 换实例必须换 id —— 否则 `already exists`');
+  assert.match(id1, /^main\./);
+  assert.match(id2, /^main\./);
+  // 会话名还在最前面（人看得出这是哪个会话）
+  assert.equal(id1.split('.')[0], 'main');
+  assert.equal(id2.split('.')[0], 'main');
+  await rt.shutdown();
 });
 
-test('★ 投给 agent 的是带 bootId 的那个 id（不是时间线 id）', async () => {
+test('★ 投给 agent 的是带后缀的那个 id（不是时间线 id）', async () => {
   const rt = new AgentRuntime({ cfg: cfg(), spawnFn: fakeSpawn('normal') });
   const a = rt.agent('main');
   assert.equal(a.sessionId, 'main', '时间线 id 不变');

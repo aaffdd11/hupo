@@ -11,8 +11,45 @@
 //   crash      中途进程退出（必须收口）
 //   slow       答得很慢（用来验淘汰前会先收口）
 //   two-step   两步：先应一声（quick），再给结论（deep）
+//   hang       一轮开始之后**永远不结束**（用来验超时硬收口；第二个 prompt 排队）
+//   hang-talk  hang 的变体：**先说半句**再不结束（验"已经说了一半"那种超时）
+
+import fs from 'node:fs';
 
 const scenario = process.env.FAKE_SCENARIO ?? 'normal';
+/**
+ * ⚠️ **DSH 的会话记录是"跨进程活着"的**——这是真 DSH 的行为，不是我们编的。
+ *
+ * 实测：`session/prompt` 对一个**已经存在**的会话 id 直接报
+ * `session "main.xxx" already exists`（SDK 只能 create，不能 resume）。
+ * 会话记录落在 `$DSH_HOME/sessions/` 里（实测那个目录下有 19 个 `main.<bootId>`）。
+ *
+ * 为什么假 agent 也要模拟这一条：**真 bug 差点漏过去。**
+ * 超时硬收口会在**同一个 runtime 里**把 agent 卸掉再起一个；
+ * 如果沿用同一个会话 id，用户接下来每一句都发不出去。
+ * 假 agent 不模拟"已存在"的话，**这一条在 CI 里永远测不出来**
+ * （它当时确实是靠端到端真 agent 才抓到的）。
+ *
+ * `FAKE_SESSION_FILE` 给一个路径就开启这个行为（**跨进程共享**，
+ * 所以"上一个进程创建过"这件事真的能被下一个进程看见）。
+ */
+const sessionFile = process.env.FAKE_SESSION_FILE ?? null;
+function sessionExists(id) {
+  if (!sessionFile) return false;
+  try {
+    return fs.readFileSync(sessionFile, 'utf8').split('\n').includes(id);
+  } catch {
+    return false;
+  }
+}
+function rememberSession(id) {
+  if (!sessionFile) return;
+  try {
+    fs.appendFileSync(sessionFile, `${id}\n`);
+  } catch {
+    /* 记不上就算了——那是测试脚手架的事 */
+  }
+}
 
 let buf = '';
 let seq = 0;
@@ -84,6 +121,19 @@ function onMessage(msg) {
     return;
   }
   if (msg.method === 'session/prompt') {
+    // ★ 和真 DSH 一样：**已存在**的会话 id 直接报错（只能 create，不能 resume）
+    const sid = msg.params?.sessionId;
+    if (sid && sessionExists(sid)) {
+      process.stdout.write(
+        `${JSON.stringify({
+          jsonrpc: '2.0',
+          id: msg.id,
+          error: { code: -32000, message: `session "${sid}" already exists` },
+        })}\n`,
+      );
+      return;
+    }
+    if (sid) rememberSession(sid);
     // ★ 真 agent 会发 `user/message`（把收到的那几个内容块回显出来），
     //   假 agent 也发——这样"我们到底喂了什么进去"可以在**真 stdio 上**验，
     //   而不用去猜。翻译层会忽略它（它不进产品事件）。
@@ -102,6 +152,14 @@ function onMessage(msg) {
 }
 
 function runScenario(t) {
+  // ⚠️ `hang*` 场景下：**第 2 个及以后的 prompt 一律"排队"**——
+  //    真 agent 会把它塞进 inbox（`agent/inbox/spliced {target:"next-turn"}`），
+  //    等当前这轮结束才变成下一轮。所以这里**连 `turn/start` 都不发**，
+  //    那就是"排队中"真实的样子。
+  //    （实测见 `docs/dev/07-TIMEOUT.md` §一；不这样模拟，
+  //      "超时要顺手收掉排队那句"这条就永远测不出来。）
+  if ((scenario === 'hang' || scenario === 'hang-talk') && t > 1) return;
+
   notifyStatus('running');
   notifyEvent('turn/start', { turn: t });
 
@@ -146,6 +204,19 @@ function runScenario(t) {
       notifyEvent('step/end', { turn: t, step: 2 });
       notifyEvent('turn/end', { turn: t, reason: { kind: 'completed' } });
       notifyStatus('idle');
+      break;
+
+    case 'hang':
+      // 一轮开始，然后**什么都不发生**——永远不收口。
+      // 真 agent 卡住时的样子就是这样：进程活着、`running` 恒真、
+      // 而用户那条气泡永远停在"马上说完"。
+      break;
+
+    case 'hang-talk':
+      // 说了半句再卡住 —— 超时收口要能认出"这一轮已经有 writer 了"
+      notifyEvent('step/start', { turn: t, step: 1 });
+      assistantMessage(t, 1, '我正在查…', '先调用工具');
+      notifyEvent('step/end', { turn: t, step: 1 });
       break;
 
     case 'normal':

@@ -77,6 +77,17 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
         10,
       ),
     },
+    /**
+     * **单轮硬收口**。手册 `08-SPEC.md` §10.2 给的就是这个数（180s）。
+     *
+     * 为什么是这个量级：比它短的会切掉正常的慢活（带工具的一轮实测十几秒很正常），
+     * 比它长的用户已经在盯着屏幕等——手册事故一里那行"还有件事在处理"挂了 **68 分钟**。
+     *
+     * ⚠️ 设成 `0` 等于**关掉**（测试与极端排障用）。**生产上不许关**：
+     *    关掉之后 agent 一卡就是永远卡，而且它还永远占着一个位置
+     *    （`running` 恒真 ⇒ LRU"跑着的不许卸" ⇒ 永不淘汰）。
+     */
+    turnDeadlineMs: Number.parseInt(env.HUPO_TURN_DEADLINE_MS ?? '180000', 10),
   };
 }
 
@@ -118,6 +129,14 @@ export function preflight(cfg) {
     problems.push(
       `recap.maxEntryChars 必须在 1..maxChars 之间，收到 ${rc.maxEntryChars}（maxChars=${rc.maxChars}）`,
     );
+  }
+
+  // ⚠️ 硬收口可以被设成 0（关掉），但**必须大声说出来**——
+  //    关掉之后 agent 卡住就是永远卡住，而现场看起来只是"它今天有点慢"。
+  if (!Number.isFinite(cfg.turnDeadlineMs) || cfg.turnDeadlineMs < 0) {
+    problems.push(`turnDeadlineMs 必须 ≥0，收到 ${cfg.turnDeadlineMs}`);
+  } else if (cfg.turnDeadlineMs === 0) {
+    notes.push('⚠️ 单轮硬收口被关掉了（turnDeadlineMs=0）——agent 卡住就不会有收尾。**生产上不该这样。**');
   }
   return { problems, notes };
 }

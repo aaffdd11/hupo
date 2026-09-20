@@ -101,9 +101,9 @@ docs/handbook/            要什么、为什么（冻结，唯一权威）
 cd v2/services/core && npm test && npm run demo
 ```
 
-**进度**：**六批已落地**（见 §四的表）。硬闸是 `cd v2/services/core && npm test`，
-现在 **152 条全过**。线上是 <https://w.stalkerai.cn>。
-**下一步**：**超时硬收口**——现在 agent 卡住就是永远卡住。
+**进度**：**七批已落地**（见 §四的表）。硬闸是 `cd v2/services/core && npm test`，
+现在 **165 条全过**。线上是 <https://w.stalkerai.cn>。
+**下一步**：**对账续做**——"被打断的活会自己接着做"。
 
 ⚠️ **最容易犯的错**：拿旧代码顺手改一改（"反正只差几行"）。
 **那样做出来的东西，会同时继承旧代码里那些我们已经判定为缺陷的东西**——
@@ -116,9 +116,9 @@ cd v2/services/core && npm test && npm run demo
 | 项 | 状态 |
 |---|---|
 | **规划** | ✅ **完成**。76 条决策全部拍板；两轮独立评审（各三席）已收口；**批 0 整个关闭** |
-| **实现** | 🚧 **进行中**——**六批已落地**，`v2/services/core` **152 条验收全过** |
-| **线上** | ✅ <https://w.stalkerai.cn> —— 登录 + 聊天 + 会答话 + **重启还记得** |
-| **下一步** | **超时硬收口**（agent 卡住 = 永远卡住，见 `docs/dev/05-AGENT.md` §七） |
+| **实现** | 🚧 **进行中**——**七批已落地**，`v2/services/core` **165 条验收全过** |
+| **线上** | ✅ <https://w.stalkerai.cn> —— 登录 + 聊天 + 会答话 + **重启还记得** + **卡住会收场** |
+| **下一步** | **对账续做**（见 `docs/dev/07-TIMEOUT.md` §九） |
 
 **已经建完的，一件一行**（每件都有对应的 `docs/dev/` 文档，**动手前先读那一份**）：
 
@@ -129,7 +129,8 @@ cd v2/services/core && npm test && npm run demo
 | 3 | 铺通 `w.stalkerai.cn`（stcp 隧道 + 证书 + nginx） | `03-DEPLOY-WEB.md` | —— |
 | 4 | 真界面：登录 + 聊天 + 四态 + 续传 | `04-CLIENT.md` | 32 |
 | 5 | 接上 agent：一个会话一个真进程 | `05-AGENT.md` | 131 |
-| 6 | **跨重启接记忆**（按来源分节喂回去） | `06-RECAP.md` | **152** |
+| 6 | **跨重启接记忆**（按来源分节喂回去） | `06-RECAP.md` | 152 |
+| 7 | **卡住的一轮怎么收场**（超时硬收口 + 回收进程） | `07-TIMEOUT.md` | **165** |
 
 **批 1 里有四件是"今天就该修的"**——⚠️ 既然是全新建立，
 **这四件不是"去旧代码里改"，而是"在新代码里从一开始就对"**。
@@ -172,7 +173,7 @@ cd v2/apps/mobile
 ### 5.2 改服务端（**`v2/services/core/` 是新实现**）
 
 ```bash
-cd v2/services/core && npm test     # 硬闸（现 152 条全过）
+cd v2/services/core && npm test     # 硬闸（现 165 条全过）
 cd v2/services/core && npm run demo # 肉眼过一遍地基
 ```
 
