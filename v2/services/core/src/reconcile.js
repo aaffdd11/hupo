@@ -35,6 +35,19 @@
 // 我们**不知道它做到哪儿了**：工具结果根本不进时间线（见 `docs/dev/07-TIMEOUT.md` §六）。
 // 所以只能说"**重新来一遍**"。说"接着做"是假话。
 //
+// ── ⚠️ 「续做」那两种情形**走通知，不走气泡**（批 3 第三件）────────
+//
+// 契约 `docs/dev/29-NOTICE.md` §5.1 把这两句的**通道**也定了：
+//
+//   自动重来 ⇒ `notice {kind:"resumed"}`
+//   只通知不重来（动过东西）⇒ `notice {kind:"not-resumed"}`
+//
+// 理由是手册 R1.2 点名的"通知疲劳"：**同一件事只走一条通道**。
+// 加通知之前，这两句是**一条气泡**；加通知之后，如果气泡和通知都发，
+// 就是"一次失败两条通道各报一次"——那正是批 3 要合并掉的东西。
+// ⇒ 给了 `notice` 参数 ⇒ 走通知，**不再另起气泡**；不给 ⇒ 照旧走气泡
+//   （离线调用方与既有测试不受影响）。
+//
 // ── 纯函数，没有 IO ────────────────────────────────────────
 // 输入是日志里的事件，输出是一份"该收哪些口"的清单。
 // 谁去落盘、谁去通知，是调用方的事（`serve.js` 开机那一步）。
@@ -239,7 +252,16 @@ export function findInterrupted(events, { now = Date.now(), windowMs = RECONCILE
  * @param {string} [o.timelineId]
  * @param {number} [o.now]
  * @param {number} [o.windowMs]
- * @returns {{ok: boolean, closed: number, told: number, error?: string}}
+ * @param {import('./notice.js').Notice} [o.notice]
+ *        ★ **系统通知那半边的口**（批 3 第三件 · 契约 `29-NOTICE.md` §5.1）。
+ *        ⚠️ 给了它 ⇒ 「续做」那两种情形**改走通知通道**，而且**不再另起一条气泡**——
+ *        契约 §二/§三② 的判据是**同一件事只走一条通道**（R1.2 的通知疲劳），
+ *        气泡 + 通知同时说同一件事，正是那一批要合并掉的东西。
+ *        不给 ⇒ 行为与加通知之前**一模一样**（那两类仍走气泡）：
+ *        离线调用方与既有测试走的都是这条路。
+ * @param {(m: string) => void} [o.log]
+ * @returns {{ok: boolean, closed: number, told: number, noticed: string|null, ...}}
+ *          `noticed` = 走通知通道的那个 `kind`（没走 ⇒ `null`）。
  */
 export function reconcileOnBoot({
   timeline,
@@ -249,6 +271,7 @@ export function reconcileOnBoot({
   windowMs = RECONCILE_WINDOW_MS,
   /** 续做的开关。**不给 ⇒ 不自动重来**（保守默认：宁可只通知） */
   resume = null,
+  notice = null,
   log = () => {},
 }) {
   const id = timelineId ?? timeline.id;
@@ -259,13 +282,13 @@ export function reconcileOnBoot({
     found = findInterrupted(events, { now, windowMs });
   } catch (err) {
     return {
-      ok: false, closed: 0, told: 0, total: 0, mutated: 0,
+      ok: false, closed: 0, told: 0, noticed: null, total: 0, mutated: 0,
       resume: null, resumeReason: 'read-failed',
       error: `读日志失败：${err?.message ?? err}`,
     };
   }
   if (found.incidents === 0) {
-    return { ok: true, closed: 0, told: 0, total: 0, mutated: 0, resume: null, resumeReason: 'nothing-interrupted' };
+    return { ok: true, closed: 0, told: 0, noticed: null, total: 0, mutated: 0, resume: null, resumeReason: 'nothing-interrupted' };
   }
 
   // ★ **先决定要不要自动重来，再决定说什么话** —— 顺序反了就会撒谎：
@@ -298,22 +321,43 @@ export function reconcileOnBoot({
   // ② **再另起一条**，而且**只说一声**（哪怕上面收了两条、或者 ① ② 同时命中）。
   //    反了就是手册 §7.3 点名的"消息交叉"；说两遍就是把同一次打断讲两次。
   let told = 0;
+  let noticed = null;
   if (found.tell) {
-    try {
-      const w = new MessageWriter({ timeline, agent: 'agent', origin: 'proactive' });
-      // ★ **动过东西的要说清"我没敢自己重来"** —— 那是主人该知道的事
-      //   （他得去看一眼那些文件）。只说"我重新来一遍"会让他以为没什么要紧。
-      const line = plan.pick
-        ? INTERRUPTED_RESUMING_LINE
-        : found.anyMutated
-          ? INTERRUPTED_TOUCHED_LINE
-          : INTERRUPTED_LINE;
-      w.chunk('deep', line);
-      w.end('completed');
-      told = 1;
-    } catch (err) {
-      failures.push(err?.message ?? String(err));
-      log(`[对账] 那句话没说出来：${err?.message ?? err}`);
+    // ★ **这两类走通知通道**（契约 `29-NOTICE.md` §5.1 那张表）：
+    //   续做（自动重来）⇒ `resumed`；只通知不重来（动过东西）⇒ `not-resumed`。
+    //   ⚠️ 它们**不再另起一条气泡** —— 同一件事只走一条通道（契约 §二/§三②）。
+    //   其余那几种（太旧 / 超额度 / 降级 / 连原话都没有）**契约没给 kind**，
+    //   照旧走气泡：那时候"告诉他一句 + 给下一步"比换通道重要（N11）。
+    const kind = plan.pick ? 'resumed' : found.anyMutated ? 'not-resumed' : null;
+    if (kind !== null && notice) {
+      try {
+        // ⚠️ 落盘失败照抛（`store.append` 的契约）⇒ 这里接住、只回报一条错误，
+        //    因为对账**不许阻断启动**（手册 §15.3）。盘满那条路另有出口：
+        //    `serve.js` 的"报平安"那条走 `noticeOrUrgent()`，而进程级兜底也有瞬态那一路。
+        const full = notice.notice({ kind });
+        noticed = full === null ? null : kind; // 被限频挡掉 ⇒ 这一轮没出声
+        if (noticed !== null) told = 1;
+      } catch (err) {
+        failures.push(err?.message ?? String(err));
+        log(`[对账] 那条通知没发出去：${err?.message ?? err}`);
+      }
+    } else {
+      try {
+        const w = new MessageWriter({ timeline, agent: 'agent', origin: 'proactive' });
+        // ★ **动过东西的要说清"我没敢自己重来"** —— 那是主人该知道的事
+        //   （他得去看一眼那些文件）。只说"我重新来一遍"会让他以为没什么要紧。
+        const line = plan.pick
+          ? INTERRUPTED_RESUMING_LINE
+          : found.anyMutated
+            ? INTERRUPTED_TOUCHED_LINE
+            : INTERRUPTED_LINE;
+        w.chunk('deep', line);
+        w.end('completed');
+        told = 1;
+      } catch (err) {
+        failures.push(err?.message ?? String(err));
+        log(`[对账] 那句话没说出来：${err?.message ?? err}`);
+      }
     }
   }
 
@@ -321,6 +365,8 @@ export function reconcileOnBoot({
     ok: failures.length === 0,
     closed,
     told,
+    /** 这一轮走的是通知通道的哪个 `kind`（`null` = 走的不是通知，或者被限频挡掉了） */
+    noticed,
     /** **出了几回事**（按归属去重 —— 同一次打断的两种形状只算一处） */
     total: found.incidents,
     /** 未收口的气泡**找到了几条**（`closed` 是**收成功了几条**——收失败会不一样） */

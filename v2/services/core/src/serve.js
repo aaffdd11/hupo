@@ -30,6 +30,7 @@ import { describeAdmission, readAdmission } from './admission.js';
 import { applyPrune, groupSlugFor, planPrune, scanEntries, summarize } from './prune.js';
 import { createTurnStatus, statusPath } from './turn-status.js';
 import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
+import { Notice, UNDO_RESTORE } from './notice.js';
 
 
 const cfg = loadConfig(process.env, process.cwd());
@@ -89,6 +90,10 @@ const timeline = new Timeline({
     console.error(`[timeline] 订阅者出错（${event.type}）：${err?.message ?? err}`);
   },
 });
+// ★ **系统通知那个口**（批 3 第三件 · 契约 `docs/dev/29-NOTICE.md`）。
+// ⚠️ 给了 `store` ⇒ 开机从盘上恢复**限频账**：重启不该把同一件事再喊一遍
+//    （R1.2 的"通知疲劳"）。不给的话，一个崩溃环会把同一句话喊一遍又一遍。
+const notice = new Notice({ timeline, store, timelineId: 'main', log: (m) => console.warn(m) });
 // ★ **开机对账**：把上一次没说完的话收干净，并告诉用户"可能没做完"。
 // ⚠️ 位置就在这儿：**在服务开始收请求之前**。晚一步的话，
 //    客户端可能已经连上、把那条没收口的气泡渲染成"还在做"了。
@@ -108,10 +113,35 @@ const reconciled = reconcileOnBoot({
   store,
   // 续做只在**没降级**时开（§11.1：崩溃环里继续续做只会放大问题）
   resume: { degraded: boot.degraded },
+  // ★ 「续做」那两类（`resumed` / `not-resumed`）走**通知通道**，不再另起气泡
+  //   （契约 `29-NOTICE.md` §5.1 + §二"同一件事只走一条通道"）。
+  notice,
   log: (m) => console.warn(m),
 });
 if (!reconciled.ok) {
   console.warn(`  ⚠️ 开机对账没做成：${reconciled.error}（**不影响启动**）`);
+}
+
+// ★ **崩溃/报警那条通知**（批 3 第三件 · 欠账 **#22**："报警没有推送渠道"）。
+//
+// 判据是 **"上一次没善终"**（被硬杀 / OOM / 断电）——它和横幅那一行
+// （`上次退出 ⚠️ 没善终`）说的是**同一个事实**，而横幅只有本机看得见，用户看不见。
+//
+// ⚠️ **对账已经说过一声的，这里不再说**（契约 §二：同一件事只走一条通道）：
+//    那种情况下时间线上已经有一条通知/气泡在讲这次出事，再来一条就是**通知疲劳**
+//    ——那正是手册 R1.2 点名叫批 3 合并掉的东西。
+//
+// ⚠️ 默认**落盘**（取号 ⇒ 时间线里那一条就是它）。`noticeOrUrgent()` 只在
+//    **写盘本身失败**时退回瞬态，而那句瞬态**自己说清**"这条我没能记下来"
+//    （契约 §三①：例外不许伪装成正常）。
+let crashNotice = null;
+if (boot.uncleanLastRun && reconciled.told === 0) {
+  try {
+    crashNotice = notice.noticeOrUrgent({ kind: 'crash' });
+  } catch (err) {
+    // ⚠️ **不许把进程带走**：那是开机路上的一句话，不是要命的事（照对账那条规矩）。
+    console.warn(`  ⚠️ "我起来了"那条通知没发出去：${err?.message ?? err}`);
+  }
 }
 
 const auth = new Auth({ dataDir: cfg.dataDir });
@@ -134,10 +164,13 @@ const dispatcher = new Dispatcher({
   store,
   recap: cfg.recap,
   turnDeadlineMs: cfg.turnDeadlineMs,
+  // ★ 把通知那本账接进过程通道（契约 §三②：同一件事只走一条通道）。
+  //   见 `dispatcher.#announceTurn()` 与 `session-translate.js` 文件头 ⑥。
+  notice,
 });
 
 // 出事谁接：进程级兜底（手册 §5.2 第 3 层）
-installProcessGuard({ timeline });
+installProcessGuard({ timeline, notice });
 
 const webRoot = nodeFs.existsSync(nodePath.join(cfg.webRoot, 'index.html')) ? cfg.webRoot : null;
 
@@ -161,14 +194,41 @@ const { listen, close } = createServer({
   log: (m) => console.log(m),
 });
 
-// ★ **回收站到点就真删**（X3③）。⚠️ 只做"到点压实"这一半；
-//   "提前一周告一声"那句话**留给系统通知**（批 3 第三件，契约 §七）——
-//   现在只把账算准（回收站里每条都写着什么时候会真删）。
+// ★ **回收站那一趟活**：① 到期前一周**告一声** ② 到点就真删（X3③）。
+//
+// ⚠️ 开机**先跑一次**，不是只等一个钟头：不跑这一次，上一个进程活着的期间
+//    就已经进入"最后一周"的那一条，要**再等一小时**才会被告一声。
+//
+// ⚠️ 两件事都**不许阻断启动 / 不许把进程带走**：它们是维护动作，
+//    而且台账（`turn/deleted` 那些墓碑）还在盘上 ⇒ 下一轮还会再试一次，不会漏掉。
+function sweepTrash() {
+  // ① ★ **到期前一周"告一声"**（契约 `29-NOTICE.md` §5.1）——
+  //    ⑲ 留下的那笔账（`28-DELETE.md` §七）在这一件上还。
+  //    ⚠️ 它**带撤销**：浮窗与时间线**两处**都渲染它（主人那条约束 3），
+  //       动作就是回收站那个"拿回来"。
+  //    ⚠️ 限频认的是**撤销那一组 id**（`subjectOf`）⇒ 同一条过期提醒
+  //       在窗口内只喊一次，一个钟头一趟也不会重复喊。
+  for (const it of trash.expiringSoon()) {
+    try {
+      notice.notice({ kind: 'expiring', undo: { ...UNDO_RESTORE, messageIds: it.messageIds } });
+    } catch (err) {
+      // 一条发不出去不该让剩下的也发不出去
+      console.warn(`  ⚠️ 到期提醒没发出去（${it.messageIds.length} 条）：${err?.message ?? err}`);
+    }
+  }
+  // ② 到点就真删
+  for (const done of trash.purgeExpired()) {
+    console.log(`  🗑 回收站到点，彻底删掉 ${done.messageIds.length} 条（释放 ${done.freedBytes} 字节）`);
+  }
+}
+try {
+  sweepTrash();
+} catch (err) {
+  console.warn(`  ⚠️ 回收站开机扫一遍没做成（不影响服务）：${err?.message ?? err}`);
+}
 const trashSweep = setInterval(() => {
   try {
-    for (const done of trash.purgeExpired()) {
-      console.log(`  🗑 回收站到点，彻底删掉 ${done.messageIds.length} 条（释放 ${done.freedBytes} 字节）`);
-    }
+    sweepTrash();
   } catch (err) {
     // ⚠️ 压实失败**不许把进程带走**：它是维护动作，而且台账（`turn/deleted`）
     //    还在盘上 ⇒ 下一轮扫描还会再试一次，不会漏掉。
@@ -180,6 +240,8 @@ trashSweep.unref?.();
 // ★ **续做**：对账说出口的那句"我重新做一遍"，在这里真的做。
 // ⚠️ 顺序不能反：**先落 `task/resumed`（记额度）再投递** ——
 //    投递失败也要算一次"发起过"，否则一个每次投递都失败的活会被无限重试。
+// ⚠️ 那句对用户说的话**不在这儿**：它由对账按契约 `29-NOTICE.md` §5.1
+//    走**通知通道**发（`resumed` / `not-resumed`）——**同一件事只走一条通道**。
 if (reconciled.resume) {
   const { ref, text, attempt } = reconciled.resume;
   console.log(`  ▶ 续做：把「${text.slice(0, 24)}…」重做一遍（第 ${attempt} 次）`);
@@ -194,6 +256,10 @@ if (reconciled.resume) {
 } else if (reconciled.total > 0) {
   console.log(`  · 没有自动重做（原因：${reconciled.resumeReason}）`);
 }
+// ⚠️ 这两行要**如实报**：通知发没发出去、发的哪一条，是"用户到底看没看见"的唯一线索
+//    （横幅是本机那一眼，通知才是**用户那一眼**）。
+if (reconciled.noticed) console.log(`  🔔 已通知   ${reconciled.noticed}（时间线里有一条）`);
+if (crashNotice) console.log('  🔔 已通知   crash（时间线里有一条）');
 
 const addr = await listen(cfg.port, '127.0.0.1');
 

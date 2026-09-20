@@ -68,8 +68,17 @@ export class Dispatcher {
    *    ⇒ 落盘时就得把它翻译成**某条主人消息**，否则那条记录永远对不上。
    */
   #turnOwner = new Map();
+  /**
+   * 通知那本账（批 3 第三件 · 契约 `docs/dev/29-NOTICE.md` §二 §三②）。
+   *
+   * ⚠️ 为什么要把它接进调度器：`message/status`（就是"它正在做…"那行提示）
+   *    是**过程通道**的发声处，而契约的判据是**同一件事只走一条通道**。
+   *    闸要打**在真的东西上**（凡是我们自己算出来的东西，闸必须在产生它的这一侧）。
+   *    见 `#announceTurn()`。
+   */
+  #notice;
 
-  constructor({ timeline, runtime, scopeId = null, store, recap = {}, turnDeadlineMs = TURN_DEADLINE_MS }) {
+  constructor({ timeline, runtime, scopeId = null, store, recap = {}, turnDeadlineMs = TURN_DEADLINE_MS, notice = null }) {
     if (!store) {
       // ⚠️ **不许默认没有 recap 就悄悄开工。**
       //    没有 store ⇒ 每次重启的用户体验都是"它失忆了"，
@@ -82,7 +91,8 @@ export class Dispatcher {
     this.#store = store;
     this.#recapOptions = { ...RECAP_DEFAULTS, ...recap };
     this.#turnDeadlineMs = turnDeadlineMs;
-    this.#translator = new TurnTranslator({ timeline, scopeId });
+    this.#notice = notice;
+    this.#translator = new TurnTranslator({ timeline, scopeId, notice });
 
     // 超时硬收口：轮的起讫从翻译层来（它才知道"这一轮开始了没有"）
     this.#translator.on('turn-start', (turn) => {
@@ -185,6 +195,12 @@ export class Dispatcher {
    */
   #announceTurn(turn) {
     if (typeof turn !== 'number') return;
+    // ★ **先对账再开口**（契约 §三②）：同一个 `(turn, kind)` 不许两条通道都说。
+    //   ⚠️ 这一句**故意**让冲突抛出去：撞上就意味着"这件事"已经在通知通道上说过了
+    //      ⇒ 宁可**不发**这行状态，也不许两条通道各说一遍（R1.2 的通知疲劳）。
+    //      抛出去会被上面 `session-event` 那圈 try 接住（记进 `#lastError`），
+    //      不会把 agent 打死。
+    this.#notice?.processSaid({ turn, kind: 'started' });
     this.#timeline.emitTransient({
       type: 'message/status',
       turn,

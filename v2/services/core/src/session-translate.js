@@ -47,6 +47,15 @@
 //      "收到 `tool/call` ⇒ 给同一个 `(turn, step)` 补一次带类别的瞬态状态"。
 //      ⚠️ **工具名绝不出去**（界面上不许出现内部词）：它只是
 //      `process_words.dart` 那张人话表的输入。见 `stepStateForTool()`。
+//
+//   ⑥ ⚠️ **一轮出事了 ⇒ 在"这件事走过哪条通道"那本账上记一笔**（批 3 第三件）。
+//      契约 `docs/dev/29-NOTICE.md` §二 / §三② 的判据是**同一件事只走一条通道**：
+//      过程（正在做 / 做到哪步）只走 `message/status` / `step/*`；
+//      替你做的决定 / 出事了只走通知。这一层是**过程通道那一侧**的产生处
+//      ⇒ 它报出去的每一件"这一轮出事了"，都要在 `Notice` 的账本上登记。
+//      于是**同一个 `(turn, kind)` 两条通道都说了 ⇒ 通知那一侧会抛**。
+//      ⚠️ 记账**不许挡住收口**（N19 比记账重要）：登记失败只记进
+//        `#claimErrors`，见 `#claimProcess()`。真正的闸在 `notice.js` 那一边。
 
 import { EventEmitter } from 'node:events';
 
@@ -134,11 +143,19 @@ export class TurnTranslator extends EventEmitter {
    * 屏幕上就挂成"永远在查资料"（H4 不许的形状）。见 `#emitStepCategory()`。
    */
   #seenSteps = new Set();
+  /**
+   * 通知那本账（批 3 第三件）——**过程通道就"这一轮出事了"登记用**。
+   * `null` = 没接通知那一路（离线测试、老调用方都走这条）。
+   */
+  #notice;
+  /** 登记失败（同一个 `(turn, kind)` 两条通道都说了）——只记不抛，见 ⑥。 */
+  #claimErrors = [];
 
-  constructor({ timeline, scopeId = null }) {
+  constructor({ timeline, scopeId = null, notice = null }) {
     super();
     this.#timeline = timeline;
     this.#scopeId = scopeId;
+    this.#notice = notice;
   }
 
   /** 当前有没有一轮还没收口。给淘汰回调判断用。 */
@@ -154,6 +171,28 @@ export class TurnTranslator extends EventEmitter {
   /** 看到过几段推理原文（**只计数，内容一律不落、不推**）。 */
   get reasoningSeen() {
     return this.#reasoningSeen;
+  }
+
+  /** 登记"这一轮出事了"时撞上的冲突（契约 §三② 的两条通道；给闸与排障看）。 */
+  get claimErrors() {
+    return [...this.#claimErrors];
+  }
+
+  /**
+   * 过程通道就"这一轮的这件事"登记一笔（文件头 ⑥）。
+   *
+   * ⚠️ **登记失败只记不抛**：这一层正在做的是**收口**（N19 挂起必有收尾），
+   *    而收口比记账重要 —— 让记账把收口挡掉，用户拿到的是一个永远不收口的气泡。
+   *    真正的闸**在通知那一侧**（`Notice.notice()` 撞上了会抛）：那样
+   *    「同一件事只走一条通道」仍然成立，只是"后说的那个"闭嘴。
+   */
+  #claimProcess(turn, kind) {
+    if (!this.#notice || typeof turn !== 'number') return;
+    try {
+      this.#notice.processSaid({ turn, kind });
+    } catch (err) {
+      this.#claimErrors.push(err?.message ?? String(err));
+    }
   }
 
   /**
@@ -382,6 +421,8 @@ export class TurnTranslator extends EventEmitter {
       });
       w.chunk('deep', kind === 'completed' ? EMPTY_LINE : INTERRUPTED_LINE);
       w.end('failed');
+      // ★ 「这一轮出事了」已经在这条通道上说过了（文件头 ⑥）
+      this.#claimProcess(turn, 'failed');
       this.emit('turn-end', { turn, kind, empty: true });
       return;
     }
@@ -391,6 +432,7 @@ export class TurnTranslator extends EventEmitter {
       //    绝不许把半句当完整回答（事故三）。
       writer.chunk('deep', kind === 'max-tokens' ? TRUNCATED_LINE : INTERRUPTED_LINE);
       writer.end('failed');
+      this.#claimProcess(turn, 'failed');
     } else {
       writer.end('completed');
     }
@@ -451,6 +493,8 @@ export class TurnTranslator extends EventEmitter {
       w.chunk('deep', DEADLINE_EMPTY_LINE);
       w.end('timeout');
     }
+    // ★ 「这一轮卡住、收了口」在过程通道上说过了（文件头 ⑥）
+    this.#claimProcess(turn, 'timeout');
     this.emit('turn-deadline', { turn });
     return true;
   }
@@ -513,6 +557,8 @@ export class TurnTranslator extends EventEmitter {
         w.chunk('deep', line);
         w.end(reason);
       }
+      // ★ 这一轮"以失败收场"在过程通道上说了（文件头 ⑥）
+      this.#claimProcess(turn, reason);
       closed += 1;
     }
     if (closed > 0) this.emit('force-close', { reason, closed });

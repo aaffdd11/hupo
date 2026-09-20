@@ -13,6 +13,8 @@
 // ⚠️ 这里能说上话，靠的是**瞬态通道**：它不写盘，所以**盘满时它仍然能发出去**。
 //    如果用普通通道报"盘满了"，那条消息自己就写不进去。
 
+import { isWriteFailure } from './notice.js';
+
 const HUMAN_LINE_DISK = '刚才出了点问题，我先停一下再起来。你最后那句话可能没记下来。';
 const HUMAN_LINE_GENERIC = '刚才出了点问题，我先停一下再起来。';
 
@@ -32,18 +34,22 @@ function describe(err) {
  *
  * @param {object} o
  * @param {import('./timeline.js').Timeline} [o.timeline] 用来发人话（瞬态）
+ * @param {import('./notice.js').Notice} [o.notice]
+ *        写盘失败时那条**用户看得见的**瞬态通知（`notice/urgent`，批 3 第三件）。
+ *        ⚠️ 只有写盘失败才走它（契约 `29-NOTICE.md` §三①）——`noticeUrgent()`
+ *        自己会把"不是写盘失败的 cause"顶回去，这里不用再判一遍。
  * @param {(code: number) => void} [o.exit]  默认 process.exit
  * @param {(...a: any[]) => void} [o.log]    默认 console.error
  * @param {boolean} [o.throwAfter] 测试用：不真退出，而是把错误再抛出去
  */
-export function installProcessGuard({ timeline, exit, log, throwAfter = false } = {}) {
+export function installProcessGuard({ timeline, notice, exit, log, throwAfter = false } = {}) {
   const doExit = exit ?? ((code) => process.exit(code));
   const doLog = log ?? ((...a) => console.error(...a));
 
   const onFatal = (kind) => (err) => {
     const detail = describe(err);
     // 盘满和别的错要分开说——用户能做的事不一样
-    const isDisk = /ENOSPC|落盘失败|no space/i.test(detail);
+    const isDisk = isWriteFailure(err);
     const text = isDisk ? HUMAN_LINE_DISK : HUMAN_LINE_GENERIC;
 
     try {
@@ -52,6 +58,18 @@ export function installProcessGuard({ timeline, exit, log, throwAfter = false } 
     } catch (e) {
       // 连说都说不出去——那也只能记日志，但**不许因此不退出**
       doLog('[guard] 连通知都发不出去：', describe(e));
+    }
+    if (isDisk) {
+      // ★ **写盘失败那一条用户看得见的话**（批 3 第三件 · 契约 §三①）。
+      //   上层那帧 `error` 是**既有的诊断帧**（客户端不渲染，探针与日志在用），
+      //   而契约给的那条通道是 `notice/urgent` —— 客户端照它显示，
+      //   而且那句话**自己说清**了"我没能记下来"（例外不许伪装成正常）。
+      //   ⚠️ 只有写盘失败才有这一条：别的情形**不许**走瞬态（契约 §三①）。
+      try {
+        notice?.noticeUrgent({ cause: err });
+      } catch (e) {
+        doLog('[guard] 那条瞬态通知没发出去：', describe(e));
+      }
     }
     doLog(`[guard] ${kind}：${detail}`);
     if (throwAfter) throw err;
