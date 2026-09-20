@@ -40,7 +40,32 @@ const MIME = {
 };
 
 /** 这两个**不许长缓存**，否则用户看到的是几小时前的界面。 */
-const NO_CACHE = new Set(['/index.html', '/flutter_service_worker.js', '/version.json']);
+/**
+ * 文件名里带**内容指纹**的，才允许长缓存。
+ *
+ * ⚠️ 这里是踩过一个坑之后改的（2026-09-21）：
+ *    早先的规则是"入口文件 `no-cache`、其余一律 `immutable`（一年）"，
+ *    而注释里想的是"带 hash 的产物可以长缓存"——**可 Flutter web 的产物
+ *    文件名里根本没有 hash**：`main.dart.js`、`flutter_bootstrap.js`、
+ *    `assets/**`、`canvaskit/**` 全是固定名字。
+ *    ⇒ 浏览器把旧的那份当成"一年内不用再问"，
+ *      **于是每次部署对已经来过的人等于没部署**。
+ *      （现场：主人平板上没有新加的按钮，而服务端产物早就换了。）
+ *
+ * ⇒ 规则改成"**看名字**"：只有**真的**带指纹的才长缓存，其余一律回来问一句。
+ *    `no-cache` 不是"不缓存"，是"用之前先问"——配合下面的 `Last-Modified`，
+ *    没改就是 304，只花一次往返。
+ */
+// ⚠️ 别写成"点 + 十六进制 + **一个**扩展名" —— 真实的产物名是
+//    `main.<hash>.dart.js`（**两个点**），那样写一条都匹配不到（我第一版就写错了）。
+const CONTENT_HASHED = /[.\-][0-9a-f]{8,}\./i;
+
+/** 该给哪个 cache-control。**判据是文件名，不是"它是不是入口"。** */
+export function cacheControlFor(relPath) {
+  return CONTENT_HASHED.test(relPath)
+    ? 'public, max-age=31536000, immutable'
+    : 'no-cache';
+}
 
 export function createServer({
   timeline,
@@ -178,17 +203,30 @@ export function createServer({
       return sendJson(res, 403, { error: 'forbidden' });
     }
     let file = target;
-    if (!nodeFs.existsSync(file) || nodeFs.statSync(file).isDirectory()) {
+    let stat = nodeFs.existsSync(file) ? nodeFs.statSync(file) : null;
+    if (!stat || stat.isDirectory()) {
       // SPA 回退：不认识的路径交回 index.html
       file = nodePath.join(webRoot, 'index.html');
-      if (!nodeFs.existsSync(file)) return sendJson(res, 404, { error: 'not-found' });
+      stat = nodeFs.existsSync(file) ? nodeFs.statSync(file) : null;
+      if (!stat) return sendJson(res, 404, { error: 'not-found' });
     }
     const ext = nodePath.extname(file).toLowerCase();
-    const isNoCache = NO_CACHE.has(`/${nodePath.relative(webRoot, file)}`);
+    const relFile = `/${nodePath.relative(webRoot, file)}`;
+    const cc = cacheControlFor(relFile);
+    // HTTP 的日期只到秒 ⇒ 比较时也要落到秒，否则"同一秒内的改动"会被误判成 304
+    const lastModified = new Date(Math.floor(stat.mtimeMs / 1000) * 1000).toUTCString();
+
+    // ★ **回来问一句**的时候，没改就只回 304（不带 body）。
+    const ims = Date.parse(req.headers['if-modified-since'] ?? '');
+    if (!Number.isNaN(ims) && Math.floor(stat.mtimeMs / 1000) * 1000 <= ims) {
+      res.writeHead(304, { 'cache-control': cc, 'last-modified': lastModified });
+      return res.end();
+    }
+
     res.writeHead(200, {
       'content-type': MIME[ext] ?? 'application/octet-stream',
-      // 带 hash 的产物可以长缓存；入口文件绝不行
-      'cache-control': isNoCache ? 'no-cache' : 'public, max-age=31536000, immutable',
+      'cache-control': cc,
+      'last-modified': lastModified,
       'x-content-type-options': 'nosniff',
     });
     if (req.method === 'HEAD') return res.end();

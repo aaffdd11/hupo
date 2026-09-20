@@ -177,13 +177,77 @@ test('静态：service worker **不许长缓存**（否则用户看到几小时�
   await s.close();
 });
 
-test('静态：带 hash 的产物可以长缓存', async () => {
+// ── 静态产物的缓存（**这里踩过一个坑，见 server.js 里 `CONTENT_HASHED` 那段**）──
+
+test('🔴 `main.dart.js` **不许**长缓存 —— 它的名字里没有指纹', async () => {
+  // ⚠️ 这一条**原先写的是反的**：旧的测试叫"带 hash 的产物可以长缓存"，
+  //    注释里写着"真实 Flutter web 产物是 main.dart.js 这种带指纹的名字"——
+  //    **那句是错的**：`main.dart.js` 里没有 hash。
+  //    于是那条测试**把 bug 钉住了**：服务端一直发 `immutable`（一年），
+  //    主人平板上永远看不到新加的按钮，而我每次都说"上线了"。
   const s = await boot();
-  // 造一个"已构建产物"（真实 Flutter web 产物是 main.dart.js 这种带指纹的名字）
   nodeFs.writeFileSync(nodePath.join(s.webRoot, 'main.dart.js'), '// built');
   const r = await fetch(`${s.origin}/main.dart.js`);
   assert.equal(r.status, 200);
-  assert.match(r.headers.get('cache-control'), /immutable/);
+  assert.equal(
+    r.headers.get('cache-control'),
+    'no-cache',
+    '★ 固定名字的产物必须回来问一句 —— 否则部署对老访客等于没部署',
+  );
+  assert.ok(r.headers.get('last-modified'), '而且要给出 Last-Modified，好让 304 生效');
+  await s.close();
+});
+
+test('★ 真的带指纹的名字 ⇒ 才允许长缓存', async () => {
+  const s = await boot();
+  // ⚠️ 用**真实部署出来的那个形状**：`deploy-web-v2.sh` 生成的是
+  //    `main.<12位指纹>.dart.js`（**两个点**）。第一版正则只认一个扩展名 ⇒ 匹配不到。
+  for (const name of ['main.6b1abc336ff6.dart.js', 'flutter_bootstrap.6b1abc336ff6.js']) {
+    nodeFs.writeFileSync(nodePath.join(s.webRoot, name), '// built');
+    const r = await fetch(`${s.origin}/${name}`);
+    assert.match(r.headers.get('cache-control'), /immutable/, `${name} 应该能长缓存`);
+  }
+  await s.close();
+});
+
+test('🔴 规则是**看名字**的：不带指纹的一律 no-cache（含 assets / canvaskit）', async () => {
+  const s = await boot();
+  for (const name of ['flutter_bootstrap.js', 'manifest.json', 'canvaskit/canvaskit.wasm', 'assets/FontManifest.json']) {
+    const f = nodePath.join(s.webRoot, name);
+    nodeFs.mkdirSync(nodePath.dirname(f), { recursive: true });
+    nodeFs.writeFileSync(f, 'x');
+    const r = await fetch(`${s.origin}/${name}`);
+    assert.equal(r.headers.get('cache-control'), 'no-cache', `${name} 不该长缓存`);
+  }
+  await s.close();
+});
+
+test('★ 回来问一句时：没改就 304（不带 body）—— 所以 no-cache 不费流量', async () => {
+  const s = await boot();
+  nodeFs.writeFileSync(nodePath.join(s.webRoot, 'main.dart.js'), '// built');
+  const first = await fetch(`${s.origin}/main.dart.js`);
+  const lm = first.headers.get('last-modified');
+  assert.ok(lm);
+
+  const again = await fetch(`${s.origin}/main.dart.js`, { headers: { 'if-modified-since': lm } });
+  assert.equal(again.status, 304, '★ 没改过 ⇒ 304');
+  assert.equal(await again.text(), '', '304 不带 body');
+  await s.close();
+});
+
+test('★ 改过之后 ⇒ 不能再给 304（不然新产物照样看不到）', async () => {
+  const s = await boot();
+  const f = nodePath.join(s.webRoot, 'main.dart.js');
+  nodeFs.writeFileSync(f, '// v1');
+  const lm = (await fetch(`${s.origin}/main.dart.js`)).headers.get('last-modified');
+
+  // 把 mtime 推到未来（一个 HTTP 日期分辨不出来的差距也要被当成"改过了"）
+  const later = new Date(Date.now() + 5000);
+  nodeFs.utimesSync(f, later, later);
+
+  const r = await fetch(`${s.origin}/main.dart.js`, { headers: { 'if-modified-since': lm } });
+  assert.equal(r.status, 200, '★ 改过了就必须给新的 body');
+  assert.equal(await r.text(), '// v1');
   await s.close();
 });
 
