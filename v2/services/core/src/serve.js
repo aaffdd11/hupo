@@ -10,6 +10,7 @@
 //    stcp **不占任何公网端口**，所以 nginx 绕不过去（见 docs/dev/03-DEPLOY-WEB.md）。
 
 import nodeFs from 'node:fs';
+import nodeOs from 'node:os';
 import nodePath from 'node:path';
 
 import { AgentRuntime } from './agent-runtime.js';
@@ -23,6 +24,7 @@ import { RESUMED_EVENT } from './resume-plan.js';
 import { Timeline } from './timeline.js';
 import { createServer } from './server.js';
 import { loadConfig, preflight } from './config.js';
+import { integrityReport } from './integrity.js';
 import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
 
 
@@ -32,6 +34,19 @@ const cfg = loadConfig(process.env, process.cwd());
 //    spawn 的失败是**异步**的，而且它的 ENOENT **分不清**
 //    "程序找不到"和"工作目录不存在"——在这里查清，能省掉半天排查。
 const { problems, notes } = preflight(cfg);
+
+// ★ **P1：开机完整性核对**（手册 `05-DECISIONS.md` P1.2 / P1.4）。
+//   ⚠️ 放在这儿而不是 `preflight()` 里：`preflight` 也被单元测试调，
+//      而在"改代码改到一半"的机器上核对清单只会把测试弄红——
+//      那会逼着下一个人把这道闸从测试里绕开。**闸要拦的是"开机"，不是"跑测试"。**
+//   ⚠️ 仓库根从 `serve.js` 自己的位置推（`v2/services/core/src/serve.js`），
+//      不依赖 cwd —— 从哪儿起的进程都算得对。
+const ig = integrityReport({
+  repo: nodePath.resolve(import.meta.dirname, '../../..'),
+  home: nodeOs.homedir(),
+});
+problems.push(...ig.problems);
+notes.push(...ig.notes);
 if (problems.length > 0) {
   console.error('✗ 起不来：');
   for (const p of problems) console.error(`  · ${p}`);
@@ -127,6 +142,17 @@ console.log(`  监听     127.0.0.1:${addr.port}   （对外走 VPS 的 stcp 隧
 console.log(`  数据     ${cfg.dataDir}`);
 console.log(`  界面     ${webRoot ?? '（没有 web 产物，只服务 API）'}`);
 console.log(`  构建     ${cfg.buildId}`);
+// ⚠️ 这一行必须**如实**：清单还没建的时候，这道闸是**没有**的。
+//    报成"OK"就是"看起来有闸、其实没有"——比不设更坏。
+console.log(
+  `  完整性   ${
+    ig.state === 'ok'
+      ? '对上了'
+      : ig.state === 'tampered'
+        ? `⚠️ 有 ${ig.warnings.length} 个"只报不拦"的条目动过`
+        : '⚠️ **还没启用**（清单不在，见上面那条提示）'
+  }`,
+);
 console.log(`  agent    ${cfg.dshBin} --profile ${cfg.agentProfile}（最多 ${cfg.agentMaxProcesses} 个）`);
 console.log(`  工作目录 ${cfg.agentCwd}`);
 console.log(

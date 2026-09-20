@@ -54,7 +54,20 @@ if [ "$FRESH" = "1" ]; then
 fi
 
 # ── 3) 起 ────────────────────────────────────────────────────
-BUILD="${HUPO_BUILD_ID:-dev}"
+# ⚠️ 指纹**不许**默认成 `dev`：那样 `/api/version` 报的就是一句假话
+#    ——"我是哪个版本"和磁盘上真正在服务的产物对不上。
+#    （2026-09-21 实测踩到：手动重启一次，线上指纹就从 `54a882e213e9` 掉成 `dev`。）
+#    ⇒ 没显式给就从**真正部署的那份产物**里读：部署时入口文件叫 `main.<指纹>.dart.js`。
+#    ⇒ 读不到（没出过 Web 产物 / 还是没指纹的老办法）才算 `dev`。
+BUILD="${HUPO_BUILD_ID:-}"
+if [ -z "$BUILD" ]; then
+  ENTRY="$(ls "$DIR"/web/main.*.dart.js 2>/dev/null | head -1 || true)"
+  if [ -n "$ENTRY" ]; then
+    BUILD="$(basename "$ENTRY" | sed -E 's/^main\.(.+)\.dart\.js$/\1/')"
+  else
+    BUILD="dev"
+  fi
+fi
 PORT="${HUPO_PORT:-8020}"
 echo "▶ 起新服务：端口 $PORT，构建指纹 $BUILD"
 setsid nohup env \
