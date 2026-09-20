@@ -211,14 +211,35 @@ test('★ 两轮之后不留残留状态（turns 用的是「轮」的编号，�
   await runtime.shutdown();
 });
 
-test('forceClose 能把没说完的收掉，且可重复调用', async () => {
-  const { runtime, dispatcher } = await setup({ scenario: 'slow' });
-  await dispatcher.deliver('慢慢答');
-  await wait(200); // 还没答
-  assert.equal(dispatcher.translator.forceClose('failed'), false, '还没有气泡，没什么可收的');
-  await wait(1800);
-  assert.equal(dispatcher.translator.forceClose('failed'), false, '已经收过了');
-  await runtime.shutdown();
+test('🔴 forceClose：一轮开了、一个字都没说 ⇒ **也必须留下话**（N19）', async () => {
+  // ⚠️ 这条是**改过的**。原先它断言的是：
+  //      forceClose 在没有 writer 时返回 false、什么都不做。
+  //    而那个行为**正是缺陷**：一轮开了、一个字都没说、然后进程没了 ⇒
+  //    用户永远等一条不会来的回答（手册事故一那行挂了 68 分钟）。
+  //    ⇒ 现在返回值是"收掉了几轮"，而且**没有 writer 也要说话**。
+  const { runtime, dispatcher, store } = await setup({ scenario: 'slow' });
+  try {
+    await dispatcher.deliver('慢慢答');
+    await wait(200); // 还没答 —— 但这一轮已经开了
+    assert.equal(
+      dispatcher.translator.forceClose('failed'),
+      1,
+      '★ 有未收口的轮 ⇒ 要收掉，而且**要说话**',
+    );
+
+    const b = bubble(store);
+    assert.ok(b, '★ 屏幕上必须真的多一条（不许留白）');
+    assert.equal(b.ended, true, '而且要收口');
+    assert.equal(b.reason, 'failed');
+
+    assert.equal(dispatcher.translator.forceClose('failed'), 0, '再收一次：没有了');
+  } finally {
+    // ⚠️ try/finally 不是洁癖：这条测试断言失败过一次，
+    //    而当时没有 finally ⇒ `runtime.shutdown()` 没跑到 ⇒
+    //    **假 agent 的子进程一直活着**，把整个 `npm test` 拖到 180 秒后
+    //    被超时杀掉。**一个断言失败变成了整个测试套件挂住。**
+    await runtime.shutdown();
+  }
 });
 
 // ── 进程上限与淘汰 ────────────────────────────────────────
@@ -353,4 +374,49 @@ test('★ 假 agent 用点号方法名，也必须能收到（防回归）', asy
   const ends = store.readAll('main').filter((e) => e.type === 'message/end');
   assert.equal(ends.length, 1, '★ 事件被丢掉了 —— 检查方法名的点/斜杠');
   await runtime.shutdown();
+});
+
+// ── S2：过程状态**按轮寻址**（不是按气泡）────────────────────
+//
+// 旧实现发的是 `messageId: ''`，客户端按 id 找、恒 null ⇒ 状态永远挂不上
+// （`07-APPENDIX.md` §1.5）。根因不是"忘填 id"：DSH 的 `session.status`
+// 都落在消息生命周期之外，**那个地址没有可能的值**。见 `dispatcher.js` `#announceTurn`。
+
+test('🔴 S2：`message/status` 的地址是「轮」，而且**绝不许发空字符串当地址**', async () => {
+  const { runtime, dispatcher, timeline } = await setup({ scenario: 'normal' });
+  const statuses = [];
+  timeline.subscribe((e) => {
+    if (e.type === 'message/status') statuses.push(e);
+  });
+  try {
+    await dispatcher.deliver('你好');
+    await wait(400);
+
+    assert.ok(statuses.length >= 1, '★ 一轮开起来就要告诉界面（那段空白正是放弃点所在）');
+    for (const s of statuses) {
+      assert.equal(typeof s.turn, 'number', '★ 地址是「轮」');
+      assert.notEqual(s.messageId, '', '★ 空字符串不是地址 —— 它是"永远挂不上"的成因');
+      assert.equal(s.seq, undefined, '瞬态不占号（决策 P-g）');
+    }
+    assert.equal(statuses[0].state, 'started');
+  } finally {
+    await runtime.shutdown();
+  }
+});
+
+test('🔴 进程死掉时：一轮开了、一个字没说 ⇒ **必须落一条看得见的话**', async () => {
+  // 这条路原先**什么都不说**，而且那一轮**永远留在 `#turns` 里**（泄漏）。
+  // `openTurn` 只找"有 writer 的那一轮"，所以它看不见这一种。
+  const { runtime, dispatcher, store } = await setup({ scenario: 'hang-die' });
+  try {
+    await dispatcher.deliver('跑个东西');
+    await wait(900);
+
+    const b = bubble(store);
+    assert.ok(b, '★ 用户必须看到一句交代（N19：挂起必有收尾）');
+    assert.equal(b.ended, true);
+    assert.match(b.all, /断了|没做完/, `说的话要是人话：${b.all}`);
+  } finally {
+    await runtime.shutdown();
+  }
 });

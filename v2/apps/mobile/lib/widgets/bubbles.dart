@@ -192,3 +192,37 @@ class MarkerLine extends StatelessWidget {
     );
   }
 }
+
+/// 「它正在做这件事…」——**一轮开着、但屏幕上还什么都没出现**的那段空白。
+///
+/// 为什么值得有它：走查里 8/10 的放弃点落在"**它到底收到没有**"。
+/// 用户说完一句话，在它出第一个字之前，屏幕上唯一的变化是自己那条气泡
+/// 从"已交出去"变成"已收到"——然后就**什么都没了**。
+/// 这一行就是补那段空白的。
+///
+/// ⚠️ **不许用无限动画**（转圈 / 呼吸灯）。
+///    本项目实测过一次：转圈动画 + 并发跑多个界面测试 ⇒ **互相饿死 CPU，
+///    跑到 17 分钟还没结束**。静态一行字就够，而且更省电。
+///
+/// ⚠️ 它**不是**气泡：不占号、不落盘、刷新就没了（决策 P-g）。
+class BusyLine extends StatelessWidget {
+  const BusyLine({super.key, required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+      child: Row(
+        children: [
+          Icon(Icons.more_horiz, size: theme.textTheme.bodySmall?.fontSize, color: theme.hintColor),
+          const SizedBox(width: 6),
+          // 跟着系统字号走（**不写死尺寸**，手册 D3）
+          Flexible(child: Text(text, style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor))),
+        ],
+      ),
+    );
+  }
+}

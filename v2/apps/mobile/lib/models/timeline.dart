@@ -12,6 +12,7 @@
 // ⚠️ 纯逻辑，**不许 import flutter/material**（禁令 1）。要进 `test/unit` 硬闸。
 
 import 'message_state.dart';
+import 'process_words.dart';
 
 /// 一条时间线条目。`seq` 是服务端发的号；本地乐观发言借用"当前最大号"。
 sealed class TimelineItem {
@@ -61,8 +62,13 @@ class AssistantMessage extends TimelineItem {
   List<Map<String, dynamic>> sources = const [];
   bool ended = false;
   String? reason;
-  String? status; // thinking / working / handoff / listening
   bool catchUp = false;
+  // ⚠️ 这里原先有个 `String? status`（thinking / working / handoff / listening），
+  //    **删掉了**：它从来没有过生产者——服务端那几种状态
+  //    （DSH 的 `session.status`）**都落在消息生命周期之外**，
+  //    按 `messageId` 根本挂不上（见 `services/core/src/dispatcher.js` `#announceTurn`）。
+  //    过程状态现在的地址是**轮**，不是气泡（`_turnState` / `agentLine`）。
+  //    批 3 做四档时如果再需要挂在气泡上，那时再加回来——那时它会有真生产者。
 
   /// 用户看到的正文。**中间不加连接词**（那会像两个人在接话）；
   /// 但快答没以句末标点结尾时补一个空格，免得两句粘在一起。
@@ -93,6 +99,50 @@ class Timeline {
   final List<TimelineItem> _items = [];
   final Set<int> _seenSeq = {};
   int _lastSeq = 0;
+
+  /// 服务端说"这一轮开始了"——**内部状态名**（`process_words.dart` 负责翻成人话）。
+  ///
+  /// ⚠️ 它是**瞬态**（决策 P-g：UI 状态不落盘）。所以断线重连不会被补发——
+  ///    那正是 `_hasOpenAssistant` 存在的理由（见 `agentLine`）。
+  String? _turnState;
+
+  /// 已经见过的最新轮号。**用来挡乱序/迟到的帧。**
+  ///
+  /// ⚠️ 手册 H4 点名要"**乱序保护 + 超时收敛**"。
+  ///    收敛那一半由服务端的硬收口保证（每条开过的轮都有收尾）；
+  ///    这一半在这儿：**旧轮的状态不许把新轮的提示点回来**——
+  ///    否则一条迟到的 `turn=1` 会在第 3 轮已经收口之后
+  ///    把「它正在做…」又亮起来，而屏幕上那是假的。
+  int? _turn;
+
+  /// 服务端说了"它断了 / 接不上活" ⇒ **那一轮已经死了**。
+  ///
+  /// ⚠️ 为什么要单独一个标志：`_hasOpenAssistant` 那条兜底（给断线重连用的）
+  ///    在"气泡还开着、但它已经死了"的时候会**把提示点回来**——
+  ///    那时屏幕上写的是"它正在做"，而它其实已经不做了。**那就是说假话。**
+  ///    ⇒ 知道了就别装不知道。下一次真开轮（收到认识的状态名）时清掉。
+  bool _agentDead = false;
+
+  /// 界面上该显示的那句「它在做…」；`null` = **什么都不显示**。
+  ///
+  /// 两个来源，缺一不可：
+  ///   ① `_turnState`：这一轮刚开、**一个字都还没说** ——
+  ///      ⚠️ **只有它能覆盖那段空白**（那时时间线上一个条目都还没有）
+  ///   ② 有**没收口的气泡**：重连之后瞬态没了，但落盘的事件还在 ⇒ 仍然推得出来
+  ///
+  /// ⇒ **不可能出现"永远停在正在做"**：每一条开过的轮都一定有 `message/end`
+  ///   （超时硬收口 / 进程死掉都会补一条，见 `docs/dev/07-TIMEOUT.md`）。
+  ///   手册 H4 说的那个失败模式（卡住时永久停在"在查资料"）就是靠这条堵住的。
+  String? get agentLine {
+    if (_agentDead) return null; // 知道它死了就别再说"它正在做"
+    final w = processWord(_turnState);
+    if (w != null) return w;
+    return _hasOpenAssistant ? busyFallback : null;
+  }
+
+  /// 有没有**还没收口**的助手气泡（= 它正在说，或者说到一半断了）。
+  bool get _hasOpenAssistant =>
+      _items.any((it) => it is AssistantMessage && !it.ended);
 
   /// 已收到的最大服务端号。**补发就从它开始要**。
   int get lastSeq => _lastSeq;
@@ -169,6 +219,8 @@ class Timeline {
           m.quick += text;
         }
       case 'message/end':
+        // 这一轮说完了 ⇒ 界面上那行「它在做…」跟着撤
+        _turnState = null;
         final m = _findMessage(messageId);
         if (m == null) return;
         m.ended = true;
@@ -210,12 +262,31 @@ class Timeline {
     ));
   }
 
-  /// 瞬态：只改状态，不新增条目。
+  /// 瞬态：只改状态，**不新增条目**（决策 P-g）。
   void _applyTransient(Map<String, dynamic> event) {
-    if (event['type'] != 'message/status') return;
-    final m = _findMessage(event['messageId'] as String?);
-    if (m == null) return; // ⚠️ 取不到就什么都别做（不许凭空造一条消息）
-    m.status = event['state'] as String?;
+    switch (event['type']) {
+      case 'message/status':
+        // ★ **按轮寻址**，不按气泡（见 `agentLine` 上面那段）。
+        //   只有**认得出来的**状态才认；认不出来的**保持安静**——
+        //   不猜、也不把内部词漏到屏幕上（N10：沉默优于编造）。
+        final state = event['state'] as String?;
+        final turn = event['turn'];
+        // 乱序保护：比见过的旧 ⇒ **丢掉**（不许让旧轮把提示点回来）
+        if (turn is int && _turn != null && turn < _turn!) return;
+        if (processWord(state) != null) {
+          if (turn is int) _turn = turn;
+          _turnState = state;
+          _agentDead = false; // 又开了一轮 ⇒ 它活着
+        }
+      case 'error':
+        // 它断了 / 接不上活 ⇒ 那一轮**不会再有收尾了**，这行提示必须撤掉。
+        // ⚠️ 少了这一条，手册 H4 那个失败模式就回来了：
+        //   卡住时**永久停在"它正在做…"**，比空白更坏。
+        _turnState = null;
+        _agentDead = true;
+      default:
+        return;
+    }
   }
 
   AssistantMessage? _findMessage(String? messageId) {
@@ -242,6 +313,9 @@ class Timeline {
       ..addAll(mine);
     _seenSeq.clear();
     _lastSeq = 0;
+    // 瞬态不属于"落盘的历史" ⇒ 重放之前先清掉（它会被后面的帧重新点起来）
+    _turnState = null;
+    _turn = null; // 号也从头来（服务端会重发一轮轮的帧）
     // 本地那条的号要重新借（现在最大号是 0）
     for (var i = 0; i < _items.length; i += 1) {
       final u = _items[i] as UserUtterance;

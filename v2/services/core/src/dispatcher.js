@@ -16,6 +16,17 @@ import { RECAP_DEFAULTS, buildRecap } from './recap.js';
 import { TurnTranslator } from './session-translate.js';
 
 /**
+ * 这几句是**用户能看到的**（落盘、上时间线）。所以它们必须是人话，
+ * 而且要**说清怎么办**（N11）。
+ *
+ * ⚠️ 它们以前是**瞬态** `error`（客户端**今天不渲染** ⇒ 用户什么都看不到）。
+ *    现在改成落盘的消息：**看得见才算数**。
+ *    瞬态那条留着，是给"盘满了、落不下盘"的场合兜底的。
+ */
+const AGENT_LOST_LINE = '刚才我断了，这条没做完。再说一次吧。';
+const AGENT_UNAVAILABLE_LINE = '我现在接不上活。你这句话我记下了，等我缓过来再说。';
+
+/**
  * 单轮硬收口（手册 `08-SPEC.md` §10.2 给的阈值就是它）。
  *
  * 为什么需要：agent 卡住就是**永远卡住**——用户等一条不会来的回答。
@@ -69,6 +80,7 @@ export class Dispatcher {
       // 一轮开始 = 消化掉一条投递
       this.#delivered.shift();
       this.#armDeadline(turn);
+      this.#announceTurn(turn);
     });
     this.#translator.on('turn-end', ({ turn }) => this.#clearDeadline(turn));
   }
@@ -115,6 +127,45 @@ export class Dispatcher {
     const built = buildRecap(events, { ...this.#recapOptions, excludeMessageId });
     this.#lastRecap = built.text === '' ? null : built.text;
     return built.text;
+  }
+
+  // ── 过程可见性（S2：状态**按轮**寻址）──────────────────────────
+
+  /**
+   * 告诉界面"这一轮开始了"——屏幕上那行「它正在做…」就挂在这上面。
+   *
+   * ⚠️⚠️ **寻址用的是「轮」（`turn`），不是「气泡」（`messageId`）。**
+   *    这是**实测决定的**，不是审美：
+   *
+   *      DSH 的 `session.status`（`running` / `idle`）**都落在消息生命周期之外**——
+   *      实测（`/tmp/probe-tools.log`、`/tmp/probe-queue.log`）：
+   *
+   *        session.status running   ← 比 turn/start **早约 1ms**
+   *        turn/start  turn=1
+   *        …assistant/message…
+   *        turn/end    turn=1
+   *        session.status idle      ← 比 turn/end **晚**
+   *
+   *      ⇒ 收到 `running` 时**还没有轮**，收到 `idle` 时**轮已经收了**：
+   *        "按 `messageId` 找那条气泡"这个形状**根本填不出值**。
+   *
+   *    旧实现的 `messageId: ''` 就是这么来的（`07-APPENDIX.md` §1.5）——
+   *    它不是"忘了填"，是**那个字段没有可能的值**。
+   *    而后果被记成了"界面没做状态"，害得人往错的方向查。
+   *
+   * ⚠️ 它是**瞬态**（决策 P-g：UI 状态不上时间线、不落盘）。
+   *    代价要说清：断线重连时它不会被补发 ⇒ **重连后那一小段可能没有这行提示**。
+   *    那正是 P-g 的取舍（UI 状态不该被持久化），不是 bug。
+   */
+  #announceTurn(turn) {
+    if (typeof turn !== 'number') return;
+    this.#timeline.emitTransient({
+      type: 'message/status',
+      turn,
+      // 内部状态名。**它不是给用户看的**——界面那一层有一张人话表
+      // （`apps/mobile/lib/models/process_words.dart`），认不出来的就**不说**。
+      state: 'started',
+    });
   }
 
   // ── 超时硬收口（N19 挂起必有收尾 + N10 收气泡 ≠ 停 agent）────────
@@ -233,27 +284,28 @@ export class Dispatcher {
       }
     });
 
-    agent.on('status', ({ status }) => {
-      // 状态走**瞬态**通道（决策 P-g：不上时间线、不落盘）
-      this.#timeline.emitTransient({ type: 'message/status', messageId: '', state: status });
-    });
+    // ⚠️ **`session.status` 不再翻译成 `message/status`。**
+    //    见 `#announceTurn()` 那段实测：`running` / `idle` **都落在消息生命周期之外**，
+    //    所以"按 messageId 找气泡"填不出值——旧代码在这里发 `messageId: ''`，
+    //    结果是**状态永远挂不上**（`07-APPENDIX.md` §1.5）。
+    //    它的信息量（这一轮在不在跑）已经被**轮的起讫**完整覆盖，
+    //    所以这里不是"少了一个功能"，是**换了一个正确的地址**。
 
     agent.on('exit', (info) => {
       // 那个实例没了 ⇒ 下一个实例要重新喂背景。
       // ⚠️ `#wiredAgent` **不动**：它是"挂过监听的那个"，不是"活着的那个"。
       //    动了它，同一个实例就会被**挂两遍**监听，用户看到两条一样的回答。
       this.#recapFedTo = null;
-      // ★ **进程死了必须收口**——不能让用户等一个不会再来的回答
-      this.#translator.forceClose('failed');
+      // ★ **进程死了必须收口**——不能让用户等一个不会再来的回答。
+      //   ⚠️ `line` 是"这一轮一个字都还没说"时说的那句：**它落盘**，
+      //      所以用户**看得见**。（`emitTransient` 那条 `error` 客户端今天不渲染，
+      //      它留着是给盘满那种"落不了盘"的场合兜底的。）
+      this.#translator.forceClose('failed', { line: AGENT_LOST_LINE });
       this.#clearAllDeadlines();
       // 排队里那些话也跟着这个进程一起没了 —— 逐条收口（和超时那条路同一个道理）
       this.#closeUndelivered('failed');
       this.#lastError = info?.reason ?? 'agent 退出了';
-      this.#timeline.emitTransient({
-        type: 'error',
-        kind: 'agent-exit',
-        text: '刚才我断了，这条没做完。',
-      });
+      this.#timeline.emitTransient({ type: 'error', kind: 'agent-exit', text: AGENT_LOST_LINE });
     });
 
     return agent;
@@ -318,14 +370,14 @@ export class Dispatcher {
       this.#lastError = String(err?.message ?? err);
       // 起不来的时候**也要有个交代**——静默失败等于"它不理我"
       try {
-        this.#translator.forceClose('failed');
+        this.#translator.forceClose('failed', { line: AGENT_UNAVAILABLE_LINE });
       } catch {
         /* 没有未收口的，正常 */
       }
       this.#timeline.emitTransient({
         type: 'error',
         kind: 'agent-unavailable',
-        text: '我现在接不上活，你这句话我记下了，等我缓过来再说。',
+        text: AGENT_UNAVAILABLE_LINE,
       });
       return { delivered: false, error: this.#lastError };
     }

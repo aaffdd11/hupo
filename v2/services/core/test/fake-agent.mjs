@@ -13,6 +13,8 @@
 //   two-step   两步：先应一声（quick），再给结论（deep）
 //   hang       一轮开始之后**永远不结束**（用来验超时硬收口；第二个 prompt 排队）
 //   hang-talk  hang 的变体：**先说半句**再不结束（验"已经说了一半"那种超时）
+//   hang-die   一轮开起来、**一个字都没说**，然后进程直接死
+//              （验 forceClose 那条"没有 writer 也要说话"的路 —— N19）
 
 import fs from 'node:fs';
 
@@ -210,6 +212,13 @@ function runScenario(t) {
       // 一轮开始，然后**什么都不发生**——永远不收口。
       // 真 agent 卡住时的样子就是这样：进程活着、`running` 恒真、
       // 而用户那条气泡永远停在"马上说完"。
+      break;
+
+    case 'hang-die':
+      // 一轮开了、一个字都没说，然后进程没了。
+      // ⚠️ 早先这条路**什么都不说**，而且那一轮**永远留在 `#turns` 里**——
+      //    用户就一直等一条不会来的回答（N19 要挡的正是这个）。
+      timers.push(setTimeout(() => process.exit(9), 30));
       break;
 
     case 'hang-talk':

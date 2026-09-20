@@ -286,27 +286,48 @@ export class TurnTranslator extends EventEmitter {
   }
 
   /**
-   * 强制收口（超时 / 进程死掉 / 淘汰前）。
+   * 强制收口：把**所有**还没收尾的轮都收掉。
    *
-   * ⚠️ 这就是"**先收口再卸**"里的那个收口。
-   *    不收的话，用户会永远等一条不会来的回答
-   *    （手册事故一："还有件事在处理"一直挂着）。
+   * ⚠️ 早先它只找"**有 writer 的那一轮**"（`openTurn`）。于是有这么一类轮
+   *    **永远不会被清掉、也永远不会说话**：
    *
-   * ⚠️ 它和 `turnDeadline` 的分工：这个是"**它不会答了**"（进程没了/被卸了），
-   *    那个是"**它答不动了**"（超时）。后者要**多说一句为什么**。
+   *      一轮开了 → 一个字都还没说 → 进程没了 / 被卸了
+   *
+   *    它在 `#turns` 里留着（**泄漏**），而屏幕上**什么都没有**——
+   *    用户就一直等一条不会来的回答。**这正是 N19 要挡的形状**，
+   *    只是它藏在"没有 writer"这条路上，`openTurn` 找不到它。
+   *
+   * ⚠️ 而且它是**界面那个"它正在做…"的收尾条件**：不清掉，
+   *    那行提示会永远挂在那儿（手册 H4：卡住时永久停在"在查资料"，比空白更坏）。
+   *
+   * @param {string} reason
+   * @param {object} [o]
+   * @param {string} [o.line] **一句话都没说**时说的那句（有 writer 时补的是
+   *        `INTERRUPTED_LINE`，因为用户已经看到半句了）。
+   * @returns {number} 收掉了几轮
    */
-  forceClose(reason = 'failed') {
-    const turn = this.openTurn;
-    const rec = turn === null ? null : this.#turns.get(turn);
-    if (!rec?.writer) {
-      if (turn !== null) this.#turns.delete(turn);
-      return false;
+  forceClose(reason = 'failed', { line = INTERRUPTED_LINE } = {}) {
+    let closed = 0;
+    for (const [turn, rec] of [...this.#turns]) {
+      this.#turns.delete(turn);
+      if (rec.writer && !rec.writer.ended) {
+        // 用户已经看到半句 ⇒ 补一句"没说完"，别重复它的开头
+        rec.writer.chunk('deep', INTERRUPTED_LINE);
+        rec.writer.end(reason);
+      } else if (!rec.writer) {
+        // 一句话都没说 ⇒ **主动交代**（不许留白）
+        const w = new MessageWriter({
+          timeline: this.#timeline,
+          agent: 'agent',
+          origin: 'reactive',
+          scopeId: this.#scopeId,
+        });
+        w.chunk('deep', line);
+        w.end(reason);
+      }
+      closed += 1;
     }
-    if (!rec.writer.ended) {
-      rec.writer.chunk('deep', INTERRUPTED_LINE);
-      rec.writer.end(reason);
-    }
-    this.#turns.delete(turn);
-    return true;
+    if (closed > 0) this.emit('force-close', { reason, closed });
+    return closed;
   }
 }

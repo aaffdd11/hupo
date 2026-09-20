@@ -9,6 +9,7 @@ import 'package:hupo_app/models/message_state.dart';
 import 'package:hupo_app/models/timeline.dart';
 
 void main() {
+  _busyGroup();
   group('排序', () {
     test('服务端事件按 seq 排', () {
       final t = Timeline();
@@ -132,16 +133,21 @@ void main() {
     test('★ 瞬态事件不许新增条目（决策 P-g：不占号 = 不上时间线）', () {
       final t = Timeline();
       t.apply({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
-      t.apply({'type': 'message/status', 'messageId': 'm1', 'state': 'working'}); // 没有 seq
+      t.apply({'type': 'message/status', 'turn': 1, 'state': 'started'}); // 没有 seq
       t.apply({'type': 'client/reload'}); // 控制帧
       expect(t.items.length, 1, reason: '瞬态只改状态，不新增');
-      expect(t.items.whereType<AssistantMessage>().single.status, 'working');
     });
 
-    test('★ 状态挂不上时不许凭空造一条消息', () {
+    test('★ 状态挂不上的时候不许凭空造一条消息', () {
       final t = Timeline();
-      t.apply({'type': 'message/status', 'messageId': 'm_不存在', 'state': 'working'});
-      expect(t.items, isEmpty);
+      t.apply({'type': 'message/status', 'turn': 1, 'state': 'started'});
+      expect(t.items, isEmpty, reason: '一行提示不是一条时间线条目');
+    });
+
+    test('★ 认不出来的状态 ⇒ **保持安静**（N10：沉默优于编造）', () {
+      final t = Timeline();
+      t.apply({'type': 'message/status', 'turn': 1, 'state': 'working'});
+      expect(t.agentLine, isNull, reason: '不认识就当没收到 —— 绝不把内部词甩出去');
     });
 
     test('不认识的类型安静忽略（向前兼容）', () {
@@ -194,6 +200,92 @@ void main() {
       t.apply({'type': 'user/echo', 'messageId': 'u1', 'text': '说过了', 'seq': 1});
       t.reset();
       expect(t.items, isEmpty);
+    });
+  });
+}
+
+// ── S2：过程状态（「它正在做…」）─────────────────────────────
+//
+// 旧实现里这条链**从服务端就断了**：`message/status` 发的是 `messageId: ''`，
+// 客户端按 id 找、恒 null ⇒ `message.status` 永远挂不上
+// （`07-APPENDIX.md` §1.5）。根因不是"忘了填 id"，是**那个地址没有可能的值**：
+// DSH 的 `session.status` 都落在消息生命周期之外。
+// ⇒ 现在的地址是**轮**。
+
+void _busyGroup() {
+  group('它在做（S2）', () {
+    test('★ 一轮开了、一个字都没说 ⇒ 界面上要有一行提示', () {
+      final t = Timeline();
+      expect(t.agentLine, isNull, reason: '还没开始，什么都不该显示');
+      t.apply({'type': 'message/status', 'turn': 1, 'state': 'started'});
+      expect(t.agentLine, isNotNull, reason: '★ 那段空白正是 8/10 放弃点所在');
+      expect(t.items, isEmpty, reason: '它**不是**一条消息');
+    });
+
+    test('★ 说出第一句之后提示仍在（它还在做这一轮）', () {
+      final t = Timeline();
+      t.apply({'type': 'message/status', 'turn': 1, 'state': 'started'});
+      t.apply({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
+      expect(t.agentLine, isNotNull);
+    });
+
+    test('★ 收口之后提示必须撤掉', () {
+      final t = Timeline();
+      t.apply({'type': 'message/status', 'turn': 1, 'state': 'started'});
+      t.apply({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
+      t.apply({'type': 'message/end', 'messageId': 'm1', 'seq': 2, 'reason': 'completed'});
+      expect(t.agentLine, isNull, reason: '这一轮说完了');
+    });
+
+    test('🔴 H4：它断了 ⇒ 提示必须撤掉（不许永久停在"正在做"）', () {
+      // 手册 H4：过程可见性卡住时永久停在"在查资料"，**比空白更坏**。
+      // 断了就一定有收尾（N19），所以这一行也一定撤得掉。
+      final t = Timeline();
+      t.apply({'type': 'message/status', 'turn': 1, 'state': 'started'});
+      t.apply({'type': 'error', 'kind': 'agent-exit', 'text': '刚才我断了'});
+      expect(t.agentLine, isNull);
+    });
+
+    test('🔴 H4 的第二条路：收尾的那条消息没到，但提示也不许留着', () {
+      final t = Timeline();
+      t.apply({'type': 'message/status', 'turn': 1, 'state': 'started'});
+      t.apply({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
+      t.apply({'type': 'error', 'kind': 'agent-exit', 'text': '刚才我断了'});
+      // 该气泡仍然开着（服务端会补一条收尾，落到盘上就会来）——
+      // 但**这一行提示**不能自己一直亮着。
+      expect(t.agentLine, isNull, reason: '断线那条 error 就是"别再显示了"');
+    });
+
+    test('★ 重连之后仍然推得出"它在做"（落盘的气泡还开着）', () {
+      final t = Timeline();
+      t.apply({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
+      t.apply({'type': 'message/text', 'messageId': 'm1', 'block': 'quick', 'text': '查着', 'seq': 2});
+      // 瞬态丢了（P-g：不落盘、不补发）—— 但气泡还在 ⇒ 仍然知道它在做
+      expect(t.agentLine, isNotNull, reason: '★ 不能只靠瞬态');
+    });
+
+    test('🔴 乱序保护：迟到的旧轮不许把提示点回来（手册 H4）', () {
+      final t = Timeline();
+      t.apply({'type': 'message/status', 'turn': 3, 'state': 'started'});
+      t.apply({'type': 'message/start', 'messageId': 'm3', 'seq': 1});
+      t.apply({'type': 'message/end', 'messageId': 'm3', 'seq': 2, 'reason': 'completed'});
+      expect(t.agentLine, isNull);
+
+      // 一条**迟到的**第 1 轮状态 —— 不许把「它正在做…」又点亮
+      t.apply({'type': 'message/status', 'turn': 1, 'state': 'started'});
+      expect(t.agentLine, isNull, reason: '★ 旧轮不许复活提示（那屏幕上就是假的）');
+
+      // 新的一轮则要认
+      t.apply({'type': 'message/status', 'turn': 4, 'state': 'started'});
+      expect(t.agentLine, isNotNull);
+    });
+
+    test('重放（reset）要清掉瞬态（它不属于落盘的历史）', () {
+      final t = Timeline();
+      t.apply({'type': 'message/status', 'turn': 1, 'state': 'started'});
+      expect(t.agentLine, isNotNull);
+      t.reset();
+      expect(t.agentLine, isNull, reason: '瞬态不落盘 ⇒ 重放时不该还亮着');
     });
   });
 }

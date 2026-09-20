@@ -8,6 +8,7 @@
 //   ① 顶部状态条：网怎么样、登录还有没有效
 //   ② 每条消息的四态（在气泡里）
 //   ③ 出错的实话：没发出去就是没发出去
+//   ④ 它正在做（`BusyLine`）：一轮开了、还没出字的那段空白
 //
 // ⚠️ 文案里**不许出现内部词**（"连接/客户端/云端/工作区"…）——
 //    有 `forbidden_words` 那道闸守着，改文案时会拦。
@@ -86,14 +87,7 @@ class _ChatScreenState extends State<ChatScreen> {
               child: ConstrainedBox(
                 // 内容列限宽（手册 D4.6 / R5）：平板上一行七十个字没人读
                 constraints: const BoxConstraints(maxWidth: 760),
-                child: c.items.isEmpty
-                    ? const _EmptyState()
-                    : ListView.builder(
-                        controller: _scroll,
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                        itemCount: c.items.length,
-                        itemBuilder: (context, i) => _render(c.items[i], c),
-                      ),
+                child: _body(c),
               ),
             ),
           ),
@@ -106,6 +100,23 @@ class _ChatScreenState extends State<ChatScreen> {
           SizedBox(height: MediaQuery.viewInsetsOf(context).bottom),
         ],
       ),
+    );
+  }
+
+  /// 时间线本体 + 尾巴上那行「它正在做…」。
+  ///
+  /// ⚠️ 那行提示**算在列表里**（会跟着滚），不是浮在输入框上面——
+  ///    它是"这一轮正在发生"，属于对话流，不属于工具栏。
+  Widget _body(ChatController c) {
+    final line = c.agentLine;
+    if (c.items.isEmpty && line == null) return const _EmptyState();
+    return ListView.builder(
+      controller: _scroll,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      itemCount: c.items.length + (line == null ? 0 : 1),
+      itemBuilder: (context, i) => i < c.items.length
+          ? _render(c.items[i], c)
+          : BusyLine(text: line!),
     );
   }
 

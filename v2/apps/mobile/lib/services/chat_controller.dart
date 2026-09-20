@@ -42,6 +42,9 @@ class ChatController extends ChangeNotifier {
   /// 界面读这个。
   List<TimelineItem> get items => timeline.items;
 
+  /// 界面上那行「它正在做…」；`null` = 什么都不显示。
+  String? get agentLine => timeline.agentLine;
+
   /// 登录后启动：连流、并开始收事件。
   Future<void> start({required String token}) async {
     _token = token;
@@ -74,12 +77,20 @@ class ChatController extends ChangeNotifier {
       }
       notifyListeners();
     });
-    s.events.listen(_onEvent);
+    s.events.listen(ingest);
     s.open(sinceSeq: timeline.lastSeq);
     _stream = s;
   }
 
-  void _onEvent(Map<String, dynamic> event) {
+  /// **服务端的事实，只有这一个入口。**
+  ///
+  /// 它公开而不是私有，有两个理由：
+  ///   1. 它本来就是"从外面收进来"的那条路（`_ensureStream` 订阅到它就转这里）
+  ///   2. 界面那一层要验"**这条事实到底有没有画到屏幕上**"——
+  ///      而那只能靠搭起屏幕、从这一个入口喂进去
+  ///      （`test/widget/busy_line_test.dart`）。没有它，S2 那类
+  ///      "链子断在中间、屏幕上看不出来"的缺陷就**测不到**。
+  void ingest(Map<String, dynamic> event) {
     if (event['type'] == '__reset__') {
       // 服务端说"你的号跑到我前面了"⇒ 本地那条时间线不作数了。
       // 不是"没有新东西"——是"从头来"。
