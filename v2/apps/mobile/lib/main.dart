@@ -47,16 +47,27 @@ class _HupoAppState extends State<HupoApp> {
 
     final token = await _tokens.read();
     if (token != null) {
-      _controller = ChatController(api: _api, tokens: _tokens, token: token)
-        ..start(token: token);
+      _controller = ChatController(
+        api: _api,
+        tokens: _tokens,
+        token: token,
+        // 续期撞上 401（过期 / 被撤销 / 过了绝对上限）⇒ 回登录页。
+        // ⚠️ 这只是**回登录页**那条路：网的问题在控制器里就被挡下了，
+        //    令牌一个字节都不会清（B1）。
+        onUnauthorized: _onLoggedOut,
+      )..start(token: token);
     }
     if (mounted) setState(() => _booting = false);
   }
 
   void _onLoggedIn(String token) {
     setState(() {
-      _controller = ChatController(api: _api, tokens: _tokens, token: token)
-        ..start(token: token);
+      _controller = ChatController(
+        api: _api,
+        tokens: _tokens,
+        token: token,
+        onUnauthorized: _onLoggedOut,
+      )..start(token: token);
     });
   }
 

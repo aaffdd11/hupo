@@ -279,6 +279,24 @@ async function main() {
     }
   }
 
+  // ⑤.5 **续期到底有没有发生**（这一条只有"在浏览器里"才看得到）
+  //   ⚠️ 为什么值得单钉一条：客户端开机会拿旧令牌换一个新的（`POST /api/renew`）。
+  //      "自动闸绿"证明不了这件事在**装出来的那个页面上**真的发生了 ——
+  //      而它的失败是**静默**的（拿旧令牌照样能连，只是半年后某天会被踢出去）。
+  //   ⇒ 判据很直接：**App 有没有把 localStorage 里那个令牌换掉。**
+  const afterTok = await send('Runtime.evaluate', {
+    expression: `localStorage.getItem('flutter.hupo_auth_token') ?? ''`,
+    returnByValue: true,
+  });
+  const afterVal = afterTok.result?.result?.value ?? '';
+  if (afterVal === '') {
+    console.log('  续期       ⚠️ 令牌**被清掉了**（那是 401 那条路：它认为续不动了）');
+  } else if (afterVal !== encoded) {
+    console.log('  续期       ✅ 令牌**被换新了**（App 开机续了一次）');
+  } else {
+    console.log('  续期       ⚠️ 没看到换新（续期没发生 / 失败后按"留着旧的"处理）');
+  }
+
   // ⑥ 报（**如实**：把数出来的一起说，别只说结论）
   const ok = wsEvents.created > 0 && wsEvents.received > 0;
   console.log(`  页面里建过的 WebSocket：${wsEvents.created}（断过 ${wsEvents.closed}）`);
