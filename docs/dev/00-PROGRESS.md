@@ -475,6 +475,7 @@ $ bash scripts/check-apk.sh
 > | 时间 | 为什么重建 | 动了哪几个文件 |
 > |---|---|---|
 > | 2026-09-21 02:22 | 「改自己」分两期 + push 工具改成必须给路径（主人签字 `f12fa88`） | `[拦]` `AGENTS.md`、`docs/handbook/{05-DECISIONS,06-OPERATIONS,CHANGELOG}.md`；`[报]` `scripts/push-changes.sh`。清单落到 `/etc/hupo/integrity.json`（`root:root 0444`）。**重建后真机重启，横幅实测「完整性 对上了」** |
+| 2026-09-21 03:44 | **重新定基线**：⑲/⑳ 两件改过的 `src/*.js`（7 个）+ 刚修好的 `scripts/apply-change.sh`，一共 **8 处**都是 `[报]`（**0 处 `[拦]`** ⇒ 可以安全重建）。⚠️ 顺带说明：`src/`、`scripts/` 是**只报不拦**，本来不重建也行 —— 重建只是把这几轮的漂移清掉、让开机横幅回到干净状态 | 全部 `[报]`：`src/{dispatcher,process-guard,reconcile,serve,server,session-translate,store}.js` + `scripts/apply-change.sh`。清单落到 `/etc/hupo/integrity.json`（`root:root 0444`），**重建后只读复核「✅ 对上了」** |
 >
 > ✅ **主人 2026-09-21 明确决定：口令先不换。**
 > ⇒ 这一条从此是**已知并接受的风险**，不是"欠着一件事"。下一个人**不必再提**，

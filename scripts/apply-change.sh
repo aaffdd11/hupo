@@ -157,11 +157,27 @@ SHORT="$(git rev-parse --short HEAD)"
 
 # ── 6) 只报"接下来做什么"，替主人做决定的部分到此为止 ────────
 # 这一块刻意压到几行：§3.1 说得很清楚，主人闭眼跑的那天，这套护栏就没了。
+#
+# ⚠️ **node 必须打印绝对路径**：本机**没有系统 `node`**（只有 nvm 里那一个），
+#    所以 `sudo node …` 会撞"找不到命令" —— 2026-09-21 实测踩过一次
+#    （主人照这行抄，命令直接失败）。`verify-integrity.mjs` 自己打印的是对的
+#    （它用 `process.execPath`），这里之前是**硬编**的，是个真缺陷。
+NODE_BIN="$(command -v node 2>/dev/null || true)"
+if [ -z "$NODE_BIN" ]; then
+  # nvm 那个位置（`AGENTS.md` §1.1 记着本机只有这一个）
+  for cand in "$HOME"/.nvm/versions/node/*/bin/node; do
+    [ -x "$cand" ] && NODE_BIN="$cand" && break
+  done
+fi
+if [ -z "$NODE_BIN" ]; then
+  NODE_BIN="<node 的绝对路径>"
+  echo "⚠️ 找不到 node —— 下面那条重建命令里的 <node 的绝对路径> 要你自己填。" >&2
+fi
 cat <<EOF
 
 ✅ 已应用并留下一个 commit：$SHORT
 ⚠️ 代码/配置变过 ⇒ 开机那份清单要重建，否则下次开机起不来：
-     sudo node scripts/verify-integrity.mjs --build
+     sudo $NODE_BIN scripts/verify-integrity.mjs --build
    然后（等它把手上的话说完再重启）：
      scripts/restart-core.sh
 EOF
