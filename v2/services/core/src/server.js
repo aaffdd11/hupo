@@ -40,6 +40,94 @@ const MIME = {
   '.map': 'application/json; charset=utf-8',
 };
 
+// ── 过程四档（决策 D7 / 契约 `docs/dev/26-PROCESS-LEVELS.md`）────────────
+//
+// ⚠️ **`level` 是连接级的**：每条 WS 连接各自一份（从 query 取），
+//    不是进程级开关，也不是全局设置——一台设备选了"推理原文"**不许**
+//    改变另一台设备看到的东西。
+//
+// 四档是**累加的梯子**（契约 §三那张表）：
+//
+//   quiet      只说出口的话（`message/*`）——**连 `message/status` 都不发**
+//   doing ✅    + `message/status`（`process_words.dart` 翻成人话）
+//   steps       + `step/*`
+//   reasoning   + `reasoning/*`（⚠️ 只有主人；默认关）
+//
+// ⚠️ **过程事件（`step/*` · `reasoning/*`）一律是瞬态的**——
+//    由 `session-translate.js` 走 `emitTransient()` 发出来（不占号、不落盘），
+//    这里的闸**只决定"发给哪条连接"**，与落盘无关。
+//    两层分开是有意的：如果由这里决定落不落盘，那"某个连接的档位"
+//    就会影响磁盘上的内容——那正是泄露闸要挡的形状。
+//    见 `session-translate.js` 文件头与契约 §二。
+
+/** 认得的四档。**不在这个表里的 query 一律当默认档**，不许把连接拒掉。 */
+export const PROCESS_LEVELS = Object.freeze(['quiet', 'doing', 'steps', 'reasoning']);
+
+/** 不带 `level` 时的档（契约：默认 `doing`）。 */
+export const DEFAULT_PROCESS_LEVEL = 'doing';
+
+/**
+ * 各档额外放行哪些事件（`message/*` 每档都发，不在这张表里）。
+ *
+ * ⚠️ `quiet` 是空集，**包括 `message/status`** —— "安静档要真的安静"，
+ *    少挡这一条就等于这一档没做（契约 §四点名要验）。
+ */
+const LEVEL_EXTRA_TYPES = Object.freeze({
+  quiet: new Set(),
+  doing: new Set(['message/status']),
+  steps: new Set(['message/status', 'step/start', 'step/end']),
+  // 累加：`reasoning` 档**也**收步骤（它是梯子最上面那一阶）
+  reasoning: new Set(['message/status', 'step/start', 'step/end', 'reasoning/delta']),
+});
+
+/** 每一档都发的那几样：它**说出口的话**。 */
+const ALWAYS_TYPES = new Set(['message/start', 'message/text', 'message/end']);
+
+/**
+ * 从 query 解出这一条连接的档。
+ *
+ * ⚠️ **认不出来 ⇒ 默认档，不报错、更不许拒连接**（契约 §三）：
+ *    客户端版本比服务端新/旧都会出现不认识的档，那时正确的行为是
+ *    "按默认档服务"，而不是把用户挡在门外（N10 的另一面：
+ *    宁可少说，不能不说）。
+ *
+ * @param {URLSearchParams|string|null} params
+ * @returns {'quiet'|'doing'|'steps'|'reasoning'}
+ */
+export function parseLevel(params) {
+  let raw = null;
+  if (typeof params === 'string') {
+    try {
+      raw = new URLSearchParams(params).get('level');
+    } catch {
+      raw = null;
+    }
+  } else if (params && typeof params.get === 'function') {
+    raw = params.get('level');
+  }
+  if (typeof raw !== 'string') return DEFAULT_PROCESS_LEVEL;
+  const level = raw.trim();
+  return PROCESS_LEVELS.includes(level) ? level : DEFAULT_PROCESS_LEVEL;
+}
+
+/**
+ * 这条连接收不收这个事件。**纯函数**（好把它单独钉住）。
+ *
+ * @param {object} event  时间线上推出来的事件
+ * @param {object} o
+ * @param {string} o.level 这一条连接的档
+ * @param {boolean} [o.dev] `dev=1` 那条**附加**通道（见 `onStream` 里的说明）
+ */
+export function levelAllows(event, { level, dev = false } = {}) {
+  const type = event?.type;
+  if (typeof type !== 'string') return false;
+  if (ALWAYS_TYPES.has(type)) return true;
+  if (LEVEL_EXTRA_TYPES[level]?.has(type)) return true;
+  // ★ `dev=1` 与 `level` **并存**（不是别名）：见 `onStream` 里那段为什么。
+  if (dev && type.startsWith('step/')) return true;
+  return false;
+}
+
 /** 这两个**不许长缓存**，否则用户看到的是几小时前的界面。 */
 /**
  * 文件名里带**内容指纹**的，才允许长缓存。
@@ -318,6 +406,8 @@ export function createServer({
     const rawSince = url.searchParams.get('sinceSeq');
     const sinceSeq = rawSince === null ? 0 : Number.parseInt(rawSince, 10);
     const devMode = url.searchParams.get('dev') === '1';
+    // ★ **按连接**解一次档（契约 §二·2）；不认识的当默认档，不拒连接
+    const level = parseLevel(url.searchParams);
 
     // 补发（手册 §2.2，决策 P-h）
     let plan;
@@ -345,9 +435,8 @@ export function createServer({
 
     // 实时
     const off = timeline.subscribe((event) => {
-      // `dev=1` 是**附加**通道：它多收步骤事件，但**不缺**正常事件
-      const isDevOnly = event.type.startsWith('step/');
-      if (isDevOnly && !devMode) return;
+      // 这一条连接收不收它（四档 + `dev` 那条附加通道）—— 见 `levelAllows`
+      if (!levelAllows(event, { level, dev: devMode })) return;
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
     });
 
