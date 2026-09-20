@@ -42,7 +42,12 @@
 ## 代码在哪
 
 ```
-apps/mobile/          Flutter 客户端（L1 终端）
+v2/                   ★ 新实现（全新建立，旧代码只当参考）
+services/core/          调度器：地基已建完（store/timeline/message-writer/process-guard）
+docs/dev/               模块开发文档（随代码长）
+docs/handbook/          手册 v1.0（定档，唯一权威）
+
+apps/mobile/          Flutter 客户端（L1 终端）—— 旧实现，只当参考
   lib/                30 个文件，5791 行
   test/unit/          硬闸：协议 / 状态机 / 纯逻辑（45 条全过）
   test/widget/        只警告，不阻断（49 条挂 10）
@@ -66,7 +71,7 @@ docs/handbook/        唯一权威文档
 | 项 | 状态 |
 |---|---|
 | **规划** | ✅ **完成** —— 76 条决策全部拍板；两轮独立评审已收口；批 0 整个关闭 |
-| **实现** | ⏸ **未开始** |
+| **实现** | 🚧 **进行中**——地基（落盘/取号/收口/出事谁接）已建完，47 条验收全过 |
 | **下一步** | [`handbook/04-ROADMAP.md`](docs/handbook/04-ROADMAP.md) **批 1**（13 件） |
 
 **批 1 里有四件是"今天就该修的"**（现在的 bug，不是新功能）：

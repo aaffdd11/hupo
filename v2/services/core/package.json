@@ -1,0 +1,16 @@
+{
+  "name": "hupo-core-v2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "琥珀 · 调度器（v2 全新实现）。地基：可见时间线内核 —— 落盘 / 取号 / 收口 / 出事谁接",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "demo": "node src/index.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "license": "MIT"
+}
