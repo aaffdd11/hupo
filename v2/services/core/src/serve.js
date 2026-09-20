@@ -124,11 +124,11 @@ console.log(
   // ⚠️ 这一行必须说**上一轮是怎么结束的**——否则"它上次是不是被硬杀的"
   //    只能靠猜，而那是排障时第一个要问的问题。
   `  上次收尾 ${
-    reconciled.closed === 0
+    reconciled.total === 0
       ? '干净（没有未说完的话）'
-      : `⚠️ 有 ${reconciled.closed} 条没说完 —— 已收口${
-          reconciled.told > 0 ? `，并告诉了用户 ${reconciled.told} 次` : '（太旧，没打扰用户）'
-        }`
+      : `⚠️ 有 ${reconciled.total} 处没说完（未收口气泡 ${reconciled.orphans} 条` +
+        `${reconciled.unanswered > 0 ? ` + 问了没人答 ${reconciled.unanswered} 句` : ''}）` +
+        `—— 已收口${reconciled.told > 0 ? '，并告诉了用户' : '（太旧，没打扰用户）'}`
   }`,
 );
 console.log(`  时间线   已有事件 ${timeline.seq} 条`);

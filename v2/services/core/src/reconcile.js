@@ -67,70 +67,86 @@ export const INTERRUPTED_LINE =
   '你说一声，我重新来一遍。';
 
 /**
- * 扫日志，找出**开始了但没有结束**的那些气泡。
+ * 扫日志，找出**没说完的话**。两种形状，都要抓：
+ *
+ *   ① **未收口的气泡**（`message/start` 没有配对的 `message/end`）
+ *      —— 进程死在"已经开口、还没说完"的时候
+ *   ② **问了没人答**（最后一条 `message/end` 之后还有 `user/echo`）
+ *      —— 进程死在**还没出第一个字**的时候
+ *
+ * ⚠️ ② 是补上的一个洞，而且它很容易漏：气泡是**它说第一句话的时候**才建的
+ *    （见 `session-translate.js`：writer 懒建）。所以"进程死在开口之前"这条路上
+ *    **盘上只有主人自己那句话**——只查①的话，对账什么都发现不了，
+ *    而主人就在那儿一直等一条不会来的回答。**那正是事故一。**
  *
  * @param {Array<object>} events  日志里的事件（顺序：seq 升序）
  * @param {object} [o]
  * @param {number} [o.now]     现在（毫秒）。注入是为了可测。
  * @param {number} [o.windowMs] 回看窗口；比这更旧的只收口、不出声
- * @returns {{open: Array<{messageId: string, at: number, ageMs: number, tell: boolean, userText: string|null}>,
- *            closedIds: Set<string>}}
- *          `tell` = 要不要对用户说话
+ * @returns {{orphans: Array<object>, unanswered: Array<object>, tell: boolean, total: number}}
  */
 export function findInterrupted(events, { now = Date.now(), windowMs = RECONCILE_WINDOW_MS } = {}) {
-  const opened = new Map(); // messageId → { at, seq }
-  const closedIds = new Set();
-  /** 每条未收口气泡之前，**主人最后说的那句话**（用来对他说"你刚才让我做的那件事"） */
-  const lastUserTextBefore = new Map();
-  let lastUserText = null;
+  const opened = new Map(); // messageId → { at }
+  let lastEndSeq = 0;
+  let seqOf = 0;
+  const echoes = []; // { messageId, text, at, seq }
 
   for (const e of events) {
-    // 瞬态事件不落盘，但仍然认一下（调用方可能把内存里的事件也一起传进来）
     if (!e || typeof e.type !== 'string') continue;
+    if (typeof e.seq === 'number') seqOf = e.seq;
     switch (e.type) {
       case 'user/echo':
-        lastUserText = typeof e.text === 'string' ? e.text : null;
+        echoes.push({
+          messageId: typeof e.messageId === 'string' ? e.messageId : null,
+          text: typeof e.text === 'string' ? e.text : null,
+          at: typeof e.at === 'number' ? e.at : now,
+          seq: seqOf,
+        });
         break;
-      case 'user/message':
-        lastUserText = (e.data?.content ?? [])
-          .map((b) => b.text ?? '')
-          .join('')
-          .trim() || lastUserText;
+      case 'message/start':
+        if (typeof e.messageId === 'string') {
+          // 同一条 id 再次开口 ⇒ 重新计时（那不是"上一次没收口"）
+          opened.set(e.messageId, { at: typeof e.at === 'number' ? e.at : now });
+        }
         break;
-      case 'message/start': {
-        if (typeof e.messageId !== 'string') break;
-        // 重新开口要重新计时 —— 同一条 id 再次 start 是"又说话了"，不是"上一次没收口"
-        opened.set(e.messageId, { at: typeof e.at === 'number' ? e.at : now, seq: e.seq });
-        lastUserTextBefore.set(e.messageId, lastUserText);
-        break;
-      }
-      case 'message/end': {
-        if (typeof e.messageId !== 'string') break;
+      case 'message/end':
         opened.delete(e.messageId);
-        closedIds.add(e.messageId);
+        lastEndSeq = seqOf;
         break;
-      }
       default:
         break;
     }
   }
 
-  const open = [];
-  for (const [messageId, info] of opened) {
-    const ageMs = Math.max(0, now - info.at);
-    open.push({
+  const orphans = [...opened.entries()]
+    .map(([messageId, info]) => ({
       messageId,
       at: info.at,
-      ageMs,
-      // ⚠️ **只对最近 6 小时内的说话**；更早的悄悄清掉
-      tell: ageMs <= windowMs,
-      userText: lastUserTextBefore.get(messageId) ?? null,
-    });
-  }
-  // 先收拾旧账（老的在前），让日志读起来是顺着时间的
-  open.sort((a, b) => a.at - b.at);
+      ageMs: Math.max(0, now - info.at),
+      tell: now - info.at <= windowMs, // ⚠️ 只对最近 6 小时内的说话
+    }))
+    .sort((a, b) => a.at - b.at); // 老的先收，日志读起来顺着时间
 
-  return { open, closedIds };
+  const unanswered = echoes
+    .filter((e) => e.seq > lastEndSeq)
+    .map((e) => ({
+      messageId: e.messageId,
+      text: e.text,
+      at: e.at,
+      ageMs: Math.max(0, now - e.at),
+      tell: now - e.at <= windowMs,
+    }))
+    .sort((a, b) => a.at - b.at);
+
+  return {
+    orphans,
+    unanswered,
+    // ⚠️ 只要**有任何一条**在窗口里就出声，而且**只出一声** ——
+    //    ① 和 ② 常常是同一件事的两面（它开口说了半句、就被杀了），
+    //    分别出声就是对着同一次打断说两遍。
+    tell: orphans.some((o) => o.tell) || unanswered.some((u) => u.tell),
+    total: orphans.length + unanswered.length,
+  };
 }
 
 /**
@@ -166,17 +182,16 @@ export function reconcileOnBoot({
   try {
     found = findInterrupted(store.readAll(id), { now, windowMs });
   } catch (err) {
-    return { ok: false, closed: 0, told: 0, error: `读日志失败：${err?.message ?? err}` };
+    return { ok: false, closed: 0, told: 0, total: 0, error: `读日志失败：${err?.message ?? err}` };
   }
-  if (found.open.length === 0) return { ok: true, closed: 0, told: 0 };
+  if (found.total === 0) return { ok: true, closed: 0, told: 0, total: 0 };
 
   let closed = 0;
-  let told = 0;
-  for (const item of found.open) {
+  const failures = [];
+  // ① **先把所有没收口的都收掉**。那几条是上一个进程开的，它不会自己收尾了。
+  //    `reason: 'failed'` 是**实话**（它确实没善终），界面据此给它"没说完"的长相 + 重发入口。
+  for (const item of found.orphans) {
     try {
-      // ① **先收口**：那一条是上一个进程开的，它不会自己收尾了。
-      //    `reason: 'failed'` 是**实话**（它确实没善终），
-      //    而界面据此给它"没说完"的长相 + 重发入口（手册 §03 §5 那张表）。
       timeline.emit({
         type: 'message/end',
         messageId: item.messageId,
@@ -184,23 +199,36 @@ export function reconcileOnBoot({
         sources: [],
       });
       closed += 1;
-
-      // ② **再另起一条**告诉用户（只对最近 6 小时内的）
-      if (item.tell) {
-        const w = new MessageWriter({
-          timeline,
-          agent: 'agent',
-          // 它是系统替他说的，但**说话的是这个助手** —— 所以还是 agent 说的
-          origin: 'proactive',
-        });
-        w.chunk('deep', INTERRUPTED_LINE);
-        w.end('completed');
-        told += 1;
-      }
     } catch (err) {
       // 一条收不住不该让剩下的也收不住
+      failures.push(err?.message ?? String(err));
       log(`[对账] 收口失败（${item.messageId}）：${err?.message ?? err}`);
     }
   }
-  return { ok: true, closed, told };
+
+  // ② **再另起一条**，而且**只说一声**（哪怕上面收了两条、或者 ① ② 同时命中）。
+  //    反了就是手册 §7.3 点名的"消息交叉"；说两遍就是把同一次打断讲两次。
+  let told = 0;
+  if (found.tell) {
+    try {
+      const w = new MessageWriter({ timeline, agent: 'agent', origin: 'proactive' });
+      w.chunk('deep', INTERRUPTED_LINE);
+      w.end('completed');
+      told = 1;
+    } catch (err) {
+      failures.push(err?.message ?? String(err));
+      log(`[对账] 那句话没说出来：${err?.message ?? err}`);
+    }
+  }
+
+  return {
+    ok: failures.length === 0,
+    closed,
+    told,
+    total: found.total,
+    /** 未收口的气泡**找到了几条**（`closed` 是**收成功了几条**——收失败会不一样） */
+    orphans: found.orphans.length,
+    unanswered: found.unanswered.length,
+    ...(failures.length > 0 ? { error: failures.join('；') } : {}),
+  };
 }

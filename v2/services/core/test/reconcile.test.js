@@ -46,12 +46,14 @@ function fresh() {
 // ── 一、纯函数 ──────────────────────────────────────────────
 
 test('对账：说完了的一轮 ⇒ 什么都不用收', () => {
-  const { open } = findInterrupted(flat(turn(1)), { now: NOW });
-  assert.deepEqual(open, []);
+  const r = findInterrupted(flat(turn(1)), { now: NOW });
+  assert.deepEqual(r.orphans, []);
+  assert.deepEqual(r.unanswered, []);
+  assert.equal(r.tell, false);
 });
 
 test('🔴 对账：开了口没收口 ⇒ 一定被抓出来（事故一）', () => {
-  const { open } = findInterrupted(flat(turn(1, { end: false })), { now: NOW + 120_000 });
+  const { orphans: open } = findInterrupted(flat(turn(1, { end: false })), { now: NOW + 120_000 });
   assert.equal(open.length, 1);
   assert.equal(open[0].messageId, 'm_1');
   assert.equal(open[0].tell, true, '两分钟前的事 ⇒ 要告诉他');
@@ -60,15 +62,15 @@ test('🔴 对账：开了口没收口 ⇒ 一定被抓出来（事故一）', (
 test('🔴 措辞那一条：**不许**留下没说的话（`tell` 决定说不说，收口都要收）', () => {
   // 手册 §15.3：只对最近 6 小时内的说话；更早的**悄悄清掉**
   const fresh6h = findInterrupted(flat(turn(1, { end: false })), { now: NOW + 5 * HOUR });
-  assert.equal(fresh6h.open[0].tell, true, '5 小时前 ⇒ 还在窗口里');
+  assert.equal(fresh6h.orphans[0].tell, true, '5 小时前 ⇒ 还在窗口里');
 
   const old = findInterrupted(flat(turn(1, { end: false })), { now: NOW + 7 * HOUR });
-  assert.equal(old.open.length, 1, '★ 旧账**照样要收口**（不然界面上那个气泡永远开着）');
-  assert.equal(old.open[0].tell, false, '★ 但**不出声**（他多半已经不在等这件事了）');
+  assert.equal(old.orphans.length, 1, '★ 旧账**照样要收口**（不然界面上那个气泡永远开着）');
+  assert.equal(old.orphans[0].tell, false, '★ 但**不出声**（他多半已经不在等这件事了）');
 });
 
 test('对账：多轮里只有没收口的那一轮被抓', () => {
-  const { open } = findInterrupted(
+  const { orphans: open } = findInterrupted(
     flat(turn(1), turn(10, { end: false }), turn(20)),
     { now: NOW + 60_000 },
   );
@@ -81,22 +83,26 @@ test('对账：同一条 id 再次开口 ⇒ 重新计时，不算"旧的没收�
     { type: 'message/end', messageId: 'm_x', reason: 'completed', seq: 2, at: NOW - 10 * HOUR + 1 },
     { type: 'message/start', messageId: 'm_x', at: NOW - 60_000, seq: 3 },
   );
-  const { open } = findInterrupted(events, { now: NOW });
+  const { orphans: open } = findInterrupted(events, { now: NOW });
   assert.equal(open.length, 1);
   assert.equal(open[0].tell, true, '★ 用的是**最后一次开口**的时间，不是第一次');
 });
 
-test('对账：认得出"主人最后说的那句"（对账那句话里要提到它）', () => {
+test('对账：认得出"主人最后说的那句"（出那声时要知道在说哪件事）', () => {
+  // ⚠️ 这句话原先挂在未收口的气泡上（`orphans[].userText`）。
+  //    补上"问了没人答"那条路之后，它搬到 `unanswered` 那边了 ——
+  //    因为**最可靠的那份原话就在 `user/echo` 里**，不必从旁边推断。
   const events = flat(
     { type: 'user/echo', messageId: 'u_a', text: '帮我订一张明天的票', seq: 1, at: NOW - 5000 },
     { type: 'message/start', messageId: 'm_a', at: NOW - 4000, seq: 2 },
   );
-  const { open } = findInterrupted(events, { now: NOW });
-  assert.equal(open[0].userText, '帮我订一张明天的票');
+  const r = findInterrupted(events, { now: NOW });
+  assert.equal(r.orphans.length, 1, '气泡确实没开口完');
+  assert.equal(r.unanswered[0].text, '帮我订一张明天的票', '★ 原话在这儿');
 });
 
 test('对账：兜底的顺序是"老的先收"（日志读起来顺着时间）', () => {
-  const { open } = findInterrupted(
+  const { orphans: open } = findInterrupted(
     flat(turn(100, { messageId: 'm_new', at: NOW - 1000, end: false }),
          turn(1, { messageId: 'm_old', at: NOW - 60_000, end: false })),
     { now: NOW },
@@ -105,7 +111,7 @@ test('对账：兜底的顺序是"老的先收"（日志读起来顺着时间）
 });
 
 test('对账：坏事件不炸（日志里可能有别的东西）', () => {
-  const { open } = findInterrupted(
+  const { orphans: open } = findInterrupted(
     [null, {}, { type: 'message/start' }, { type: 'message/end', messageId: 42 },
      { type: 'message/status', turn: 1, state: 'started' }],
     { now: NOW },
@@ -214,4 +220,79 @@ test('对账那条话必须**是人话**：说清"可能"、说清"不知道做�
   for (const w of ['工作区', '口令', '客户端', '云端', '服务器', '调度器', '时间线', '会话', '工具', '系统提示']) {
     assert.ok(!INTERRUPTED_LINE.includes(w), `出现了内部词「${w}」`);
   }
+});
+
+// ── ② 问了没人答（**进程死在开口之前**）────────────────────
+//
+// ⚠️ 这是一个补上的洞：气泡是它**说第一句话**的时候才建的（writer 懒建），
+//    所以"死在开口之前"这条路上，盘上**只有主人自己那句话**。
+//    只查未收口的气泡的话，对账什么都发现不了 —— **那正是事故一**。
+
+test('🔴 对账：主人问了、还没出第一个字就被杀 ⇒ **必须发现**', () => {
+  const events = [
+    { type: 'user/echo', messageId: 'u_1', text: '帮我查一下明天的天气', seq: 1, at: NOW - 60_000 },
+  ];
+  const r = findInterrupted(events, { now: NOW });
+  assert.equal(r.orphans.length, 0, '确实没有气泡（还没开口）');
+  assert.equal(r.unanswered.length, 1, '★ 但"问了没人答"必须抓到');
+  assert.equal(r.unanswered[0].text, '帮我查一下明天的天气');
+  assert.equal(r.tell, true, '一分钟前 ⇒ 要告诉他');
+});
+
+test('对账：答完的那句不算"没人答"', () => {
+  const r = findInterrupted(flat(turn(1)), { now: NOW + 1000 });
+  assert.deepEqual(r.unanswered, []);
+});
+
+test('对账：连着问两句、只答了第一句 ⇒ 只抓第二句', () => {
+  const events = flat(
+    turn(1), // u_1 + 答完
+    { type: 'user/echo', messageId: 'u_9', text: '那后天呢', seq: 200, at: NOW - 30_000 },
+  );
+  const r = findInterrupted(events, { now: NOW });
+  assert.deepEqual(r.unanswered.map((u) => u.text), ['那后天呢']);
+});
+
+test('对账：太旧的"没人答"也一样 —— 不出声，但**还是要收**', () => {
+  const events = [
+    { type: 'user/echo', messageId: 'u_1', text: '很久以前问的', seq: 1, at: NOW - 9 * HOUR },
+  ];
+  const r = findInterrupted(events, { now: NOW });
+  assert.equal(r.unanswered.length, 1);
+  assert.equal(r.tell, false, '超过 6 小时 ⇒ 不打扰他');
+  // ⚠️ 注意：这一种**没有气泡可收**（它还没开口）——
+  //    所以"收"这件事对它来说就是"不出声、也不留一个永远等不到回答的现场"。
+  //    它不会被误当成"还有一个气泡开着"，因为盘上确实没有。
+});
+
+test('🔴 开口说了一半就被杀（① 和 ② 同时命中）⇒ **只说一声**', () => {
+  // 这是最常见的那种打断：它先应了一声、然后被杀了。
+  // 两次命中（未收口的气泡 + 没人答的话）说的是**同一件事** ⇒ 说不该说两遍。
+  const { store, timeline } = fresh();
+  timeline.emit({ type: 'user/echo', messageId: 'u_1', text: '跑个东西' });
+  timeline.emit({ type: 'message/start', messageId: 'm_1', agent: 'agent', origin: 'reactive', re: [] });
+  timeline.emit({ type: 'message/text', messageId: 'm_1', block: 'quick', seqInBlock: 1, text: '收到，跑着。' });
+
+  const r = reconcileOnBoot({ timeline, store, now: Date.now() });
+  assert.equal(r.closed, 1, '气泡要收');
+  assert.equal(r.unanswered, 1, '那句也确实没人答');
+  assert.equal(r.told, 1, '★ 但**只说一声**（同一次打断不该讲两遍）');
+});
+
+test('🔴 死了在开口之前 ⇒ 没有气泡可收，但那句话要说出来', () => {
+  const { store, timeline } = fresh();
+  timeline.emit({ type: 'user/echo', messageId: 'u_1', text: '帮我查一下明天的天气' });
+
+  const r = reconcileOnBoot({ timeline, store, now: Date.now() });
+  assert.equal(r.closed, 0, '没有气泡');
+  assert.equal(r.told, 1, '★ 但他得听见一声 —— 不然就是一直等');
+  const texts = store.readAll('main').filter((e) => e.type === 'message/text').map((e) => e.text);
+  assert.deepEqual(texts, [INTERRUPTED_LINE]);
+});
+
+test('🔴 这样也不会重复唠叨（事故二）', () => {
+  const { store, timeline } = fresh();
+  timeline.emit({ type: 'user/echo', messageId: 'u_1', text: '帮我查一下' });
+  assert.equal(reconcileOnBoot({ timeline, store, now: Date.now() }).told, 1);
+  assert.equal(reconcileOnBoot({ timeline, store, now: Date.now() }).told, 0, '★ 第二次不说了');
 });
