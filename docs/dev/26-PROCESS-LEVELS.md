@@ -117,3 +117,77 @@ wss://<host>/api/stream?sinceSeq=<n>&level=quiet|doing|steps|reasoning
    因为 `timeline.agentLine` 有一条**与档位无关**的兜底（"有没收口的气泡 ⇒ 推得出它在做"）—— 这个判断很准；
 2. 切换入口放**顶栏**（`Icons.tune` + tooltip「它说多少过程」），位置**等主人看过再定**（入口独立成文件，挪地方只丢一个文件）；
 3. 四档存**设备级**、退出登录**不清**（它不是隐私数据；时间线/草稿才清）。
+
+---
+
+## 七、落地结果（2026-09-21 收尾）
+
+> 契约 §一–§六 是**动手前**写的；这一节记**实际怎么落的、踩到什么**。
+
+**两边都落地了**：服务端 `src/server.js`（连接级 `level`）+ `src/session-translate.js`（瞬态 `step/*`、`reasoning/delta`）；
+客户端 `lib/models/process_levels.dart` · `lib/services/process_level_store.dart` · `lib/services/stream_uri.dart` ·
+`lib/widgets/process_view.dart` · `lib/widgets/process_level_menu.dart`（入口在顶栏 `Icons.tune`）。
+
+⚠️ **接手时它是"一半"**：上一轮上下文用尽，服务端那半边**一条测试都没写**（325 → 325）。
+收尾时查出来三件事，都是"闸没守住"的形状：
+
+### 7.1 🔴 那道闸写反了：**默认档把 `user/echo` / `turn/*` 吞了**
+
+`levelAllows` 原本是**白名单**（只放行 `message/*` 加本档那几样）⇒ **默认档**（`doing`）丢掉了
+`user/echo`、`turn/start`、`turn/end`、`title`。当时没人发现，因为：
+**补发那一路不走这道闸**（`onStream` 里 `plan.frames` 直发）⇒ replay 的用例全绿，
+只有 `test/server.test.js` 的「★ WS 实时：连上之后新说的一句会被推过来」红 ——
+而它红了之后整个 `npm test` **挂在那里不退出**（见 7.3），所以看起来像"慢"。
+
+⇒ 判据（已写进 `PROCESS_TYPES` 上面那段注释，并钉了回归闸）：
+
+> **默认档（`doing`）必须等于"加四档之前的行为"。**
+
+修法：把"要放行的清单"改成"**过程事件的清单**"（`PROCESS_TYPES`）—— 不是过程事件的一律发。
+反过来写（白名单）的代价是：以后每加一种时间线事件都得记得回来补一笔，漏一次就是"某一档静默丢事件"，
+而那种缺陷在客户端看起来像"服务端没反应"。
+
+### 7.2 🔴 契约点名的泄露闸**文件根本不存在**
+
+`server.js` / `session-translate.js` 的注释有**五处**引用 `test/process-level.test.js`，而那个文件没建。
+⇒ 补了 **14 条**：两条 🔴 泄露闸（读盘上的**原始字节** + 真起服务读 `sinceSeq=0` 的**重放帧**）、
+四档的累加梯子、`dev=1` 只加不减、认不出的档 ⇒ 默认档、类别补发、"只补报过的步"、跨轮清账。
+
+两条都做了**变异验证**（`AGENTS.md` 的规矩：负向对照不能省）：
+
+| 变异 | 结果 |
+|---|---|
+| `#emitReasoning` 的 `emitTransient` → `emit` | 泄露闸 **两条红** |
+| 闸改回白名单 | 回归闸 + 端到端 **两条红** |
+
+⚠️ 泄露闸带**正对照**（"它说的话**应该**在盘上 / 在重放里"）——
+不然"grep 不到"可能是"什么都没写"的假绿。
+
+### 7.3 🔴 闸红了会**挂死**，而不是"快速红"
+
+`server.test.js` 的用例在 `await s.close()` **之前**断言失败时，那个监听一直挂着 ⇒
+node 测试进程**永不退出**（实测：红一条 ⇒ `npm test` 挂 3 分钟才被杀，CPU 只用了 1 秒）。
+⇒ `boot()` 现在把服务登记进一个文件级 `after()` 收尾，`close()` 幂等。
+**红了要立刻红** —— "红了却看不出红"会让人以为只是慢，从而放它过去。
+
+### 7.4 §6.1 的类别补发：落了，而且**只补已经报过的步**
+
+`stepStateForTool(name)` 照 §6.1 那张表翻；`tool/call` 到了 ⇒ 给同一个 `(turn, step)` 补一条
+`step/start`（`state` 换成类别）。两条自己加的护栏：
+
+* **只在 `step/start` 报过之后才补**（`#seenSteps`）：否则会凭空造一个客户端没见过的步号，
+  而它等不到 `step/end` ⇒ 屏幕上挂成"永远在读东西"（H4 不许的形状）。账在 `turn/end` 清，键是 `turn:step`。
+* **工具名与 `callId` 一律不发**（有闸）：它们只是 `process_words.dart` 那张人话表的**输入**。
+
+### 7.5 收尾实测
+
+| 项 | 值 |
+|---|---|
+| 服务端 | **339**（325 + 14）· `npm test` 13.7 秒干净退出 |
+| 客户端 | unit **170** · widget **65** · `scripts/check-client.sh` 三道硬闸全过 |
+| 公网 | 入口指纹 **`a3f14670d0a5`** · `/api/version` 对得上 · 入口 `no-cache` + 带指纹的 `immutable` |
+| 浏览器那条路 | **通了**：1 条 WebSocket / 79 帧 / 认出 5 类事件 / 续期**换新了** ✅ |
+
+⚠️ **顺带发现一个不属于这一批的缺陷**（已记账，见 `00-PROGRESS.md` §六）：
+**打开就停在最老那一条** —— `chat_screen.dart` 的 `_onChanged` 只在"本来就在底部附近"时才跟随，
+而首屏 `pixels == 0` 对上一屏长历史 ⇒ `nearBottom` 恒 false。**这一批没动它**（先收尾）。

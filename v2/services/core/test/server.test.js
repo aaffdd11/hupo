@@ -3,7 +3,7 @@
 // 这些用例是**端到端**的：起一个真监听、用真 fetch / 真 ws 打进去。
 // 单元测试证明"逻辑对"，这里证明"**接起来也对**"。
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import nodeFs from 'node:fs';
 import nodeOs from 'node:os';
@@ -16,6 +16,28 @@ import { SayService } from '../src/say.js';
 import { Store } from '../src/store.js';
 import { Timeline } from '../src/timeline.js';
 import { createServer } from '../src/server.js';
+
+/**
+ * 这一轮起过的服务（`after()` 兜底关掉）。
+ *
+ * ⚠️ **为什么要有这个兜底**（2026-09-21 实测）：用例在 `await s.close()`
+ *    **之前**断言失败时，那个监听会一直挂着 ⇒ node 的测试进程**永不退出**
+ *    ⇒ 表现是"**红**"变成"**挂到超时**"（那一轮 `npm test` 挂了 3 分钟才被杀）。
+ *    闸红不可怕，"红了却看不出红"才可怕 —— 它会让人以为只是慢。
+ *    所以注册一个文件级收尾：**红了也照常退出**。
+ */
+const openServers = new Set();
+
+after(async () => {
+  for (const s of openServers) {
+    try {
+      await s.close();
+    } catch {
+      // 关不干净不影响任何结论：测试的判据是断言，不是"关得优雅"
+    }
+  }
+  openServers.clear();
+});
 
 async function boot({ withWeb = true, password = null } = {}) {
   const dataDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-srv-'));
@@ -38,7 +60,18 @@ async function boot({ withWeb = true, password = null } = {}) {
   const addr = await listen(0);
   const origin = `http://127.0.0.1:${addr.port}`;
   const wsUrl = `ws://127.0.0.1:${addr.port}/api/stream`;
-  return { dataDir, store, timeline, auth, say, webRoot, origin, wsUrl, port: addr.port, close, server };
+  const handle = {
+    dataDir, store, timeline, auth, say, webRoot, origin, wsUrl, port: addr.port, server,
+  };
+  let closed = false;
+  handle.close = async () => {
+    if (closed) return;
+    closed = true;
+    openServers.delete(handle);
+    await close();
+  };
+  openServers.add(handle);
+  return handle;
 }
 
 const post = (origin, path, body, headers = {}) =>

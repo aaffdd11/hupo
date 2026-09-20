@@ -67,7 +67,30 @@ export const PROCESS_LEVELS = Object.freeze(['quiet', 'doing', 'steps', 'reasoni
 export const DEFAULT_PROCESS_LEVEL = 'doing';
 
 /**
- * 各档额外放行哪些事件（`message/*` 每档都发，不在这张表里）。
+ * ⚠️ **只有"过程"这一路随档位变**（契约 §三那张表说的就是这一路）。
+ *
+ * 这道闸**踩过坑**（2026-09-21，`server.test.js` 的「WS 实时」当场变红）：
+ * 早先的写法是**白名单**——只放行 `message/*` 加本档那几样，
+ * 于是**默认档**把 `user/echo`、`turn/*`、`title` 一起挡掉了。
+ * 补发那一路**不走这道闸**（见 `onStream`），所以 replay 的测试全绿、
+ * 只有"连上之后新说的一句"那条红 ⇒ 判据：
+ *
+ *   **默认档（`doing`）必须等于"加四档之前的行为"。**
+ *
+ * ⇒ 所以这里记的是**过程事件的清单**，而不是"要放行的清单"：
+ *    不是过程事件的一律发。反过来写（白名单）的代价是——
+ *    以后每加一种时间线事件都得记得回来补一笔，漏一次就是
+ *    "某一档静默丢事件"，而那种缺陷在客户端看起来像"服务端没反应"。
+ */
+export const PROCESS_TYPES = Object.freeze([
+  'message/status',
+  'step/start',
+  'step/end',
+  'reasoning/delta',
+]);
+
+/**
+ * 各档**额外**放行哪些过程事件（累加的梯子）。
  *
  * ⚠️ `quiet` 是空集，**包括 `message/status`** —— "安静档要真的安静"，
  *    少挡这一条就等于这一档没做（契约 §四点名要验）。
@@ -79,9 +102,6 @@ const LEVEL_EXTRA_TYPES = Object.freeze({
   // 累加：`reasoning` 档**也**收步骤（它是梯子最上面那一阶）
   reasoning: new Set(['message/status', 'step/start', 'step/end', 'reasoning/delta']),
 });
-
-/** 每一档都发的那几样：它**说出口的话**。 */
-const ALWAYS_TYPES = new Set(['message/start', 'message/text', 'message/end']);
 
 /**
  * 从 query 解出这一条连接的档。
@@ -113,6 +133,10 @@ export function parseLevel(params) {
 /**
  * 这条连接收不收这个事件。**纯函数**（好把它单独钉住）。
  *
+ * ⚠️ **它只管过程事件**（`PROCESS_TYPES`）：其它事件（用户自己的回声、
+ *    轮的边界、标题……）一律 `true` —— 档位调的是"过程说多少"，
+ *    不是"时间线还剩什么"。见 `PROCESS_TYPES` 上面那段踩坑记录。
+ *
  * @param {object} event  时间线上推出来的事件
  * @param {object} o
  * @param {string} o.level 这一条连接的档
@@ -121,7 +145,9 @@ export function parseLevel(params) {
 export function levelAllows(event, { level, dev = false } = {}) {
   const type = event?.type;
   if (typeof type !== 'string') return false;
-  if (ALWAYS_TYPES.has(type)) return true;
+  // ★ **不是过程事件 ⇒ 与档位无关**，照旧发。
+  //   默认档的行为 = 加四档之前的行为，靠的就是这一行。
+  if (!PROCESS_TYPES.includes(type)) return true;
   if (LEVEL_EXTRA_TYPES[level]?.has(type)) return true;
   // ★ `dev=1` 与 `level` **并存**（不是别名）：见 `onStream` 里那段为什么。
   if (dev && type.startsWith('step/')) return true;

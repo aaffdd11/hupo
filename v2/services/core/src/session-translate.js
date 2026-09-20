@@ -40,6 +40,13 @@
 //         而档位是**每条连接**的东西（契约 §二·2），不是全局开关。
 //         代价要先认：过程事件会广播给所有订阅者再过闸，
 //         它不占号、不落盘，量也只在"正在做"的那几秒——可以接受。
+//
+//   ⑤ ⚠️ **步骤的"类别"由随后的 `tool/call` 补上，而且只补不发名字。**
+//      `step/start` 里没有工具名（实测），所以只靠它，第③档会是一串
+//      一模一样的兜底句。契约 `26-PROCESS-LEVELS.md` §6.1 的裁决是
+//      "收到 `tool/call` ⇒ 给同一个 `(turn, step)` 补一次带类别的瞬态状态"。
+//      ⚠️ **工具名绝不出去**（界面上不许出现内部词）：它只是
+//      `process_words.dart` 那张人话表的输入。见 `stepStateForTool()`。
 
 import { EventEmitter } from 'node:events';
 
@@ -76,6 +83,41 @@ export const DEADLINE_LINES = Object.freeze({
   queued: DEADLINE_QUEUED_LINE,
 });
 
+/**
+ * 工具名 → **步骤类别**（契约 `26-PROCESS-LEVELS.md` §6.1 的裁决）。
+ *
+ * 为什么需要它：DSH 的 `step/start` 里**没有工具名**（工具名在随后的
+ * `tool/call` 上，实测）⇒ 只靠 `step/start`，第③档「步骤流水」会是
+ * **一串一模一样的兜底句**，等于把这一档做成噪音。
+ *
+ * ⚠️ 三条不许破：
+ *   ① **工具名本身绝不许出去**（界面上不许出现内部词）——这里出来的是
+ *      客户端 `process_words.dart` 那张人话表的**输入**，不是名字；
+ *   ② 走**瞬态**（`emitTransient`），和 `step/start` 同一条通道；
+ *   ③ **认不出来就不补**（N10）：名字不是非空字符串 ⇒ `null`。
+ *      名字认得出、但不在表里 ⇒ `thinking`（"在琢磨"）——那是**知道**它
+ *      在干一件没归类的事，不是猜。
+ */
+const TOOL_STEP_STATE = Object.freeze({
+  web_search: 'searching',
+  web_fetch: 'searching',
+  read: 'reading',
+  glob: 'reading',
+  grep: 'reading',
+  read_image: 'reading',
+  write: 'writing',
+  edit: 'writing',
+  bash: 'running',
+});
+
+/** 给测试用：这一步是什么类别的活。认不出来 ⇒ `null`（**不许猜**）。 */
+export function stepStateForTool(name) {
+  if (typeof name !== 'string' || name === '') return null;
+  // `job_*`（后台作业那几个）都是"在动手做"
+  if (name.startsWith('job_')) return 'running';
+  return TOOL_STEP_STATE[name] ?? 'thinking';
+}
+
 export class TurnTranslator extends EventEmitter {
   #timeline;
   #scopeId;
@@ -84,6 +126,14 @@ export class TurnTranslator extends EventEmitter {
   #reasoningSeen = 0;
   /** 已经报过"动过东西"的轮号（一轮只报一次） */
   #mutatedTurns = new Set();
+  /**
+   * 已经由 `step/start` 报过的步（键 `turn:step`）。
+   *
+   * 用途只有一个：`tool/call` 的**类别补发**只认这一步已经报过——
+   * 否则我们会凭空造一个客户端没见过的步骤号，而它等不到 `step/end`，
+   * 屏幕上就挂成"永远在查资料"（H4 不许的形状）。见 `#emitStepCategory()`。
+   */
+  #seenSteps = new Set();
 
   constructor({ timeline, scopeId = null }) {
     super();
@@ -160,11 +210,34 @@ export class TurnTranslator extends EventEmitter {
   #onToolCall(data) {
     const turn = data?.turn;
     if (typeof turn !== 'number') return;
+    // ★ 契约 §6.1：顺带给**这一步**补上"是什么类别的活"（人话表在客户端）。
+    //   ⚠️ 它和下面那个布尔是**两件事**：这一步读文件也要说"在读东西"，
+    //      哪怕整轮一次都没改过东西（只读白名单那条路）。
+    this.#emitStepCategory(turn, data?.step, data?.name);
     if (this.#mutatedTurns.has(turn)) return;
     if (isReadOnlyTool(data?.name)) return;
     this.#mutatedTurns.add(turn);
     // 派给外面（dispatcher 知道这一轮是主人哪句话引起来的，它去落盘）
     this.emit('mutated', { turn });
+  }
+
+  /**
+   * 契约 §6.1：`tool/call` 到了 ⇒ 给**同一个 `(turn, step)`** 补一次
+   * 带类别的瞬态步骤状态（事件形状不变：还是 `step/start`，只是 `state`
+   * 从兜底的 `started` 换成 `searching` 这一类）。
+   *
+   * ⚠️ **只在"这一步已经报过"时才补**（`#seenSteps`）：否则会凭空造出
+   *    一个客户端没见过的步骤号，而它等不到 `step/end` ⇒ 屏幕上挂成
+   *    "永远在查资料"（H4 明确不许的形状）。
+   *
+   * ⚠️ 仍然**瞬态**（`emitTransient`）：不占号、不落盘、新连接 replay 拿不到。
+   */
+  #emitStepCategory(turn, step, name) {
+    if (typeof step !== 'number') return;
+    if (!this.#seenSteps.has(`${turn}:${step}`)) return;
+    const state = stepStateForTool(name);
+    if (state === null) return;
+    this.#timeline.emitTransient({ type: 'step/start', turn, step, state });
   }
 
   /**
@@ -184,12 +257,15 @@ export class TurnTranslator extends EventEmitter {
    *    数据里**没有**工具名（工具名在随后的 `tool/call` 上，实测），
    *    所以此刻能诚实说出的只有"这一步开始了"（复用既有的 `started`）。
    *    硬编一个"searching"之类就得先猜工具 —— 那是编造。
+   *    ⇒ 类别由随后的 `tool/call` 补（契约 §6.1，见 `#emitStepCategory()`）。
    */
   #emitStep(type, data) {
     const turn = data?.turn;
     const step = data?.step;
     // 没有轮/步号 ⇒ 发出去客户端也没法做乱序保护，不如不发（沉默优于编造）
     if (typeof turn !== 'number' || typeof step !== 'number') return;
+    // ★ 记下"这一步开始过"：`tool/call` 的类别补发只认这里报过的步
+    if (type === 'step/start') this.#seenSteps.add(`${turn}:${step}`);
     const event =
       type === 'step/start'
         ? { type, turn, step, state: 'started' }
@@ -281,6 +357,14 @@ export class TurnTranslator extends EventEmitter {
 
   #onTurnEnd(data, ev) {
     const turn = data.turn;
+    // ★ 这一轮的步骤账跟着轮一起清（键里带 `turn:`，所以不会串到别的轮）。
+    //   ⚠️ 放在 `rec` 判空**之前**：步骤可能在 `turn/start` 之前就报过，
+    //      那种轮没有 `rec`，早退会把账留在这儿。
+    if (typeof turn === 'number') {
+      for (const key of this.#seenSteps) {
+        if (key.startsWith(`${turn}:`)) this.#seenSteps.delete(key);
+      }
+    }
     const rec = this.#turns.get(turn);
     if (!rec) return;
     this.#turns.delete(turn); // ★ 用 turn 删 —— 键和存的时候一致
