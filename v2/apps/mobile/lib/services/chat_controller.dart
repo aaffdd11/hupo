@@ -13,6 +13,7 @@ import '../models/conn_state.dart';
 import '../models/message_state.dart';
 import '../models/timeline.dart';
 import 'api.dart';
+import 'draft_store.dart';
 import 'stream.dart';
 import 'timeline_store.dart';
 import 'token_store.dart';
@@ -23,14 +24,23 @@ class ChatController extends ChangeNotifier {
     required this.tokens,
     String? token,
     TimelineStore? local,
+    DraftStore? drafts,
   })  : _token = token,
-        local = local ?? TimelineStore();
+        local = local ?? TimelineStore(),
+        drafts = drafts ?? DraftStore();
 
   final Api api;
   final TokenStore tokens;
 
   /// 本机那"一屏"（S5c）。**只缓存，不判断**——见 `timeline_store.dart`。
   final TimelineStore local;
+
+  /// 我这边**还没被服务端认领**的那几句（欠账 18）。
+  ///
+  /// ⚠️ 和 [local] **各存各的、不许重叠**：那边是服务端事实（带 `seq`），
+  ///    这边是**没有号**的本地发言。一句被认领（`confirmed`）就从这边消失。
+  ///    见 `draft_store.dart` 顶上那张边界表。
+  final DraftStore drafts;
 
   /// 收进来的**服务端事实**（只留带号的），存缓存就是从这份存。
   ///
@@ -58,33 +68,74 @@ class ChatController extends ChangeNotifier {
   /// 界面上那行「它正在做…」；`null` = 什么都不显示。
   String? get agentLine => timeline.agentLine;
 
-  /// 登录后启动：**先画本地一屏**，再连流。
+  /// 登录后启动：**先画本地一屏**（连用户自己打了一半的话一起），再连流。
   ///
   /// ⚠️ 顺序不能反：① 屏幕先有东西（S5c 的全部目的）；
   ///    ② `sinceSeq` 要从缓存里那个号接着要，而不是从 0 重放一遍。
-  Future<void> start({required String token}) async {
+  ///
+  /// ⚠️ [openStream] 只给 `test/unit` 用：纯逻辑的闸不该去开真 socket
+  ///    （那会让"这件事对不对"变成"这机器上网络快不快"）。
+  ///    **生产路径永远是 `true`**，而且顺序永远是"先读本机、再连流"。
+  Future<void> start({required String token, bool openStream = true}) async {
     _token = token;
     await tokens.write(token);
     _needsSetup = false;
     _lastError = null;
     await _restoreLocal();
     notifyListeners();
-    _ensureStream();
+    if (openStream) _ensureStream();
   }
 
   /// 把上一屏读回来（读不到就什么都不做 —— **空屏是允许的，乱画不允许**）。
   Future<void> _restoreLocal() async {
     final events = await local.load();
-    if (events.isEmpty) return;
-    _facts.addAll(events);
-    timeline.seedFromCache(events);
+    if (events.isNotEmpty) {
+      _facts.addAll(events);
+      timeline.seedFromCache(events);
+    }
+    // ⚠️ **服务端事实先画完，再画我自己的话**（欠账 18）：
+    //    `addLocalUtterance` 借的是"当前最大号"，所以必须等事实都进来了再借，
+    //    否则那几句会被排到历史中间去。
+    await _restoreDrafts();
+  }
+
+  /// 把"我打了、还没发出去"的那几句放回时间线。
+  ///
+  /// 放回去之后它们仍走**同一条渲染路径**（`UserBubble`）⇒ 屏幕上还是
+  /// 「没发出去」+「重发」那条路（N11：可重试），而不是凭空变成"已收到"。
+  Future<void> _restoreDrafts() async {
+    for (final d in await drafts.load()) {
+      timeline.addLocalUtterance(d.text, d.messageId);
+      // 回到它原来的态（`sent` 读回来是 `failed`，理由见 [storableState]）
+      timeline.setLocalState(d.messageId, d.state);
+    }
+  }
+
+  /// 存档**从时间线现算一遍**（不另立一份"影子列表"）。
+  ///
+  /// ⚠️ 现算 = 不可能出现"存档里有一条屏幕上没有的"。而那正是最坏的那种缺陷：
+  ///    刷新之后冒出一句用户以为自己已经发出去（或者根本没打过）的话。
+  ///
+  /// ⚠️ **只在真的变了的时候写盘**：这个方法在 `ingest()` 里是**每一帧**都调的，
+  ///    而一轮流式回答能来上百条 `message/text`。不挡的话每一帧都写一次
+  ///    localStorage——那是"一个用户几十个字就把盘写爆"的那类浪费
+  ///    （`_maybeSave` 那套 `textSaveEvery` 去抖是同一个顾虑）。
+  ///    比的是**刚交给磁盘的那一份**，不是"磁盘上现在是什么"（写落盘是异步的）。
+  List<LocalDraft>? _draftsHandedOff;
+
+  void _saveDrafts() {
+    final now = draftsFrom(timeline.items);
+    if (listEquals(now, _draftsHandedOff)) return;
+    _draftsHandedOff = now;
+    drafts.save(now);
   }
 
   Future<void> logout() async {
     _stream?.close();
     _stream = null;
     _token = null;
-    // ⚠️ 缓存跟着账号走：这台机器换了个人登录，**不许再看见上一个人的一屏**
+    // ⚠️ 缓存跟着账号走：这台机器换了个人登录，**不许再看见上一个人的一屏**，
+    //    也**不许看见上一个人打了一半的话**（欠账 18）
     _invalidateLocal();
     timeline.reset();
     await tokens.clear();
@@ -126,6 +177,10 @@ class ChatController extends ChangeNotifier {
       // ⚠️ **缓存也要一起清**：不清的话下次开机又会把那个**已经不存在的世界**
       //    先画出来，然后再被服务端打脸——那一屏就是编造。
       _invalidateLocal();
+      // ⚠️ 上面那一清把存档也清了，而 `timeline.reset()` **刻意保住了**
+      //    用户自己未确认的那几句 ⇒ 立刻按"幸存下来的时间线"重存一次。
+      //    不重存的话，刷新之后那几句就真没了——那正是欠账 18 要修的东西。
+      _saveDrafts();
       _lastError = '和服务器对不上了，正在重新同步';
       notifyListeners();
       return;
@@ -141,6 +196,9 @@ class ChatController extends ChangeNotifier {
       }
       _maybeSave(event);
     }
+    // ⚠️ 服务端可能**正好在这一帧里认领了**本地那条（`user/echo`）⇒ 立刻把它
+    //    从存档里去掉。晚一步的话，刷新之后它会被画两遍（一遍事实、一遍存档）。
+    _saveDrafts();
     notifyListeners();
   }
 
@@ -160,11 +218,17 @@ class ChatController extends ChangeNotifier {
   /// 这一屏作废（服务端判死 / 退出登录）。
   ///
   /// ⚠️ 光清内存不够：**已经在飞的那次 `save()` 会晚一步落地**把刚判死的缓存写回去。
-  ///    那一步由 `TimelineStore` 内部排队挡住（见那里的 `_enqueue`）。
+  ///    那一步由两个 store 内部各自的排队挡住（见那里的 `_enqueue`）。
+  ///
+  /// ⚠️ 存档（本机那几句）**一起清**，但调用方在复位之后要**再存一次**：
+  ///    `timeline.reset()` **刻意保住**用户自己未确认的那几句（`timeline.dart`），
+  ///    所以那几句马上会从时间线里被重新派生出来——清的只是"服务端不认的那个世界"。
   void _invalidateLocal() {
     _textSinceSave = 0;
     _facts.clear();
+    _draftsHandedOff = null; // 存档要清了 ⇒ "上一次交出去的那份"也不作数了
     local.clear();
+    drafts.clear();
   }
 
   void _maybeSave(Map<String, dynamic> event) {
@@ -190,6 +254,9 @@ class ChatController extends ChangeNotifier {
     final messageId = 'u_${DateTime.now().millisecondsSinceEpoch}_$_localSeq';
     timeline.addLocalUtterance(text, messageId);
     _lastError = null;
+    // ⚠️ **在发出去之前先落存档**（欠账 18）：用户按下发送之后马上切出去、
+    //    或者这一次请求就挂在网上，那这句话也必须还在。
+    _saveDrafts();
     notifyListeners();
 
     await _deliver(messageId, text, t);
@@ -203,6 +270,7 @@ class ChatController extends ChangeNotifier {
     final text = _textOf(messageId);
     if (text == null) return;
     timeline.retry(messageId);
+    _saveDrafts(); // 态变了 ⇒ 存档跟着变（重发中也是 `queued`，刷新后仍可重发）
     notifyListeners();
     await _deliver(messageId, text, t);
   }
@@ -250,6 +318,10 @@ class ChatController extends ChangeNotifier {
         timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '网没通，这条没发出去';
     }
+    // ⚠️ 上面每一条分支都改了那条的态（`sent` 或 `failed`）⇒ 存档要跟着走。
+    //    `sent` 存进去时会被降成 `failed`（理由见 `draft_store.storableState`）：
+    //    刷新之后回执不会再来，屏幕上必须有「重发」那条路，不能停在"已送到"。
+    _saveDrafts();
     notifyListeners();
   }
 

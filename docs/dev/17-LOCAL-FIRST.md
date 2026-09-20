@@ -90,6 +90,9 @@ static bool isPersistable(Map<String, dynamic> e) => e['seq'] is int;
 ⇒ 现在：
 
 * key = `hupo_timeline_v1.<namespace>`，`namespace` 是**参数**（形状对了）；
+  ⚠️ **落到 localStorage 里的真名是 `flutter.hupo_timeline_v1.<namespace>`** ——
+  `shared_preferences_web` 会自己加 `flutter.` 前缀，而且**值也是 JSON 编码过的**
+  （`json.encode`）。排查"本机存的东西去哪了"时必须带这两条（见 `22-DEBTS.md` §1.3）；
 * 真正兜住"换个人就串"的是：**退出登录时清缓存** + `client/reset` 时清缓存；
 * **多人那一批必须把 `userId` 那一半补上**（记在 §六）。
 

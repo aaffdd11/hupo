@@ -26,6 +26,7 @@ import { createServer } from './server.js';
 import { loadConfig, preflight } from './config.js';
 import { integrityReport } from './integrity.js';
 import { describeAdmission, readAdmission } from './admission.js';
+import { applyPrune, groupSlugFor, planPrune, scanEntries, summarize } from './prune.js';
 import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
 
 
@@ -44,6 +45,26 @@ const { problems, notes } = preflight(cfg);
 //      不依赖 cwd —— 从哪儿起的进程都算得对。
 // ★ **准入闸**：开机读一次，横幅里**如实**写它现在算不算得出判据（手册 §9.1）。
 const adm = readAdmission();
+
+// ★ **顺手清理自己那一组旧的会话记录**（欠账第 9 条：`$DSH_HOME/sessions/` 只涨不降）。
+//
+// ⚠️ 只动 `HUPO_AGENT_CWD` 对应的**那一组**：
+//    盘上是两层的（`sessions/<项目>-<slug>--/<记录>/`），不分组地清会连
+//    **别的项目**和**这个 GUI 自己的可 resume 记录**一起删（AGENTS §六.5）。
+// ⚠️ 而且它**不许阻断启动**：清记录是维护动作，出任何事都只记一句（照开机对账那条规矩）。
+let pruned = null;
+try {
+  const groupDir = nodePath.join(cfg.dshHome, 'sessions', groupSlugFor(cfg.agentCwd));
+  if (nodeFs.existsSync(groupDir)) {
+    const plan = planPrune({ entries: scanEntries({ root: groupDir }) });
+    if (plan.remove.length > 0) {
+      const done = applyPrune(plan.remove, { root: groupDir });
+      pruned = summarize(plan, { applied: true, done });
+    }
+  }
+} catch (err) {
+  console.warn(`  ⚠️ 顺手清旧记录没做成（不影响服务）：${err?.message ?? err}`);
+}
 
 const ig = integrityReport({
   repo: nodePath.resolve(import.meta.dirname, '../../..'),
@@ -149,6 +170,7 @@ console.log(`  构建     ${cfg.buildId}`);
 // ⚠️ 这一行必须**如实**：清单还没建的时候，这道闸是**没有**的。
 //    报成"OK"就是"看起来有闸、其实没有"——比不设更坏。
 console.log(`  准入     ${describeAdmission(adm)}`);
+if (pruned) console.log(`  顺手清   ${pruned}`);
 console.log(
   `  完整性   ${
     ig.state === 'ok'
