@@ -316,12 +316,46 @@ test('🔴 主人定的那一档（2026-09-21）：**人格 / 说明书 / DSH �
     '/repo/v2/services/core/hupo-persona.yml', // 它是谁
     '/repo/AGENTS.md', // 它给自己的说明书
     '/home/u/.dsh/profiles', // 每轮开机读到的 profile / 补丁
-    '/home/u/.dsh/settings.yaml',
-    '/home/u/.dsh/.credentials.yaml',
     '/repo/docs/handbook', // 判据本身
   ];
   for (const p of strict) assert.equal(modeOf(p), 'strict', `${p} 必须是 strict`);
+  // ⚠️ 这两条**刻意**只报：它们会被正常运行改写（记住"提示看过了" / 令牌续期），
+  //    拿它们当 strict ⇒ 某天开机无故拒绝启动，而主人不在跟前。
+  assert.equal(modeOf('/home/u/.dsh/settings.yaml'), 'report');
+  assert.equal(modeOf('/home/u/.dsh/.credentials.yaml'), 'report');
+  // 目录里只认"就是那条指令本身"的文件
+  assert.deepEqual(list.find((e) => e.path === '/home/u/.dsh/profiles').only, [
+    'cordis.yml',
+    'cordis.patch.yml',
+  ]);
   // 开发期刻意只报的那两条
   assert.equal(modeOf('/repo/v2/services/core/src'), 'report');
   assert.equal(modeOf('/repo/scripts'), 'report');
+});
+
+test('🔴 `profiles/` 只认"就是那条指令"的那两个文件（安装产物不算）', () => {
+  const f = fixture();
+  try {
+    // 那个"就是指令本身"的文件（fixture 里默认只有补丁）
+    f.w('profiles/sdk/cordis.yml', 'profile: 1\n');
+    // 安装产物：`pnpm install` 会正常改写它们 ⇒ 算进来就会**无故拒绝启动**
+    f.w('profiles/sdk/package.json', '{"name":"sdk"}\n');
+    f.w('profiles/sdk/pnpm-workspace.yaml', 'packages: []\n');
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    const keys = Object.keys(baseline.entries);
+    assert.ok(
+      keys.includes(nodePath.join(f.home, '.dsh/profiles/sdk/cordis.patch.yml')),
+      '补丁必须进清单（它是喂给 agent 的东西）',
+    );
+    assert.ok(
+      keys.includes(nodePath.join(f.home, '.dsh/profiles/sdk/cordis.yml')),
+      'profile 定义必须进清单',
+    );
+    assert.ok(
+      !keys.some((k) => k.endsWith('package.json') || k.endsWith('pnpm-workspace.yaml')),
+      '安装产物不该进清单',
+    );
+  } finally {
+    f.cleanup();
+  }
 });

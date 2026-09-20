@@ -277,7 +277,7 @@ git ls-tree -r --name-only f93f296 | grep docs/     # 列出当时所有文档
 | **提申请** | 补丁放 `proposals/`（已在 `.gitignore` 里），**主人**跑 `scripts/apply-change.sh proposals/xxx.patch` |
 | **回退** | `scripts/rollback.sh`（用 `git revert`：**把这一次反做一遍**，历史留着。⚠️ **不许用"退回到上一个提交"那种做法**——它会连同后面的每一个改动一起丢掉）；它**不读任何助手产出的文件**——出问题时助手可能就是出问题的那个 |
 | **改完代码之后** | 不用做什么（`src/`、`scripts/` 是**只报不拦**） |
-| ⚠️ **改完这几样之后** | **人格 / 这个文件 / `docs/handbook/**` / DSH 配置** = `strict` ⇒ 要请主人补一条 `sudo node scripts/verify-integrity.mjs --build`，否则**下次重启会拒绝启动**。⇒ **`AGENTS.md` 里不许写进度数字**（那些每批都变）：数字只住在 `docs/dev/00-PROGRESS.md` |
+| ⚠️ **改完这几样之后** | **人格 / 这个文件 / `docs/handbook/**` / `~/.dsh/profiles/*/cordis*.yml`** = `strict` ⇒ 要请主人补一条 `sudo node scripts/verify-integrity.mjs --build`，否则**下次重启会拒绝启动**。⇒ **`AGENTS.md` 里不许写进度数字**（那些每批都变）：数字只住在 `docs/dev/00-PROGRESS.md` |
 
 ⚠️ **在本机改仓库代码不属于这一条**——那是正常的开发工作。
 这一条针对的是**让改动变成"下次开机自动读"**的路径。

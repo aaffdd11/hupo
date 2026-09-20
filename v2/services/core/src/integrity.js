@@ -69,9 +69,22 @@ export function protectedPaths({ repo, home = nodeOs.homedir() }) {
     // ② 开机自动喂给 agent 的
     { path: p('v2/services/core/hupo-persona.yml'), mode: 'strict', why: '每开一个新 agent 就喂一遍：改一句就改掉它的性格与纪律' },
     { path: p('AGENTS.md'), mode: 'strict', why: '助手给"下一次的自己"读的说明书' },
-    { path: d('profiles'), kind: 'dir', mode: 'strict', why: 'agent 的 profile 与补丁（cordis.patch.yml）——改它就能改自己每轮读到的东西' },
-    { path: d('settings.yaml'), mode: 'strict', why: 'agent 的默认模型与设置' },
-    { path: d('.credentials.yaml'), mode: 'strict', why: '密钥：被换掉 = 别人能进来' },
+    {
+      path: d('profiles'),
+      kind: 'dir',
+      // ⚠️ 只认这两个：它们**就是喂给 agent 的东西**（profile 定义 + 补丁）。
+      //    `package.json` / `pnpm-workspace.yaml` 是安装产物，`pnpm install` 会正常改写它们
+      //    ⇒ 把它们算进来 = 一次正常安装就让服务再也起不来。
+      only: ['cordis.yml', 'cordis.patch.yml'],
+      mode: 'strict',
+      why: 'agent 的 profile 与补丁——改它就能改自己每轮读到的东西',
+    },
+    // ⚠️ 下面两条是 **report** 而不是 strict：它们会被**正常运行**改写。
+    //    `settings.yaml` 记着"那个提示看过了"这类东西；`.credentials.yaml` 里的令牌会**自己续期**。
+    //    拿它们当 strict ⇒ 某天开机**无故拒绝启动**，而主人不在跟前。
+    //    ⇒ "看得见它被换过"才是这两条真正能提供的保护。
+    { path: d('settings.yaml'), mode: 'report', why: 'agent 的模型与设置：运行时会被写（例如记住提示看过了），所以只报不拦' },
+    { path: d('.credentials.yaml'), mode: 'report', why: '密钥：令牌会自己续期 ⇒ 只报不拦，但被换掉必须看得见' },
     // ③ 判据本身
     { path: p('docs/handbook'), kind: 'dir', mode: 'strict', why: '手册就是判据：能随手改判据，任何闸都白设' },
     // 本来就该变的安全数据：只报不拦
@@ -88,6 +101,12 @@ export function hashFile(file) {
 /** 把一个条目（文件或目录）展开成"要核对的绝对路径"列表（排好序、去重）。 */
 export function filesUnder(entry) {
   if (entry.kind !== 'dir') return [entry.path];
+  // `only`：目录里**只有这几个文件名**算"就是那条指令本身"。
+  // ⚠️ 为什么要它：同一个目录里往往混着"指令"与"安装产物"
+  //    （`cordis.patch.yml` vs `package.json` / `pnpm-workspace.yaml`），
+  //    后者会被 `pnpm install` 这类正常动作改写 ⇒ 拿它当 strict 会**无故拒绝启动**。
+  //    ⇒ 要把"会被正常动作改写的"排除掉，而不是把整层降级成 report。
+  const only = entry.only ? new Set(entry.only) : null;
   const out = [];
   const walk = (dir) => {
     let list;
@@ -100,7 +119,7 @@ export function filesUnder(entry) {
       if (ALWAYS_SKIP.has(e.name)) continue;
       const full = nodePath.join(dir, e.name);
       if (e.isDirectory()) walk(full);
-      else if (e.isFile()) out.push(full);
+      else if (e.isFile() && (!only || only.has(e.name))) out.push(full);
     }
   };
   walk(entry.path);
