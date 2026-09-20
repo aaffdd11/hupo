@@ -10,6 +10,7 @@ import 'package:hupo_app/models/timeline.dart';
 
 void main() {
   _busyGroup();
+  _cacheGroup();
   group('排序', () {
     test('服务端事件按 seq 排', () {
       final t = Timeline();
@@ -286,6 +287,73 @@ void _busyGroup() {
       expect(t.agentLine, isNotNull);
       t.reset();
       expect(t.agentLine, isNull, reason: '瞬态不落盘 ⇒ 重放时不该还亮着');
+    });
+  });
+}
+
+/// S5c：**从本机缓存先画出来的那一屏**，能说什么、不能说什么。
+///
+/// ⚠️ 这一组钉的是一次**差点写出来的假话**：缓存里最后一个事件可能是
+///    `message/start`（那一轮还没收口）。照 `_hasOpenAssistant` 那条兜底，
+///    屏幕上会立刻出现「它正在做…」——**可那一轮很可能是上次关机时断的**，
+///    我们根本不知道它还活着没有。
+///    ⇒ 服务端开口之前，一个字都不许说（N10：沉默优于编造）。
+void _cacheGroup() {
+  group('本机一屏（S5c）', () {
+    Map<String, dynamic> start(int seq, String id) =>
+        {'type': 'message/start', 'messageId': id, 'seq': seq};
+    Map<String, dynamic> text(int seq, String id, String s) =>
+        {'type': 'message/text', 'messageId': id, 'seq': seq, 'text': s};
+
+    test('缓存先画出一屏：字在，但**不许**说"它正在做"', () {
+      final t = Timeline();
+      t.seedFromCache([start(1, 'm1'), text(2, 'm1', '上一条说到一半')]);
+      expect(t.items, isNotEmpty, reason: 'S5c 的全部目的：冷启动不空屏');
+      expect(t.agentLine, isNull, reason: '🔴 那一轮还活着没有，我们不知道');
+      expect(t.isStale, true);
+    });
+
+    test('🔴 服务端一开口，"它正在做"才是真的', () {
+      final t = Timeline();
+      t.seedFromCache([start(1, 'm1')]);
+      expect(t.agentLine, isNull);
+      // 服务端来了一条真帧（补发的、或新的）
+      t.markFresh();
+      t.apply(text(2, 'm1', '接着'));
+      expect(t.isStale, false);
+      expect(t.agentLine, isNotNull);
+    });
+
+    test('服务端说"你这号不对了" ⇒ 连"缓存画的"这个身份也一起清掉', () {
+      final t = Timeline();
+      t.seedFromCache([start(1, 'm1')]);
+      expect(t.isStale, true);
+      t.reset();
+      expect(t.isStale, false, reason: '服务端亲口说了话 ⇒ 不再是缓存猜的');
+      expect(t.lastSeq, 0, reason: '号要重新从服务端要');
+    });
+
+    test('缓存里"已经收口"的那条：收口之后本来就不该有提示', () {
+      final t = Timeline();
+      t.seedFromCache([
+        start(1, 'm1'),
+        text(2, 'm1', '说完了'),
+        {'type': 'message/end', 'messageId': 'm1', 'seq': 3},
+      ]);
+      expect(t.agentLine, isNull);
+      t.markFresh();
+      expect(t.agentLine, isNull, reason: '收口了就是收口了');
+    });
+
+    test('缓存画出来的条目和实时那条走**同一条渲染路径**（不是两套）', () {
+      final cached = Timeline()..seedFromCache([start(1, 'm1'), text(2, 'm1', '一样')]);
+      final live = Timeline()
+        ..apply(start(1, 'm1'))
+        ..apply(text(2, 'm1', '一样'));
+      expect(cached.items.length, live.items.length);
+      expect(cached.lastSeq, live.lastSeq);
+      expect((cached.items.single as AssistantMessage).quick,
+          (live.items.single as AssistantMessage).quick);
     });
   });
 }

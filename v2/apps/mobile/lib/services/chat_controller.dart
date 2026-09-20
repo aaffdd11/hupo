@@ -14,6 +14,7 @@ import '../models/message_state.dart';
 import '../models/timeline.dart';
 import 'api.dart';
 import 'stream.dart';
+import 'timeline_store.dart';
 import 'token_store.dart';
 
 class ChatController extends ChangeNotifier {
@@ -21,10 +22,21 @@ class ChatController extends ChangeNotifier {
     required this.api,
     required this.tokens,
     String? token,
-  }) : _token = token;
+    TimelineStore? local,
+  })  : _token = token,
+        local = local ?? TimelineStore();
 
   final Api api;
   final TokenStore tokens;
+
+  /// 本机那"一屏"（S5c）。**只缓存，不判断**——见 `timeline_store.dart`。
+  final TimelineStore local;
+
+  /// 收进来的**服务端事实**（只留带号的），存缓存就是从这份存。
+  ///
+  /// ⚠️ 为什么要单独留一份：`Timeline` 里已经是**画出来的条目**了，
+  ///    从条目反推事件等于把"缓存"变成"第二次解释"——那就违反"只缓存，不判断"。
+  final List<Map<String, dynamic>> _facts = [];
 
   final Timeline timeline = Timeline();
   String? _token;
@@ -46,20 +58,35 @@ class ChatController extends ChangeNotifier {
   /// 界面上那行「它正在做…」；`null` = 什么都不显示。
   String? get agentLine => timeline.agentLine;
 
-  /// 登录后启动：连流、并开始收事件。
+  /// 登录后启动：**先画本地一屏**，再连流。
+  ///
+  /// ⚠️ 顺序不能反：① 屏幕先有东西（S5c 的全部目的）；
+  ///    ② `sinceSeq` 要从缓存里那个号接着要，而不是从 0 重放一遍。
   Future<void> start({required String token}) async {
     _token = token;
     await tokens.write(token);
     _needsSetup = false;
     _lastError = null;
+    await _restoreLocal();
     notifyListeners();
     _ensureStream();
+  }
+
+  /// 把上一屏读回来（读不到就什么都不做 —— **空屏是允许的，乱画不允许**）。
+  Future<void> _restoreLocal() async {
+    final events = await local.load();
+    if (events.isEmpty) return;
+    _facts.addAll(events);
+    timeline.seedFromCache(events);
   }
 
   Future<void> logout() async {
     _stream?.close();
     _stream = null;
     _token = null;
+    // ⚠️ 缓存跟着账号走：这台机器换了个人登录，**不许再看见上一个人的一屏**
+    _invalidateLocal();
+    timeline.reset();
     await tokens.clear();
     _conn = ConnState.idle;
     notifyListeners();
@@ -96,12 +123,57 @@ class ChatController extends ChangeNotifier {
       // 服务端说"你的号跑到我前面了"⇒ 本地那条时间线不作数了。
       // 不是"没有新东西"——是"从头来"。
       timeline.reset();
+      // ⚠️ **缓存也要一起清**：不清的话下次开机又会把那个**已经不存在的世界**
+      //    先画出来，然后再被服务端打脸——那一屏就是编造。
+      _invalidateLocal();
       _lastError = '和服务器对不上了，正在重新同步';
       notifyListeners();
       return;
     }
+    // ★ 服务端开口了：从这一刻起，"它正在做"才是我们**知道**的事
+    timeline.markFresh();
     timeline.apply(event);
+    if (TimelineStore.isPersistable(event)) {
+      _facts.add(event);
+      // 内存里也别只涨不降（留一点余量给"还没落盘的那几条"）
+      if (_facts.length > TimelineStore.capEvents * 2) {
+        _facts.removeRange(0, _facts.length - TimelineStore.capEvents);
+      }
+      _maybeSave(event);
+    }
     notifyListeners();
+  }
+
+  /// 存缓存：**按"句子的边界"写，不按钟写**。
+  ///
+  /// * 结构性事件（一轮开始 / 收口 / 用户那句 / 分节标记）⇒ **立刻写**：
+  ///   它们正好是屏幕上"稳定"的那些点。
+  /// * 流式的 `message/text` ⇒ 每 [textSaveEvery] 条写一次。
+  ///
+  /// ⚠️ 为什么不用 `Timer` 做去抖：**测试里挂着一个没走完的定时器本身就是一种失败**
+  ///    （`test/widget/busy_line_test.dart` 当场变红——那是"这件事有没有画到屏幕上"
+  ///    唯一的自动化证据，不能被这种小事弄坏）。而且每一轮的末尾**一定**会有一次
+  ///    `message/end`（超时硬收口也补一条，见 `07-TIMEOUT.md`）⇒ 尾巴不会丢。
+  static const textSaveEvery = 8;
+  int _textSinceSave = 0;
+
+  /// 这一屏作废（服务端判死 / 退出登录）。
+  ///
+  /// ⚠️ 光清内存不够：**已经在飞的那次 `save()` 会晚一步落地**把刚判死的缓存写回去。
+  ///    那一步由 `TimelineStore` 内部排队挡住（见那里的 `_enqueue`）。
+  void _invalidateLocal() {
+    _textSinceSave = 0;
+    _facts.clear();
+    local.clear();
+  }
+
+  void _maybeSave(Map<String, dynamic> event) {
+    if (event['type'] == 'message/text') {
+      _textSinceSave += 1;
+      if (_textSinceSave < textSaveEvery) return;
+    }
+    _textSinceSave = 0;
+    local.save(_facts);
   }
 
   /// 说一句。

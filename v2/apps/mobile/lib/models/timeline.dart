@@ -123,6 +123,11 @@ class Timeline {
   ///    ⇒ 知道了就别装不知道。下一次真开轮（收到认识的状态名）时清掉。
   bool _agentDead = false;
 
+  /// 这一屏是**从本机缓存先画出来的**，服务端还没开口（S5c）。
+  ///
+  /// ⚠️ 见 [agentLine]：这个标志拦的就是"拿缓存当事实"。
+  bool _stale = false;
+
   /// 界面上该显示的那句「它在做…」；`null` = **什么都不显示**。
   ///
   /// 两个来源，缺一不可：
@@ -135,6 +140,11 @@ class Timeline {
   ///   手册 H4 说的那个失败模式（卡住时永久停在"在查资料"）就是靠这条堵住的。
   String? get agentLine {
     if (_agentDead) return null; // 知道它死了就别再说"它正在做"
+    // ⚠️ **从本机缓存画出来的那一屏，在服务端开口之前一个字都不许说。**
+    //    那一屏可能是上次关机时断的——我们**不知道那一轮还活着没有**。
+    //    而 `_hasOpenAssistant` 那条兜底会照旧把「它正在做…」点回来，
+    //    于是屏幕上写着一件我们其实不知道的事。沉默优于编造（N10）。
+    if (_stale) return null;
     final w = processWord(_turnState);
     if (w != null) return w;
     return _hasOpenAssistant ? busyFallback : null;
@@ -313,6 +323,8 @@ class Timeline {
       ..addAll(mine);
     _seenSeq.clear();
     _lastSeq = 0;
+    // 服务端亲口说"你这号不对了" ⇒ 这一屏不再是缓存画的（缓存本身由调用方清）
+    _stale = false;
     // 瞬态不属于"落盘的历史" ⇒ 重放之前先清掉（它会被后面的帧重新点起来）
     _turnState = null;
     _turn = null; // 号也从头来（服务端会重发一轮轮的帧）
@@ -329,4 +341,21 @@ class Timeline {
       apply(e);
     }
   }
+
+  /// **先用本机缓存把上一屏画出来**（S5c），画完仍标着"没跟服务端对上"。
+  ///
+  /// 纯函数：进来的是**服务端说过的事实**，不是"缓存版的状态"。
+  void seedFromCache(Iterable<Map<String, dynamic>> events) {
+    _stale = true;
+    applyAll(events);
+  }
+
+  /// 服务端开口了（收到任何一条真帧）⇒ 这一屏不再是从缓存猜的。
+  ///
+  /// ⚠️ 只要**一条**帧就够：它证明链路是通的、服务端还在那个世界上。
+  ///    而"那一轮还活着没有"由服务端的收口事件回答（它接着会被补发上来）。
+  void markFresh() => _stale = false;
+
+  /// 这一屏是不是"从缓存先画出来的"。
+  bool get isStale => _stale;
 }
