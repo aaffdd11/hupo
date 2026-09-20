@@ -415,6 +415,28 @@ export class Ledger {
   }
 
   /**
+   * **按"人说得出的那几项"找一笔**（`date` + `kind`，可选 `qty` / `unit`）。
+   *
+   * ⚠️ 为什么不让模型拿着 `entryId` 来删（这是**刻意的一刀**）：
+   *    `entryId` 是**内部身份** —— 模型既拿不到它（`ledger_list` 那段文字里没有，
+   *    也不该有），也不该把它念给主人听（内部词上屏 = 缺陷）。
+   *    ⇒ 工具那一层按**主人说得出的话**找；身份这一层在这里解决。
+   *
+   * ⚠️ 找不唯一就**不猜**：把候选全给出去，让调用方去问清楚
+   *    （认错一笔 = 删错账，那是这一批最贵的一类错）。
+   */
+  find({ date, kind, qty, unit } = {}) {
+    const k = typeof kind === 'string' ? kind.trim() : '';
+    return this.list().filter((r) => {
+      if (date && r.date !== date) return false;
+      if (k && !String(r.kind ?? '').includes(k) && !k.includes(String(r.kind ?? ''))) return false;
+      if (qty !== undefined && qty !== null && Number(qty) !== r.qty) return false;
+      if (unit && r.unit !== unit) return false;
+      return true;
+    });
+  }
+
+  /**
    * **合计**（D6.9）：含税说不清的那些**不进合计**，并且**明说有几条未计入**。
    *
    * ⚠️ 这两件事必须同时成立 —— 只排除不报数，就是"悄悄少算"；

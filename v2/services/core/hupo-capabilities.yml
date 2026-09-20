@@ -1,0 +1,40 @@
+# 琥珀 —— **能力层**（批 4 · 契约 `docs/dev/31-LEDGER.md` v2 §7.1）
+#
+# 用法（`v2/services/core` 起 agent 进程时带，两条一起）：
+#   dsh --profile sdk --patch <repo>/v2/services/core/hupo-persona.yml \
+#                     --patch <repo>/v2/services/core/hupo-capabilities.yml
+#   （两条都已经是 `config.js` 里的**默认值**；`dsh --patch` 官方支持重复，见 `dsh --help`。）
+#
+# ── 为什么是一层 patch，而不是去改 profile ────────────────────────
+# 改 profile（`~/.dsh/profiles/*/cordis.patch.yml`）会让**每一次**改动都要主人
+# 补一条 `sudo` 重建清单 —— 那几个文件在开机清单里是 `strict`。
+# 而 `--patch` 是官方支持的"额外覆盖层，作用在 profile 层之后"，
+# **碰都不碰那几个受保护文件**（`docs/dev/31-LEDGER.md` §三·补二）。
+#
+# ⚠️ 形状必须是 `- insert: [ … ]`。
+#    写成 `- id: <一个新 id>` 会被当成"改一个**已存在**的条目"——
+#    实测直接报 `patch: entry "…" not found`，而且**树里不会有它**（同上 §三·补二）。
+#
+# ⚠️ 值从**环境**来（`!!js`），**不写死路径**：
+#    这台机器与生产机是两个 checkout，路径不一样。
+#    三个变量由服务端 spawn 时设好（`agent-runtime.js` 的 `childEnv`）。
+#    ⚠️ 这里**没有也不许有**任何秘密：MCP 那头拿到的是一个**域套接字路径**，
+#       准入靠文件权限（0600），见契约 §7.2。
+
+- insert:
+    - id: mcp-ledger
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: ledger
+        transport: stdio
+        command: !!js process.env.HUPO_NODE_BIN
+        args:
+          - !!js process.env.HUPO_LEDGER_SERVER
+        env:
+          HUPO_LEDGER_SOCKET: !!js process.env.HUPO_LEDGER_SOCKET
+        # ⚠️ 起不来就**别悄悄少一个工具**：能力层缺了 = 记不了账，
+        #    而那件事必须**当场看得见**（本仓库反复栽的那个形状就是"静默降级"）。
+        #    常见的配置错误（文件不在、路径空）在服务端 `preflight` 里已经先拦一道。
+        failOnStartupError: true
+        # 本机域套接字，快得很；默认那 60 秒是给网络那头的服务器留的。
+        toolCallTimeoutMs: 15000

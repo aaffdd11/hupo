@@ -288,6 +288,11 @@ export class DshAgent extends EventEmitter {
     const cfg = this.#cfg;
     const args = ['--profile', cfg.agentProfile];
     if (cfg.personaPath) args.push('--patch', cfg.personaPath);
+    // ★ **能力层**（批 4 · 契约 `docs/dev/31-LEDGER.md` v2 §7.1）：
+    //   `--patch` 是**可重复**的（`dsh --help` 原文），人格一层、能力一层。
+    //   ⚠️ 顺序：能力层挂在人格**之后** ⇒ 它改不了人格那一条
+    //      （`system-prompt` 只有人格那份 patch 会碰）。
+    if (cfg.capabilitiesPath) args.push('--patch', cfg.capabilitiesPath);
 
     const gen = (this.#gen += 1);
 
@@ -302,7 +307,19 @@ export class DshAgent extends EventEmitter {
     const child = this.#spawnFn(cfg.dshBin, args, {
       cwd: cfg.agentCwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: childEnv({ home: cfg.dshHome }),
+      env: childEnv({
+        home: cfg.dshHome,
+        // ★ 能力层那三个变量（`hupo-capabilities.yml` 用 `!!js process.env.…` 读它们）。
+        //   ⚠️ 它们**都不是秘密**：node 的绝对路径、一支脚本的绝对路径、
+        //      一个域套接字的路径。准入靠套接字文件的权限（0600），不靠令牌。
+        extra: {
+          HUPO_NODE_BIN: process.execPath,
+          // ⚠️ 只放**有值**的：把 `undefined` 塞进 env 会变成字符串 "undefined"，
+          //    那比"没设"更难查（能力层会拿到一个字面量 "undefined" 的路径）。
+          ...(cfg.ledgerServerPath ? { HUPO_LEDGER_SERVER: cfg.ledgerServerPath } : {}),
+          ...(cfg.ledgerSocketPath ? { HUPO_LEDGER_SOCKET: cfg.ledgerSocketPath } : {}),
+        },
+      }),
     });
     this.#child = child;
     this.#buf = '';

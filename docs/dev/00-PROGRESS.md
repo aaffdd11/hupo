@@ -375,7 +375,17 @@ $ bash scripts/check-apk.sh
 
 ⚠️ **半途中的东西要写在这里**（"在飞的东西"那一栏），不许让它只在对话里存在。
 
-**现在在飞的东西**：**没有** —— 第 ⑳ 条（系统通知）已按四件收尾完毕。
+**现在在飞的东西**：**批 4 进行中**（2026-09-21 起，契约 v2 = `31-LEDGER.md`）——
+**第 1 件「账本本体」已落地**（`v2/services/core/src/ledger.js` + `test/ledger.test.js`，26 条闸）、
+**第 2 件「能力契约层」已落地**（`ledger-socket.js` · `mcp-ledger-server.mjs` · `hupo-capabilities.yml` ·
+`test/ledger-chain.test.js` 17 条 + `test/capabilities.test.js` 8 条 · 真 dsh 启动走
+`node v2/services/core/scripts/check-capabilities.mjs`）；
+**还没做的**：第 3 件「出口文字」的**渲染搬到服务端**（现在那段文字在 MCP 那一侧拼）、
+第 4 件判据闸（D6.3 进 CI 的正式那一条）、以及**收尾四件**。
+⚠️ 能力层那份新 patch 文件按 P1.2 要进开机清单 ⇒ **欠主人一次 `sudo` 重建**（攒着一起给）。
+
+> ⚠️ 上一行原先是「**没有**」（第 ⑳ 条收尾完毕）。批 4 开工后改成现在这样 ——
+> **在飞的东西不许只活在对话里**。
 
 > ⚠️ **⑲ 与 ⑳ 两件都是"两半并行"做的**（服务端 + 客户端，照各自的契约对齐）。可复用的经验：
 > ① 子 agent **自己查出了五处真问题**（`message/text` 要去重 · `_applyEcho` 不许搬家 ·

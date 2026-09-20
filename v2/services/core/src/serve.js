@@ -19,6 +19,8 @@ import { Dispatcher } from './dispatcher.js';
 import { SayService } from './say.js';
 import { Trash } from './trash.js';
 import { Store } from './store.js';
+import { Ledger, LEDGER_TIMELINE_ID } from './ledger.js';
+import { LedgerSocket } from './ledger-socket.js';
 import { reconcileOnBoot } from './reconcile.js';
 import { CRASH_WINDOW_MS, markCleanExit, recordStart } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
@@ -149,6 +151,27 @@ const say = new SayService({ timeline, store, timelineId: 'main' });
 // 回收站（批 3 第二件）。⚠️ **必须 sync**：不 sync 的话重启之后回收站是空的，
 // 而屏幕上那些话还藏着 —— 用户会以为永远拿不回来了（契约 `docs/dev/28-DELETE.md`）。
 const trash = new Trash({ timeline, store, timelineId: 'main' }).sync();
+
+// ★ **账本**（批 4 第一件 · 契约 `docs/dev/31-LEDGER.md` v2 §7.5）。
+//
+// ⚠️ 它**另起一条日志**（`data/ledger.jsonl`），**不塞进 `main.jsonl`**：
+//    那条是"可见时间线"，账本是一份**用户数据**，两件事混一起会让 ⑲ 的
+//    删除/回收站语义变复杂（契约 §五）。
+// ⚠️ 一条日志一个取号器 ⇒ 它有自己的 `Timeline`，和可见时间线互不干扰。
+// ⚠️ **必须 sync**：不 sync 的话重启之后账本的回收站是空的，
+//    而被主人收起来的那几笔还藏着 —— 他会以为永远拿不回来了。
+const ledgerTimeline = new Timeline({ id: LEDGER_TIMELINE_ID, store });
+const ledger = new Ledger({ store, timeline: ledgerTimeline }).sync();
+
+// ★ **账本那条本地通道**（契约 §7.2）：模型那侧的工具经它过来，
+//   **写盘只有这一处**（MCP 那支进程自己不写盘）。
+// ⚠️ 它不是"另一条对外接口"：只听本机的一个文件（0600），
+//    对外那一面仍然是 8020 上那套要令牌的服务面。
+const ledgerSocket = new LedgerSocket({
+  ledger,
+  socketPath: cfg.ledgerSocketPath,
+  log: (m) => console.warn(m),
+}).listen();
 
 // agent 运行时 + 粘合层。
 // ⚠️ `onEvict` 是「**先收口再卸**」里的那个收口——runtime 没有翻译层，
@@ -324,6 +347,13 @@ console.log(
     `（${CRASH_WINDOW_MS / 60000} 分钟内第 ${boot.starts} 次启动${boot.degraded ? '，**已降级：这次不续做**' : ''}）`,
 );
 console.log(`  时间线   已有事件 ${timeline.seq} 条`);
+console.log(
+  // ⚠️ 这一行要**如实报账本那两支东西在不在**：能力层缺了的时候，
+  //    "它今天没记账"看起来只是它忘了 —— 而那正是查不出来的故障。
+  `  账本     ${ledger.list().length} 笔（回收站 ${ledger.listBin().length} 组）` +
+    `；本地通道 ${nodeFs.existsSync(cfg.ledgerSocketPath) ? '通了' : '⚠️ 没起来'}`,
+);
+console.log(`  能力层   ${cfg.capabilitiesPath}（${nodeFs.existsSync(cfg.capabilitiesPath) ? '已挂上' : '⚠️ 文件不在'}）`);
 console.log('──────────────────────────────────────────────');
 
 // 优雅退出：先停止接新连接，再关。
@@ -340,6 +370,9 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     await close();
     turnStatus.stop();
     clearInterval(trashSweep);
+    // ⚠️ 账本那条口要关掉**并把套接字文件删掉**：留着它，下次
+    //    `listen()` 会撞上 `EADDRINUSE`，而那句话看起来像"端口被占"。
+    ledgerSocket.close();
     // ★ 留下"这次是好好走的"标记 ⇒ 下次开机才知道上一次是不是被硬杀的
     markCleanExit(cfg.dataDir);
     process.exit(0);

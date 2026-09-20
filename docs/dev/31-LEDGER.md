@@ -147,6 +147,15 @@ D6.4 说"只认**明说的**『记一笔』"、D6.5 说"**不确认不写**"。�
 | `command` | **绝对路径**（本机没有系统 node；用 `process.execPath` 那一套，`integrity.js` 已有先例） |
 | 代价 | 该文件按 **P1.2** 属于"开机自动喂给 agent 的东西" ⇒ 要进 `protectedPaths()`（**strict**）⇒ **一次开机清单重建**；**和其他改动攒到一起**告诉主人 |
 
+⚠️ **两处实测更正**（写契约时还不知道，实现时撞上的）：
+
+* `dsh --dump-config` **不代换 `!!js`**（它的原文就是"booting or **evaluating** `!!js`"**之外**那一半）
+  ⇒ 它原样把 `!!js process.env.HUPO_NODE_BIN` 打出来。
+  ⇒ 所以"代换有没有真的发生"**不能靠 dump 证明**，要靠**真启动**：
+  `node scripts/check-capabilities.mjs`（起真 dsh + 一个**录音桩**，
+  桩收到 `initialize` + `tools/list` ⇒ 那三个变量真的代进去了）。
+  ⚠️ 桩必须是**别人的**服务器：拿我们自己那支当证据叫**自证**。
+
 ### 7.2 MCP 服务器怎么落到账本：**Unix domain socket**
 
 core 侧在 `<dataDir>/ledger.sock` 上听（**0600**）；MCP 服务器连它。
@@ -169,8 +178,15 @@ core 侧在 `<dataDir>/ledger.sock` 上听（**0600**）；MCP 服务器连它�
 * 字段是**它自己**从主人那句话里抽的（v1 §三「甲」）；**回显给主人确认之后**才调 `ledger_write`。
 * ⚠️ `ledger_write` **不信任模型报上来的字段**：6 项逐项校验（类型、范围、单位、日期是不是真的那一天）；
   不过 ⇒ **不写**，并**说清哪一项**（不是笼统"格式不对"）。
-  ⚠️ **但要说实话**：宿主能验的只有**形状**，验不了"原话里到底说没说这个数"（那是理解，不是校验）
+  ⚠️ **但要说实话**：宿主能验的只有**形状**，验不了"原话里到底说没说过这个数"（那是理解，不是校验）
   —— 所以 **D6.5 的"回显确认"那一步不能省**，它才是"出处"真正的闸。契约不假装宿主能验出处。
+* ⚠️ **删账那一层按"人说得出的那几项"找，不按内部身份**（实现时定的，2026-09-21）：
+  `ledger_delete` 收 `date` + `kind`（可选 `qty` / `unit`），**不收 `entryId`**。
+  理由两条：① `entryId` 是**内部身份**，列表那段文字里根本没有它，
+  模型**拿不到**（第一版写成收 `entryId`，那个工具当时**用不了**）；
+  ② 就算拿得到，也不该把它念给主人听（内部词上屏 = 缺陷）。
+  ⇒ 身份那一层留 `Ledger.find()` 解决。**对得上好几笔 ⇒ 不猜**，把候选念回去让主人挑
+  （认错一笔 = 删错账，这是这一批最贵的一类错）。
 * ⚠️ 两个工具**都只经 socket 到 core**，宿主是唯一写入者。
 
 ### 7.4 账本的单条删：**与 ⑲ 同语义**（30 天 · 可恢复 · 真删压实）
@@ -215,7 +231,7 @@ core 侧在 `<dataDir>/ledger.sock` 上听（**0600**）；MCP 服务器连它�
 | # | 件 | 出口 |
 |---|---|---|
 | 1 | **账本本体**：`ledger.jsonl` + `Timeline('ledger')` + 只追加 + 6 字段校验 + 按 `entryId` 去重 | 服务端测试 |
-| 2 | **能力契约层**：MCP stdio 服务器（`ledger_propose` / `ledger_write`）+ `hupo-capabilities.yml` + UDS | **一次真 dsh 启动**证明 `mcp__ledger__*` 进了工具表 |
+| 2 | **能力契约层**：MCP stdio 服务器（`ledger_propose` / `ledger_write` / `ledger_list` / `ledger_delete`）+ `hupo-capabilities.yml` + 域套接字 | 快闸 `test/capabilities.test.js` + `test/ledger-chain.test.js`；**真 dsh 启动**走 `node scripts/check-capabilities.mjs` |
 | 3 | **出口文字**：列表 / 导出 / 单条删（复用 ㉑ 那套"一段能粘进微信的文字"） | `unknown` 不进合计 + **明说"1 条未计入"** |
 | 4 | **判据闸**（D6.3 / D6.10）：同一句话两次 ⇒ **逐字段 diff = 0**（时钟注入，进 CI） | `npm test` |
 | 5 | **收尾四件** + 攒到这一次请主人补开机清单重建 | 两边闸绿 / 能部署的部署掉 / 文档与账对上 / 推 + 总结 |

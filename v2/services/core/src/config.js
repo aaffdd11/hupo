@@ -9,6 +9,7 @@ import nodeOs from 'node:os';
 import nodePath from 'node:path';
 
 import { RECAP_DEFAULTS } from './recap.js';
+import { ledgerSocketPath } from './ledger-socket.js';
 
 export function loadConfig(env = process.env, cwd = process.cwd()) {
   const dataDir = env.HUPO_DATA ?? nodePath.resolve(cwd, 'data');
@@ -55,6 +56,29 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      *    （这正是本仓库反复栽的那个形状：**静默降级**。）
      */
     personaPath: env.HUPO_PERSONA ?? nodePath.resolve(cwd, 'hupo-persona.yml'),
+
+    /**
+     * **能力层** patch（批 4 · 契约 `docs/dev/31-LEDGER.md` v2 §7.1）。
+     *
+     * 它和人格那一份是**同一种东西**：`dsh --patch` 的额外覆盖层（可重复），
+     * 挂在 profile 之后 ⇒ **不碰 `~/.dsh/profiles/**` 那几个受保护文件**。
+     *
+     * ⚠️ 它里面**不许有秘密**：MCP 那头拿到的是一个**域套接字的路径**，
+     *    准入靠文件权限（0600）。原因见契约 §7.2（父环境会被清洗、
+     *    写进配置就等于把令牌放进仓库）。
+     */
+    capabilitiesPath: env.HUPO_CAPABILITIES ?? nodePath.resolve(cwd, 'hupo-capabilities.yml'),
+
+    /**
+     * 账本那条本地通道（域套接字）。
+     *
+     * ⚠️ 它跟着 `dataDir` 走：账本日志和这条口是一对。
+     * ⚠️ 路径里**没有账号也没有秘密** —— 谁连得上由文件权限说了算。
+     */
+    ledgerSocketPath: env.HUPO_LEDGER_SOCKET ?? ledgerSocketPath(dataDir),
+
+    /** MCP 服务器那支脚本（绝对路径：spawn 时经环境变量递给 dsh）。 */
+    ledgerServerPath: env.HUPO_LEDGER_SERVER ?? nodePath.resolve(cwd, 'src/mcp-ledger-server.mjs'),
 
     /** 冷启动实测 ~1.1s（initialize），留足余量。 */
     agentBootTimeoutMs: Number.parseInt(env.HUPO_AGENT_BOOT_TIMEOUT_MS ?? '90000', 10),
@@ -131,6 +155,28 @@ export function preflight(cfg) {
   }
   if (!nodeFs.existsSync(cfg.dshHome)) {
     notes.push(`DSH_HOME 不存在：${cfg.dshHome}（agent 起来时才可能报错）`);
+  }
+
+  // ★ **能力层**（批 4）。同样按人格那条规矩：**缺了要当场说**，
+  //   因为"少一个能力"这件事在界面上看起来只是"它今天没记"，没人会去查配置。
+  if (!cfg.capabilitiesPath) {
+    problems.push(
+      'capabilitiesPath 是空的 ⇒ 能力层挂不上，账本那几条工具在模型那一侧根本不存在。\n' +
+        '    ⇒ 修：设 HUPO_CAPABILITIES，或者别覆盖它的默认值（默认指向 v2/services/core/hupo-capabilities.yml）',
+    );
+  } else if (!nodeFs.existsSync(cfg.capabilitiesPath)) {
+    problems.push(
+      `能力层 patch 不存在：${cfg.capabilitiesPath}\n` +
+        `    ⇒ 它照样起得来、照样答得出，但**记不了账**，而且不会报错。\n` +
+        `    ⇒ 修：把文件放回去，或设 HUPO_CAPABILITIES 指向别处`,
+    );
+  }
+  if (!cfg.ledgerServerPath || !nodeFs.existsSync(cfg.ledgerServerPath)) {
+    problems.push(
+      `账本那支 MCP 服务器不在：${cfg.ledgerServerPath}\n` +
+        `    ⇒ 能力层会以"起不来"告终（那份 patch 里 failOnStartupError: true），agent 会整个起不来。\n` +
+        `    ⇒ 修：把 v2/services/core/src/mcp-ledger-server.mjs 放回去`,
+    );
   }
 
   // 跨重启接记忆的额度：**说不通就起不来**，别让它悄悄生效。
