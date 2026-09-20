@@ -68,7 +68,7 @@ if (has('--list')) {
   }
   console.log(`\n合计 ${list.length} 条、${files} 个文件。`);
   console.log('拦 = 对不上就**拒绝启动**；报 = 只记一笔，服务照起。');
-  console.log('看清楚了再建：sudo node scripts/verify-integrity.mjs --build');
+  console.log(`看清楚了再建：sudo ${nodeProcess.execPath} ${nodeProcess.argv[1]} --build`);
   nodeProcess.exit(0);
 }
 
@@ -106,7 +106,7 @@ if (r.state === 'absent') {
   console.log(`⚠️ 清单还没建：${baselinePath}`);
   console.log('   ⇒ **P1 那条保护现在是没有的**（服务照跑，但没人核对开机读的东西）。');
   console.log('   ⇒ 建一次（要 root）：');
-  console.log('        sudo node scripts/verify-integrity.mjs --build');
+  console.log(`        sudo ${nodeProcess.execPath} ${nodeProcess.argv[1]} --build`);
   nodeProcess.exit(3);
 }
 

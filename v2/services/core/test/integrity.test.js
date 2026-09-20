@@ -304,7 +304,12 @@ test('真跑一次核对（清单不在时）：退出码 3，并说清"保护�
   );
   assert.equal(r.status, 3, '"还没建"要和"对不上"分开报（3 vs 2）');
   assert.match(r.stdout, /还没建/);
-  assert.match(r.stdout, /sudo node scripts\/verify-integrity\.mjs --build/);
+  // ⚠️ 必须是**能直接粘**的形式：node 用绝对路径（本机没有系统 node，sudo 的 PATH 里没有 nvm）
+  assert.match(
+    r.stdout,
+    /sudo \/\S*node \S*verify-integrity\.mjs --build/,
+    '给主人的命令必须是绝对路径，否则他会撞上「sudo: node：找不到命令」',
+  );
 });
 
 test('🔴 主人定的那一档（2026-09-21）：**人格 / 说明书 / DSH 配置 / 手册才拦，代码与脚本只报**', () => {

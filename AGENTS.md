@@ -34,6 +34,7 @@
 | Android SDK | 36 |
 | Node | **v24.15.0** |
 | `sudo` | ⚠️ **要密码**（`sudo -n true` 会失败） |
+| `node` | ⚠️ **只有 nvm 里那一个**（`/usr/bin/node` **不存在**）⇒ 让主人跑的命令**必须写绝对路径**，`sudo node …` 会撞「找不到命令」 |
 | `deploy` 在 docker 组？ | ❌ 不在（**而且永久不加**） |
 | 无根容器 | ❌ 被挡（`apparmor_restrict_unprivileged_userns=1`） |
 
@@ -273,11 +274,11 @@ git ls-tree -r --name-only f93f296 | grep docs/     # 列出当时所有文档
 | 事 | 现在怎么样 |
 |---|---|
 | **开机完整性清单** | 机制在 `v2/services/core/src/integrity.js`：`strict` 条目对不上 ⇒ **拒绝启动** |
-| ⚠️ **保护启用了没有** | **还没有** —— 清单要 **root** 才能建（`root:root 0444`，否则助手自己就能改它）。每次开机横幅会写「**还没启用**」。**建它要主人跑一次**：`sudo node scripts/verify-integrity.mjs --build` |
+| ✅ **保护启用了吗** | **已启用**（2026-09-20 23:21，主人自己跑的 `--build`）。清单在 `/etc/hupo/integrity.json`，**`root:root 0444`**、50 个文件。开机横幅写「**完整性 对上了**」。真机验过：改一个受保护文件 ⇒ `serve.js` **拒绝启动**并点名那个文件；还原 ⇒ 对上了 |
 | **提申请** | 补丁放 `proposals/`（已在 `.gitignore` 里），**主人**跑 `scripts/apply-change.sh proposals/xxx.patch` |
 | **回退** | `scripts/rollback.sh`（用 `git revert`：**把这一次反做一遍**，历史留着。⚠️ **不许用"退回到上一个提交"那种做法**——它会连同后面的每一个改动一起丢掉）；它**不读任何助手产出的文件**——出问题时助手可能就是出问题的那个 |
 | **改完代码之后** | 不用做什么（`src/`、`scripts/` 是**只报不拦**） |
-| ⚠️ **改完这几样之后** | **人格 / 这个文件 / `docs/handbook/**` / `~/.dsh/profiles/*/cordis*.yml`** = `strict` ⇒ 要请主人补一条 `sudo node scripts/verify-integrity.mjs --build`，否则**下次重启会拒绝启动**。⇒ **`AGENTS.md` 里不许写进度数字**（那些每批都变）：数字只住在 `docs/dev/00-PROGRESS.md` |
+| ⚠️ **改完这几样之后** | **人格 / 这个文件 / `docs/handbook/**` / `~/.dsh/profiles/*/cordis*.yml`** = `strict` ⇒ **要请主人补一条重建命令**，否则**下次重启会拒绝启动**。命令别手打，照 `verify-integrity.mjs` 打出来的那一条粘（**里面是绝对路径**：本机没有系统 `node`）。⇒ **`AGENTS.md` 里不许写进度数字**（那些每批都变）：数字只住在 `docs/dev/00-PROGRESS.md` |
 
 ⚠️ **在本机改仓库代码不属于这一条**——那是正常的开发工作。
 这一条针对的是**让改动变成"下次开机自动读"**的路径。

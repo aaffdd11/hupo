@@ -212,6 +212,20 @@ export function verifyBaseline({ baseline, exists = true }) {
 }
 
 /**
+ * **重建清单那一条命令**——按这台机器的实际路径拼出来。
+ *
+ * ⚠️ 为什么不用 `sudo node scripts/…` 这种写法：本机**没有系统 node**
+ *    （`/usr/bin/node` 不存在，node 只在 `~/.nvm/...` 下），而 `sudo` 用的是
+ *    **它自己的 PATH**，那里没有 nvm 的目录 ⇒ 主人照着跑会撞上
+ *    「**sudo: node：找不到命令**」。
+ *    一条跑不通的"修法"就是一句空话 —— 而且是在最需要它的时刻（服务起不来）出现。
+ *    ⇒ 用 `process.execPath`（**现在正在跑的这个 node 的绝对路径**）+ 脚本的绝对路径。
+ */
+export function rebuildCommand({ repo }) {
+  return `sudo ${process.execPath} ${nodePath.join(repo, 'scripts/verify-integrity.mjs')} --build`;
+}
+
+/**
  * 把清单写到磁盘上：**只读**（`0444`）。
  *
  * ⚠️ 单独拿出来是为了**能测**：`--build` 那段要 root，而本机的 AI 没有 root
@@ -257,14 +271,14 @@ export function integrityReport({ repo, home, baselinePath = BASELINE_PATH }) {
     // ⚠️ **不许悄悄过去**：这是"看起来有闸、其实没有"的那一类
     notes.push(
       `开机清单还没建（${baselinePath} 不在）⇒ **P1 那条保护还没启用**。` +
-        `建一次：sudo node scripts/verify-integrity.mjs --build`,
+        `建一次：${rebuildCommand({ repo })}`,
     );
   }
   for (const c of r.blocked) {
     problems.push(
       `开机清单对不上：${c.file}（${c.what}；${c.why}）` +
         `\n      ⇒ 拒绝启动（手册 P1.4）。是你自己改的就重建清单：` +
-        `sudo node scripts/verify-integrity.mjs --build` +
+        `${rebuildCommand({ repo })}` +
         `\n      ⇒ 不是你改的：git revert 那一次改动，或把它改回来`,
     );
   }
