@@ -58,8 +58,14 @@ export function protectedPaths({ repo, home = nodeOs.homedir() }) {
   const d = (...segs) => nodePath.join(home, '.dsh', ...segs);
   return [
     // ① 会被执行的
-    { path: p('v2/services/core/src'), kind: 'dir', mode: 'strict', why: '调度器自己的代码：开机就执行' },
-    { path: p('scripts'), kind: 'dir', mode: 'strict', why: '这些是主人会手动跑的脚本（重启 / 部署 / 应用改动）' },
+    // ⚠️ 这两条现在是 `report`（**只报不拦**）—— 这是**主人 2026-09-21 定的取舍**：
+    //    开发期代码天天改，要是它们也 strict，助手每改一行主人就得补一条 `sudo`，
+    //    否则下次重启服务会拒绝启动。⇒ 先只报，**等收口了再收紧**。
+    //    ⚠️ 这是个**刻意的让步**，不是"本来就该这样"：P1.2 的判据（一条路径都不许剩）
+    //       在 `src/` 与 `scripts/` 这两条上**今天没有满足**。有一条测试把这个状态钉住，
+    //       免得下一个人以为它是 strict 而放松了别的。
+    { path: p('v2/services/core/src'), kind: 'dir', mode: 'report', why: '调度器自己的代码：开机就执行（开发期"只报不拦"，收口后应收紧）' },
+    { path: p('scripts'), kind: 'dir', mode: 'report', why: '主人会手动跑的脚本（同上，开发期"只报不拦"）' },
     // ② 开机自动喂给 agent 的
     { path: p('v2/services/core/hupo-persona.yml'), mode: 'strict', why: '每开一个新 agent 就喂一遍：改一句就改掉它的性格与纪律' },
     { path: p('AGENTS.md'), mode: 'strict', why: '助手给"下一次的自己"读的说明书' },

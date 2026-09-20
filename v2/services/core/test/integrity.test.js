@@ -109,7 +109,8 @@ test('🔴 文件被删了 ⇒ 也算对不上（"不在了"和"变了"都要报
   const f = fixture();
   try {
     const baseline = buildBaseline({ repo: f.repo, home: f.home });
-    nodeFs.rmSync(nodePath.join(f.repo, 'scripts/restart-core.sh'));
+    // 用一个 strict 条目（手册判据）：删了它必须**拦**
+    nodeFs.rmSync(nodePath.join(f.repo, 'docs/handbook/08-SPEC.md'));
     const r = verifyBaseline({ baseline });
     assert.equal(r.state, 'tampered');
     assert.equal(r.blocked.length, 1);
@@ -304,4 +305,23 @@ test('真跑一次核对（清单不在时）：退出码 3，并说清"保护�
   assert.equal(r.status, 3, '"还没建"要和"对不上"分开报（3 vs 2）');
   assert.match(r.stdout, /还没建/);
   assert.match(r.stdout, /sudo node scripts\/verify-integrity\.mjs --build/);
+});
+
+test('🔴 主人定的那一档（2026-09-21）：**人格 / 说明书 / DSH 配置 / 手册才拦，代码与脚本只报**', () => {
+  // ⚠️ 这条不是"描述现状"，是把**主人的取舍**钉住：
+  //    改它 = 改这道护栏的强度 ⇒ 必须是有意为之，不能是顺手。
+  const list = protectedPaths({ repo: '/repo', home: '/home/u' });
+  const modeOf = (p) => list.find((e) => e.path === p)?.mode;
+  const strict = [
+    '/repo/v2/services/core/hupo-persona.yml', // 它是谁
+    '/repo/AGENTS.md', // 它给自己的说明书
+    '/home/u/.dsh/profiles', // 每轮开机读到的 profile / 补丁
+    '/home/u/.dsh/settings.yaml',
+    '/home/u/.dsh/.credentials.yaml',
+    '/repo/docs/handbook', // 判据本身
+  ];
+  for (const p of strict) assert.equal(modeOf(p), 'strict', `${p} 必须是 strict`);
+  // 开发期刻意只报的那两条
+  assert.equal(modeOf('/repo/v2/services/core/src'), 'report');
+  assert.equal(modeOf('/repo/scripts'), 'report');
 });

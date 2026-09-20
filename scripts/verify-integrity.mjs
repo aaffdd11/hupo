@@ -11,7 +11,9 @@
 //    下面那两个 `--baseline` / `--repo` 是给**这个工具**用的（别的机器、测试），
 //    **服务本体不认它们** —— 所以拿它们骗不了服务。
 //
-// 退出码：`0` 对上（或刚建好）· `2` 对不上 · `3` 清单还没建
+// 退出码（**分清楚**，"只报"和"会拒绝启动"不是一回事）：
+//   `0` 对上（或刚建好）· `1` 只有"只报不拦"的条目动过（服务照起）
+//   `2` strict 对不上（**会拒绝启动**）· `3` 清单还没建
 
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
@@ -103,4 +105,8 @@ for (const c of r.warnings) console.log(`   [报] ${c.file} —— ${c.what}（$
 console.log('\n▶ 怎么收拾：');
 console.log('   · 是你自己（或主人）刚改的  ⇒ sudo node scripts/verify-integrity.mjs --build');
 console.log('   · 不是你改的                ⇒ git revert 那一次改动，或把文件改回去');
+if (r.blocked.length === 0) {
+  console.log('   （只有"只报不拦"的条目动过 ⇒ **服务照常起**，但要知道这件事）');
+  nodeProcess.exit(1);
+}
 nodeProcess.exit(2);
