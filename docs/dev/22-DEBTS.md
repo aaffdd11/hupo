@@ -81,6 +81,10 @@ HUPO_TOKEN=<令牌> node scripts/check-web-browser.mjs --shot /tmp/shot.png
 npx --yes @puppeteer/browsers install chrome@stable --path ~/.cache/hupo-chrome
 ```
 
+✅ **本机已经装好了**（2026-09-21）：`~/.cache/hupo-chrome/chrome/linux-153.0.8010.52/chrome-linux64/chrome`（Chrome 153，393M）。
+⇒ **不带任何参数**就能跑（脚本自己会去那儿找）；装之前我临时借用了这台机器上**别的项目**的一份，
+那只是权宜 —— **现在不依赖别人的目录了**（AGENTS §六.5）。
+
 ## 二、第 9 条：`$DSH_HOME/sessions/` 有上限了
 
 ### 2.1 ⚠️ 两条实测发现，都是"照直觉做就会删错东西"
