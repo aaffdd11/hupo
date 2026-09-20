@@ -17,6 +17,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/conn_state.dart';
+import '../models/scroll_follow.dart';
 import '../models/timeline.dart';
 import '../services/chat_controller.dart';
 import '../widgets/bubbles.dart';
@@ -38,10 +39,21 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _scroll = ScrollController();
 
+  /// 用户**自己往上翻过**没有。
+  ///
+  /// ⚠️ 这个布尔是欠账第 24 条的修法里唯一的新状态：
+  ///    在此之前，"要不要跟到底部"只看"离底部近不近"，
+  ///    而**首屏 `pixels == 0` 对上一屏历史** ⇒ 那个判据恒为 false
+  ///    ⇒ **打开就停在最老那一条**。判据本身搬去了 `models/scroll_follow.dart`。
+  bool _userScrolledAway = false;
+
   @override
   void initState() {
     super.initState();
     widget.controller.addListener(_onChanged);
+    // ⚠️ **首屏也要跟一次**：本机缓存那一屏（`17-LOCAL-FIRST.md`）可能
+    //    在挂载之前就已经在控制器里了，那时 `_onChanged` 一次都不会触发。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _followBottom());
   }
 
   @override
@@ -55,15 +67,27 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
     setState(() {});
     // 新东西进来时滚到底；**用户正在往上翻时不打断他**
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
-      final pos = _scroll.position;
-      final nearBottom = pos.maxScrollExtent - pos.pixels < 160;
-      if (nearBottom) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _followBottom());
+  }
+
+  /// 按纯函数的判定跟到底部（判据与理由见 `models/scroll_follow.dart`）。
+  void _followBottom() {
+    if (!mounted || !_scroll.hasClients) return;
+    final pos = _scroll.position;
+    final action = scrollFollowAction(
+      pixels: pos.pixels,
+      maxScrollExtent: pos.maxScrollExtent,
+      userScrolledAway: _userScrolledAway,
+    );
+    switch (action) {
+      case FollowAction.none:
+        return;
+      case FollowAction.jump:
+        _scroll.jumpTo(pos.maxScrollExtent);
+      case FollowAction.animate:
         _scroll.animateTo(pos.maxScrollExtent,
             duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
-      }
-    });
+    }
   }
 
   @override
@@ -129,17 +153,33 @@ class _ChatScreenState extends State<ChatScreen> {
   ///    它是"这一轮正在发生"，属于对话流，不属于工具栏。
   Widget _body(ChatController c) {
     if (c.items.isEmpty && !c.hasProcess) return const _EmptyState();
-    return ListView.builder(
-      controller: _scroll,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      itemCount: c.items.length + (c.hasProcess ? 1 : 0),
-      itemBuilder: (context, i) => i < c.items.length
-          ? _render(c.items[i], c)
-          : ProcessTail(
-              level: c.level,
-              busyText: c.agentLine,
-              steps: c.steps,
-            ),
+    return NotificationListener<ScrollNotification>(
+      // ⚠️ **只有手指拖出来的滚动**才算"用户自己翻走了"。
+      //    我们自己 `animateTo` 产生的那一次不算 —— 否则第一次跟随
+      //    就等于把自己关掉（那正是"打开停在最老"的另一种写法）。
+      onNotification: (n) {
+        // ⚠️ 两类分开判：`dragDetails` 不在基类 `ScrollNotification` 上，
+        //    合在一个条件里 Dart 提升不出类型来（会报 undefined_getter）。
+        if (n is ScrollStartNotification && n.dragDetails != null) {
+          _userScrolledAway = true;
+        }
+        if (n is ScrollUpdateNotification && n.dragDetails != null) {
+          _userScrolledAway = true;
+        }
+        return false;
+      },
+      child: ListView.builder(
+        controller: _scroll,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        itemCount: c.items.length + (c.hasProcess ? 1 : 0),
+        itemBuilder: (context, i) => i < c.items.length
+            ? _render(c.items[i], c)
+            : ProcessTail(
+                level: c.level,
+                busyText: c.agentLine,
+                steps: c.steps,
+              ),
+      ),
     );
   }
 

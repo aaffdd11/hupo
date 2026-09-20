@@ -235,11 +235,21 @@ void main() {
     /// `InkWell` **外面**：实测某个 `IconButton` 的 `InkWell` 是 40×40，
     /// 而它的**语义矩形是 48×48**。
     /// ⇒ 量内层那个框会**误报**（我第一版就是这么误报的，见 `13-A11Y.md` §三）。
-    void sweep(WidgetTester tester, String where) {
+    /// ⚠️ 量之前**先把这个按钮完整露出来**（见下面"被裁过的矩形"那段）。
+    Future<void> sweep(WidgetTester tester, String where) async {
       var checked = 0;
       for (final type in <Type>[IconButton, TextButton, FilledButton, ElevatedButton]) {
         for (final e in find.byType(type).evaluate()) {
-          final r = tester.getSemantics(find.byWidget(e.widget)).rect;
+          final w = find.byWidget(e.widget);
+          // ⚠️ **先 `ensureVisible`，再量语义矩形。**
+          //    为什么非这样不可（2026-09-21 实测）：时间线**会滚**之后，
+          //    一个滚到一半的按钮，它的语义矩形是**被视口裁过的**——
+          //    「重发」明明有 44 高，量出来是 `Size(65.2, 20.5)`。
+          //    ⇒ 那种读数**随滚动位置变**：同一份代码，滚到哪儿决定闸红不红。
+          //      而"读数会变的闸"下一步就是被绕过。
+          await tester.ensureVisible(w);
+          await tester.pumpAndSettle();
+          final r = tester.getSemantics(w).rect;
           checked += 1;
           expect(
             r.width >= minTouch && r.height >= minTouch,
@@ -264,19 +274,29 @@ void main() {
     for (final s in scales) {
       testWidgets('登录页 @ ${s}x', (tester) async {
         await _pump(tester, _login(), s);
-        sweep(tester, '登录页 @${s}x');
+        await sweep(tester, '登录页 @${s}x');
       });
 
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
         await _openAbout(tester, s);
-        sweep(tester, '关于页 @${s}x');
+        await sweep(tester, '关于页 @${s}x');
       });
 
       testWidgets('主界面（含"重发"那个入口）@ ${s}x', (tester) async {
         final c = _controller();
         _stuff(c.timeline);
         await _pump(tester, ChatScreen(controller: c, onLoggedOut: () {}), s);
-        sweep(tester, '主界面 @${s}x');
+        // ⚠️ **先滚到最上面**：时间线现在打开就停在**最新**那一条（`27-SCROLL.md`），
+        //    而"重发"那个入口属于**最老**那条（第一条就发失败了）。
+        //    不滚上去的话，字放大之后它可能根本没被 build ⇒ **这一条闸就漏掉了它**，
+        //    而 `checked > 0` 照样是绿的（顶栏那几个图标永远在）——那就是"闸变弱"。
+        //    ⇒ 显式把它露出来，再量。
+        await tester.drag(find.byType(ListView), const Offset(0, 4000));
+        await tester.pumpAndSettle();
+        // ★ 这条用例的意义就在这个入口：**必须真的量到它**，
+        //   不许因为它现在在屏幕外面就悄悄漏过去。
+        expect(find.text('重发'), findsOneWidget, reason: '★ "重发"入口没进到这棵树里 ⇒ 这条闸漏了它');
+        await sweep(tester, '主界面 @${s}x');
       });
     }
   });
