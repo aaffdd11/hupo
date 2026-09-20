@@ -34,11 +34,15 @@
 apps/mobile/          Flutter 客户端（L1 终端）
 services/core/        Node.js 调度器（L2）——常驻进程
 packages/protocol/    PROTOCOL.md：客户端 ⇄ 调度器的约定
-scripts/              构建 / 部署 / 完整性 脚本
-docs/handbook/        本手册（唯一权威）
-docs/                 其他文档（来源与历史）
-ARCHITECTURE-v7.md    大架构（权威，但被本手册收敛）
+scripts/              构建 / 部署 / 推送 脚本
+docs/handbook/        本手册（唯一权威文档）
 ```
+
+> ⚠️ **仓库里只有这一份文档集了。** 旧的架构 / 评审 / 辩论记录已删除，**在 git 历史里**
+> （取法见 `README.md` §六）。
+>
+> ⚠️ **别把根目录的 `package.json` 当成入口**——它的 `main` 指向的是**已删除的 v1 原型**。
+> **当前服务是 `services/core/`**（它有自己的 `package.json`，`main: src/index.js`）。
 
 **【现状】规模**（`wc -l` 实测）：
 
@@ -606,7 +610,7 @@ deadlineTimer（长）后到 → :611 guard 读到**新** id ⇒ undefined !== i
 | `scripts/integrity-manifest.json` | 新增；**由主人 `sudo` 手动重建** | 批 6 |
 | `scripts/verify-integrity.mjs` · `apply-change.sh` · `rollback.sh` | 新增 | 批 6 |
 | **容器三件**（Dockerfile / slice / 验收脚本） | 新增 | 批 6 |
-| `docs/design/L1-terminal.md` · `L2-dispatcher.md` · `L3-worker.md` | **不改**——保留"单用户那一代"的原样 | —— |
+| 单用户那一代的子架构（`L1-terminal` / `L2-dispatcher` / `L3-worker`） | **已删除**——仍有效的规范已收敛进 `08-SPEC.md`；原文在 git 历史里 | —— |
 | 本手册 | 结构变了才改 | 随时 |
 
 ---

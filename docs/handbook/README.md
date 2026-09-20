@@ -21,6 +21,7 @@
 | **[`05-DECISIONS.md`](05-DECISIONS.md)** | **已经拍板了什么**——76 条决策，带最强理由与连带动作 | 想知道"为什么不能那样做"的人 |
 | **[`06-OPERATIONS.md`](06-OPERATIONS.md)** | **怎么跑起来、怎么保证不出事**——部署、容器、完整性、备份、供给上限 | 运维与安全 |
 | **[`07-APPENDIX.md`](07-APPENDIX.md)** | **现状有哪些坑、术语怎么统一、评审经历过什么** | 查证据的人 |
+| **[`08-SPEC.md`](08-SPEC.md)** | **顺手要用的规范**——继承的不变量 N1–N11、接口表、spawn 契约、安全模型、成本与告警、iOS 与 Web 构建 | 写代码 / 部署的人 |
 
 ---
 
@@ -62,6 +63,7 @@
 | **2** | **协议字段一旦上线就冻结。** `03-DEVELOPMENT.md` §三那张表**动工前定完**，之后只加不改语义（旧客户端还在跑）。 |
 | **3** | **纯函数进 `test/unit`，不写界面断言。** `test/widget` 只是提示不是闸（它现在 49 条挂 10，一重构必过期）。新验收写进 `test/unit` 才算有人守。 |
 | **4** | **"以后再说"等于永远不做。** 每一批都必须回答"**能验证什么**"和"**装不装得上平板**"。**写不出验收的条目不许进批次表。** |
+| **5** | **要删任何一条结论，先确认它已经在这里有家。** 上一轮删旧文档时，靠的就是"先把 N1–N11、接口表、安全模型搬进 `08-SPEC.md`，再删"。**顺序反了就会丢东西。** |
 
 ---
 
@@ -83,13 +85,26 @@
 
 ---
 
-## 六、历史文档去哪找
+## 六、历史文档在哪
 
-| 想找什么 | 去哪 |
+> **旧文档已经删掉了**——`ARCHITECTURE-v2…v7`、`REVIEW-*`、`DEBATE-*`、`DISCUSS-*`、
+> `PLAN.md`、`SYNTHESIS.md`、`docs/` 下的旧目录、以及 v1 原型的 `src/`。
+>
+> **它们全在 git 历史里。** 取法：
+>
+> ```bash
+> git log --oneline | tail -20            # 找回删除前的提交
+> git show <commit>:<path>                # 看某个文件当时的样子
+> git show <commit>:docs/ux/06-retiree.md # 例：那位不会拼音的用户的原话
+> ```
+
+| 想找什么（**先确认手册里真没有**） | 在历史里的路径 |
 |---|---|
-| 架构的推导过程 | `docs/design/ai-phone-architecture.md`、`ARCHITECTURE-v7.md` |
-| 76 条决策的**辩论过程** | `docs/pm-panel/R2-SYNTHESIS.md`、`R2-0{1,2,3}-*.md` |
+| 不变量 N1–N11、接口表、安全模型 | ✅ **已在手册**：`08-SPEC.md` |
+| iOS 构建、Web 部署、`hupo.chat` 的备案坑 | ✅ **已在手册**：`08-SPEC.md` §七 |
 | 十个用户走查的**逐字原文** | `docs/ux/01-owner.md` … `10-tablet.md` |
-| 实测事实的**出处** | `docs/design/R2-verification.md`、`07-APPENDIX.md` §四 |
+| 76 条决策的**完整辩论过程** | `docs/pm-panel/R2-SYNTHESIS.md`、`R2-0{1,2,3}-*.md` |
 | 两轮评审的**完整发现** | `docs/design/R2-plan-review.md`、`R2-ENGINEERING-review.md` |
+| 实测事实的**原始出处** | `docs/design/R2-verification.md` |
+| 架构的推导过程 | `docs/design/ai-phone-architecture.md`、`ARCHITECTURE-v7.md` |
 | 单用户那一代的子架构 | `docs/design/L1-terminal.md`、`L2-dispatcher.md`、`L3-worker.md` |

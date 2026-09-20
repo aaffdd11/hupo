@@ -1,6 +1,6 @@
 // 会话列表页。
 //
-// 设计要点（PLAN.md §六之二）：**不在本地存消息**。
+// 设计要点（见 docs/handbook/02-ARCHITECTURE.md）：**不在本地存消息**。
 // 只拉服务端的会话元数据（标题/最后一条/时间/未读），点进去才加载对话。
 
 import 'package:flutter/material.dart';
@@ -152,7 +152,7 @@ class _ConversationListViewState extends State<ConversationListView> {
 /// 设置页。
 ///
 /// 刻意保持极少 —— 客户端是哑终端。
-/// 但**账号删除入口是应用商店硬要求**（PLAN.md §六之二），必须在。
+/// 但**账号删除入口是应用商店硬要求**，必须在。
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
 
