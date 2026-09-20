@@ -15,12 +15,35 @@
 // ⚠️ 第三条：**不许出现禁用词**（`models/forbidden_words.dart`）。
 //     有 `test/unit/process_words_test.dart` 守着。
 
-/// 服务端在 `message/status.state` 里给的那些词，各自对应哪句人话。
+/// 服务端在 `message/status.state`（以及 `step/*.state`）里给的那些词，
+/// 各自对应哪句人话。
 ///
-/// 现在只有一种：**一轮开了、还没出字**。
-/// 那正是"它到底收到没有"的那段空白——也是走查里 8/10 放弃点落的地方。
+/// * `started`：**一轮开了、还没出字**。那正是"它到底收到没有"的那段空白
+///   ——也是走查里 8/10 放弃点落的地方（第 ② 档「在做什么」用的就是它）。
+///   ⚠️ 服务端**现在每一步也发 `started`**：DSH 的 `step/start` 事件里
+///   没有工具名（`session-translate.js` `#emitStep` 记着这条），
+///   所以"这一步是什么"它**不知道**——那就不猜（N10）。
+///   代价是：第 ③ 档现在会是一串同样的「它正在做这件事…」+ 完成的对勾。
+/// * `searching` / `writing`：契约 `26-PROCESS-LEVELS.md` §一/§三 点名的那两句
+///   人话（`searching` 是事件例子里的 state，D7.1 说它翻成"在查资料"）。
+///   现在**没有生产者**（服务端不发明名字）；留着是给"将来 DSH 的 step 带上
+///   工具类别"那一天用的。认不出来的状态照样是 `null` ⇒ 屏幕上安静。
+///   `reading` / `running` / `thinking` 也是同一套词，同样只在这张表里备着。
+///
+/// ⚠️ 这张表是**唯一**允许出现内部状态名的地方，而且方向是单向的：
+///    内部名进来，人话出去。
 const Map<String, String> processWords = {
   'started': busyFallback,
+  // 在查资料：`web_search` / `web_fetch` 这一类（D7.1 点名的那个例子）
+  'searching': '在查资料',
+  // 在读东西：翻文件、看图、找东西
+  'reading': '在读东西',
+  // 在写：改文件、写东西
+  'writing': '在写',
+  // 在动手做：跑一条命令、干一件会留下痕迹的事
+  'running': '在动手做',
+  // 在琢磨：还没动工具，先想一下
+  'thinking': '在琢磨',
 };
 
 /// 兜底那句话：**知道它在做，但不知道具体在做什么**。
@@ -28,6 +51,12 @@ const Map<String, String> processWords = {
 /// 什么时候用它：断线重连之后瞬态没了，但时间线上还挂着一条没收口的气泡
 /// ⇒ 仍然推得出"它在做"，只是推不出是哪个内部状态。
 const String busyFallback = '它正在做这件事…';
+
+/// 第 ④ 档「推理原文」那一块的标题。
+///
+/// ⚠️ **它必须说清这是"另一种东西"**：那不是它要说的话，是它还没说出口的念头。
+///    写在 `models/` 里而不是界面里，是为了让它也进禁用词硬闸。
+const String reasoningLabel = '它心里想的（还没说出口）';
 
 /// 认不出来 ⇒ `null`（**界面据此什么都不显示**）。
 String? processWord(String? state) => state == null ? null : processWords[state];

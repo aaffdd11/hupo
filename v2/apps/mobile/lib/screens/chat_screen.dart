@@ -21,6 +21,8 @@ import '../models/timeline.dart';
 import '../services/chat_controller.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/composer.dart';
+import '../widgets/process_level_menu.dart';
+import '../widgets/process_view.dart';
 import 'about_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -71,6 +73,13 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: const Text('助手'),
         actions: [
+          // ⚠️ **过程四档的入口**（契约 §五：位置等主人看过再定，
+          //    所以这一批只做"能切"）。换档要重连（`level` 是连接级的）。
+          IconButton(
+            tooltip: '它说多少过程',
+            onPressed: () => _pickLevel(c),
+            icon: const Icon(Icons.tune),
+          ),
           // ⚠️ **关于**放在这儿不是装饰：H1 点名要避免的形态是
           //    "字放大了，但还是打不了字" ⇒ 得有一处**如实告诉他这台设备上行不行**。
           IconButton(
@@ -114,20 +123,38 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// 时间线本体 + 尾巴上那行「它正在做…」。
+  /// 时间线本体 + 尾巴上那一块**过程**（步骤流水 / 那行「它正在做…」）。
   ///
-  /// ⚠️ 那行提示**算在列表里**（会跟着滚），不是浮在输入框上面——
+  /// ⚠️ 那一块**算在列表里**（会跟着滚），不是浮在输入框上面——
   ///    它是"这一轮正在发生"，属于对话流，不属于工具栏。
   Widget _body(ChatController c) {
-    final line = c.agentLine;
-    if (c.items.isEmpty && line == null) return const _EmptyState();
+    if (c.items.isEmpty && !c.hasProcess) return const _EmptyState();
     return ListView.builder(
       controller: _scroll,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      itemCount: c.items.length + (line == null ? 0 : 1),
+      itemCount: c.items.length + (c.hasProcess ? 1 : 0),
       itemBuilder: (context, i) => i < c.items.length
           ? _render(c.items[i], c)
-          : BusyLine(text: line!),
+          : ProcessTail(
+              level: c.level,
+              busyText: c.agentLine,
+              steps: c.steps,
+              reasoning: c.reasoning,
+            ),
+    );
+  }
+
+  /// 打开四档的切换面板。**选中即生效**（换档会重连，见 `setLevel`）。
+  Future<void> _pickLevel(ChatController c) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheet) => ProcessLevelMenu(
+        current: c.level,
+        onPick: (level) {
+          Navigator.of(sheet).pop();
+          c.setLevel(level);
+        },
+      ),
     );
   }
 

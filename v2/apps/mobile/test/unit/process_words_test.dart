@@ -15,6 +15,7 @@ void main() {
         expect(hits, isEmpty, reason: '「${e.key}」翻出来的话里有禁用词：$hits');
       }
       expect(scanForbidden(busyFallback), isEmpty);
+      expect(scanForbidden(reasoningLabel), isEmpty);
     });
 
     test('每一句都要**说清是谁在做**，而且不许是内部状态名本身', () {
@@ -31,6 +32,24 @@ void main() {
       // ⚠️ 这条把**两端用同一个 token**这件事钉住：
       //    服务端 `dispatcher.js` 的 `#announceTurn()` 发的就是 `'started'`。
       expect(processWord('started'), isNotNull);
+    });
+
+    test('★ 第 ③ 档步骤流水那几个状态名也认得出来（契约 §三 step/*.state）', () {
+      // ⚠️ 契约 §三 的例子就是 `searching`；D7.1 点名它要翻成"在查资料"。
+      //    这四个 + searching 是服务端按工具类别给的词（`tool/call.name` 那一层
+      //    翻完之后的结果）。**少一个就是屏幕上少一行**——静默地少。
+      for (final s in ['searching', 'reading', 'writing', 'running', 'thinking']) {
+        expect(processWord(s), isNotNull, reason: '服务端会发的状态名「$s」不认识了');
+      }
+      expect(processWord('searching'), '在查资料');
+    });
+
+    test('🔴 推理原文那一块的标题：有人话、且**说清它不是"它说的话"**', () {
+      expect(reasoningLabel.trim(), isNotEmpty);
+      expect(scanForbidden(reasoningLabel), isEmpty);
+      // D7.4：它是"没说出口的"，不是回答。标题里必须有这层意思，
+      // 不然用户会以为那是它对自己说的话。
+      expect(reasoningLabel, contains('没说出口'));
     });
 
     test('★ 认不出来 ⇒ null（**不许猜、不许显示内部词**）', () {

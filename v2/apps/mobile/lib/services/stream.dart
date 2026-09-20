@@ -22,18 +22,25 @@ import 'stream_uri.dart';
 
 import 'api.dart';
 import '../models/conn_state.dart';
+import '../models/process_levels.dart';
 
 class StreamClient {
   StreamClient({
     required this.base,
     required this.token,
     required this.api,
+    this.level = defaultProcessLevel,
     this.pingTimeout = const Duration(seconds: 60),
   });
 
   final String base; // 空串 = 同源
   final String token;
   final Api api;
+
+  /// 过程四档（契约 §三）。**连接级**：服务端按这条连接决定发多少过程
+  /// ⇒ 换档只能靠**重连**（`chat_controller.setLevel` 就是这么做的）。
+  final ProcessLevel level;
+
   final Duration pingTimeout;
 
   final _events = StreamController<Map<String, dynamic>>.broadcast();
@@ -85,7 +92,7 @@ class StreamClient {
 
     // ⚠️ 别在这里自己拼协议：同源时必须看**页面**的协议，
     //    否则会在 https 页面上拼出 ws:// 并被浏览器拦掉（`stream_uri.dart` 记着这次事故）。
-    final uri = streamUri(base: base, page: Uri.base, sinceSeq: _sinceSeq);
+    final uri = streamUri(base: base, page: Uri.base, sinceSeq: _sinceSeq, level: level);
 
     try {
       // 令牌走**子协议**（手册 §2.1）——不进 URL。

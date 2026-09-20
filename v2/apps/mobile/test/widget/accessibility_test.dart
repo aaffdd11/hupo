@@ -21,12 +21,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/message_state.dart';
+import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/timeline.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/screens/login_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// D3.5 点名的五档。
 const scales = <double>[1.0, 1.3, 1.75, 2.0, 3.1];
@@ -77,6 +79,30 @@ Future<void> _openAbout(WidgetTester tester, double scale) async {
   await tester.pumpAndSettle();
 }
 
+/// **像用户那样**打开过程四档的切换面板（批 3 新加的入口）。
+///
+/// ⚠️ 和关于页同一条理由：新加的界面**必须也过五档不溢出那道硬闸**，
+///    不然"五档不溢出"会随时间失效。
+Future<void> _openProcessMenu(WidgetTester tester, double scale) async {
+  await _pump(tester, ChatScreen(controller: _controller(), onLoggedOut: () {}), scale);
+  await tester.tap(find.byTooltip('它说多少过程'));
+  await tester.pumpAndSettle();
+}
+
+/// 一份"过程那一块拉满"的控制器：步骤流水 + 推理原文都在屏幕上。
+///
+/// ⚠️ 用**最高的那一档**（`reasoning`）：它同时包含步骤流水与推理原文，
+///    也就是这一批新加的两样最多的字。
+Future<ChatController> _processController() async {
+  final c = _controller();
+  await c.setLevel(ProcessLevel.reasoning);
+  c.ingest({'type': 'message/status', 'turn': 1, 'state': 'started'});
+  c.ingest({'type': 'step/start', 'turn': 1, 'step': 1, 'state': 'searching'});
+  c.ingest({'type': 'step/start', 'turn': 1, 'step': 2, 'state': 'writing'});
+  c.ingest({'type': 'reasoning/delta', 'turn': 1, 'text': '他问的是这周，我先把账翻出来对一下。'});
+  return c;
+}
+
 /// 一份"什么内容都有"的时间线：四态、快答+深答、标记、断了的那条。
 void _stuff(Timeline t) {
   t.addLocalUtterance('帮我把这周工时记一下', 'u_1');
@@ -99,6 +125,10 @@ void _stuff(Timeline t) {
 }
 
 void main() {
+  // 换档会写本机设置（`ProcessLevelStore`）——测试里给它一个空盘，
+  // 免得真去敲一个不存在的平台插件（写失败也不会抛，但别让它去敲）。
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   // ── D3.5 ──────────────────────────────────────────────────
 
   group('D3.5：容器跟字算，五档不许溢出', () {
@@ -116,10 +146,28 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '主界面在 ${s}x 溢出了');
       });
 
+      testWidgets('主界面 @ ${s}x（步骤流水 + 推理原文拉满 —— 批 3 新加的）', (tester) async {
+        final c = await _processController();
+        await _pump(tester, ChatScreen(controller: c, onLoggedOut: () {}), s);
+        expect(_drain(tester), isEmpty, reason: '过程那一块在 ${s}x 溢出了');
+      });
+
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
         // ⚠️ 新加的界面**必须也过这道闸** —— 不然"五档不溢出"会随时间失效。
         await _openAbout(tester, s);
         expect(_drain(tester), isEmpty, reason: '关于页在 ${s}x 溢出了');
+      });
+
+      testWidgets('过程四档的切换面板（从真入口进）@ ${s}x', (tester) async {
+        await _openProcessMenu(tester, s);
+        expect(_drain(tester), isEmpty, reason: '切换面板在 ${s}x 溢出了');
+        // 命中区：面板里那四项每一行都得 ≥44（它们是 `ListTile`，
+        // 不在下面那份按钮扫描的种类里，所以在这儿单独量）。
+        for (final t in find.byType(ListTile).evaluate()) {
+          final size = tester.getSize(find.byWidget(t.widget));
+          expect(size.height >= minTouch, isTrue,
+              reason: '切换面板 @${s}x：一行的命中区只有 ${size.height}');
+        }
       });
 
       testWidgets('空屏 @ ${s}x', (tester) async {

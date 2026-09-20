@@ -94,6 +94,36 @@ class TimelineMarker extends TimelineItem {
   final bool catchUp;
 }
 
+/// 过程里的**一步**（第 ③ 档「步骤流水」，契约 §三 `step/*`）。
+///
+/// ⚠️ **瞬态**：不占号、不落盘（决策 P-g）⇒ 它**不是**时间线条目，
+///    而是挂在**轮**上的一小段临时状态。轮一收口就清掉。
+///
+/// [state] 是**内部状态名**（`searching`…），要经 `processWord()` 翻成人话才上屏。
+class ProcessStep {
+  const ProcessStep({
+    required this.turn,
+    required this.step,
+    required this.state,
+    this.done = false,
+  });
+
+  /// 哪一轮的（乱序保护靠它）。
+  final int turn;
+
+  /// 一轮里的第几步（同一号重复到达 ⇒ 覆盖，不重复画）。
+  final int step;
+
+  /// 内部状态名。**绝不上屏**（`process_words.dart` 翻）。
+  final String state;
+
+  /// `step/end` 到了没有。用来画"这一步做完了"。
+  final bool done;
+
+  ProcessStep copyWith({bool? done}) =>
+      ProcessStep(turn: turn, step: step, state: state, done: done ?? this.done);
+}
+
 /// 时间线本体。
 class Timeline {
   final List<TimelineItem> _items = [];
@@ -113,7 +143,30 @@ class Timeline {
   ///    这一半在这儿：**旧轮的状态不许把新轮的提示点回来**——
   ///    否则一条迟到的 `turn=1` 会在第 3 轮已经收口之后
   ///    把「它正在做…」又亮起来，而屏幕上那是假的。
-  int? _turn;
+  ///
+  /// ⚠️ 批 3 起**状态与步骤共用这一个号**：两条路都得挡同一件事
+  ///    （迟到的旧轮），各记各的一定会漂。
+  int _seenTurn = 0;
+
+  /// 已经收口的最高轮号。**≤ 它的过程帧一律丢**。
+  ///
+  /// 为什么要有它：收口事件（`message/end`）里**没有 `turn` 字段**
+  /// （`services/core/src/message-writer.js` 的 `end()`），
+  /// 客户端只知道"某一轮收口了"，不知道是哪一轮。
+  /// 收口时把见到的最大轮号记下来，就等于
+  /// "这一号以前的都不许再把提示点回来"——H4 那条既有规矩的延伸。
+  int _closedThrough = 0;
+
+  /// 第 ③ 档「步骤流水」：这一轮的步骤，**按 `step` 号排**。
+  ///
+  /// ⚠️ 它是瞬态 ⇒ 轮收口时**必须清空**（契约 §三：不许留成"永远在查资料"）。
+  final List<ProcessStep> _steps = [];
+
+  /// 第 ④ 档「推理原文」：这一轮的思考原文。
+  ///
+  /// ⚠️ **只在内存里**（契约 §二：一个字节都不许落盘）——
+  ///    所以它也不进 `timeline_store`：那里只收带号的（`isPersistable`）。
+  String _reasoning = '';
 
   /// 服务端说了"它断了 / 接不上活" ⇒ **那一轮已经死了**。
   ///
@@ -153,6 +206,15 @@ class Timeline {
   /// 有没有**还没收口**的助手气泡（= 它正在说，或者说到一半断了）。
   bool get _hasOpenAssistant =>
       _items.any((it) => it is AssistantMessage && !it.ended);
+
+  /// 第 ③ 档：这一轮的**步骤流水**（按 `step` 号排；轮收口即空）。
+  ///
+  /// 界面要拿 `processWord(s.state)` 翻成人话，**认不出来的跳过**
+  /// （N10：沉默优于编造）。
+  List<ProcessStep> get steps => List.unmodifiable(_steps);
+
+  /// 第 ④ 档：这一轮的**思考原文**（空串 = 没有，界面据此什么都不显示）。
+  String get reasoning => _reasoning;
 
   /// 已收到的最大服务端号。**补发就从它开始要**。
   int get lastSeq => _lastSeq;
@@ -229,8 +291,11 @@ class Timeline {
           m.quick += text;
         }
       case 'message/end':
-        // 这一轮说完了 ⇒ 界面上那行「它在做…」跟着撤
+        // 这一轮说完了 ⇒ 界面上那行「它在做…」跟着撤，
+        // **并且把这一轮的过程（步骤流水 / 思考原文）一起清掉**——
+        // 不收的话就会留成"永远在查资料"（契约 §三：超时收敛）。
         _turnState = null;
+        _closeTurn();
         final m = _findMessage(messageId);
         if (m == null) return;
         m.ended = true;
@@ -276,27 +341,119 @@ class Timeline {
   void _applyTransient(Map<String, dynamic> event) {
     switch (event['type']) {
       case 'message/status':
-        // ★ **按轮寻址**，不按气泡（见 `agentLine` 上面那段）。
-        //   只有**认得出来的**状态才认；认不出来的**保持安静**——
-        //   不猜、也不把内部词漏到屏幕上（N10：沉默优于编造）。
-        final state = event['state'] as String?;
-        final turn = event['turn'];
-        // 乱序保护：比见过的旧 ⇒ **丢掉**（不许让旧轮把提示点回来）
-        if (turn is int && _turn != null && turn < _turn!) return;
-        if (processWord(state) != null) {
-          if (turn is int) _turn = turn;
-          _turnState = state;
-          _agentDead = false; // 又开了一轮 ⇒ 它活着
-        }
+        _applyStatus(event);
+      case 'step/start':
+        _applyStepStart(event);
+      case 'step/end':
+        _applyStepEnd(event);
+      case 'reasoning/delta':
+        _applyReasoning(event);
       case 'error':
         // 它断了 / 接不上活 ⇒ 那一轮**不会再有收尾了**，这行提示必须撤掉。
         // ⚠️ 少了这一条，手册 H4 那个失败模式就回来了：
         //   卡住时**永久停在"它正在做…"**，比空白更坏。
         _turnState = null;
         _agentDead = true;
+        // 过程也一样：那一轮已经死了，步骤 / 思考留在屏幕上就是假的。
+        _closeTurn();
       default:
         return;
     }
+  }
+
+  /// `message/status`（第 ② 档「在做什么」）。
+  void _applyStatus(Map<String, dynamic> event) {
+    // ★ **按轮寻址**，不按气泡（见 `agentLine` 上面那段）。
+    //   只有**认得出来的**状态才认；认不出来的**保持安静**——
+    //   不猜、也不把内部词漏到屏幕上（N10：沉默优于编造）。
+    final state = event['state'] as String?;
+    final turn = event['turn'];
+    // 乱序保护：比见过的旧、或那一轮已经收口 ⇒ **丢掉**
+    // （不许让旧轮把提示点回来）
+    if (turn is int && _isLate(turn)) return;
+    if (processWord(state) == null) return;
+    if (turn is int) _openTurn(turn);
+    _turnState = state;
+    _agentDead = false; // 又开了一轮 ⇒ 它活着
+  }
+
+  /// `step/start`（第 ③ 档「步骤流水」）。
+  ///
+  /// ⚠️ 同一 `(turn, step)` 重复到达 ⇒ **覆盖**，不是再画一条
+  ///    （断线重连、乱序都会重复）。
+  void _applyStepStart(Map<String, dynamic> event) {
+    final turn = event['turn'];
+    final step = event['step'];
+    final state = event['state'];
+    if (turn is! int || step is! int) return;
+    if (_isLate(turn)) return; // 迟到的旧轮 / 已收口的那一轮 ⇒ 丢
+    if (processWord(state) == null) return; // 认不出来 ⇒ 安静
+    _openTurn(turn); // 步骤可能先于 `message/status` 到
+    _agentDead = false;
+    for (var i = 0; i < _steps.length; i += 1) {
+      if (_steps[i].step == step) {
+        _steps[i] = ProcessStep(turn: turn, step: step, state: state);
+        return;
+      }
+    }
+    _steps.add(ProcessStep(turn: turn, step: step, state: state));
+    _steps.sort((a, b) => a.step.compareTo(b.step));
+  }
+
+  /// `step/end`。**只标完成，不新增**——没见过的号（比如状态名认不出来
+  /// 而被跳过的那一步）就不该凭空冒出来。
+  void _applyStepEnd(Map<String, dynamic> event) {
+    final turn = event['turn'];
+    final step = event['step'];
+    if (turn is! int || step is! int) return;
+    if (_isLate(turn)) return;
+    for (var i = 0; i < _steps.length; i += 1) {
+      if (_steps[i].turn == turn && _steps[i].step == step) {
+        _steps[i] = _steps[i].copyWith(done: true);
+        return;
+      }
+    }
+  }
+
+  /// `reasoning/delta`（第 ④ 档「推理原文」）。
+  ///
+  /// ⚠️ **只在内存里拼**：契约 §二 说它一个字节都不许落盘——
+  ///    它可能含系统提示词片段，那是产品的核心资产（D7.4）。
+  void _applyReasoning(Map<String, dynamic> event) {
+    final turn = event['turn'];
+    final text = event['text'];
+    if (turn is! int || text is! String || text.isEmpty) return;
+    if (_isLate(turn)) return;
+    _openTurn(turn);
+    _agentDead = false;
+    _reasoning += text;
+  }
+
+  /// 这一号是不是"迟到的旧轮"（比见过的旧，或者已经收口了）。
+  ///
+  /// ⚠️ 两条合起来才算完：`_seenTurn` 挡"旧轮"，`_closedThrough` 挡
+  ///    "收口之后又飘回来的那几帧"——后者正是 H4 说的"永久停在正在做"的根。
+  bool _isLate(int turn) => turn < _seenTurn || turn <= _closedThrough;
+
+  /// 新的一轮开始了（比见过的都新）⇒ 上一轮的过程不作数了。
+  void _openTurn(int turn) {
+    if (turn <= _seenTurn) return;
+    _seenTurn = turn;
+    // 上一轮的步骤 / 思考本来也活不过收口；这里再清一次是为了
+    // "收口帧丢了、但下一轮已经开了"那种组合也不会把旧东西留下。
+    _steps.clear();
+    _reasoning = '';
+  }
+
+  /// 轮收口 ⇒ **清掉这一轮的过程**（契约 §三）。
+  ///
+  /// ⚠️ 收口事件里没有 `turn`（见 `_closedThrough`），所以只能按
+  ///    "见到的最大轮号"收。现实中轮是串行的（一次只有一轮在跑），
+  ///    这个近似就是准的。
+  void _closeTurn() {
+    _steps.clear();
+    _reasoning = '';
+    if (_seenTurn > _closedThrough) _closedThrough = _seenTurn;
   }
 
   AssistantMessage? _findMessage(String? messageId) {
@@ -327,7 +484,12 @@ class Timeline {
     _stale = false;
     // 瞬态不属于"落盘的历史" ⇒ 重放之前先清掉（它会被后面的帧重新点起来）
     _turnState = null;
-    _turn = null; // 号也从头来（服务端会重发一轮轮的帧）
+    // 号也从头来（服务端会重发一轮轮的帧）
+    _seenTurn = 0;
+    _closedThrough = 0;
+    // 过程（步骤 / 思考）也是瞬态，跟着一起清
+    _steps.clear();
+    _reasoning = '';
     // 本地那条的号要重新借（现在最大号是 0）
     for (var i = 0; i < _items.length; i += 1) {
       final u = _items[i] as UserUtterance;

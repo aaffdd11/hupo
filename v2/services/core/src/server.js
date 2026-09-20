@@ -405,6 +405,16 @@ export function createServer({
   function onStream(ws, url, claim) {
     const rawSince = url.searchParams.get('sinceSeq');
     const sinceSeq = rawSince === null ? 0 : Number.parseInt(rawSince, 10);
+    // ⚠️ **`dev=1` 与 `level` 是并存的，不是别名。** 两个理由：
+    //   ① `dev=1` 是一条**附加**通道（代码里原本就这么写着、也这么用着：
+    //      "它多收步骤事件，但**不缺**正常事件"）。把它改成 `level=steps`
+    //      的别名，`?dev=1&level=reasoning` 就会**静默降档**——调试的人
+    //      以为自己在看最上面那一档，其实只拿到步骤。别名会把
+    //      "附加"变成"覆盖"，那是对既有行为的破坏。
+    //   ② 两者管的**不是同一件事**：`level` 是产品档位（每条连接一份、
+    //      主人选的），`dev` 是开发调试通道（跟"这道闸开不开"无关）。
+    //      混成一个概念，以后想动调试通道就会碰到产品协议。
+    //   并存时的语义：**dev 只加不减** —— 档位不变，步骤事件额外放行。
     const devMode = url.searchParams.get('dev') === '1';
     // ★ **按连接**解一次档（契约 §二·2）；不认识的当默认档，不拒连接
     const level = parseLevel(url.searchParams);
@@ -422,6 +432,13 @@ export function createServer({
       // **不能**什么都不发（那会把它永远停在一个不存在的世界上）
       ws.send(JSON.stringify({ type: 'client/reset', reason: 'cursor-ahead' }));
     } else {
+      // ⚠️ 补发这一路**不过档位闸**，而且这是安全的——理由只有一个：
+      //    `plan.frames` 全部来自 `store.readAll()`，即**盘上的事件**，
+      //    而过程事件（`step/*` · `reasoning/*`）是瞬态的、**永远不在盘上**。
+      //    ⇒ 任何档位都能收全量补发：补发里**不可能**有推理原文。
+      //    ⚠️ 反过来说：如果哪天有人把 `emitTransient` 换成 `emit`，
+      //       这一路就会把推理原文补发给 `sinceSeq=0` 的新连接——
+      //       泄露闸（`test/process-level.test.js` 那条 🔴）就是为此存在的。
       for (const frame of plan.frames) {
         ws.send(JSON.stringify(markCatchUp(frame, plan.catchUp)));
       }

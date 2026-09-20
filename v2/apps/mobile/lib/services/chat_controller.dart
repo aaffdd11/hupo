@@ -11,9 +11,11 @@ import 'package:flutter/foundation.dart';
 
 import '../models/conn_state.dart';
 import '../models/message_state.dart';
+import '../models/process_levels.dart';
 import '../models/timeline.dart';
 import 'api.dart';
 import 'draft_store.dart';
+import 'process_level_store.dart';
 import 'stream.dart';
 import 'timeline_store.dart';
 import 'token_store.dart';
@@ -25,10 +27,12 @@ class ChatController extends ChangeNotifier {
     String? token,
     TimelineStore? local,
     DraftStore? drafts,
+    ProcessLevelStore? levels,
     this.onUnauthorized,
   })  : _token = token,
         local = local ?? TimelineStore(),
-        drafts = drafts ?? DraftStore();
+        drafts = drafts ?? DraftStore(),
+        levels = levels ?? ProcessLevelStore();
 
   final Api api;
   final TokenStore tokens;
@@ -50,6 +54,9 @@ class ChatController extends ChangeNotifier {
   ///    见 `draft_store.dart` 顶上那张边界表。
   final DraftStore drafts;
 
+  /// 过程四档存在哪（契约 §三）。**按设备存、按账号不存**。
+  final ProcessLevelStore levels;
+
   /// 收进来的**服务端事实**（只留带号的），存缓存就是从这份存。
   ///
   /// ⚠️ 为什么要单独留一份：`Timeline` 里已经是**画出来的条目**了，
@@ -64,17 +71,48 @@ class ChatController extends ChangeNotifier {
   String? _lastError;
   int _localSeq = 0;
 
+  /// 现在这一幕给用户看多少过程（契约 §三）。**开档前是默认档 `doing`**。
+  ProcessLevel _level = defaultProcessLevel;
+
   String? get token => _token;
   bool get needsSetup => _needsSetup;
   ConnState get conn => _conn;
   bool get connected => _conn == ConnState.connected;
   String? get lastError => _lastError;
 
+  /// 现在这一幕的过程档位。
+  ProcessLevel get level => _level;
+
   /// 界面读这个。
   List<TimelineItem> get items => timeline.items;
 
   /// 界面上那行「它正在做…」；`null` = 什么都不显示。
-  String? get agentLine => timeline.agentLine;
+  ///
+  /// ⚠️ **安静档（`quiet`）在这儿被掐掉**：契约 §一 说那一档
+  ///    "连「它正在做…」也没有"。
+  ///    光靠服务端不发 `message/status` 是不够的——`timeline.agentLine`
+  ///    还有一条兜底（"有没收口的气泡" ⇒ 推得出它在做），
+  ///    那条路跟档位无关。所以闸必须打在**拿到档位的这一层**。
+  String? get agentLine =>
+      _level == ProcessLevel.quiet ? null : timeline.agentLine;
+
+  /// 第 ③ 档要画的步骤流水（其余档位返回空 ⇒ 界面自然不画）。
+  ///
+  /// ⚠️ `doing` 档服务端本来就不发步骤，但这一层也要挡：
+  ///    用户从"步骤流水"切回"在做什么"时，屏幕上**立刻**不该再留着那串步骤
+  ///    （它们下一帧就会被清，但那一帧可能很久才来）。
+  List<ProcessStep> get steps =>
+      _level == ProcessLevel.steps || _level == ProcessLevel.reasoning
+          ? timeline.steps
+          : const [];
+
+  /// 第 ④ 档要画的思考原文（其余档位返回空）。
+  String get reasoning =>
+      _level == ProcessLevel.reasoning ? timeline.reasoning : '';
+
+  /// 屏幕上有没有**过程**可画（决定列表尾巴那一条要不要占位置）。
+  bool get hasProcess =>
+      agentLine != null || steps.isNotEmpty || reasoning.isNotEmpty;
 
   /// 登录后启动：**先画本地一屏**（连用户自己打了一半的话一起），再连流。
   ///
@@ -95,11 +133,36 @@ class ChatController extends ChangeNotifier {
     await tokens.write(token);
     _needsSetup = false;
     _lastError = null;
+    // ★ 过程档位是**本机偏好**，跟"先画本机一屏"一起读出来——
+    //   它决定了那一屏上那行「它正在做…」要不要出现（安静档不许有）。
+    _level = await levels.read();
     await _restoreLocal();
     notifyListeners();
     // ★ 本机那一屏已经画出来了，这才轮到网络。
     if (!await _renew()) return; // 令牌真的没了 ⇒ 已经回登录页，别连流
     if (openStream) _ensureStream();
+  }
+
+  /// 换档（契约 §三）。
+  ///
+  /// ⚠️ **`level` 是连接级的** ⇒ 换档只能靠**重连**：旧的连接还按旧档
+  ///    在发（或者按旧档在*不发*）。重连时带上 `timeline.lastSeq`，
+  ///    中间那段事实由服务端的补发兜住（协议 R5）。
+  ///
+  /// ⚠️ 存盘**先做**：就算马上要重连、就算这一次重连失败，
+  ///    下次开机也得是用户刚选的那一档。
+  Future<void> setLevel(ProcessLevel level) async {
+    if (level == _level) return;
+    _level = level;
+    await levels.write(level);
+    notifyListeners();
+    if (_stream == null) return;
+    // ⚠️ `dispose` 不是 `close`：换档会反复走这条路，旧的流连它那两个
+    //    `StreamController` 一起收掉，别留着一堆没人引用的监听。
+    final old = _stream;
+    _stream = null;
+    await old?.dispose();
+    _ensureStream();
   }
 
   /// 续一次。**成功就用新的；401 才清；网的问题什么都不清。**
@@ -195,7 +258,7 @@ class ChatController extends ChangeNotifier {
     final t = _token;
     if (t == null) return;
     if (_stream != null) return;
-    final s = StreamClient(base: '', token: t, api: api);
+    final s = StreamClient(base: '', token: t, api: api, level: _level);
     s.states.listen((st) {
       _conn = st;
       if (st == ConnState.unauthorized) {

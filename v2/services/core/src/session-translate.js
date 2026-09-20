@@ -24,6 +24,22 @@
 //      回答被长度上限截断（`max-tokens`），而翻译层**一律写 completed**，
 //      用户拿到一个"看起来说完了"的残篇。
 //      ⇒ 必须补一句说明，并把它标成**失败收尾**。
+//
+//   ④ ⚠️ **过程事件（`step/*` · `reasoning/*`）一律走 `emitTransient()`。**
+//      这一条是**泄露闸的地基**（决策 D7.4 / `08-SPEC.md` §4.4 /
+//      契约 `docs/dev/26-PROCESS-LEVELS.md` §二）：
+//        * `emit()` 会落盘，而**新连接 `sinceSeq=0` 会 replay 全部历史**
+//          ⇒ 一条走了 `emit()` 的推理原文，**以后每一个连上来的人都能拿到**；
+//        * 而推理原文**可能含系统提示词片段** ⇒ 那是 D7.4 说的核心资产。
+//      ⇒ 铁律：**`reasoning/delta` 绝对不许走 `emit()`**；`step/*` 同理。
+//      ⚠️ 这不是"顺手写对"的事，`test/process-level.test.js` 有两条 🔴 闸
+//         钉着它（一条读盘上的日志、一条读 `sinceSeq=0` 的重放帧）。
+//      ⚠️ **档位过滤不在这里做。** 翻译层把过程事件**原样推上时间线**
+//         （瞬态），"发给哪条连接"由 `server.js` 按**连接级 `level`** 决定。
+//         分开的理由：如果由这里看档位，档位就会影响"盘上有没有"——
+//         而档位是**每条连接**的东西（契约 §二·2），不是全局开关。
+//         代价要先认：过程事件会广播给所有订阅者再过闸，
+//         它不占号、不落盘，量也只在"正在做"的那几秒——可以接受。
 
 import { EventEmitter } from 'node:events';
 
@@ -120,9 +136,9 @@ export class TurnTranslator extends EventEmitter {
         break;
       case 'step/start':
       case 'step/end':
-        // D7 的"在做什么"以后从这里来。**现在不推给用户**——
-        // 推了就是"还没做的功能在撒谎"。
-        this.emit('step', { phase: type, turn: data.turn, step: data.step });
+        // ★ D7 的"步骤流水"就是从这里来的（契约 §三的事件形状）。
+        //   ⚠️ 走**瞬态**：不占号、不落盘 —— 见文件头 ④。
+        this.#emitStep(type, data);
         break;
       default:
         // 其它（request/*、permission/*、sandbox/*、agent/inbox/*…）安静忽略
@@ -149,6 +165,58 @@ export class TurnTranslator extends EventEmitter {
     this.#mutatedTurns.add(turn);
     // 派给外面（dispatcher 知道这一轮是主人哪句话引起来的，它去落盘）
     this.emit('mutated', { turn });
+  }
+
+  /**
+   * **一步一步的过程**（D7 的"步骤流水"档）——瞬态，永不落盘。
+   *
+   * 形状照契约 §三（新增事件，**不动既有字段的语义**）：
+   *
+   *   {"type":"step/start","turn":3,"step":1,"state":"started"}
+   *   {"type":"step/end",  "turn":3,"step":1,"reason":"completed"}
+   *
+   * ⚠️ `turn` / `step` **必须带**（契约 §三的乱序保护）：客户端拿 `turn`
+   *    丢掉"已收口那一轮"的迟到步骤（H4：迟到的旧轮不许把提示点回来）；
+   *    收到 `message/end` / 轮收口即清掉该轮的步骤（不许留成"永远在查资料"）。
+   *
+   * ⚠️ `state` 是**内部名**（界面那一层有 `process_words.dart` 翻人话，
+   *    认不出来的就不说 —— N10）。这里**不发明**新名字：DSH 的 `step/start`
+   *    数据里**没有**工具名（工具名在随后的 `tool/call` 上，实测），
+   *    所以此刻能诚实说出的只有"这一步开始了"（复用既有的 `started`）。
+   *    硬编一个"searching"之类就得先猜工具 —— 那是编造。
+   */
+  #emitStep(type, data) {
+    const turn = data?.turn;
+    const step = data?.step;
+    // 没有轮/步号 ⇒ 发出去客户端也没法做乱序保护，不如不发（沉默优于编造）
+    if (typeof turn !== 'number' || typeof step !== 'number') return;
+    const event =
+      type === 'step/start'
+        ? { type, turn, step, state: 'started' }
+        : { type, turn, step, reason: 'completed' };
+    // ⚠️ **`emitTransient`，不是 `emit`** —— 文件头 ④。
+    //    换成 `emit` 会让 `test/process-level.test.js` 的泄露闸变红。
+    this.#timeline.emitTransient(event);
+  }
+
+  /**
+   * **推理原文**（D7 的"推理原文"档，⚠️ 只有主人、默认关）——瞬态，永不落盘。
+   *
+   * 实测（`docs/dev/05-AGENT.md` §一）：**没有 token 级增量**，
+   * 推理原文是**整段**跟着 `assistant/message` 一起到的。
+   * ⇒ 事件名沿用契约的 `reasoning/delta`（名字冻结），
+   *    但**一段一到**：一次 `assistant/message` 里的每段 reasoning 发一条。
+   *    （"delta" 在这里是"增量地给"，不是"token 级流"。）
+   *
+   * ⚠️ 只有 `level=reasoning` 的连接会收到它（`server.js` 的档位闸）；
+   *    翻译层不判断档位——见文件头 ④ 最后一段。
+   */
+  #emitReasoning(turn, text) {
+    if (typeof turn !== 'number') return;
+    if (typeof text !== 'string' || text === '') return;
+    // ⚠️⚠️ **绝不许写成 `emit()`**：那会落盘，而新连接 `sinceSeq=0`
+    //      会 replay 全部历史 ⇒ 以后每一个人都能拿到这段原文（可能含系统提示片段）。
+    this.#timeline.emitTransient({ type: 'reasoning/delta', turn, text });
   }
 
   /** 这一轮动过东西吗？（给测试与诊断用） */
@@ -180,10 +248,13 @@ export class TurnTranslator extends EventEmitter {
       if (block?.type === 'text' && typeof block.text === 'string' && block.text !== '') {
         texts.push(block.text);
       } else if (block?.type === 'reasoning') {
-        // ⚠️ 只计数。**内容绝不落盘、绝不外推。**
+        // ⚠️ 只计数。**内容绝不落盘、绝不走持久通道。**
         //    （手册 §4.4：它可能含系统提示片段，一旦进日志，
         //      之后任何新连接 replay 都会拿到。）
         this.#reasoningSeen += 1;
+        // ★ 但 `level=reasoning` 那条连接**要看到它** ——
+        //   走瞬态（发出去就不存在了）。见 `#emitReasoning()`。
+        this.#emitReasoning(turn, block.text);
       }
     }
     if (texts.length === 0) return;

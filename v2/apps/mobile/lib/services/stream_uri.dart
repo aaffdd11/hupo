@@ -22,16 +22,28 @@
 //
 // 所以现在：**同源时看页面自己的协议，跨源时看 `base` 的协议。**
 // 纯函数，`test/unit/stream_uri_test.dart` 钉住（含一条 https 页面**不许降级**的金丝雀）。
+//
+// ── 批 3：地址上多带一个 `level`（过程四档）────────────────────
+//
+// `level` 是**连接级**的：服务端按每条连接决定发多少过程
+// （`docs/dev/26-PROCESS-LEVELS.md` §三）。⇒ 它必须跟着地址走，
+// **不能**连上之后再补发一个"改档"的帧（那会变成全局开关）。
+// 契约：不带 = `doing`；客户端**永远带上**，好让"用户在哪个档"这件事
+// 在服务端和客户端只有一种理解。
 
-/// 算出流该往哪儿连：`wss://<host>/api/stream?sinceSeq=<n>`。
+import '../models/process_levels.dart';
+
+/// 算出流该往哪儿连：`wss://<host>/api/stream?sinceSeq=<n>&level=<档>`。
 ///
 /// * [base] 空串 = **同源**（生产就是这个），协议取 [page]（浏览器地址栏里的那个）。
 /// * [base] 非空 = 跨源调试用，协议取它自己的。
 /// * [sinceSeq] 是续传起点（断线重连时带上，服务端从这里把缺的补回来）。
+/// * [level] 过程四档（契约 §三）。默认 [defaultProcessLevel] = `doing`。
 Uri streamUri({
   required String base,
   required Uri page,
   required int sinceSeq,
+  ProcessLevel level = defaultProcessLevel,
 }) {
   final raw = base.trim();
   final origin = raw.isEmpty
@@ -45,5 +57,5 @@ Uri streamUri({
   //    拼进 URL 就会变成一个多余的 `:443`。
   final host = '${origin.host}${origin.hasPort ? ':${origin.port}' : ''}';
   final scheme = origin.scheme == 'https' ? 'wss' : 'ws';
-  return Uri.parse('$scheme://$host/api/stream?sinceSeq=$sinceSeq');
+  return Uri.parse('$scheme://$host/api/stream?sinceSeq=$sinceSeq&level=${level.wire}');
 }

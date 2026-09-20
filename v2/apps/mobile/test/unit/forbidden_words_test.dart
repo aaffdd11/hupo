@@ -6,6 +6,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
+import 'package:hupo_app/models/process_levels.dart';
+import 'package:hupo_app/models/process_words.dart';
 
 void main() {
   test('★ 永久禁用的那几个，一个都不许漏', () {
@@ -55,6 +57,13 @@ void main() {
       '忘了密码？在机器上重设一次就行。',
       '记一笔账、问一件事、让它去查个东西。',
       '它会把做过的事说给你听。',
+      // ⚠️ 批 3 过程四档（D7）新增的那几句：切换入口的标题、
+      //    四档的名字与解释、步骤流水那几个词、推理原文那块标题。
+      //    全部**直接引数据源**（手抄会漂）。
+      '它说多少过程',
+      ...ProcessLevel.values.expand((l) => [l.title, l.hint]),
+      ...processWords.values,
+      reasoningLabel,
       // ⚠️ **关于页那几句也在这儿**（直接引数据源，不手抄 —— 手抄会漂）
       ...aboutFacts.expand((f) => [f.title, ...f.lines]),
     ];
