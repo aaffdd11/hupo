@@ -120,6 +120,13 @@ export function createServer({
       const claim = token ? auth.verify(token) : null;
       if (!claim) return sendJson(res, 401, { error: 'unauthorized' });
 
+      // ★ **续期**（决策 A）：用现在这个令牌换一个新的，`exp` 往前挪。
+      //   ⚠️ 它**不是**公开路由（`PUBLIC_ROUTES` 仍然只有三个）：没有有效令牌就拿不到新的。
+      if (path === '/api/renew' && req.method === 'POST') {
+        const r = auth.renew(tokenFromRequest(req));
+        if (!r) return sendJson(res, 401, { error: 'expired' });
+        return sendJson(res, 200, { token: r.token, expiresAt: r.expiresAt });
+      }
       if (path === '/api/say' && req.method === 'POST') return handleSay(req, res, claim);
       if (path === '/api/health' && req.method === 'GET') {
         return sendJson(res, 200, { ok: true, timelineId: timeline.id, seq: timeline.seq });

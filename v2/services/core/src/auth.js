@@ -36,6 +36,20 @@ export const PUBLIC_ROUTES = Object.freeze(['/api/version', '/api/auth', '/api/l
 
 const SCRYPT_KEYLEN = 64;
 const DEFAULT_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 天（决策：TTL 由 30 天延长）
+
+/**
+ * **续期**那两个窗（决策 A，2026-09-21 主人拍板）。
+ *
+ * ⚠️ 为什么不是"30 天没用就过期"：那会把 **D2 好不容易去掉的**
+ *    "每 30 天要重新登录一次"装回来 —— 而 D2 把 TTL 从 30 提到 180，
+ *    理由正是**那位不会拼音的用户不能被反复要求登录**。
+ *    ⇒ 空闲窗**和今天一样是 180 天**（只续、不倒退）。
+ *
+ * 绝对上限的唯一用途：给"**令牌被盗**"一个止损点 —— 一直用就一直续，
+ * 那就等于永远不过期。一年重新登录一次，是普通人能接受的频率（30 天不是）。
+ */
+export const TOKEN_IDLE_WINDOW_MS = DEFAULT_TOKEN_TTL_MS;
+export const TOKEN_ABS_CAP_MS = 365 * 24 * 60 * 60 * 1000;
 const DEFAULT_LOCK_AFTER = 8;
 const DEFAULT_LOCK_MS = 15 * 60 * 1000;
 
@@ -286,11 +300,43 @@ export class Auth {
     return crypto.createHmac('sha256', this.#secret).update(payloadB64).digest('base64url');
   }
 
-  issue({ sub = 'owner' } = {}) {
+  /**
+   * 发一个令牌。
+   *
+   * @param {{sub?: string, iat?: number, jti?: string}} [opts]
+   *   `iat`/`jti` 由**续期**传进来：续期只把 `exp` 往前挪，
+   *   **`iat` 保持第一次签发的时间** ⇒ 绝对上限靠 `exp` 的封顶实现，
+   *   而 `verify()` 一行都不用改（`exp` 的语义**没有变** —— 协议字段冻结）。
+   */
+  issue({ sub = 'owner', iat = null, jti = null } = {}) {
     if (this.needsSetup) throw new Error('还没设口令，不许发令牌');
-    const payload = { sub, iat: this.#now(), exp: this.#now() + this.#tokenTtlMs, jti: crypto.randomUUID() };
+    const now = this.#now();
+    const issuedAt = Number.isFinite(iat) ? iat : now;
+    // ⚠️ 滑动窗要从**现在**算，不能从 `iat` 算：
+    //    从 `iat` 算的话，"续期"续出来的 `exp` 和原来**一模一样**（等于没续）。
+    //    封顶那一项仍然从 `iat` 算 —— 那就是**绝对上限**。
+    const exp = Math.min(now + TOKEN_IDLE_WINDOW_MS, issuedAt + TOKEN_ABS_CAP_MS);
+    const payload = { sub, iat: issuedAt, exp, jti: jti ?? crypto.randomUUID() };
     const body = this.#b64(JSON.stringify(payload));
     return { token: `${body}.${this.#sign(body)}`, expiresAt: payload.exp, sub };
+  }
+
+  /**
+   * **续期**：把 `exp` 往前挪（同一个 `jti`、同一个 `iat`），不重新登录。
+   *
+   * ⚠️ 三条不许含糊：
+   *   1. **`exp` 封顶在 `iat + 绝对上限`** ⇒ 一年必须重新登录一次（止损点）；
+   *   2. **同一个 `jti`** ⇒ 撤销它，新旧两份一起作废（不会留下一个"续出来的野令牌"）；
+   *   3. 已经过期 / 被撤销 / 过了上限 ⇒ `null`（调用方回 401，客户端走"重新登录"那条老路）。
+   *
+   * @returns {{token: string, expiresAt: number, sub: string}|null}
+   */
+  renew(token) {
+    const payload = this.verify(token);
+    if (!payload) return null;
+    const iat = Number.isFinite(payload.iat) ? payload.iat : this.#now();
+    if (this.#now() - iat > TOKEN_ABS_CAP_MS) return null; // 过了绝对上限 ⇒ 请重新登录
+    return this.issue({ sub: payload.sub, iat, jti: payload.jti });
   }
 
   /** @returns {{sub: string, exp: number, jti: string}|null} */
