@@ -90,6 +90,11 @@ console.log(
     `（单条 ${cfg.recap.maxEntryChars} 字封顶）`,
 );
 console.log(
+  // ⚠️ 人格必须**报出来**：它没挂上的时候一切照常，
+  //    只是"它说话不像它"——那是查不出来的故障。
+  `  人格     ${cfg.personaPath}（${nodeFs.existsSync(cfg.personaPath) ? '已挂上' : '⚠️ 文件不在'}）`,
+);
+console.log(
   cfg.turnDeadlineMs > 0
     ? `  卡住收口 一轮超过 ${Math.round(cfg.turnDeadlineMs / 1000)} 秒没收口就收掉，并卸下那个 agent`
     : '  卡住收口 ⚠️ 关掉了（turnDeadlineMs=0）——agent 卡住不会有收尾',

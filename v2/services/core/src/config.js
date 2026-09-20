@@ -45,8 +45,16 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     agentEffort: env.HUPO_AGENT_EFFORT ?? 'low',
     agentMaxTokens: Number.parseInt(env.HUPO_AGENT_MAX_TOKENS ?? '16000', 10),
 
-    /** 人格 patch。给了就挂上；文件不在就不挂（下面会检查并警告）。 */
-    personaPath: env.HUPO_PERSONA ?? null,
+    /**
+     * 人格 patch。**默认就是仓库里那一份** —— 人格是产品的一部分，不是可选配置。
+     *
+     * ⚠️ 为什么默认挂上、而且**缺了就当启动失败**（下面 `preflight`）：
+     *    没有它的时候，agent 会退化成一个**通用编码助手**——
+     *    照样回答、照样能干活、照样没有任何报错。
+     *    那种故障看起来只是"它今天说话有点怪"，**没人会去查配置**。
+     *    （这正是本仓库反复栽的那个形状：**静默降级**。）
+     */
+    personaPath: env.HUPO_PERSONA ?? nodePath.resolve(cwd, 'hupo-persona.yml'),
 
     /** 冷启动实测 ~1.1s（initialize），留足余量。 */
     agentBootTimeoutMs: Number.parseInt(env.HUPO_AGENT_BOOT_TIMEOUT_MS ?? '90000', 10),
@@ -108,8 +116,18 @@ export function preflight(cfg) {
         `（或设 HUPO_AGENT_CWD）`,
     );
   }
-  if (cfg.personaPath && !nodeFs.existsSync(cfg.personaPath)) {
-    notes.push(`人格 patch 不存在，将不挂它：${cfg.personaPath}`);
+  if (!cfg.personaPath) {
+    problems.push(
+      'personaPath 是空的 ⇒ 人格挂不上，agent 会退化成一个通用编码助手，而且**不会有任何报错**。\n' +
+        '    ⇒ 修：设 HUPO_PERSONA，或者别覆盖它的默认值（默认指向 v2/services/core/hupo-persona.yml）',
+    );
+  } else if (!nodeFs.existsSync(cfg.personaPath)) {
+    // ⚠️ 这是**问题**不是提示：见上面 personaPath 那段注释。
+    problems.push(
+      `人格 patch 不存在：${cfg.personaPath}\n` +
+        `    ⇒ agent 起得来、答得出、但**说话不是它该有的样子**，而且不会报错。\n` +
+        `    ⇒ 修：把文件放回去，或设 HUPO_PERSONA 指向别处`,
+    );
   }
   if (!nodeFs.existsSync(cfg.dshHome)) {
     notes.push(`DSH_HOME 不存在：${cfg.dshHome}（agent 起来时才可能报错）`);

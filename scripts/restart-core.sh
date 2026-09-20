@@ -73,4 +73,4 @@ if ! kill -0 "$(cat serve.pid)" 2>/dev/null; then
   exit 1
 fi
 echo "✓ 起来了（PID $(cat serve.pid)）"
-grep -E "监听|鉴权|接记忆|界面|构建|时间线" serve.log || tail -20 serve.log
+grep -E "监听|鉴权|接记忆|人格|卡住|界面|构建|时间线" serve.log || tail -20 serve.log
