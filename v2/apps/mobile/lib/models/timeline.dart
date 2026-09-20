@@ -178,11 +178,15 @@ class Timeline {
   /// ⚠️ 它是瞬态 ⇒ 轮收口时**必须清空**（契约 §三：不许留成"永远在查资料"）。
   final List<ProcessStep> _steps = [];
 
-  /// 第 ④ 档「推理原文」：这一轮的思考原文。
+  /// 第 ④ 档「推理原文」：**还没找到气泡的那一段**。
   ///
-  /// ⚠️ **只在内存里**（契约 §二：一个字节都不许落盘）——
-  ///    所以它也不进 `timeline_store`：那里只收带号的（`isPersistable`）。
-  String _reasoning = '';
+  /// ⚠️ 为什么需要它：服务端是**先发推理段、后发正文**的（`assistant/message`
+  ///    的 `content` 里 reasoning 在前、text 在后 ⇒ `#emitReasoning` 先于
+  ///    `message/start`）。所以推理可能**没有气泡可挂**。
+  ///    这一段先存在这儿，`message/start` 一到就挂上去。
+  ///
+  /// ⚠️ 它同样是"只在内存里"（不占号、不进存储）。
+  String _pendingReasoning = '';
 
   /// 服务端说了"它断了 / 接不上活" ⇒ **那一轮已经死了**。
   ///
@@ -223,14 +227,21 @@ class Timeline {
   bool get _hasOpenAssistant =>
       _items.any((it) => it is AssistantMessage && !it.ended);
 
+  /// 现在还没收口的那**一条**助手气泡（一轮最多一条，N22）。
+  ///
+  /// ⚠️ 推理段要挂到它上面——所以这里取的是**最后**那条没结束的。
+  AssistantMessage? get _openAssistant {
+    for (final it in _items.reversed) {
+      if (it is AssistantMessage && !it.ended) return it;
+    }
+    return null;
+  }
+
   /// 第 ③ 档：这一轮的**步骤流水**（按 `step` 号排；轮收口即空）。
   ///
   /// 界面要拿 `processWord(s.state)` 翻成人话，**认不出来的跳过**
   /// （N10：沉默优于编造）。
   List<ProcessStep> get steps => List.unmodifiable(_steps);
-
-  /// 第 ④ 档：这一轮的**思考原文**（空串 = 没有，界面据此什么都不显示）。
-  String get reasoning => _reasoning;
 
   /// 已收到的最大服务端号。**补发就从它开始要**。
   int get lastSeq => _lastSeq;
@@ -295,8 +306,16 @@ class Timeline {
       case 'message/start':
         if (messageId == null) return;
         if (_findMessage(messageId) != null) return;
-        _items.add(AssistantMessage(messageId: messageId, seq: rawSeq)
-          ..catchUp = catchUp);
+        final fresh = AssistantMessage(messageId: messageId, seq: rawSeq)
+          ..catchUp = catchUp;
+        // ★ 推理段可能**先于正文**到（服务端先发 reasoning 再发 text）⇒
+        //   把先存着的那一段挂到这条气泡上。
+        //   ⚠️ 只挂给**实时**开的那条：补发放的是落盘历史，不可能带着推理。
+        if (!catchUp && _pendingReasoning.isNotEmpty) {
+          fresh.reasoning = _pendingReasoning;
+          _pendingReasoning = '';
+        }
+        _items.add(fresh);
       case 'message/text':
         final m = _findMessage(messageId);
         if (m == null) return;
@@ -308,8 +327,9 @@ class Timeline {
         }
       case 'message/end':
         // 这一轮说完了 ⇒ 界面上那行「它在做…」跟着撤，
-        // **并且把这一轮的过程（步骤流水 / 思考原文）一起清掉**——
-        // 不收的话就会留成"永远在查资料"（契约 §三：超时收敛）。
+        // **步骤流水一起清掉**（不收的话就会留成"永远在查资料"）。
+        // ⚠️ **推理原文不清**：它挂在气泡上，主人回头还要看（见
+        //    `AssistantMessage.reasoning` 那段生命周期说明）。
         _turnState = null;
         _closeTurn();
         final m = _findMessage(messageId);
@@ -370,7 +390,8 @@ class Timeline {
         //   卡住时**永久停在"它正在做…"**，比空白更坏。
         _turnState = null;
         _agentDead = true;
-        // 过程也一样：那一轮已经死了，步骤 / 思考留在屏幕上就是假的。
+        // 步骤是**过程噪音** ⇒ 那一轮死了就不该留着。
+        // ⚠️ 推理原文**留着**：它是内容，挂在那条还开着的气泡上（改过一次，别改回去）。
         _closeTurn();
       default:
         return;
