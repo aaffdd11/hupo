@@ -413,7 +413,7 @@ $ bash scripts/check-apk.sh
 
 **② 那 6 件**（顺序不能乱）：
 
-1. **`dsh` 进镜像**（+ profile 那几份）—— 少了它，容器起来了也**没有 agent 可跑**；
+1. ✅ **`dsh` 进镜像** —— **2026-09-21 做完了**（②-1）：镜像 130→385MB（**所有租户共用一份层**）；容器里 `dsh --version` = `0.1.5-rc.1`、空 `DSH_HOME` 能起 sdk、`--patch` 人格挂得上、服务照常 200。⚠️ **不用带 profile 模板**（dsh 自带 sdk）；⚠️ 两个坑记在 `34-CONTAINER.md` §七（包一层启动器会因 `import.meta.main` **静默退出 0**；注释写进续行命令会让 `buildah config` 失败而脚本照样报成功）；
 2. **换手**：agent 真以 **uid 1000** 跑（现在 `/etc/passwd` 里那个 `agent` **只是声明**）；
 3. **root 小代理持 key**（`/run/hupo/creds.yaml` tmpfs `0600`）+ **反向 UDS `SO_PEERCRED`**；
 4. **服务侧接线**：`worldFor(sub)` → 起那个用户的容器（`systemd 模板 hupo-tenant@<user>` 或预建池）+ **容器状态回给客户端**；

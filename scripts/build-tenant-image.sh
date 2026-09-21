@@ -8,11 +8,14 @@
 # ── 这个镜像里有什么（初步版）────────────────────────────────
 #   node（宿主的那个，连同它依赖的动态库）· 调度器本体（`v2/services/core/src` + `ws`）
 #   · 人格层 / 能力层那两份 yml · MCP 服务器那支脚本
+#   · **`dsh`（agent 本体）** + 一个三行的启动器（见 ②·dsh 那段）
 #   · 空目录 `/data`（**数据挂这里**，不放在容器那层可写层里）
 #
-# ⚠️ **还不含 `dsh`（agent 本体）**：那是下一步（它连同 node_modules 很大）。
-#    所以这一版能证明的是"**整套服务的形状**能装进容器、能以容器身份起来"，
-#    不能证明"agent 能在里面干活"。
+# ✅ **2026-09-21：`dsh` 进来了**（多租户 ②-1）⇒ 镜像从 130MB 变成 ~435MB。
+#    ⚠️ 但**所有租户共用同一份镜像层**（`podman images` 里只有一份），
+#       所以"每人一台"并不等于"每人 435MB" —— 每人真正占的是**他自己的卷**。
+#    ⚠️ **没有带 profile 模板**：`dsh` 自带 `sdk` profile，空 `DSH_HOME` 就能起
+#       （见 ②·dsh 那三条实测）。
 #
 # ── 三条纪律 ──────────────────────────────────────────────
 #   ① **不联网、不拉镜像**：这台机器够不着 Docker Hub（实测），
@@ -71,6 +74,57 @@ cp "$CORE/hupo-persona.yml" "$R/app/hupo-persona.yml"
 [ -f "$CORE/hupo-capabilities.yml" ] && cp "$CORE/hupo-capabilities.yml" "$R/app/hupo-capabilities.yml"
 [ -f "$CORE/src/mcp-ledger-server.mjs" ] && cp "$CORE/src/mcp-ledger-server.mjs" "$R/app/src/mcp-ledger-server.mjs"
 echo "  服务: $(find "$R/app/src" -name '*.js' | wc -l) 个 js + ws"
+
+# ── ②·dsh：**agent 本体**（多租户 ②-1）──
+#
+# ⚠️ 为什么必须带它：少了它，容器起来了也**没有 agent 可跑** ——
+#    服务会 spawn 一个不存在的程序，现象只是"它不理我"（`agent-runtime.js` 里
+#    那个 `ENOENT` 还分不清"程序找不到"和"工作目录不存在"）。
+#
+# ⚠️ **三条实测事实**（2026-09-21，都是先测了才写的）：
+#   ① `dsh` 自带 `sdk` profile ⇒ **镜像里不需要带 profile 模板**。
+#      空 `DSH_HOME` 直接 `dsh --profile sdk --dump-config` 就出 11178 字节的树；
+#      我自己往镜像里塞模板是**多余**的（而且会多一份会漂的东西）。
+#      （实测踩过：`--from-default-profile sdk` 会被它自己拒掉 ——
+#        "profile sdk is shipped and cannot be a custom profile target"。）
+#   ② 起的过程中**不碰任何包管理器 / registry**（实测 grep `pnpm|npm install|registry` = 0）
+#      ⇒ 这台机器够不着 Docker Hub 也不影响。
+#   ③ `bin.js` 只用 `process.argv.slice(2)`（**不看 argv[1]**），而且
+#      **不直接调 shell**（没有 `exec(` / `shell:true` / `/bin/sh` 字面量）
+#      ⇒ 可以用一个三行的启动器，也**不需要**往镜像里塞 `/bin/sh`。
+#
+# ⚠️ **启动器为什么是"改 shebang"而不是"包一层"**（2026-09-21，我两种都真的试了）：
+#    镜像里没有 `/usr/bin/env`，而 `bin.js` 的 shebang 正是 `#!/usr/bin/env node`
+#    ⇒ 直接执行它一定失败。
+#    * ❌ **包一层不行**：写个 `import '.../bin.js'` 的启动器，进程会**静默退出 0、一个字都不输出**。
+#      根因在 `bin.js` 最后一行：`if (import.meta.main) await runCli();` ——
+#      被 import 时 `import.meta.main` 是 **false**（入口变成了启动器），
+#      于是 `runCli()` **一次都没调**。⇒ 这类"包装一下就哑了"的坑正好是这个项目最忌的。
+#    * ✅ **改 shebang 可以**：把**拷进来那一份**的第一行换成 `#!/bin/node`，
+#      然后 `/bin/dsh` 直接指向它。此时它**仍然是被执行的入口** ⇒ `import.meta.main` 为真、
+#      它自己那些**相对路径**的 `import("./plugin-….js")` 也照旧解析（没有搬家）。
+DSH_BIN="$(command -v dsh || true)"
+if [ -n "$DSH_BIN" ]; then
+  DSH_PKG="$(dirname "$(dirname "$(readlink -f "$DSH_BIN")")")"
+  if [ -d "$DSH_PKG/node_modules" ]; then
+    mkdir -p "$R/app/node_modules/@deepseek-ai"
+    echo "  dsh:  $DSH_PKG（$(du -sh "$DSH_PKG" | cut -f1)）—— 拷进去要一会儿"
+    cp -r "$DSH_PKG" "$R/app/node_modules/@deepseek-ai/dsh"
+    DSH_ENTRY="$R/app/node_modules/@deepseek-ai/dsh/lib/bin.js"
+    sed -i '1s|^#!/usr/bin/env node$|#!/bin/node|' "$DSH_ENTRY"
+    # ⚠️ **判据要卡在"真换了没有"上**：sed 没匹配上会**静默不改**，而那种镜像
+    #    照样能 commit（现象是容器里 `dsh` 起不来）。
+    [ "$(head -1 "$DSH_ENTRY")" = '#!/bin/node' ] \
+      || { echo "✗ dsh 的 shebang 没换成 /bin/node —— 镜像里没有 /usr/bin/env，它一定跑不动"; exit 4; }
+    chmod 755 "$DSH_ENTRY"
+    ln -sf /app/node_modules/@deepseek-ai/dsh/lib/bin.js "$R/bin/dsh"
+    echo "  dsh:  已放进 /app/node_modules + /bin/dsh（shebang 换成 /bin/node）"
+  else
+    echo "  ⚠️ dsh 的 node_modules 不在 $DSH_PKG —— 跳过了（agent 会在容器里起不来）"
+  fi
+else
+  echo "  ⚠️ 宿主上没有 dsh —— 跳过了（agent 会在容器里起不来）"
+fi
 
 # ── ②′ 入口：先把卷里的目录建出来，再起服务 ──
 # ⚠️ 为什么不能在镜像里建 `/data/hupo-workspace`：`/data` 是**挂载卷**
@@ -154,6 +208,12 @@ echo "nameserver 10.0.2.3" > "$R/etc/resolv.conf"
 # ── ④ 提交成镜像 ──
 ctr="$("$BUILDAH" from scratch)"
 "$BUILDAH" copy "$ctr" "$R/" / >/dev/null
+# ⚠️ **`HUPO_DSH_BIN` 要给绝对路径**：scratch 镜像的 PATH 不由我们决定，
+#    而 `resolveDshBin()` 默认只是 `dsh` ⇒ 不给这一条就可能 spawn 不到。
+# ⚠️ **注释不许写在续行命令中间**（2026-09-21 我真踩了）：`\` 之后那一行的 `#`
+#    **不是注释**（那一行已经被拼进同一条命令了）⇒ 整条 `buildah config` 会失败，
+#    镜像**没有 Cmd/Env**，而脚本**照样打印"镜像好了"**（因为 commit 还是成功的）。
+#    ⇒ 所以注释放在**整条命令之前**。
 "$BUILDAH" config \
   --workingdir /app \
   --env HUPO_DATA=/data \
@@ -161,8 +221,9 @@ ctr="$("$BUILDAH" from scratch)"
   --env HUPO_HOST=0.0.0.0 \
   --env HUPO_WEB=/nonexistent \
   --env HUPO_AGENT_CWD=/data/main \
+  --env HUPO_DSH_BIN=/bin/dsh \
   --cmd '["/bin/node","/app/entry.mjs"]' \
-  "$ctr" >/dev/null
+  "$ctr" >/dev/null || { echo "✗ buildah config 失败 —— 镜像会缺 Cmd/Env，不许往下走"; exit 3; }
 "$BUILDAH" commit "$ctr" "$IMG" >/dev/null
 "$BUILDAH" rm "$ctr" >/dev/null
 echo "✅ 镜像好了：$IMG（$( "$PODMAN" images --format '{{.Size}}' "$IMG" | head -1)）"

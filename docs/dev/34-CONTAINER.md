@@ -91,3 +91,72 @@
 2. **用户之间**：定 subuid 映射与卷隔离，并**量化**验一条"甲用户的东西乙用户读不到"。
 3. **资源上限**：把 §10.3 的数真跑一遍（现在是纸上的）。
 4. ⚠️ **docker 组那一页不要翻**（P2.2）；要翻就是治理改动，得同时改手册与那条硬闸。
+
+---
+
+## 七、✅ **agent 本体进镜像了**（多租户 ②-1，2026-09-21）
+
+> 上半（§一–§六）证明的是"**整套服务的形状**装得进容器"。
+> 这一节补的是那件一直缺的事：**镜像里没有 `dsh`** ⇒ 容器起来了也**没有 agent 可跑**
+> （服务会 spawn 一个不存在的程序，现象只是"它不理我"）。
+
+### 7.1 结果（实测）
+
+| 判据 | 读数 |
+|---|---|
+| 镜像大小 | **130 MB → 385 MB** ⚠️ 但**所有租户共用同一份镜像层**（`podman images` 里只有一份）⇒ 每人真正占的是**他自己的卷**，不是 385MB |
+| 容器里 `dsh --version` | **`0.1.5-rc.1`** |
+| 空 `DSH_HOME` 起 `sdk` profile | ✅ `--help` 正常出（**镜像里不需要带 profile 模板**，见 7.2①） |
+| 带人格那一层 | ✅ `--patch /app/hupo-persona.yml --dump-config` = 14643 字节 |
+| 服务照常起 | ✅ `/api/version` **200** · 根 **`EROFS`** · 容器里 `dsh` 在 |
+
+### 7.2 三条**先测了才写**的事实（省掉一整类返工）
+
+① **`dsh` 自带 `sdk` profile** ⇒ 镜像里**不用带 profile 模板**。
+   空 `DSH_HOME` 直接 `dsh --profile sdk --dump-config` 就出 11178 字节的树。
+   ⚠️ 我差点自己塞一份模板进去（那会多一份**会漂**的东西）。
+   ⚠️ 顺带：`--from-default-profile sdk` 会被它**自己拒掉**
+   —— *"profile sdk is shipped and cannot be a custom profile target"*。
+② **起的过程中不碰任何包管理器 / registry**（grep `pnpm|npm install|registry` = **0**）
+   ⇒ 这台机器够不着 Docker Hub **不影响**。
+③ **`bin.js` 只看 `process.argv.slice(2)`**（不看 `argv[1]`），而且**不直接调 shell**
+   （没有 `exec(` / `shell:true` / `/bin/sh` 字面量）。
+
+### 7.3 🔴 两个坑（都真踩了，都记下来）
+
+**坑 ①：给 `bin.js` **包一层启动器**，进程会静默退出 0、一个字都不输出。**
+
+镜像里**没有 `/usr/bin/env`**（scratch + 只拷了 node），而 `bin.js` 的 shebang 正是
+`#!/usr/bin/env node` ⇒ 直接执行它一定失败。我第一版写了个三行的启动器：
+
+```js
+#!/bin/node
+import '/app/node_modules/@deepseek-ai/dsh/lib/bin.js';   // ❌ 静默退出 0
+```
+
+**根因**在 `bin.js` 最后一行：`if (import.meta.main) await runCli();`
+—— 被 `import` 时 `import.meta.main` 是 **false**（入口变成了启动器），
+于是 **`runCli()` 一次都没调**，进程正常退出（退出码 0）。
+
+⇒ ✅ **正解**：把**拷进来那一份**的第一行 shebang 换成 `#!/bin/node`，
+`/bin/dsh` 直接指向它。此时它**仍然是被执行的入口** ⇒ `import.meta.main` 为真，
+它自己那些**相对路径**的 `import("./plugin-….js")` 也照旧解析（没有搬家）。
+⚠️ 并且判据卡在**"真换了没有"**上：`sed` 没匹配上会**静默不改**，而那种镜像照样 commit。
+
+> 这条的教训不止于 dsh：**"包装一下就哑了"是退出码 0 的那种失败** ——
+> 它不会红，只会"什么都没发生"。所以判据必须是**看输出**，不是看退出码。
+
+**坑 ②：注释写在**续行命令**中间 ⇒ 整条命令失败，而脚本**照样打印成功**。**
+
+```bash
+"$BUILDAH" config \
+  --env HUPO_AGENT_CWD=/data/main \
+  # ⚠️ 这行不是注释 —— 上一行的 \ 已经把它拼进同一条命令了
+  --env HUPO_DSH_BIN=/bin/dsh \
+```
+
+⇒ `buildah config` 整条失败（镜像**没有 Cmd/Env**），而 `commit` 仍然成功，
+脚本**照样打印"✅ 镜像好了"**。是日志里那句 `--env: command not found` 露的馅。
+⇒ 修法两条：注释放到**整条命令之前**；并且 `config ... || exit 3`（**失败了不许往下走**）。
+
+
