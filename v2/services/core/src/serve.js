@@ -282,10 +282,21 @@ const { listen, listenTrusted, close } = createServer({
   devCode: cfg.devCode,
   setModelKey,
   tenantOf,
+  // ★ **"主人那一份"只有一个**：别人要么走他那台容器，要么如实说没准备好
+  isLocalUser: (userId) => userId === OWNER_ID,
   // ⚠️ **只查不发**（`hasTunnel` 没有副作用）；主人那种没有容器的 ⇒ `kind:'local'`
   tenantStatusOf: (userId) => {
+    // 🔴 **只有"主人"才是 `local`**（他自己那份就在宿主上，没有单独一台）。
+    //    ⚠️ 一个**新号**在 `tenantMap` 里**没有对应租户** —— 那**不是** `local`：
+    //       `local` 的语义是"本机那份 = 主人那一份"，把新号当成它
+    //       就是**让新用户看见主人的东西**（多租户要防的第一件事）。
+    //    ⇒ 没有租户的新号：**如实说"你那台还没准备好"**（`preparing`），
+    //      让他看到等待屏，而不是进到不属于他的世界里。
     const tenant = tenantOf(userId);
-    if (!tenant) return { kind: 'local' };
+    if (!tenant) {
+      if (userId === OWNER_ID) return { kind: 'local' };
+      return { kind: 'tenant', state: 'preparing', hasKey: false, unassigned: true };
+    }
     return {
       kind: 'tenant',
       state: channel.hasTunnel(tenant) ? 'ready' : 'preparing',

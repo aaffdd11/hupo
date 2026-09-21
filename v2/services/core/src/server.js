@@ -244,6 +244,8 @@ export function createServer({
    * ⚠️ **取不到就当"就绪"**（老客户端没有这个字段也能用 —— 兼容那条纪律）。
    */
   tenantStatusOf = () => ({ kind: 'local' }),
+  /** 这个 `sub` 是不是"主人那一份"（宿主上直接服务的那种）。 */
+  isLocalUser = () => false,
   /**
    * **用户填了自己的模型凭据**（多租户 ②-4b）。`null` = 这台部署没开这条路（路由 404）。
    *
@@ -341,6 +343,18 @@ export function createServer({
       // ⚠️ 隧道没通 ⇒ **503 + 一句人话**，**不许**偷偷在本机替他答
       //    （那会让他看到"一个不属于他的世界"—— 比报错坏得多）。
       const tenant = tenantOf(claim.sub);
+      // 🔴 **宿主只服务主人那一份**：别人（有租户的走他那台容器；没分配到的**如实说没准备好**）。
+      //    ⚠️ 少了这一条，"还没分到空间的新号"会落到**宿主上**被本机那个世界接着 ——
+      //      而 `local` 的语义是**主人**，那是多租户要防的第一件事。
+      if (!tenant && !isLocalUser(claim.sub) && path.startsWith('/api/')) {
+        const space = tenantStatusOf(claim.sub);
+        if (space.kind === 'tenant') {
+          return sendJson(res, 503, {
+            error: 'space-not-ready',
+            text: '你那台还在准备，稍等一下再试。',
+          });
+        }
+      }
       if (tenant && TENANT_ROUTES.some((p) => path === p || path.startsWith(`${p}/`))) {
         const sock = proxyFor ? proxyFor(tenant) : null;
         if (!sock) {
@@ -762,6 +776,13 @@ export function createServer({
       }
       // ── ★ **数据面**：这个人在容器里 ⇒ 把这次升级**原样转进去** ──────────
       const tenant = tenantOf(claim.sub);
+      // ⚠️ 升级那条路**同一个道理**：不是主人、又没租户 ⇒ 不许落在宿主上
+      if (!tenant && !isLocalUser(claim.sub) && tenantStatusOf(claim.sub).kind === 'tenant') {
+        return rejectUpgrade(socket, 503, 'Service Unavailable', {
+          error: 'space-not-ready',
+          text: '你那台还在准备，稍等一下再试。',
+        });
+      }
       if (tenant) {
         const sock = proxyFor ? proxyFor(tenant) : null;
         if (!sock) {
