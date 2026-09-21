@@ -20,7 +20,7 @@ import { SayService } from './say.js';
 import { Trash } from './trash.js';
 import { Store } from './store.js';
 import { Ledger, LEDGER_TIMELINE_ID } from './ledger.js';
-import { Users } from './users.js';
+import { Users, maskPhone } from './users.js';
 import { LedgerSocket } from './ledger-socket.js';
 import { reconcileOnBoot } from './reconcile.js';
 import { CRASH_WINDOW_MS, markCleanExit, recordStart } from './boot-marker.js';
@@ -151,6 +151,16 @@ const auth = new Auth({ dataDir: cfg.dataDir });
 // ★ **用户表**（多租户第一步 · 契约 `docs/dev/37-MULTITENANT.md` §三）：
 //   手机号 → 用户。落在 `data/users.json`（0600、gitignore 里）。
 const users = new Users({ dataDir: cfg.dataDir });
+// ★ 把主人那个号绑到**原来那个账号**（`owner`）——不绑的话，"先用口令登过的那份数据"
+//   和"后来用手机号进来的那个人"会是两个身份（今天看不出来，将来数据一分就分家）。
+let ownerBind = null;
+if (cfg.ownerPhone) {
+  try {
+    ownerBind = users.bind(cfg.ownerPhone, 'owner');
+  } catch (err) {
+    console.warn(`  ⚠️ 主人那个号没绑上（${err?.message ?? err}）——手机号登录会当新用户`);
+  }
+}
 const say = new SayService({ timeline, store, timelineId: 'main' });
 // 回收站（批 3 第二件）。⚠️ **必须 sync**：不 sync 的话重启之后回收站是空的，
 // 而屏幕上那些话还藏着 —— 用户会以为永远拿不回来了（契约 `docs/dev/28-DELETE.md`）。
@@ -367,7 +377,12 @@ console.log(
     ? `  ⚠️ 临时验证码 **开着**（HUPO_DEV_CODE）⇒ **任何手机号 + 它都能进**。这不是上线形态。`
     : '  手机号登录 没开（要临时验证码就设 HUPO_DEV_CODE；⚠️ 设了谁都能进）',
 );
-console.log(`  用户     ${users.size} 个（手机号只落在 data/users.json，不进仓库不进日志）`);
+console.log(
+  `  用户     ${users.size} 个（手机号只落在 data/users.json，不进仓库不进日志）` +
+    (ownerBind
+      ? `｜主人号 ${maskPhone(cfg.ownerPhone)}${ownerBind.changed ? ' 刚绑上' : ' 已绑'} → owner`
+      : ''),
+);
 console.log('──────────────────────────────────────────────');
 
 // 优雅退出：先停止接新连接，再关。

@@ -87,6 +87,15 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      */
     devCode: env.HUPO_DEV_CODE ?? '',
 
+    /**
+     * **主人自己那个手机号**（可选）。
+     *
+     * ⚠️ 设了它 ⇒ 开机时把那个号**绑到原来那个账号**（`owner`）。
+     *    不设也行：绑一次就落在 `data/users.json` 里了（0600，不进仓库）。
+     *    ⚠️ 手机号是个人信息 —— **不许写进仓库、不许打进日志**（横幅只印脱敏形态）。
+     */
+    ownerPhone: env.HUPO_OWNER_PHONE ?? '',
+
     /** MCP 服务器那支脚本（绝对路径：spawn 时经环境变量递给 dsh）。 */
     ledgerServerPath: env.HUPO_LEDGER_SERVER ?? nodePath.resolve(cwd, 'src/mcp-ledger-server.mjs'),
 

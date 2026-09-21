@@ -76,6 +76,34 @@ export class Users {
     } catch { /* 尽力 */ }
   }
 
+  /**
+   * **绑**：把这个号的身份定成 `id`（幂等）。见 `bindPhone` 的说明。
+   * ⚠️ 一个 `id` 不许被两个号占用（否则"谁是谁"就没有意义了）。
+   */
+  bind(phone, id, { now = Date.now } = {}) {
+    const p = normalizePhone(phone);
+    if (!p) throw new Error('手机号不像手机号');
+    if (typeof id !== 'string' || id === '') throw new Error('id 必填');
+    const had = this.#byPhone.get(p);
+    if (had?.id === id) return { ...had, changed: false };
+    for (const [other, rec] of this.#byPhone) {
+      if (other !== p && rec.id === id) throw new Error(`id ${id} 已经被另一个手机号占着`);
+    }
+    const rec = { id, createdAt: had?.createdAt ?? now() };
+    this.#byPhone.set(p, rec);
+    this.#save();
+    return { ...rec, changed: true };
+  }
+
+  /** **删一个号**（只给清理与注销用）。返回删掉没有。 */
+  remove(phone) {
+    const p = normalizePhone(phone);
+    if (!p || !this.#byPhone.has(p)) return false;
+    this.#byPhone.delete(p);
+    this.#save();
+    return true;
+  }
+
   /** 这个号是谁；没有就 `null`（**不建**）。 */
   get(phone) {
     const p = normalizePhone(phone);
@@ -99,6 +127,17 @@ export class Users {
     this.#save();
     return { ...rec, created: true };
   }
+}
+
+/**
+ * 把一个手机号**绑到指定的用户 id**（幂等）。
+ *
+ * ⚠️ 它的用途只有一个：**把主人自己那个号绑到原来那个账号**（`owner`）。
+ *    没有它的话，"先用口令登录过的那份数据"与"后来用手机号进来的那个人"
+ *    会是**两个身份** —— 而今天数据还没按用户分，看起来一样，**将来一分就分家**。
+ */
+export function bindPhone(users, phone, id, { now = Date.now } = {}) {
+  return users.bind(phone, id, { now });
 }
 
 /** 给人看的脱敏手机号（**日志/横幅里只许出现这个形态**）。 */
