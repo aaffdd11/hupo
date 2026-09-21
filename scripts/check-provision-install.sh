@@ -191,7 +191,113 @@ if grep -q '✅ 一致' <<<"$out"; then ok "还原之后又一致了"; else bad 
 
 # ══════════════════════════════════════════════════════════════════
 echo
-echo "⑦ 撤得干净（一条命令）"
+echo "⑦ 🔴 那几份脚本在 **systemd 的最小 PATH** 下跑得起来"
+# ══════════════════════════════════════════════════════════════════
+# ⚠️ 为什么非验不可：助手是被 **systemd** 拉起来的，而 systemd 给服务的 `PATH`
+#    是**最小那一条**（`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`），
+#    **不是**你在登录 shell 里那条。而这条链子上要调 `podman` / `useradd` /
+#    `loginctl` / `install` … 一堆命令 ⇒ 有一条不在那条 PATH 上，
+#    **装完就起不来**（而报错会是被 `command not found` 打断的一串怪现象）。
+#    ⇒ 最好的闸不是"我列个清单"，而是**拿那条 PATH 真跑一遍**：
+#      这几份脚本的**只看模式**什么都不建，正是为这种时候准备的。
+#    （顺带：这一步也是"那几份脚本本身没坏"的回归。）
+SYS_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+probe_env() { env -i PATH="$SYS_PATH" HOME=/root HUPO_TENANT_TEMPLATE="$CONF" "$@"; }
+for pair in "create-tenant-users.sh:hupo-a" "create-tenant-pool.sh:hupo-a"; do
+  sc="${pair%%:*}"; who="${pair##*:}"
+  out="$(probe_env HUPO_TENANT_USERS="$who" PATH="$SYS_PATH" bash "$ROOT/scripts/$sc" 2>&1)"
+  if grep -qE "command not found|: not found" <<<"$out"; then
+    bad "$sc 在最小 PATH 下撞了找不到的命令：$(grep -m1 -E 'command not found|: not found' <<<"$out")"
+  elif [ -z "$out" ]; then
+    bad "$sc 在最小 PATH 下**一个字都没输出**（多半是半路就死了）"
+  else
+    ok "$sc 在最小 PATH 下跑完了（只看模式），没撞找不到的命令"
+  fi
+done
+# 助手自己：拿桩跑一遍（与 ⑩ 同一套思路），PATH 换成最小那条
+ORCH2="$TEST/orch-path"
+rm -rf "$ORCH2"; mkdir -p "$ORCH2/lib" "$ORCH2/req"
+cp "$ROOT/scripts/provision-tenant-request.sh" "$ORCH2/lib/provision-tenant-request.sh"; chmod 0755 "$ORCH2/lib/provision-tenant-request.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$ORCH2/lib/create-tenant-users.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$ORCH2/lib/create-tenant-pool.sh"
+chmod 0755 "$ORCH2/lib/create-tenant-users.sh" "$ORCH2/lib/create-tenant-pool.sh"
+chmod 0755 "$ORCH2" "$ORCH2/lib" "$ORCH2/req"
+: > "$ORCH2/req/3.req"; chown "$SERVICE_USER" "$ORCH2/req/3.req"
+out="$(env -i PATH="$SYS_PATH" HOME=/root \
+      HUPO_PROVISION_DIR="$ORCH2/req" HUPO_PROVISION_FAILED_DIR="$ORCH2/state" \
+      HUPO_PROVISION_STAMP="$ORCH2/.last" HUPO_PROVISION_MIN_INTERVAL=0 \
+      HUPO_TENANT_TEMPLATE="$CONF" HUPO_SERVICE_USER="$SERVICE_USER" \
+      bash "$ORCH2/lib/provision-tenant-request.sh" 2>&1)"
+if grep -qE "command not found|: not found" <<<"$out"; then
+  bad "助手在最小 PATH 下撞了找不到的命令：$(grep -m1 -E 'command not found|: not found' <<<"$out")"
+elif [ -e "$ORCH2/req/3.req" ]; then
+  bad "助手在最小 PATH 下**没把申请收掉**（那它多半半路死了）：$(tail -1 <<<"$out")"
+else
+  ok "助手在最小 PATH 下把一张申请走完了（桩），申请收掉了"
+fi
+# ⚠️ 顺带钉一条：单元里**没有**给 PATH（那就得靠 systemd 那条默认的）
+if grep -q "^Environment=PATH=" "$TEST/etc/systemd/system/hupo-provision.service" 2>/dev/null; then
+  ok "单元里显式给了 PATH（那上面这一节验的就是"单元给的那条"）"
+else
+  ok "单元没给 PATH ⇒ 靠的是 systemd 那条默认的（上面几行验的就是它）"
+fi
+
+# ══════════════════════════════════════════════════════════════════
+echo
+echo "⑦·补 🔴 **静态**那一条：链子上要用的命令，在最小 PATH 下**都解析得到**"
+# ══════════════════════════════════════════════════════════════════
+# ⚠️ 为什么"跑一遍"还不够（2026-09-21 变异验证抓出来的）：
+#    我故意让脚本调一个不存在的命令，写成 `xxx >/dev/null 2>&1 || true`
+#    —— **错误被吞掉了**，于是"跑一遍"那条闸**没红**。
+#    ⇒ 再加一条静态的：把几份脚本里出现的"命令位置的词"抠出来，
+#      凡是**不是** shell 关键字 / 内建 / 脚本自己定义的函数 / 切分碎片，
+#      就**必须**在 systemd 那条最小 PATH 下解析得到。
+#    ❗ 加新命令时不用改这里 —— 它会自己被抓出来（解析不到就红）。
+SHELL_WORDS="break case continue do done elif else esac exec exit export fi for if local read return set shift then true while until function time"
+BUILTINS="cd echo printf pwd test kill wait umask getopts hash type command builtin eval source alias unalias jobs fg bg trap let declare typeset unset readonly shopt"
+# ⚠️ 下面这几个是**切分切出来的碎片**，不是命令（写在这里是为了**说清**它们为什么被放过）：
+#    · hupo-a / hupo-b —— `case` 的分支标签
+#    · want / now / sub / enable —— 赋值目标、或 `$( … )` 里切出来的第一个词
+#    · uid_of / uid_for_name / tpl_get / as_user / owner_run / plan / say / log /
+#      mark_failed / clear_failed / finish_fail —— **脚本自己定义的函数**（下面会自动再收一遍）
+ARTIFACTS="hupo-a hupo-b want now sub enable"
+# 脚本自己定义的函数名（自动收，免得手抄漏）
+funcs="$(grep -ohE '^[[:space:]]*[a-z_][a-z0-9_]*[[:space:]]*\(\)' "$ROOT"/scripts/provision-tenant-request.sh "$ROOT"/scripts/create-tenant-users.sh "$ROOT"/scripts/create-tenant-pool.sh 2>/dev/null | tr -d ' ()' | sort -u | tr '\n' ' ')"
+cands="$(cat "$ROOT"/scripts/provision-tenant-request.sh "$ROOT"/scripts/create-tenant-users.sh "$ROOT"/scripts/create-tenant-pool.sh \
+  | sed 's/#.*$//' | tr '|&;()' '\n\n\n\n\n\n' \
+  | sed -E 's/^[[:space:]]*//; s/[[:space:]]+.*$//' \
+  | grep -E '^[a-z][a-z0-9_-]*$' | sort -u)"
+missing=""
+for t in $cands; do
+  case " $SHELL_WORDS $BUILTINS $ARTIFACTS $funcs " in *" $t "*) continue ;; esac
+  PATH="$SYS_PATH" command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+done
+if [ -z "$missing" ]; then
+  ok "链子上要用的命令在最小 PATH 下**全都解析得到**（扫了 $(wc -w <<<"$cands") 个词）"
+else
+  bad "🔴 这些命令在 systemd 的最小 PATH 下**找不到**：$missing"
+fi
+
+# ══════════════════════════════════════════════════════════════════
+echo
+echo "⑧ 让 systemd 自己校验那两份单元（⚠️ 它**退出码永远是 0**，所以要看它说什么）"
+# ══════════════════════════════════════════════════════════════════
+# 为什么非要它：`Unknown key name` 这类错**单元照样加载**（只是那一行被忽略），
+# 而"被忽略的那一行"正好可能是承重的（我写探针时就手滑写过一个 `WantsBy`）。
+if ! command -v systemd-analyze >/dev/null 2>&1; then
+  bad "这台机器上没有 systemd-analyze ⇒ 这一条**没验**"
+else
+  vout="$(systemd-analyze verify "$TEST/etc/systemd/system/hupo-provision.path" "$svc" 2>&1 || true)"
+  if grep -qE "Unknown key name|Invalid|Failed to parse|not a valid" <<<"$vout"; then
+    bad "systemd 校验不过：$(grep -m1 -E 'Unknown key name|Invalid|Failed to parse|not a valid' <<<"$vout")"
+  else
+    ok "两份单元 systemd 都认（没有 Unknown key / Invalid）"
+  fi
+fi
+
+# ══════════════════════════════════════════════════════════════════
+echo
+echo "⑨ 撤得干净（一条命令）"
 # ══════════════════════════════════════════════════════════════════
 bash "$INSTALLER" --uninstall --root "$TEST" >/dev/null 2>&1
 if [ ! -e "$LE" ] && [ ! -e "$CONF" ] && [ ! -e "$svc" ]; then
@@ -202,7 +308,7 @@ fi
 
 # ══════════════════════════════════════════════════════════════════
 echo
-echo "⑧ 🔴 **自证：这一趟在这台机器上什么都没多出来**（"隔离"要验它真的隔离了）"
+echo "⑩ 🔴 **自证：这一趟在这台机器上什么都没多出来**（"隔离"要验它真的隔离了）"
 # ══════════════════════════════════════════════════════════════════
 stray=0
 [ -e "$REAL_LIBEXEC" ] && { bad "多出来了：$REAL_LIBEXEC"; stray=1; }
