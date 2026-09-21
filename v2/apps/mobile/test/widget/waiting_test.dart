@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/space.dart';
+import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/waiting_screen.dart';
 
 void main() {
@@ -49,6 +50,37 @@ void main() {
     expect(find.textContaining('%'), findsNothing);
     // ★ "正在做"那一步旁边**有个圈**（在动）—— 但它不是进度
     expect(find.byType(CircularProgressIndicator), findsWidgets);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('🔴 **给不了**的时候：明说 + **停止自问自答** + 不挂秒数', (tester) async {
+    // ⚠️ 这一条钉的是"永远等"那个病：原来"还在开"与"给不了"共用一句话，
+    //    于是屏幕上没有一个字说它会永远等，而这一屏每 2 秒还在自问。
+    var calls = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: WaitingScreen(onRetry: () {}, full: true, onRefresh: () async => calls++),
+    ));
+
+    expect(find.text(waitingFull), findsOneWidget, reason: '🔴 必须明说给不了');
+    expect(find.text(waitingBody), findsNothing, reason: '不许同时叠一句"还在开"');
+    expect(find.textContaining('已经等了'), findsNothing, reason: '这一台不会来了，别量他等了多久');
+
+    // ★ 关键：**它不再自己问了**（再问也不会有别的答案）
+    await tester.pump(const Duration(seconds: 6));
+    expect(calls, 0, reason: '🔴 给不了还在每 2 秒自问 = 让他以为在动');
+
+    // ⚠️ 一个定时器都没开 ⇒ `pumpAndSettle` 会正常返回（没开的话它会挂到超时）
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('★ 还在开的时候**照旧**自己问（别把正常那一档一起改坏了）', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: WaitingScreen(onRetry: () {}, onRefresh: () async => calls++),
+    ));
+    await tester.pump(const Duration(seconds: 2));
+    expect(calls, 1, reason: '正常那一档的"动态"不许被上面那条改动碰坏');
     await tester.pumpWidget(const SizedBox());
   });
 }

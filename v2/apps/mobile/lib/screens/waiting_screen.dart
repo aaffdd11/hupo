@@ -26,6 +26,7 @@ class WaitingScreen extends StatefulWidget {
     this.retryFailed = false,
     this.steps = const [],
     this.queued = false,
+    this.full = false,
     this.onRefresh,
   });
 
@@ -40,8 +41,16 @@ class WaitingScreen extends StatefulWidget {
   /// **开空间那三步**（真进度）。空 ⇒ 只显示那句话（老服务端 / 认不出来）。
   final List<SpaceStep> steps;
 
-  /// 池子里没有空位了（那不是"马上就好"）。
+  /// 我们自己这边还没给他开（那不是"马上就好"）。
   final bool queued;
+
+  /// 🔴 **给不了**（满了 / 那台没建成）。
+  ///
+  /// ⚠️ 这一档与"还在开"是**两件事**，而原来它们共用一句话 ——
+  ///    于是屏幕上没有一个字说"它不会自己好了"，而这一屏每 2 秒还在自问、
+  ///    三步一直不勾 ⇒ **看着像在动**。这正是项目点名禁的假象。
+  /// ⇒ 它一到，这一屏就该：**说清楚** + **停止自问**（再问也不会变，还费电）。
+  final bool full;
 
   /// 用户按了"再看看"。（多久算太久**住在服务端**，客户端不复制那个数。）
   final VoidCallback onRetry;
@@ -67,6 +76,10 @@ class _WaitingScreenState extends State<WaitingScreen> {
   @override
   void initState() {
     super.initState();
+    // ⚠️ **给不了的时候一个定时器都不许开**：
+    //    · 那个秒数是在量"你等了多久" —— 而这一台**不会来了**，量它就是在骗人；
+    //    · 每 2 秒再问一次也不会有别的答案（白耗电、还让用户以为"在动"）。
+    if (widget.full) return;
     // ★ **真的在走的秒数**（量真实时间 ⇒ 诚实；不是进度）
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _elapsed += 1);
@@ -106,7 +119,11 @@ class _WaitingScreenState extends State<WaitingScreen> {
                 const SizedBox(height: 12),
                 // ★ **真进度**（主人 2026-09-21）：把服务端**真的知道的那三步**画出来。
                 //   ⚠️ 只有"做完了没有" —— **没有百分比、没有进度条**（不许假进度）。
-                if (widget.queued)
+                if (widget.full)
+                  // 🔴 **给不了就说给不了**：不画那三步（一步都没走），也不挂秒数。
+                  //    让他知道"再等下去不会有变化"，而不是继续盯着一个不会动的东西。
+                  Text(waitingFull, style: t.textTheme.bodyMedium, textAlign: TextAlign.center)
+                else if (widget.queued)
                   Text(waitingQueued, style: t.textTheme.bodyMedium, textAlign: TextAlign.center)
                 else if (widget.steps.isNotEmpty)
                   Column(
@@ -126,14 +143,18 @@ class _WaitingScreenState extends State<WaitingScreen> {
                     ],
                   ),
                 const SizedBox(height: 12),
-                Text(note, style: t.textTheme.bodyMedium, textAlign: TextAlign.center),
-                const SizedBox(height: 4),
-                // ★ **一个真的在走的秒数**（量真实时间 ⇒ 诚实；**不是百分比**）
-                Text(
-                  waitingElapsedWords(_elapsed),
-                  style: t.textTheme.bodySmall,
-                  textAlign: TextAlign.center,
-                ),
+                // ⚠️ 给不了的时候上面已经把话说完了 ⇒ 不再叠一句"还在开"
+                //    （两句意思相反的话同时在屏幕上，用户只会更慌）
+                if (!widget.full) ...[
+                  Text(note, style: t.textTheme.bodyMedium, textAlign: TextAlign.center),
+                  const SizedBox(height: 4),
+                  // ★ **一个真的在走的秒数**（量真实时间 ⇒ 诚实；**不是百分比**）
+                  Text(
+                    waitingElapsedWords(_elapsed),
+                    style: t.textTheme.bodySmall,
+                    textAlign: TextAlign.center,
+                  ),
+                ],
                 const SizedBox(height: 24),
                 // ⚠️ 命中区 ≥44：`minimumSize` 而不是写死宽高
                 FilledButton(

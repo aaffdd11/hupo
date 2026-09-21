@@ -247,6 +247,15 @@ export function createServer({
   /** 这个 `sub` 是不是"主人那一份"（宿主上直接服务的那种）。 */
   isLocalUser = () => false,
   /**
+   * **他要一台，就替他申请一台**（契约 `docs/dev/43-AUTO-PROVISION.md`）。
+   *
+   * 🔴 调用它 = **产生副作用**（投一张申请），所以它**只在登录那一刻**被调，
+   *    **不**在 `/api/space` 那种"只查"的路上被调（那条路要能随便刷）。
+   * ⚠️ 返回 `{ok, why}`；调用方**不许**把 `why` 之外的任何东西回给客户端
+   *    （尤其不许回路径）。
+   */
+  ensureTenant = null,
+  /**
    * **用户填了自己的模型凭据**（多租户 ②-4b）。`null` = 这台部署没开这条路（路由 404）。
    *
    * ⚠️ 约定：`setModelKey(userId, key)`，返回值里**不含 key**；调用方**不许**把它写日志。
@@ -592,6 +601,20 @@ export function createServer({
         return sendJson(res, 400, { error: 'bad-phone' });
       }
       auth.recordLoginSuccess(ip);
+      // ★ **新号（以及"上次没开成"的老号）在这一刻拿到他那一台的申请**
+      //   （契约 `43-AUTO-PROVISION.md` §四）。
+      //   ⚠️ 放在**登录**而不是 `/api/space`：那条路是"只查"，要能随便刷 ——
+      //      在它里面投申请就等于"刷一下页面就多一张申请"。
+      //   ⚠️ 失败了**不许**把登录挡掉：人先进得来，状态照实说。
+      //   ⚠️ 这里的返回值**只用来记日志**，一个字段都不回给客户端。
+      try {
+        const asked = ensureTenant ? ensureTenant(who.id) : null;
+        if (asked && !asked.ok && asked.why !== 'mapped' && asked.why !== 'local') {
+          log(`  ⚠️ ${who.id} 那台没申请成（${asked.why}）—— 状态会如实说是哪一档`);
+        }
+      } catch (err) {
+        log(`  ⚠️ 申请那一步抛了：${err?.message ?? err}（登录照常）`);
+      }
       try {
         const { token, expiresAt } = auth.issue({ sub: who.id });
         // ★ 登录回执**带上"他那台到哪一步了"**（`38` §8.3）：

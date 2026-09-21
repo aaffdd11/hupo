@@ -200,6 +200,13 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      */
     trustedSocketPath: env.HUPO_TRUSTED_SOCKET || '',
 
+    /**
+     * **申请投放口**（契约 `43-AUTO-PROVISION.md`）：服务唯一能做的副作用，
+     * 就是往这儿放一个**空文件**，名字是一个整数。
+     * ⚠️ `''` = **这条路关着**（新号只能排队，而且状态会如实说给不了）。
+     */
+    provisionDir: env.HUPO_PROVISION_DIR ?? '',
+
     /** 通道套接字放哪个目录（每个租户一个）。`''` = 不开这条通道。 */
     tenantChannelDir: env.HUPO_CHANNEL_DIR ?? '/run/hupo-channel',
 

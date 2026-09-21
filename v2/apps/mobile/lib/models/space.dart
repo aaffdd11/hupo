@@ -38,7 +38,8 @@ class SpaceInfo {
   /// `local` = 主人那种（本机那份，没有单独一台）；`tenant` = 有自己一台。
   final String kind;
 
-  /// `queued`（池子里没空了）/ `starting`（他那台正在起）/ `ready`。
+  /// `queued`（没人会来开）/ `provisioning`（正在给他开一台）/ `starting`（他那台在起）
+  /// / `ready` / `full`（**给不了**：满了或者建失败了）。
   /// ⚠️ **只有 `ready` 才算就绪** —— 别的值一律**不许**当就绪
   ///    （认不出就进聊天 = 把他送进一个还没准备好的世界）。
   final String state;
@@ -55,6 +56,20 @@ class SpaceInfo {
 
   /// 他这一步是不是"连队都没排上"（池子里没有空位）—— ⚠️ 那不是"马上就好"，别骗他。
   bool get queued => state == 'queued';
+
+  /// 正在**给他开一台**（申请已经被受理）。
+  /// ⚠️ 与 `starting` 的区别是**服务端真的知道的事实**：那张申请还在特权侧手里。
+  bool get provisioning => state == 'provisioning';
+
+  /// 🔴 **给不了**（满了 / 建失败了）—— 这一档**必须明说**。
+  ///
+  /// 这一档是这次专门加出来的：原来"排队"与"永远排不上"是**同一个词**
+  /// （`queued`），屏幕上没有一个字说它会永远等 ——
+  /// 那正是项目最忌的"**看着在动、其实到不了**"。
+  bool get full => state == 'full';
+
+  /// 还要不要接着自己问下去。**给不了的时候就不必再等了**（省电，也不给假希望）。
+  bool get keepsChanging => isTenant && !ready && !full;
 
   /// **宽容解析**：不是对象 / 缺字段 / 字段类型不对 ⇒ 一律退回"就绪的本机那种"。
   factory SpaceInfo.fromJson(Object? raw) {

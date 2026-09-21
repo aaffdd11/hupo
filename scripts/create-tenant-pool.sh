@@ -29,7 +29,16 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMG="${HUPO_TENANT_IMAGE:-localhost/hupo-tenant:local}"
-USERS=(hupo-a hupo-b)
+# ── 要管哪几台 ──────────────────────────────────────────────
+# ⚠️ 默认还是那两台（**已建好在跑的**，逐字不变）；`HUPO_TENANT_USERS` 是给
+#    "自动开一台"那条路用的（root 侧助手一次只建一个）。
+# ⚠️ **名单只有这一处**：自动那条路**不许**自己长出一套平行的建法 ——
+#    它调的就是这个脚本（契约 `43-AUTO-PROVISION.md` §八）。
+if [ -n "${HUPO_TENANT_USERS:-}" ]; then
+  read -r -a USERS <<< "$(printf '%s' "$HUPO_TENANT_USERS" | tr ',' ' ')"
+else
+  USERS=(hupo-a hupo-b)
+fi
 DO=0
 [ "${1:-}" = "--yes" ] && DO=1
 
@@ -52,7 +61,10 @@ echo
 # 以 root 跑 `podman image exists` 会得到"没有这个镜像" —— 然后你会以为镜像丢了。
 # ⇒ 这个脚本里**每一处 podman 都以它自己的属主身份跑**：
 #    造镜像那个人（导出 tar）、以及每个租户（load 进他自己那份）。
-OWNER_USER="${SUDO_USER:-deploy}"
+# ⚠️ 三个来源，**优先级写在这里**：显式给的 > `sudo` 记住的那个人 > 默认 deploy。
+#    `HUPO_OWNER_USER` 是给"自动开一台"那条路用的 —— 它由 **systemd** 拉起，
+#    没有 `SUDO_USER`（那时候默认 deploy 也对，但**显式**比"碰巧对"好）。
+OWNER_USER="${HUPO_OWNER_USER:-${SUDO_USER:-deploy}}"
 # ⚠️ **`cd /tmp` 那一步不能省**（2026-09-21 实测踩了）：
 #    `sudo -u` **保留当前工作目录**，而这个脚本体在 `deploy` 的目录里
 #    ⇒ 换成租户身份之后 chdir 就 `Permission denied`

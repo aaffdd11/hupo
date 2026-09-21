@@ -19,7 +19,8 @@ import { Users, maskPhone } from './users.js';
 import { TenantChannel } from './tenant-channel.mjs';
 import { stepsFor } from './space-steps.js';
 import { Worlds } from './worlds.js';
-import { OWNER_ID } from './tenants.js';
+import { OWNER_ID, readTenantTemplate, tenancyFor, tenantNameFor, userIdNumber } from './tenants.js';
+import { ProvisionQueue } from './provision.js';
 import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
 import { createServer } from './server.js';
@@ -244,9 +245,30 @@ const tenantKeys = new Map(); // userId → key（**只在内存**）
 // ⚠️ 下面这一整段（`tenantOf` / `userOfTenant` / 通道）在 2026-09-21 被我**误删过一次** ——
 //    删内联函数时切多了，现象是服务起来就 `ReferenceError: tenantOf is not defined`。
 //    ⇒ 教训记在 `38` §9.4：**动启动路径上的顺序/片段，改完先在隔离目录跑一次**。
-const tenantOf = (userId) => cfg.tenantMap.get(userId) ?? null;
+// ★ **租户命名模板**（契约 `43-AUTO-PROVISION.md` §三 A2）：**唯一权威**在
+//   `tenant-template.conf`（服务侧与 root 侧都读它 ⇒ 两边推出来的名字必然逐字相同）。
+//   ⚠️ 读不到 ⇒ "自动开一台"这条路**关着**，但**不许**因此挡住服务（那是附加能力）。
+const tpl = readTenantTemplate();
+const queue = new ProvisionQueue({
+  // ⚠️ `''` 时退回默认那个路径（`/run/hupo-provision`）—— 但判据里可以指到临时目录
+  ...(cfg.provisionDir ? { dir: cfg.provisionDir } : {}),
+  log: (m) => console.log(m),
+});
+
+// ⚠️ **表优先，推出来的兜底**：
+//   · `u1→hupo-a`、`u2→hupo-b` 是**已经建好在跑**的两台 ⇒ 表里写死的那个名字赢；
+//   · 表里没有的 `u<N>`（第 3 个及以后的新号）⇒ 按模板推 `hupo-t<N>`。
+//   ⚠️ 这一条**必须**留着表的优先权：否则 `u1` 会被推成 `hupo-t1`，
+//      而真在跑的那台叫 `hupo-a` ⇒ 服务去听一个没人连的通道，
+//      现象是"主人自己那台好好的、老用户全都连不上"。
+const tenantOf = (userId) => cfg.tenantMap.get(userId) ?? tenantNameFor(userId, tpl);
 const userOfTenant = (tenant) => {
   for (const [uid, t] of cfg.tenantMap) if (t === tenant) return uid;
+  // 推出来的那种：`hupo-t<N>` → `u<N>`（只认前缀 + 纯数字，别的一律不认）
+  if (tpl.ok && tenant.startsWith(tpl.namePrefix)) {
+    const rest = tenant.slice(tpl.namePrefix.length);
+    if (/^[1-9][0-9]{0,2}$/.test(rest)) return `u${rest}`;
+  }
   return null;
 };
 
@@ -259,17 +281,43 @@ const channel = new TenantChannel({
   },
   log: (m) => console.log(m),
 });
-let channelTenants = 0;
-const channelTenantNames = [...new Set(cfg.tenantMap.values())];
+// ★ **静态表里那几台** + **已经推出来的那几台**都要在开机时把耳朵支起来。
+//
+// ⚠️ 为什么要管推出来的那些（`43-AUTO-PROVISION.md`）：它们是**按需**建的，
+//    而这条通道在 `/run`（**tmpfs**）—— 宿主一重启，目录全没了。
+//    那时候容器还活着、还在重连，而服务这边**没有人再替它听** ⇒
+//    现象是"重启之后某几个老用户永远卡在 waiting"（`38` §七 那个坑的同族）。
+const channelTenantNames = [
+  ...new Set([
+    ...cfg.tenantMap.values(),
+    // ⚠️ 只认**已经存在**的（`users.ids()` 是登记过的号）：不认识的号不在开机时开通道，
+    //    它们是登录那一刻才支耳朵（见 `ensureTenant`）。
+    // 🔴 **表里已经有名字的那些要排掉**（2026-09-21 隔离启动抓到的）：
+    //    `u1` 在表里是 `hupo-a`，而 `tenantNameFor('u1')` 会推出 `hupo-t1` ——
+    //    那是个**不存在的租户**。不排掉的话开机就会多听两条没人连的通道，
+    //    而横幅会报"4 个租户在听"（**在说假话**：真在跑的只有两台）。
+    ...users
+      .ids()
+      .filter((uid) => !cfg.tenantMap.has(uid))
+      .map((uid) => tenantNameFor(uid, tpl))
+      .filter(Boolean),
+  ]),
+];
 if (cfg.tenantChannelDir && channelTenantNames.length > 0) {
   try {
     for (const t of channelTenantNames) {
       channel.listenFor(t);
-      channelTenants += 1;
     }
   } catch (err) {
     console.warn(`  ⚠️ 租户通道没全开起来：${err?.message ?? err}（那几台容器会一直等配置）`);
   }
+}
+// ⚠️ 这条路关着的时候要**说一声**（不然"新号一直排队"看起来像别的地方坏了）
+if (!tpl.ok) {
+  console.warn(
+    '  ⚠️ 没有租户模板（v2/services/core/tenant-template.conf）⇒ **"自动开一台"这条路关着**，' +
+      '新号只能排队',
+  );
 }
 
 /**
@@ -287,6 +335,32 @@ function setModelKey(userId, key) {
   return { ok: true };
 }
 
+/**
+ * **他要一台，我们就替他申请一台**（契约 `43-AUTO-PROVISION.md` §四）。
+ *
+ * 🔴 这是这套设计里**唯一一处新增的副作用**：往申请目录里放一个**空文件**，
+ *    名字是一个整数。**服务永远不执行任何特权动作**（A1）。
+ *
+ * @returns {{ok:boolean, why:string}}
+ */
+function ensureTenant(userId) {
+  const kind = tenancyFor(userId, { map: cfg.tenantMap, tpl });
+  // 主人那一份在本机、静态表里那两台已经建好在跑 ⇒ 没什么可申请的
+  if (kind === 'local' || kind === 'mapped') return { ok: true, why: kind };
+  if (kind !== 'provisionable') return { ok: false, why: kind };
+
+  const tenant = tenantNameFor(userId, tpl);
+  // ★ **先把耳朵支起来**（在投申请**之前**）：容器起来时它的 `ExecStartPre`
+  //   在等这个套接字，等不到的话 podman 会把那个路径**建成一个目录**，
+  //   然后容器连它连不上 —— 而报错完全看不出原因（`38` §七 那个坑）。
+  try {
+    channel.listenFor(tenant);
+  } catch (err) {
+    console.warn(`  ⚠️ 给 ${userId} 支通道没成：${err?.message ?? err}`);
+  }
+  return queue.request(userId);
+}
+
 const { listen, listenTrusted, close } = createServer({
   // ★ **多租户那一侧**：每个请求按令牌里的 `sub` 取那个人的世界。
   //   ⚠️ 上面那五个单例**不再传**了 —— 传了就等于"所有人共用一份"。
@@ -296,33 +370,72 @@ const { listen, listenTrusted, close } = createServer({
   devCode: cfg.devCode,
   setModelKey,
   tenantOf,
+  // ★ **新号登录时替他申请一台**（除了改状态，这是登录路径上唯一新增的动作）
+  ensureTenant,
   // ★ **"主人那一份"只有一个**：别人要么走他那台容器，要么如实说没准备好
   isLocalUser: (userId) => userId === OWNER_ID,
-  // ⚠️ **只查不发**（`hasTunnel` 没有副作用）；主人那种没有容器的 ⇒ `kind:'local'`
+  // ⚠️ 这一段**只查不发**（`hasTunnel` / `outstanding` 都没有副作用）——
+  //    申请那件事只发生在 `ensureTenant()` 里（登录那一刻），见上面那段。
   tenantStatusOf: (userId) => {
     // 🔴 **只有"主人"才是 `local`**（他自己那份就在宿主上，没有单独一台）。
     //    ⚠️ 一个**新号**在 `tenantMap` 里**没有对应租户** —— 那**不是** `local`：
     //       `local` 的语义是"本机那份 = 主人那一份"，把新号当成它
     //       就是**让新用户看见主人的东西**（多租户要防的第一件事）。
+    if (userId === OWNER_ID) return { kind: 'local' };
     const tenant = tenantOf(userId);
     if (!tenant) {
-      if (userId === OWNER_ID) return { kind: 'local' };
-      // ⚠️ **没分到**不是"正在开" —— 池子里没有空了（见 `41-SPECIAL-CODE.md` §四）。
-      //    如实说 `queued`，别让他以为马上就好。
-      return { kind: 'tenant', state: 'queued', hasKey: false, steps: stepsFor(0) };
+      // 推不出名字 = 只有两种可能，**都不是"正在开"**：
+      //   · 超过上限（`full`）—— 公开口烧资源那条代价的最后一道闸（A4）
+      //   · 这个 id 根本不认识（也不该发生）
+      const kind = tenancyFor(userId, { map: cfg.tenantMap, tpl });
+      // ⚠️ 原来的写法是**一律** `queued` —— 那是"永远等"，而屏幕上没有一个字
+      //    说它会永远等。这正是项目最忌的"看着在动、其实到不了"。
+      return {
+        kind: 'tenant',
+        state: kind === 'full' ? 'full' : 'queued',
+        why: kind === 'full' ? (tpl.ok ? 'capacity' : 'no-template') : 'unknown-id',
+        hasKey: false,
+        steps: stepsFor(0),
+      };
     }
+    // ⚠️ **顺序要紧**：先看"在飞没有"，再看"上次是不是失败了"。
+    //    反过来的话，重试那张申请还躺在目录里、屏幕却已经说"给不了"
+    //    —— 那是"看着到不了、其实正在开"，同样是假话。
+    const mapped = cfg.tenantMap.has(userId);
+    const inFlight = !mapped && queue.outstanding(userId);
     const up = channel.hasTunnel(tenant);
+    if (up) {
+      return {
+        kind: 'tenant',
+        state: 'ready',
+        // ★ **两个来源取或**（2026-09-21）：宿主内存里那份（我送过）
+        //    **或** 容器自己报的（它真的拿着）—— 后者才是权威。
+        //    ⚠️ 少了后面那一半，宿主一重启就会**再问用户要一次钥匙**
+        //      （主人报的"刷新后又要我输入 apikey"）。
+        hasKey: tenantKeys.has(userId) || channel.hasKeyFor(tenant),
+        // ⚠️ 3 不是 2 —— 就绪时**三步都算走完**（传 2 会自相矛盾：state=ready 而第三步没打勾）
+        steps: stepsFor(3),
+      };
+    }
+    // 申请**还在飞**（特权侧还没消费掉它）⇒ 正在开。这是四条里唯一"马上会变"的那条。
+    if (inFlight) {
+      return { kind: 'tenant', state: 'provisioning', hasKey: false, steps: stepsFor(1) };
+    }
+    // 特权侧**试过、但没建成** ⇒ 也**不许**让他一直等（A5 那个标记就是为这一条）
+    if (!mapped && queue.failed(userId)) {
+      return { kind: 'tenant', state: 'full', why: 'failed', hasKey: false, steps: stepsFor(0) };
+    }
+    // 没通、也没在飞：两种**不同**的实情，不许混成一个词
+    //   · 静态表里那台 / 已经建出来的那台 ⇒ 在跑，只是隧道还没连上来
+    //   · 特权侧**根本没装** ⇒ **没人会来开**，如实说给不了（原来这里说 `queued`，
+    //     而屏幕上一个字都没说它会永远等）
+    const state = mapped || queue.available ? 'starting' : 'full';
     return {
       kind: 'tenant',
-      state: up ? 'ready' : 'starting',
-      // ★ **两个来源取或**（2026-09-21）：宿主内存里那份（我送过）
-      //    **或** 容器自己报的（它真的拿着）—— 后者才是权威。
-      //    ⚠️ 少了后面那一半，宿主一重启就会**再问用户要一次钥匙**
-      //      （主人报的"刷新后又要我输入 apikey"）。
+      state,
+      ...(state === 'full' ? { why: 'no-helper' } : {}),
       hasKey: tenantKeys.has(userId) || channel.hasKeyFor(tenant),
-      // ★ **真进度**（主人 2026-09-21："创建 docker 空间要能够对用户展示进度"）：
-      //   这三条**每一条都是服务端真的知道的事实**，不是编的、也没有百分比。
-      steps: stepsFor(up ? 3 : 1), // ⚠️ 3 不是 2 —— 就绪时**三步都算走完**（传 2 会自相矛盾：state=ready 而第三步没打勾）
+      steps: stepsFor(state === 'full' ? 0 : 1),
     };
   },
   // ⚠️ 隧道没通时返回 `null`（调用方**如实回 503**，不许假装通了）
@@ -507,7 +620,9 @@ console.log(
 console.log(
   // ⚠️ 通道那一行也要**如实**：它报的是"我给几个租户开着口"，
   //    而不是"有几台容器真的在跑"（那两个数不是一回事）。
-  `  租户通道 ${channelTenants > 0 ? `${channelTenants} 个租户在听（${cfg.tenantChannelDir}）` : '⚠️ 没开（HUPO_TENANT_MAP 空 / 目录没配）'}`,
+  // ⚠️ 这个数是**通道自己算的**（`listeningCount`），不是记出来的：
+  //    租户现在会在**运行时**多出来（按需开一台）⇒ 记出来的那个数一定会漂。
+  `  租户通道 ${channel.listeningCount > 0 ? `${channel.listeningCount} 个租户在听（${cfg.tenantChannelDir}）` : '⚠️ 没开（HUPO_TENANT_MAP 空 / 目录没配）'}`,
 );
 console.log(
   // ⚠️ **这一行是多租户接上之后必须有的**：不报它，就看不出「到底有几个人各过各的」。

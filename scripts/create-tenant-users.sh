@@ -20,10 +20,48 @@
 #   5. 每个用户的卷 **0700、属主是他自己** —— 别人（含 `deploy`）读不到
 set -uo pipefail
 
-# 租户名单（要加人，改这一行；前缀固定 `hupo-`）
-USERS=(hupo-a hupo-b)
-FIRST_UID=2001
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# ── 租户模板：**唯一权威**（契约 `docs/dev/43-AUTO-PROVISION.md` §三 A2）────
+# ⚠️ 服务侧（JS 的 `tenants.js`）读的是**同一个文件**。两边各写一份常数就一定会漂，
+#    而"漂"的表现是"容器起来了、服务却在听另一个通道"（看起来像容器没起来）。
+# ⚠️ 路径**可注入**：装到系统里之后，特权侧读的是 **root 自己那一份拷贝**
+#    （`/etc/hupo/tenant-template.conf`）—— 读仓库里那份的话，
+#    服务（= 仓库属主）能改它 ⇒ 那等于把边界画在一个可写的地方（契约 §三 A9）。
+TEMPLATE="${HUPO_TENANT_TEMPLATE:-$ROOT/v2/services/core/tenant-template.conf}"
+tpl_get() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$TEMPLATE" | head -1; }
+NAME_PREFIX="$(tpl_get name_prefix)"
+UID_BASE="$(tpl_get uid_base)"
+MAX_TENANTS="$(tpl_get max_tenants)"
+for pair in "name_prefix=$NAME_PREFIX" "uid_base=$UID_BASE" "max_tenants=$MAX_TENANTS"; do
+  [ -n "${pair#*=}" ] || { echo "✗ 租户模板读不出 ${pair%%=*}（$TEMPLATE）"; exit 2; }
+done
+
+# ── 要处理哪几个租户 ────────────────────────────────────────
+# ⚠️ 默认还是那两台（**这台机器上已经建好的**，名字带字母、uid 是当年手工给的）；
+#    `HUPO_TENANT_USERS` 是给"自动开一台"那条路用的（root 侧助手一次只建一个）。
+#    ⇒ 名单**不再是写死的两行**，但默认值逐字不变（幂等、跑两次不会出事）。
+if [ -n "${HUPO_TENANT_USERS:-}" ]; then
+  read -r -a USERS <<< "$(printf '%s' "$HUPO_TENANT_USERS" | tr ',' ' ')"
+else
+  USERS=(hupo-a hupo-b)
+fi
 SUBID_COUNT=65536
+
+# 名字 → uid。**只有两处来源**：最早那两台的手工表，和模板推出来的公式。
+# ⚠️ 服务侧算的是同一个数（`tenantUidFor`）；`test/provision.test.js` 钉着模板那一半。
+uid_for_name() {
+  case "$1" in
+    hupo-a) printf '%s' 2001 ;;   # ⚠️ 这两台是**手工建的**，uid 不在公式上 ⇒ 明写成表
+    hupo-b) printf '%s' 2002 ;;
+    "$NAME_PREFIX"*)
+      local n="${1#"$NAME_PREFIX"}"
+      [[ "$n" =~ ^[1-9][0-9]{0,2}$ ]] || return 1
+      [ "$n" -le "$MAX_TENANTS" ] || return 1
+      printf '%s' "$((UID_BASE + n))" ;;
+    *) return 1 ;;
+  esac
+}
 
 DO=0
 [ "${1:-}" = "--yes" ] && DO=1
@@ -37,16 +75,21 @@ fi
 
 echo "── 租户用户清单 ────────────────────────────────"
 echo "  要建：${USERS[*]}"
+echo "  模板：$TEMPLATE（前缀 $NAME_PREFIX · uid 起点 $UID_BASE · 上限 $MAX_TENANTS）"
 echo "  ⚠️ 不碰：welkin(1000)、deploy(1001)、docker 组"
 echo "  模式：$([ "$DO" = "1" ] && echo '**真做**' || echo '只看（想真做加 --yes）')"
 echo
 
 uid_of() { id -u "$1" 2>/dev/null; }
 
-i=0
 for u in "${USERS[@]}"; do
-  want=$((FIRST_UID + i)); i=$((i + 1))
   home="/home/$u"
+  # 🔴 **认不出的名字一律不建**（不是"猜一个 uid"）：这条同时是 A2 的落点 ——
+  #    特权侧的名字必须能从模板推出来，推不出来就说明有人在绕这条路。
+  if ! want="$(uid_for_name "$u")"; then
+    echo "✗ 不认识这个租户名：$u（只认 hupo-a / hupo-b / ${NAME_PREFIX}<1..${MAX_TENANTS}>）"
+    exit 3
+  fi
   plan "用户 $u（uid $want）"
 
   have="$(uid_of "$u")"

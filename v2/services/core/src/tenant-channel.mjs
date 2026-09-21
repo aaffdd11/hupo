@@ -95,6 +95,17 @@ export class TenantChannel {
     return this.#dir;
   }
 
+  /**
+   * **正在替几个租户支着耳朵**（横幅要如实报这个数）。
+   *
+   * ⚠️ 它必须是**算出来的**、不是记出来的（2026-09-21 改）：租户通道多了
+   *    "按需开一条"这条路（`43-AUTO-PROVISION.md`）⇒ 谁要是在别处自己加个计数器，
+   *    横幅报的数与真实情况必然会漂 —— 而横幅正是主人开机看的那一眼。
+   */
+  get listeningCount() {
+    return this.#servers.size;
+  }
+
   /** 最近的状态（**不含 key**）。 */
   get recent() {
     return [...this.#seen];
