@@ -152,7 +152,66 @@ if grep -q '要以 root 跑' <<<"$out"; then ok "服务那个身份跑 ⇒ 拒";
 
 # ══════════════════════════════════════════════════════════════════
 echo
-echo "⑨ 这一趟**没有真建出任何租户**（判据脚本自己不许有副作用）"
+echo "⑨ 🔴 **两边推出来的名字/编号必须逐字相同**（A2 / T7）"
+# ══════════════════════════════════════════════════════════════════
+# ⚠️ 这一条验的是**跨语言**的一致：服务侧是 JS（`tenants.js`），
+#    特权侧是 shell（`create-tenant-users.sh`）。两边**读同一个模板文件**只保证
+#    "常数一样"，**不保证"公式一样"** —— 而"公式漂了"的表现是最难查的那种：
+#    容器起来了、服务却在听**另一个**通道。
+# ⇒ 所以这里**真的把那个 shell 脚本跑一遍**（只看模式），从它打出来的
+#    "用户 <名字>（uid <编号>）" 里把两个值抠出来，跟 JS 那边算的比。
+#
+# ⚠️ 只看模式 = 什么都不建（那正是 `create-tenant-users.sh` 不带 `--yes` 的行为）。
+NODE_BIN="${HUPO_NODE_BIN:-}"
+if [ -z "$NODE_BIN" ]; then
+  for c in /home/deploy/.nvm/versions/node/*/bin/node "$(command -v node 2>/dev/null || true)"; do
+    [ -x "$c" ] && NODE_BIN="$c" && break
+  done
+fi
+if [ -z "$NODE_BIN" ]; then
+  bad "找不到 node —— 跨语言那一条**没验**（不是过了）"
+else
+  for n in 3 8; do
+    # ① shell 那边：真跑脚本，抠出它打算建的名字与 uid
+    sh_out="$(HUPO_TENANT_USERS="$(sed -n "s/^[[:space:]]*name_prefix[[:space:]]*=[[:space:]]*//p" "$CONF" | head -1)$n" \
+               HUPO_TENANT_TEMPLATE="$CONF" bash "$ROOT/scripts/create-tenant-users.sh" 2>&1)"
+    sh_name="$(sed -n 's/^▶ 用户 \([^ ]*\)（uid [0-9]*）.*/\1/p' <<<"$sh_out" | head -1)"
+    sh_uid="$(sed -n 's/^▶ 用户 [^ ]*（uid \([0-9]*\)）.*/\1/p' <<<"$sh_out" | head -1)"
+    # ② JS 那边：用**真那份模块**算（不是在这儿再抄一遍公式）
+    js="$(cd "$ROOT/v2/services/core" && HUPO_TENANT_TEMPLATE="$CONF" "$NODE_BIN" --input-type=module -e "
+      import { readTenantTemplate, tenantNameFor, tenantUidFor } from './src/tenants.js';
+      const t = readTenantTemplate({ file: process.env.HUPO_TENANT_TEMPLATE });
+      console.log(tenantNameFor('u$n', t) + ' ' + tenantUidFor('u$n', t));
+    " 2>&1)"
+    js_name="${js%% *}"; js_uid="${js##* }"
+    if [ -z "$sh_name" ] || [ -z "$js_name" ]; then
+      bad "第 $n 号：有一边没算出来（shell='$sh_name/$sh_uid' js='$js_name/$js_uid'）"
+    elif [ "$sh_name" = "$js_name" ] && [ "$sh_uid" = "$js_uid" ]; then
+      ok "第 $n 号 ⇒ 两边都是 $sh_name / uid $sh_uid"
+    else
+      bad "🔴 第 $n 号**两边不一样**：shell=$sh_name(uid $sh_uid) js=$js_name(uid $js_uid)"
+    fi
+  done
+  # ⚠️ 负向对照：故意用一个**超上限**的编号 ⇒ 两边都该"推不出来"（不是各推各的）
+  max="$(sed -n 's/^[[:space:]]*max_tenants[[:space:]]*=[[:space:]]*//p' "$CONF" | head -1)"
+  over=$((max + 1))
+  js_over="$(cd "$ROOT/v2/services/core" && HUPO_TENANT_TEMPLATE="$CONF" "$NODE_BIN" --input-type=module -e "
+    import { readTenantTemplate, tenantNameFor } from './src/tenants.js';
+    const t = readTenantTemplate({ file: process.env.HUPO_TENANT_TEMPLATE });
+    console.log(String(tenantNameFor('u$over', t)));
+  " 2>&1)"
+  sh_over="$(HUPO_TENANT_USERS="$(sed -n "s/^[[:space:]]*name_prefix[[:space:]]*=[[:space:]]*//p" "$CONF" | head -1)$over" \
+             HUPO_TENANT_TEMPLATE="$CONF" bash "$ROOT/scripts/create-tenant-users.sh" 2>&1 | grep -c '不认识这个租户名' || true)"
+  if [ "$js_over" = "null" ] && [ "$sh_over" != "0" ]; then
+    ok "超上限（第 $over 号）⇒ **两边都拒**（JS 给 null、shell 说"不认识"）"
+  else
+    bad "超上限那一条两边不一致：js='$js_over' shell拒=$sh_over"
+  fi
+fi
+
+# ══════════════════════════════════════════════════════════════════
+echo
+echo "⑩ 这一趟**没有真建出任何租户**（判据脚本自己不许有副作用）"
 # ══════════════════════════════════════════════════════════════════
 if id hupo-t3 >/dev/null 2>&1; then
   bad "跑判据把 hupo-t3 建出来了 —— 这套判据有副作用"
