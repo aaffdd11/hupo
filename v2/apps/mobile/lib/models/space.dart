@@ -68,8 +68,6 @@ class SpaceInfo {
   /// 那正是项目最忌的"**看着在动、其实到不了**"。
   bool get full => state == 'full';
 
-  /// 还要不要接着自己问下去。**给不了的时候就不必再等了**（省电，也不给假希望）。
-  bool get keepsChanging => isTenant && !ready && !full;
 
   /// **宽容解析**：不是对象 / 缺字段 / 字段类型不对 ⇒ 一律退回"就绪的本机那种"。
   factory SpaceInfo.fromJson(Object? raw) {

@@ -83,4 +83,31 @@ void main() {
     expect(calls, 1, reason: '正常那一档的"动态"不许被上面那条改动碰坏');
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets('🔴 **正在现开一台**：说的是「会久一点」，**不是**「通常很快」', (tester) async {
+    // ⚠️ 这一条钉的是一句**会说假话的文案**：头一次开一台要建用户、装盒子
+    //    （几分钟），拿 waitingBody（"这一步通常很快"）去盖它就是在骗人。
+    await tester.pumpWidget(MaterialApp(
+      home: WaitingScreen(onRetry: () {}, provisioning: true, steps: const [
+        SpaceStep(step: 'assigned', done: true),
+        SpaceStep(step: 'starting', done: false),
+        SpaceStep(step: 'ready', done: false),
+      ]),
+    ));
+    expect(find.text(waitingProvisioning), findsOneWidget, reason: '🔴 要说明"头一次会久一点"');
+    expect(find.text(waitingBody), findsNothing, reason: '🔴 "通常很快"在这里是假话');
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('★ 对照：**已经建好、在等它连上来**（starting）还是那句「通常很快」', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: WaitingScreen(onRetry: () {}, steps: const [
+        SpaceStep(step: 'assigned', done: true),
+        SpaceStep(step: 'starting', done: false),
+      ]),
+    ));
+    expect(find.text(waitingBody), findsOneWidget);
+    expect(find.text(waitingProvisioning), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
 }

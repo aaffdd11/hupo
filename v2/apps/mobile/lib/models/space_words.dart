@@ -42,6 +42,15 @@ String waitingElapsedWords(int seconds) {
   return '已经等了 $m 分 ${s % 60} 秒';
 }
 const String waitingBody = '这一步通常很快。要是等久了，按下面那个按钮再看看。';
+
+/// **正在现开一台**（申请已被受理、那一台还没建出来）。
+///
+/// ⚠️ 为什么要单有一句：这一步要**建一个用户、装一台盒子**（头一次还要把镜像
+///    弄进去）—— 那是**几分钟**，不是"很快"。拿 `waitingBody`（"这一步通常很快"）
+///    去盖它，就是在**说假话**：用户等两分钟就开始怀疑是不是坏了。
+/// ⚠️ 而"已经建好了、在等它连上来"（`starting`）**确实**是很快的 —— 两句**不能混**。
+/// ⚠️ 不许出现内部词；一个百分号也不许有。
+const String waitingProvisioning = '头一次会久一点：这一台要现给你开出来。开着这一页等就行。';
 const String waitingRetry = '再看看';
 const String waitingStillLong = '还在开，比平常久了一点。没坏，再等一会儿就行。';
 const String waitingRetryFail = '刚才没问上。等会儿再按一次。';

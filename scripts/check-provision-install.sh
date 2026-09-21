@@ -297,7 +297,44 @@ fi
 
 # ══════════════════════════════════════════════════════════════════
 echo
-echo "⑨ 撤得干净（一条命令）"
+echo "⑨ 🔴 **三处路径必须一致**：服务（JS）写哪儿 · 助手看哪儿 · 单元里指哪儿"
+# ══════════════════════════════════════════════════════════════════
+# ⚠️ 为什么单立一条：这三处一旦有一处不一致，**整条路静默断掉** ——
+#    服务把申请投到一个没人看的目录 / 助手把标记写到服务看不见的地方，
+#    而**每一处单独看都是对的**。这与租户名那条（T7）是同一类病。
+NODE_BIN="${HUPO_NODE_BIN:-}"
+if [ -z "$NODE_BIN" ]; then
+  for c in /home/deploy/.nvm/versions/node/*/bin/node "$(command -v node 2>/dev/null || true)"; do
+    [ -x "$c" ] && NODE_BIN="$c" && break
+  done
+fi
+if [ -z "$NODE_BIN" ]; then
+  bad "找不到 node ⇒ 这一条**没验**（不是过了）"
+else
+  js="$(cd "$ROOT/v2/services/core" && "$NODE_BIN" --input-type=module -e "
+    import { DEFAULT_PROVISION_DIR, DEFAULT_FAILED_DIR } from './src/provision.js';
+    console.log(DEFAULT_PROVISION_DIR + ' ' + DEFAULT_FAILED_DIR);
+  " 2>&1)"
+  js_dir="${js%% *}"; js_state="${js##* }"
+  # 安装器在临时根下建的就是"默认那两个"，把临时根前缀去掉就是它的默认值
+  sh_dir="${req#"$TEST"}"; sh_state="${state#"$TEST"}"
+  [ "$js_dir" = "$sh_dir" ] \
+    && ok "投放口：JS 与安装器都是 $js_dir" \
+    || bad "🔴 投放口不一致：JS=$js_dir 安装器=$sh_dir"
+  [ "$js_state" = "$sh_state" ] \
+    && ok "标记目录：JS 与安装器都是 $js_state" \
+    || bad "🔴 标记目录不一致：JS=$js_state 安装器=$sh_state"
+  # 单元里那一条也必须指同一个（不然跑起来写去别处）
+  if grep -q "^Environment=HUPO_PROVISION_FAILED_DIR=$TEST$js_state$" "$svc" 2>/dev/null; then
+    ok "单元里的 HUPO_PROVISION_FAILED_DIR 也指它"
+  else
+    bad "单元里那一条没指对：$(grep 'FAILED_DIR' "$svc" 2>/dev/null || echo 无)"
+  fi
+fi
+
+# ══════════════════════════════════════════════════════════════════
+echo
+echo "⑩ 撤得干净（一条命令）"
 # ══════════════════════════════════════════════════════════════════
 bash "$INSTALLER" --uninstall --root "$TEST" >/dev/null 2>&1
 if [ ! -e "$LE" ] && [ ! -e "$CONF" ] && [ ! -e "$svc" ]; then
@@ -308,7 +345,7 @@ fi
 
 # ══════════════════════════════════════════════════════════════════
 echo
-echo "⑩ 🔴 **自证：这一趟在这台机器上什么都没多出来**（"隔离"要验它真的隔离了）"
+echo "⑪ 🔴 **自证：这一趟在这台机器上什么都没多出来**（"隔离"要验它真的隔离了）"
 # ══════════════════════════════════════════════════════════════════
 stray=0
 [ -e "$REAL_LIBEXEC" ] && { bad "多出来了：$REAL_LIBEXEC"; stray=1; }

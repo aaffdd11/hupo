@@ -27,6 +27,7 @@ class WaitingScreen extends StatefulWidget {
     this.steps = const [],
     this.queued = false,
     this.full = false,
+    this.provisioning = false,
     this.onRefresh,
   });
 
@@ -43,6 +44,11 @@ class WaitingScreen extends StatefulWidget {
 
   /// 我们自己这边还没给他开（那不是"马上就好"）。
   final bool queued;
+
+  /// **正在现开一台**（申请已受理、那一台还没建出来）。
+  /// ⚠️ 与"已经建好、在等它连上来"**分开**：那一步很快，这一步**不快**
+  ///    （要建用户、装盒子）⇒ 拿"很快"那句盖它是说假话。
+  final bool provisioning;
 
   /// 🔴 **给不了**（满了 / 那台没建成）。
   ///
@@ -104,7 +110,10 @@ class _WaitingScreenState extends State<WaitingScreen> {
     // ⚠️ 三句话**分开**：混用会让用户以为"它一直在稳步推进"，而事实可能是"根本没问上"
     final String note = widget.retryFailed
         ? waitingRetryFail
-        : (widget.askedTooLong ? waitingStillLong : waitingBody);
+        : (widget.askedTooLong
+            ? waitingStillLong
+            // ⚠️ **正在现开一台**用**它自己**那句（不是"通常很快"）——见 `waitingProvisioning`
+            : (widget.provisioning ? waitingProvisioning : waitingBody));
 
     return Scaffold(
       body: SafeArea(

@@ -150,6 +150,8 @@ class _HupoAppState extends State<HupoApp> {
                   // 🔴 **给不了**（满了 / 没建成）—— 那一档要在屏上明说，
                   //    而且要**停掉自问自答**（再问也不会有别的答案）。
                   full: (_space ?? const SpaceInfo()).full,
+                  // ★ **正在现开一台**：那一步不快（要建用户、装盒子）⇒ 说它自己那句
+                  provisioning: (_space ?? const SpaceInfo()).provisioning,
                   // ★ **它自己会问**（主人要的"动态"）：不用用户按"再看看"。
                   //   ⚠️ 问的是**真状态**（`/api/space`），不是编出来的进度。
                   onRefresh: () async {
