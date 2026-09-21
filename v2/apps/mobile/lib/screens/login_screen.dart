@@ -1,14 +1,25 @@
-// 登录页。文案是**手册 D2 的定稿**，一字不改。
+// 登录页：**手机号 + 验证码**（主人 2026-09-21：「登录不对，需要手机号和验证码」）。
 //
-// 为什么不改：那几句话是四个人吵出来的，每一句都有用户原话垫底——
-//   · 不说"能执行命令、能改自己的代码" → 03 读完**是害怕**
-//   · 不说"口令" → 用户上一次听到是"看电视里当兵的站岗"
-//   · 不说"进去/登录" → 没人读出"进门"，读出来的是"提交"
-//   · **"密码"** 可以用 → 微信/支付宝时代**已经学过**
-//   · **"打开"** 可以用 → 同样是学过的词
+// ── 为什么把"密码"整个拿掉 ─────────────────────────────────
+// 手册 `01-PROJECT.md` R4 那张表（逐条有用户原话垫底）：
+//   · **"口令"** 挡住 03（"我上一次听是看电视里当兵的站岗"）与
+//     **06（68 岁退休教师 —— "就在登录页"，第一天就放弃）**；
+//   · 而 03 的期望原话是"**微信抖音都是验证码**"。
+// ⇒ 手机号 + 验证码是**用户已经学过**的那一套，不用再学。
+//
+// ── 三条不许破 ────────────────────────────────────────────
+//   ① 🔴 **临时验证码必须如实说**（那一行小字）：现在没有短信，
+//      那个码谁都知道 —— 不说就是让用户以为这是真的短信验证（**说假话**）；
+//   ② 🔴 **四种失败四句话**：码不对 / 手机号不像 / 还没接短信 / 连不上。
+//      把它们混成一句"登录失败"，用户只会反复重输；
+//   ③ 不写死尺寸（D3.5）：字号走 `theme.textTheme`，整页能滚；
+//      命中区 ≥44（D3.6）。
+//
+// ⚠️ 文案全在 `models/login_words.dart`（那样才进得了禁用词硬闸）。
 
 import 'package:flutter/material.dart';
 
+import '../models/login_words.dart';
 import '../services/api.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -17,7 +28,7 @@ class LoginScreen extends StatefulWidget {
   final Api api;
   final void Function(String token) onLoggedIn;
 
-  /// 服务端说"还没设密码"时要**明说**——别让人在那儿瞎试。
+  /// 服务端说"这台机器还没设好"时要**明说**——别让人在那儿瞎试。
   final bool needsSetup;
 
   @override
@@ -25,24 +36,27 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _controller = TextEditingController();
+  final _phone = TextEditingController();
+  final _code = TextEditingController();
   bool _busy = false;
   String? _error;
 
   @override
   void dispose() {
-    _controller.dispose();
+    _phone.dispose();
+    _code.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
-    final pw = _controller.text;
-    if (pw.isEmpty || _busy) return;
+    final phone = _phone.text.trim();
+    final code = _code.text.trim();
+    if (phone.isEmpty || code.isEmpty || _busy) return;
     setState(() {
       _busy = true;
       _error = null;
     });
-    final r = await widget.api.login(pw);
+    final r = await widget.api.loginWithCode(phone, code);
     if (!mounted) return;
     setState(() => _busy = false);
 
@@ -50,16 +64,19 @@ class _LoginScreenState extends State<LoginScreen> {
       widget.onLoggedIn(r.token!);
       return;
     }
-    // ⚠️ 四种失败说四句不同的话。笼统一句"登录失败"等于什么都没说。
     setState(() {
-      _error = r.wrongPassword
-          ? '密码不对，再试一次'
-          : r.lockedSec != null
-              ? '试得太频繁，${(r.lockedSec! / 60).ceil()} 分钟后再试'
-              : r.networkError != null
-                  // ★ 手册 D2：连不上**不是**"你密码错了"——网回来自己就好了
-                  ? '连不上，你还登着，网回来自己进'
-                  : '出了点问题：${r.other ?? '再试一次'}';
+      _error = r.wrongCode
+          ? loginErrCode
+          : r.badPhone
+              ? loginErrPhone
+              : r.noSms
+                  ? loginErrNoSms
+                  : r.lockedSec != null
+                      ? '$loginErrLockedPrefix${(r.lockedSec! / 60).ceil()}$loginErrLockedSuffix'
+                      : r.networkError != null
+                          // ★ 手册 D2：连不上**不是**"你输错了"——网回来自己就好了
+                          ? loginErrNetwork
+                          : '出了点问题：${r.other ?? '再试一次'}';
     });
   }
 
@@ -79,21 +96,27 @@ class _LoginScreenState extends State<LoginScreen> {
               children: [
                 Text('助手', style: theme.textTheme.headlineMedium, textAlign: TextAlign.center),
                 const SizedBox(height: 16),
-                Text(
-                  '你说的事它真会去做，不只是陪聊。\n所以这道门只有你能开。',
-                  style: theme.textTheme.bodyLarge,
-                  textAlign: TextAlign.center,
-                ),
+                Text(loginPromise, style: theme.textTheme.bodyLarge, textAlign: TextAlign.center),
                 const SizedBox(height: 28),
                 TextField(
-                  controller: _controller,
-                  obscureText: true,
+                  controller: _phone,
+                  keyboardType: TextInputType.phone,
                   autofocus: true,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    labelText: loginPhoneLabel,
+                    helperText: loginPhoneHint,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _code,
+                  keyboardType: TextInputType.number,
                   onSubmitted: (_) => _submit(),
                   decoration: const InputDecoration(
                     border: OutlineInputBorder(),
-                    labelText: '密码',
-                    helperText: '装机器时给你的那一串',
+                    labelText: loginCodeLabel,
+                    helperText: loginCodeHint,
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -101,16 +124,12 @@ class _LoginScreenState extends State<LoginScreen> {
                   // 触控目标 ≥44
                   style: FilledButton.styleFrom(minimumSize: const Size(48, 52)),
                   onPressed: _busy ? null : _submit,
-                  child: Text(_busy ? '正在开…' : '打开'),
+                  child: Text(_busy ? loginBusy : loginSubmit),
                 ),
                 if (widget.needsSetup) ...[
                   const SizedBox(height: 16),
                   // 不许让人瞎试——服务端明说了就明说
-                  Text(
-                    '这台机器还没设密码。\n在机器上跑一次设置命令，再回来打开。',
-                    style: theme.textTheme.bodySmall,
-                    textAlign: TextAlign.center,
-                  ),
+                  Text(loginNeedsSetup, style: theme.textTheme.bodySmall, textAlign: TextAlign.center),
                 ],
                 if (_error != null) ...[
                   const SizedBox(height: 16),
@@ -121,11 +140,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ],
                 const SizedBox(height: 24),
-                Text(
-                  '忘了密码？在机器上重设一次就行。',
-                  style: theme.textTheme.bodySmall,
-                  textAlign: TextAlign.center,
-                ),
+                // ⚠️ 如实说（见文件头 ①）：这不是短信验证，是临时码
+                Text(loginTempCodeNote, style: theme.textTheme.bodySmall, textAlign: TextAlign.center),
               ],
             ),
           ),

@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
+import 'package:hupo_app/models/login_words.dart';
 import 'package:hupo_app/models/notice_words.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/process_words.dart';
@@ -72,7 +73,22 @@ void main() {
       '这台机器还没设密码',
       // 它忙不过来（内存准入闸拒的）——首页那句人话
       '它现在忙不过来，过一会儿再发一次',
-      '忘了密码？在机器上重设一次就行。',
+      // ⚠️ 登录那一屏（2026-09-21 改成手机号 + 验证码）——**直接引数据源**
+      loginPromise,
+      loginPhoneLabel,
+      loginPhoneHint,
+      loginCodeLabel,
+      loginCodeHint,
+      loginSubmit,
+      loginBusy,
+      loginTempCodeNote,
+      loginErrCode,
+      loginErrPhone,
+      loginErrNoSms,
+      loginErrNetwork,
+      loginErrLockedPrefix,
+      loginErrLockedSuffix,
+      loginNeedsSetup,
       '记一笔账、问一件事、让它去查个东西。',
       '它会把做过的事说给你听。',
       // ⚠️ 批 3 过程四档（D7）新增的那几句：切换入口的标题、

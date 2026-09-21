@@ -99,6 +99,34 @@ class Api {
   }
 
   /// 登录。**成功返回令牌，密码错返回 null**，其余抛。
+  /// **手机号 + 验证码**（契约 `docs/dev/37-MULTITENANT.md` §三/§六）。
+  ///
+  /// ⚠️ 现在就一种码：服务端的**临时码**（默认是关的）。所以
+  ///    "码不对" 与 "还没接短信" 必须**分开说** —— 混成一句，用户会一直重输。
+  Future<LoginResult> loginWithCode(String phone, String code) async {
+    try {
+      final r = await _c
+          .post(_u('/api/login'), headers: _json, body: jsonEncode({'phone': phone, 'code': code}))
+          .timeout(const Duration(seconds: 10));
+      if (r.statusCode == 200) {
+        final j = jsonDecode(r.body) as Map;
+        return LoginResult(token: j['token'] as String?);
+      }
+      if (r.statusCode == 503) {
+        return const LoginResult(noSms: true);
+      }
+      if (r.statusCode == 400) return const LoginResult(badPhone: true);
+      if (r.statusCode == 401) return const LoginResult(wrongCode: true);
+      if (r.statusCode == 429) {
+        final j = jsonDecode(r.body) as Map;
+        return LoginResult(lockedSec: (j['retryAfterSec'] as num?)?.toInt() ?? 0);
+      }
+      return LoginResult(other: 'HTTP ${r.statusCode}');
+    } catch (e) {
+      return LoginResult(networkError: '$e');
+    }
+  }
+
   Future<LoginResult> login(String password) async {
     try {
       final r = await _c
@@ -497,9 +525,27 @@ enum TokenProbe { ok, unauthorized, notSetup, unknown }
 
 /// 登录结果。四种情况**分清楚**——对用户说的话完全不同。
 class LoginResult {
-  const LoginResult({this.token, this.wrongPassword = false, this.lockedSec, this.other, this.networkError});
+  const LoginResult({
+    this.token,
+    this.wrongPassword = false,
+    this.wrongCode = false,
+    this.noSms = false,
+    this.badPhone = false,
+    this.lockedSec,
+    this.other,
+    this.networkError,
+  });
   final String? token;
   final bool wrongPassword;
+
+  /// 验证码不对（**和"码过期了"是两件事** —— 现在只有临时码，所以只可能是"输错了"）
+  final bool wrongCode;
+
+  /// 服务端说"还没接短信"（临时码没开）—— ⚠️ **不许把它说成"码错了"**
+  final bool noSms;
+
+  /// 手机号看着不像手机号（11 位、1 开头）
+  final bool badPhone;
   final int? lockedSec;
   final String? other;
   final String? networkError;
