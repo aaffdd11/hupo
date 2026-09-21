@@ -11,6 +11,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/export.dart';
+import '../models/space.dart';
 import '../models/trash.dart';
 
 /// 说话的结果。**把"为什么没成功"分清楚**——
@@ -193,6 +194,52 @@ class Api {
       };
     } catch (_) {
       return TokenProbe.unknown; // 网的问题 ⇒ 值得重试
+    }
+  }
+
+  /// **我那台到哪一步了**（契约 `38` §8.3：等待屏 / 填钥匙屏靠它）。
+  ///
+  /// ⚠️ **问不到就当"就绪"**（`SpaceInfo()` 的默认值）—— 网抖一下不该把人
+  ///    永久挡在"正在给你开空间"那一屏上（那比"进聊天然后发现没数据"更糟）。
+  Future<SpaceInfo> space(String token) async {
+    try {
+      final r = await _c
+          .get(_u('/api/space'), headers: {'authorization': 'Bearer $token'})
+          .timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) return const SpaceInfo();
+      return SpaceInfo.fromJson(jsonDecode(r.body));
+    } catch (_) {
+      return const SpaceInfo(); // 认不出来 / 问不到 ⇒ 按就绪
+    }
+  }
+
+  /// **把我自己那串钥匙送过去**（只送到他自己那一台）。
+  ///
+  /// ⚠️ 返回的是**四种失败分开的**结果（空白 / 字符不对 / 太长 / 没送过去）——
+  ///    混成一句用户会一直重试（`space_words.dart` 里那四句就是为此）。
+  /// ⚠️ **客户端不做它的裁判**：像不像钥匙由上游说了算，这里只挡"明摆着的坏输入"。
+  Future<KeySend> setModelKey(String token, String key) async {
+    final k = key.trim();
+    if (k.isEmpty) return KeySend.blank;
+    if (k.length > 4096) return KeySend.tooLong;
+    if (RegExp(r'[^\x20-\x7e]').hasMatch(k)) return KeySend.badChars;
+    try {
+      final r = await _c
+          .post(
+            _u('/api/model-key'),
+            headers: {'content-type': 'application/json', 'authorization': 'Bearer $token'},
+            body: jsonEncode({'key': k}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (r.statusCode == 200) return KeySend.ok;
+      if (r.statusCode == 400) {
+        final e = (jsonDecode(r.body) as Map)['error'];
+        if (e == 'blank-key') return KeySend.blank;
+        if (e == 'bad-key-chars') return KeySend.badChars;
+      }
+      return KeySend.failed;
+    } catch (_) {
+      return KeySend.failed;
     }
   }
 
@@ -552,3 +599,6 @@ class LoginResult {
 
   bool get ok => token != null;
 }
+
+/// 送钥匙的结果。**四种失败分开**（混成一句用户会一直重试）。
+enum KeySend { ok, blank, badChars, tooLong, failed }

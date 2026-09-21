@@ -31,6 +31,8 @@ import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/screens/landing_screen.dart';
 import 'package:hupo_app/screens/login_screen.dart';
+import 'package:hupo_app/screens/model_key_screen.dart';
+import 'package:hupo_app/screens/waiting_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
@@ -344,6 +346,17 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '登录页在 ${s}x 溢出了');
       });
 
+      testWidgets('等待那屏（"正在给你开一个只属于自己的空间"）@ ${s}x', (tester) async {
+        // ⚠️ 多租户新加的两屏 ⇒ 必须也过五档不溢出（同第一屏 / 登录页那条理由）
+        await _pump(tester, WaitingScreen(onRetry: () {}), s);
+        expect(_drain(tester), isEmpty, reason: '等待那屏在 ${s}x 溢出了');
+      });
+
+      testWidgets('填钥匙那屏 @ ${s}x', (tester) async {
+        await _pump(tester, ModelKeyScreen(onSubmit: (_) async => KeySend.ok), s);
+        expect(_drain(tester), isEmpty, reason: '填钥匙那屏在 ${s}x 溢出了');
+      });
+
       testWidgets('主界面 @ ${s}x（满内容 + 那行"它正在做…"）', (tester) async {
         final c = _controller();
         _stuff(c.timeline);
@@ -537,6 +550,17 @@ void main() {
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
         await _openAbout(tester, s);
         await sweep(tester, '关于页 @${s}x');
+      });
+
+      testWidgets('等待那屏 @ ${s}x', (tester) async {
+        // ⚠️ 新加的屏也要进这份扫描 —— 不然"再看看"那个按钮没人守着命中区 ≥44
+        await _pump(tester, WaitingScreen(onRetry: () {}), s);
+        await sweep(tester, '等待那屏 @${s}x');
+      });
+
+      testWidgets('填钥匙那屏 @ ${s}x', (tester) async {
+        await _pump(tester, ModelKeyScreen(onSubmit: (_) async => KeySend.ok), s);
+        await sweep(tester, '填钥匙那屏 @${s}x');
       });
 
       testWidgets('回收站页（从真入口进）@ ${s}x', (tester) async {

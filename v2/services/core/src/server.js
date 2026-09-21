@@ -235,6 +235,14 @@ export function createServer({
   /** `userId → 租户名`；不在表里的（例如主人）走**本机**那条路。 */
   tenantOf = () => null,
   /**
+   * **这个人的空间到哪一步了**（契约 `38-ISOLATION-SPLIT.md` §8.3）。
+   *
+   * 返回 `{kind:'local'}`（主人：本机那份、直接聊）
+   * 或 `{kind:'tenant', state:'preparing'|'ready', hasKey:boolean}`。
+   * ⚠️ **取不到就当"就绪"**（老客户端没有这个字段也能用 —— 兼容那条纪律）。
+   */
+  tenantStatusOf = () => ({ kind: 'local' }),
+  /**
    * **用户填了自己的模型凭据**（多租户 ②-4b）。`null` = 这台部署没开这条路（路由 404）。
    *
    * ⚠️ 约定：`setModelKey(userId, key)`，返回值里**不含 key**；调用方**不许**把它写日志。
@@ -338,6 +346,12 @@ export function createServer({
       // ⚠️ 回收站里那些**不算进来**，但**条数要如实报**（契约 §三）——
       //    `trash.list()` 是唯一知道"谁被删过"的地方，所以这道闸打在这儿。
       // ⚠️ 没开回收站的部署也照样导得出（只是没有"被删掉的那几条"要报）。
+      // ── "我的空间到哪一步了"（契约 `38` §8.3：等待屏靠它）──────────────
+      // ⚠️ **只读**、**不带 key**、**不分配任何隧道**（探测不许有副作用）。
+      if (path === '/api/space' && req.method === 'GET') {
+        return sendJson(res, 200, tenantStatusOf(claim.sub));
+      }
+
       // ── 用户填自己的模型凭据（多租户 ②-4b）──────────────────────────
       // ⚠️ **身份只从令牌来**（`claim.sub`）：A 填的 key 只能进 A 那台容器。
       // ⚠️ 回执里**不带 key**，也**不校验它长得像不像 key**（我们不是它的裁判，
@@ -534,7 +548,16 @@ export function createServer({
       auth.recordLoginSuccess(ip);
       try {
         const { token, expiresAt } = auth.issue({ sub: who.id });
-        return sendJson(res, 200, { token, expiresAt, isNew: who.created });
+        // ★ 登录回执**带上"他那台到哪一步了"**（`38` §8.3）：
+        //   客户端靠它决定"进聊天"还是"先看等待屏 / 填 key 屏"。
+        //   ⚠️ 这是个**新增字段**：老客户端不认识它 ⇒ **缺字段按"就绪"兼容**
+        //      （所以不认识它的客户端行为**逐字不变**）。
+        return sendJson(res, 200, {
+          token,
+          expiresAt,
+          isNew: who.created,
+          space: tenantStatusOf(who.id),
+        });
       } catch (err) {
         // ⚠️ 这台机器还没设过口令 ⇒ `issue()` 会拒绝（fail-closed）。**如实说**。
         return sendJson(res, 503, { error: 'not-setup', text: String(err?.message ?? err) });

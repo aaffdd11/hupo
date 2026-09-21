@@ -249,6 +249,16 @@ const { listen, listenTrusted, close } = createServer({
   devCode: cfg.devCode,
   setModelKey,
   tenantOf,
+  // ⚠️ **只查不发**（`hasTunnel` 没有副作用）；主人那种没有容器的 ⇒ `kind:'local'`
+  tenantStatusOf: (userId) => {
+    const tenant = tenantOf(userId);
+    if (!tenant) return { kind: 'local' };
+    return {
+      kind: 'tenant',
+      state: channel.hasTunnel(tenant) ? 'ready' : 'preparing',
+      hasKey: tenantKeys.has(userId),
+    };
+  },
   // ⚠️ 隧道没通时返回 `null`（调用方**如实回 503**，不许假装通了）
   proxyFor: (tenant) => channel.openSocket(tenant),
   log: (m) => console.log(m),

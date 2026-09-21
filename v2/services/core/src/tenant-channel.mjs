@@ -292,6 +292,15 @@ export class TenantChannel {
     return sock;
   }
 
+  /**
+   * **那个租户的隧道通着吗**（只查，**不分配**隧道 id）。
+   * ⚠️ 别拿 `openSocket()` 去当探测：它**有副作用**（分配 id、发一帧 `open`）。
+   */
+  hasTunnel(userId) {
+    const set = this.#tunnelConns.get(userId);
+    return Boolean(set && set.size > 0);
+  }
+
   /** 有几个租户的隧道通着（给横幅/排障用）。 */
   get tunnelCount() {
     return this.#tunnelConns.size;

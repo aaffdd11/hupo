@@ -7,6 +7,8 @@
 // 于是网络抖一下就把人踢回登录页。06 那类用户的后果是
 // **每 30 天要打一次电话求助**——而手册 D2 的红线正是这个。
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'models/forbidden_words.dart';
@@ -14,6 +16,9 @@ import 'screens/chat_screen.dart';
 import 'screens/landing_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/api.dart';
+import 'models/space.dart';
+import 'screens/model_key_screen.dart';
+import 'screens/waiting_screen.dart';
 import 'services/chat_controller.dart';
 import 'services/token_store.dart';
 
@@ -32,6 +37,15 @@ class _HupoAppState extends State<HupoApp> {
   final _api = Api();
   final _tokens = TokenStore();
   ChatController? _controller;
+
+  /// **"我那台到哪一步了"**（契约 `38` §8.3）。`null` = 还没问过（按就绪处理）。
+  SpaceInfo? _space;
+
+  /// 刚把钥匙填完（还没等下一次问回来）—— 这一刻**不许**把人退回填钥匙那一屏。
+  bool _keySent = false;
+
+  /// 正在问"到哪一步了"。
+  bool _askingSpace = false;
   bool _booting = true;
   bool _needsSetup = false;
   /// 未登录时的**两屏**：先 landing（说清它是什么），点"开始用"才进登录页。
@@ -60,6 +74,8 @@ class _HupoAppState extends State<HupoApp> {
         //    令牌一个字节都不会清（B1）。
         onUnauthorized: _onLoggedOut,
       )..start(token: token);
+      // ⚠️ 冷启动那条路也要问（不然"上次还没开好"的人这次会直接看到聊天界面）
+      unawaited(_askSpace(token));
     }
     if (mounted) setState(() => _booting = false);
   }
@@ -73,6 +89,35 @@ class _HupoAppState extends State<HupoApp> {
         onUnauthorized: _onLoggedOut,
       )..start(token: token);
     });
+    // ★ 登录之后**问一次"到哪一步了"**（`38` §8.3）——
+    //   ⚠️ **不 await、不挡登录**：登录该立刻算成功，这一问晚一点回来也行
+    //     （问不到就当就绪，见 `SpaceInfo.fromJson` 那条兼容纪律）。
+    unawaited(_askSpace(token));
+  }
+
+  /// 问一次"我那台到哪一步了"。⚠️ **问不到不抛、不改状态**（保持上一次的结论）。
+  Future<void> _askSpace(String token) async {
+    if (_askingSpace) return;
+    _askingSpace = true;
+    try {
+      final s = await _api.space(token);
+      if (!mounted) return;
+      setState(() => _space = s);
+    } finally {
+      _askingSpace = false;
+    }
+  }
+
+  /// 把钥匙送过去，然后**再问一次**（问回来才是真的算数）。
+  Future<KeySend> _sendKey(String key) async {
+    final token = await _tokens.read();
+    if (token == null) return KeySend.failed;
+    final r = await _api.setModelKey(token, key);
+    if (r == KeySend.ok && mounted) {
+      setState(() => _keySent = true); // 先放他进去（他自己刚填完）
+      await _askSpace(token); // 再问一次，拿服务端的话为准
+    }
+    return r;
   }
 
   void _onLoggedOut() {
@@ -96,7 +141,17 @@ class _HupoAppState extends State<HupoApp> {
       ),
       home: _booting
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
-          : _controller != null
+          : _controller != null && spaceScreenFor(_space ?? const SpaceInfo(), keySent: _keySent) == SpaceScreen.waiting
+              ? WaitingScreen(
+                  busy: _askingSpace,
+                  onRetry: () async {
+                    final t = await _tokens.read();
+                    if (t != null) await _askSpace(t);
+                  },
+                )
+              : _controller != null && spaceScreenFor(_space ?? const SpaceInfo(), keySent: _keySent) == SpaceScreen.key
+                  ? ModelKeyScreen(onSubmit: _sendKey)
+                  : _controller != null
               ? ChatScreen(controller: _controller!, onLoggedOut: _onLoggedOut)
               : _showLogin
                   ? LoginScreen(api: _api, needsSetup: _needsSetup, onLoggedIn: _onLoggedIn)
