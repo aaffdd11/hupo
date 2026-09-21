@@ -165,7 +165,14 @@ for (const w of worlds.all()) {
 //    **写盘本身失败**时退回瞬态，而那句瞬态**自己说清**"这条我没能记下来"
 //    （契约 §三①：例外不许伪装成正常）。
 let crashNotice = null;
-if (boot.uncleanLastRun && reconciled.told === 0) {
+// 🔴 **只有在"真的打断了什么"的时候才说**（2026-09-21 主人报的一个真问题）：
+//    原来只判 `uncleanLastRun` ⇒ **无事也报**。现象是主人**一登录**就看见
+//    "刚才出了点事，我已经重来了" —— 他刚进来、什么都没说，那句话读起来像
+//    "你刚才说的那条我还没做好"（而它其实在报告"上一次进程是怎么没的"）。
+//    ⚠️ 这违反项目自己的 **R1.2「通知疲劳」**：没有被打断的事，就不该打扰人；
+//       **真的打断了**（`reconciled.total > 0`）时，对账那一路**本来就会说**
+//       （`told > 0`），所以这一条只在"有东西没收口、但对账没来得及说"时补位。
+if (boot.uncleanLastRun && reconciled.told === 0 && reconciled.total > 0) {
   try {
     crashNotice = notice.noticeOrUrgent({ kind: 'crash' });
   } catch (err) {
