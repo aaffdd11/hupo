@@ -17,6 +17,17 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
   return {
     // ── 服务 ──
     port: Number.parseInt(env.HUPO_PORT ?? '8020', 10),
+
+    /**
+     * 监听地址。**默认 `127.0.0.1`——这一条不许松。**
+     *
+     * ⚠️ 唯一该改成 `0.0.0.0` 的场合：**服务跑在容器里**（租户那台）。
+     *    容器内的 `0.0.0.0` 不等于对外——对外那一层是宿主上的端口映射，
+     *    而**那个必须只绑 `127.0.0.1`**（实测：容器够得着宿主 `0.0.0.0` 的服务，
+     *    所以一旦把租户的口开在 `0.0.0.0`，甲那台就能连乙那台）。
+     * ⚠️ 在宿主上把它设成 `0.0.0.0` = **把服务直接递给整个局域网**，横幅会大声喊。
+     */
+    host: env.HUPO_HOST ?? '127.0.0.1',
     dataDir,
     webRoot: env.HUPO_WEB ?? nodePath.resolve(cwd, 'web'),
     buildId: env.HUPO_BUILD_ID ?? 'dev',

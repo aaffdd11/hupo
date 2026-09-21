@@ -300,11 +300,18 @@ if (reconciled.resume) {
 if (reconciled.noticed) console.log(`  🔔 已通知   ${reconciled.noticed}（时间线里有一条）`);
 if (crashNotice) console.log('  🔔 已通知   crash（时间线里有一条）');
 
-const addr = await listen(cfg.port, '127.0.0.1');
+const addr = await listen(cfg.port, cfg.host);
 
 // 启动横幅**报告状态**，不喊口号（手册 §11.4）
 console.log('── 琥珀 · 调度器（v2）────────────────────────');
-console.log(`  监听     127.0.0.1:${addr.port}   （对外走 VPS 的 stcp 隧道）`);
+console.log(
+  cfg.host === '127.0.0.1'
+    ? `  监听     127.0.0.1:${addr.port}   （对外走 VPS 的 stcp 隧道）`
+    // ⚠️ 绑到 0.0.0.0 只有一种正当场合：**服务跑在容器里**。
+    //    在宿主上这么干 = 把服务递给整个局域网 ⇒ 必须**大声**说出来（不许静默）。
+    : `  ⚠️ 监听     ${cfg.host}:${addr.port} —— **不是回环**！` +
+      `只有"服务跑在容器里"才该这样；在宿主上这是把服务递给了整个局域网。`,
+);
 console.log(`  数据     ${cfg.dataDir}`);
 console.log(`  界面     ${webRoot ?? '（没有 web 产物，只服务 API）'}`);
 console.log(`  构建     ${cfg.buildId}`);
