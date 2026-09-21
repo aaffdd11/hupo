@@ -13,7 +13,7 @@
 //   （手册事故一：那行"还有件事在处理"挂了 68 分钟）。
 
 import { RECAP_DEFAULTS, buildRecap } from './recap.js';
-import { TurnTranslator } from './session-translate.js';
+import { TurnTranslator, isAuthFailure } from './session-translate.js';
 
 /**
  * 这几句是**用户能看到的**（落盘、上时间线）。所以它们必须是人话，
@@ -45,6 +45,8 @@ export class Dispatcher {
   /** 已经挂过监听的那个实例。**永不清空**——见 `#ensureAgent()`。 */
   #wiredAgent = null;
   #lastError = null;
+  /** 见构造参数 `onAuthFailure`。 */
+  #onAuthFailure = null;
   #recapFedTo = null;
   #lastRecap = null;
   /** turn → 计时器。一轮一个，所以"后一轮开始把前一轮的计时器顶掉"不会丢东西。 */
@@ -105,6 +107,14 @@ export class Dispatcher {
   constructor({
     timeline,
     runtime,
+    /**
+     * 🔴 **上游说"钥匙不对"时叫一声**（可选）。
+     *
+     * ⚠️ 为什么需要它：钥匙**填错了**的用户，得**能重新填** ——
+     *    而客户端只有在"这台没有钥匙"时才进得去那一屏。
+     *    ⇒ 宿主收到这一声就把那一把标成"用不了"，`hasKey` 随之变回 `false`。
+     */
+    onAuthFailure = null,
     scopeId = null,
     /** agent 进程池的键。默认退回 `timeline.id`（单租户时就是 `'main'`）。多租户**必须传**。 */
     agentKey = null,
@@ -127,6 +137,7 @@ export class Dispatcher {
     this.#recapOptions = { ...RECAP_DEFAULTS, ...recap };
     this.#turnDeadlineMs = turnDeadlineMs;
     this.#notice = notice;
+    this.#onAuthFailure = onAuthFailure;
     this.#translator = new TurnTranslator({ timeline, scopeId, notice });
 
     // 超时硬收口：轮的起讫从翻译层来（它才知道"这一轮开始了没有"）
@@ -354,6 +365,17 @@ export class Dispatcher {
 
     agent.on('session-event', (params) => {
       try {
+        // ★ **上游说"钥匙不对"**（`44-CONTAINER-MODEL-KEY.md` §六）：
+        //   这件事**只有这一层看得见**（`turn/end.reason.error.code === 'AUTH'`），
+        //   而"把那一把标成用不了、让用户能重新填"要宿主去做 ⇒ 回调一次。
+        //   ⚠️ 回调**不许**把这一轮带走（它只是记账），所以吞掉它的异常。
+        if (isAuthFailure(params?.event?.data)) {
+          try {
+            this.#onAuthFailure?.();
+          } catch {
+            /* 回调失败不影响收口 */
+          }
+        }
         this.#translator.handle(params);
       } catch (err) {
         // 翻译层抛错不该把 agent 打死；但**必须报出来**（不许静默吞）
@@ -382,6 +404,11 @@ export class Dispatcher {
       // 排队里那些话也跟着这个进程一起没了 —— 逐条收口（和超时那条路同一个道理）
       this.#closeUndelivered('failed');
       this.#lastError = info?.reason ?? 'agent 退出了';
+      // 🔴 **要有人看得见**（2026-09-21 修）：`#lastError` 原来只是**存着**，
+      //    没有任何地方打印 ⇒ 盒子里"agent 死了"这件事在日志上**完全静默**，
+      //    而用户那一侧只看到一句"这条我没说完就断了"。
+      //    ⇒ 排查的人（今天的我）在容器日志里**一行线索都没有**。
+      console.error(`[dispatcher] agent 退了：${this.#lastError}`);
       this.#timeline.emitTransient({ type: 'error', kind: 'agent-exit', text: AGENT_LOST_LINE });
     });
 

@@ -233,12 +233,19 @@ Type=simple
 #    超时是防"宿主服务一直没起来"时在这里无限等（等不到就让 systemd 重试，
 #    重试链上有 Restart=on-failure 顶着）。
 ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'until [ -S $chan ]; do sleep 1; done'
+# ⚠️ **`/tmp` 的 `mode=1777` 不能省**（2026-09-21 真机抓到的）：
+#    不写它的时候盒里 `/tmp` 是 `775 root` ⇒ **uid 1000（agent）写不进去**
+#    ⇒ dsh 起手就报 `EACCES: permission denied, mkdtemp '/tmp/dsh-spill-XXXXXX'`
+#    （它要一个临时目录来放"溢出到磁盘"的东西）。
+#    现象同样极难查：界面上只是"它不理我"。
 # ⚠️ **`--replace` 不能省**（2026-09-21 实测）：systemd 重启时先把旧的 SIGTERM 掉，
 #    而 `--rm` **不保证**把那个停下来的容器清掉 ⇒ 下一次 `podman run --name` 直接报
 #    "the container name ... is already in use"（**退出码 125**），
 #    现象是"容器起不来，但上一次的日志是好的"。
 ExecStart=/usr/bin/podman run --replace --rm --name hupo-tenant-$u \
-  --read-only --tmpfs /tmp --tmpfs /run/hupo:rw,nosuid,nodev,mode=0700 \
+  --read-only \
+  --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+  --tmpfs /run/hupo:rw,nosuid,nodev,mode=0700 \
   -v $vol:/data \
   -v $(dirname $chan):/run/hupo-host \
   --security-opt=no-new-privileges \

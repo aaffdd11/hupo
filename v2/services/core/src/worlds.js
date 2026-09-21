@@ -60,6 +60,8 @@ export class Worlds {
   #warn;
   /** 这台部署开不开回收站。**关掉时 `world.trash` 是 `null`**（路由一律 404）。 */
   #wantTrash;
+  /** 见构造参数 `onAuthFailure`（上游说"钥匙不对"时叫一声）。 */
+  #onAuthFailure = null;
   /** userId → 世界 */
   #worlds = new Map();
   /** agentKey → userId（`onEvict` 回来时要知道该找谁收口） */
@@ -85,6 +87,8 @@ export class Worlds {
     warn = (m) => console.warn(m),
     trash = true,
     now = Date.now,
+    /** 见 `Dispatcher` 的同名参数：上游说"钥匙不对"时叫一声。 */
+    onAuthFailure = null,
   }) {
     if (!cfg) throw new Error('Worlds 需要 cfg');
     if (!runtime) throw new Error('Worlds 需要 runtime（agent 那个进程池）');
@@ -95,6 +99,11 @@ export class Worlds {
     this.#warn = warn;
     this.#wantTrash = trash;
     this.#now = now;
+    // ⚠️ **这一行原来漏了**（2026-09-21）：参数加了、往下传的那一行也加了，
+    //    就是**没存下来** ⇒ `#onAuthFailure` 永远是 `null` ⇒ 整条链子静默断掉。
+    //    而两条单测都是**直接打 `Dispatcher`** 的 ⇒ **全绿**。
+    //    ⇒ 教训：接线的每一段都要有一条闸**从外面**打进来（见下面那条 Worlds 级的用例）。
+    this.#onAuthFailure = onAuthFailure;
     this.#makeTrash = (o) => new Trash(o);
   }
 
@@ -216,6 +225,8 @@ export class Worlds {
     const dispatcher = new Dispatcher({
       timeline,
       runtime: this.#runtime,
+      // ⚠️ 回调里带的是**这个人**（每个世界各一份调度器 ⇒ 不用再传 userId）
+      onAuthFailure: this.#onAuthFailure ? () => this.#onAuthFailure(t.userId) : null,
       // ⚠️ 协议字段照旧（`main`）：它是写到事件里的，盘上已有的事件也是它
       scopeId: 'main',
       // 🔴 进程池的键**按人不同** —— 就是这一条在修"甲说的话进乙的窗口"

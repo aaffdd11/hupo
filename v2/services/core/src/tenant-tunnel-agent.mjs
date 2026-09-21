@@ -35,6 +35,54 @@ const CHUNK = 32 * 1024;
  * @param {string} [o.localTarget]
  * @param {(m:string)=>void} [o.log]
  */
+/**
+ * 🔴 **给"盒子里的服务"一个能跟宿主说句话的口子**（2026-09-21 加）。
+ *
+ * 为什么需要它：`turn/end` 里那句 `code:'AUTH'`（钥匙不对）**只有容器里的
+ * 调度器看得见** —— 而"把那一把标成用不了、让用户能重新填"这件事**得宿主做**
+ * （用户那一屏问的是宿主）。没有这个口子，容器知道了也没处说。
+ *
+ * ⚠️ 它**只在容器里**有用（宿主上那条隧道根本没起 ⇒ `liveSend` 是 `null`）。
+ * ⚠️ 发出去的东西**不含任何凭据**：这里只说"那一把不灵了"。
+ */
+let liveSend = null;
+/** 见 `dropTunnel()`。 */
+let liveDrop = null;
+
+/**
+ * 往宿主那条通道上说一句（不在隧道里、或对面断了 ⇒ 返回 `false`，**不抛**）。
+ * @param {object} obj
+ * @returns {boolean} 说出去了没有
+ */
+export function notifyHost(obj) {
+  if (!liveSend) return false;
+  try {
+    liveSend(obj);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * **把隧道掐一下让它重连**（2026-09-21 加）。
+ *
+ * 为什么要它：`notifyHost` 是**一次性**的（连接恰好在重连就**丢了** ——
+ * 实测栽过一次：容器日志说"我告诉宿主了"，而宿主**什么都没收到**）。
+ * 而"这一台现在到底有没有钥匙"这件事**每次重连都会自报一遍**
+ * （`tunnel-ready.hasKey`）—— 那是一条**一定会送到**的路。
+ * ⇒ 钥匙不灵了就掐一下：三秒后它自己连回来，宿主就听见了真话。
+ * ⚠️ 它**不抛**（不在隧道里就什么都不做）。
+ */
+export function dropTunnel() {
+  try {
+    liveDrop?.();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function runTunnelAgent({
   socketPath,
   localTarget = process.env.HUPO_LOCAL_TARGET ?? DEFAULT_LOCAL_TARGET,
@@ -57,6 +105,23 @@ export function runTunnelAgent({
     } catch {
       /* 对面没了 */
     }
+  };
+  // ★ 把它挂到模块级 ⇒ 盒子里的 `serve.js` 也能用它跟宿主说话（见 `notifyHost`）
+  //   ⚠️ **要如实说"发出去了没有"**（2026-09-21 实测栽了一次）：
+  //      上一版直接挂 `send`，而它写的是 `conn?.write` —— 连接正好在重连时
+  //      **静默写进 `null`**，调用方却以为说成了 ⇒ 那条消息**丢了**，
+  //      现象是"宿主什么都没收到，而容器日志说它说了"。
+  liveDrop = () => {
+    try {
+      conn?.destroy();
+    } catch {
+      /* 已经没了 */
+    }
+  };
+  liveSend = (obj) => {
+    if (!conn || conn.destroyed) return false;
+    send(obj);
+    return true;
   };
 
   const openTunnel = (id) => {
@@ -164,6 +229,8 @@ export function runTunnelAgent({
         /* 已经没了 */
       }
       conn = null;
+      liveSend = null; // 停了就别再往里写（`notifyHost` 会说"没说出去了"）
+      liveDrop = null;
     },
     get tunnels() {
       return tunnels.size;

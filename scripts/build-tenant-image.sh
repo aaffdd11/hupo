@@ -303,6 +303,58 @@ EOF
 echo "127.0.0.1 localhost" > "$R/etc/hosts"
 echo "nameserver 10.0.2.3" > "$R/etc/resolv.conf"
 
+# ── ③·补 🔴 **agent（uid 1000）必须读得到 /app**（2026-09-21 真机抓到的）
+#
+# 现象：新号在界面上说什么，盒子里的时间线**永远只出一句**
+#       "你刚才那句我没来得及做，就卡住了。再说一次吧。"
+#       —— 而盒内日志**一行都不多**（那个退是被 `#closeUndelivered` 收掉的）。
+#
+# 根因：dsh 是**以 agent 的身份（uid 1000）**起来的，而它开机第一件事就是读
+#   `--patch` 那几份文件。`cp` 把仓库里的权限一起带过来了（`hupo-persona.yml`
+#   与 `hupo-capabilities.yml` 在仓库里是 **600**），于是：
+#
+#       Error: dsh: failed to read overlay /app/hupo-persona.yml:
+#              EACCES: permission denied
+#
+#   ⇒ dsh 当场退（status 1），**一个字都没机会说**。
+#   `A9` 之外的另一半：**"权限位"不只在"不许谁读"，也在"该读的人读不读得到"**。
+#
+# ⚠️ 为什么 `a+rX` 是安全的：镜像里**没有任何秘密** ——
+#    那把 key 是**运行时**才进 `/run/hupo/creds.yaml`（tmpfs · 0700 的 /run/hupo 里），
+#    **不在镜像里**。而 `/app` 里是 dsh、调度器源码、人格/能力 patch（都在 git 里）。
+#    决策 ① 要保护的是"**agent 读不到自己的 key**"，不是"agent 读不到代码"。
+# ⚠️ `X`（大写）只给**目录**和**本来就可执行**的文件加 x —— 不会把数据文件变成可执行。
+chmod -R a+rX "$R/app"
+
+# ── ③·补2 🔴 **原生模块自己的动态库也要带上**（2026-09-21 真机抓到的第二个断点）
+#
+# 上面 ① 只 `ldd` 了 **node 自己**的依赖 ⇒ node 跑得起来，
+# 但 `node-pty` 那个 `.node` 有**它自己的**依赖，而 scratch 镜像里没有：
+#
+#     ERR_DLOPEN_FAILED libutil.so.1: cannot open shared object file
+#
+# 而它的表现极难查：dsh 报的是
+#     `dsh: plugin tree failed to load: ... failed to import loader entry subprocess`
+#   —— **一个字都没提"缺库"**，因为 node-pty 的加载器把 dlopen 的失败
+#      吞成了"找不到模块"（`Cannot find module './prebuilds/linux-x64/pty.node'`）。
+#   ⇒ 现象和"文件没拷进去"**一模一样**，而文件明明在那儿。
+#
+# ⚠️ 所以：**凡是从别处拷进来的二进制（可执行的、或要被 dlopen 的），
+#    都得对它自己 ldd 一遍**。（node 那一条覆盖不到 `.node`。）
+for so in $(find "$R/app" -name '*.node' 2>/dev/null); do
+  ldd "$so" 2>/dev/null | while read -r line; do
+    case "$line" in
+      *"=>"*) lib="${line##*=> }"; lib="${lib%% *}" ;;
+      /*)     lib="${line%% *}" ;;
+      *)      continue ;;
+    esac
+    [ -f "$lib" ] || continue
+    mkdir -p "$R$(dirname "$lib")"
+    cp -n "$lib" "$R$lib" 2>/dev/null || true
+  done
+done
+echo "  库（含原生模块的）: $(find "$R" -name '*.so*' | wc -l) 个"
+
 # ── ④ 提交成镜像 ──
 ctr="$("$BUILDAH" from scratch)"
 "$BUILDAH" copy "$ctr" "$R/" / >/dev/null

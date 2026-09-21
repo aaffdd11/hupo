@@ -382,7 +382,21 @@ export class DshAgent extends EventEmitter {
       this.ready = false;
       this.running = false;
       this.#failAll(new Error('agent 进程退出了'));
-      this.emit('exit', { code, signal, wasReady, reason: `进程退出 code=${code}` });
+      // 🔴 **把它最后说的话带上**（2026-09-21 修）。
+      //    原来这里只写 `进程退出 code=1` —— 而"为什么退"**一个字都没有**，
+      //    于是排查只能靠猜（这次真机上就这么耗掉了好几轮：
+      //    真实原因是 `EACCES` 读不到 patch、`ERR_DLOPEN_FAILED` 缺库、
+      //    以及 `/tmp` 不可写，**三条都只出现在 stderr 里**）。
+      // ⚠️ 长度封顶：它是**别人的一句话**，不是日志正文。
+      // ⚠️ 不含秘密：`childEnv()` 已经把 `*_API_KEY|_TOKEN|_SECRET` 摘掉了，
+      //    而真 key 从来不在这个进程的环境里（它在盒内那个小代理手上）。
+      const tail = String(this.stderrTail ?? '').trim().slice(-400);
+      this.emit('exit', {
+        code,
+        signal,
+        wasReady,
+        reason: `进程退出 code=${code}${tail ? `；它最后说的话：${tail}` : ''}`,
+      });
     });
 
     await withTimeout(

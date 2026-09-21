@@ -58,6 +58,8 @@ export function channelPathFor(dir, userId) {
 export class TenantChannel {
   #dir;
   #keyFor;
+  /** 见构造参数 `onKeyBad`（容器说"那把钥匙不灵了"）。 */
+  #onKeyBad = null;
   #log;
   #servers = new Map(); // userId → net.Server
   /** userId → 已经连着的那些连接（"key 晚到"时要主动推给它们） */
@@ -83,12 +85,13 @@ export class TenantChannel {
    * @param {(userId:string)=>(string|null)} o.keyFor  **这个人的 key**；`null` = 还没有
    * @param {(m:string)=>void} [o.log]
    */
-  constructor({ dir, keyFor, log = () => {} }) {
+  constructor({ dir, keyFor, log = () => {}, onKeyBad = null }) {
     if (!dir) throw new Error('TenantChannel 需要 dir');
     if (typeof keyFor !== 'function') throw new Error('TenantChannel 需要 keyFor(userId)');
     this.#dir = dir;
     this.#keyFor = keyFor;
     this.#log = log;
+    this.#onKeyBad = onKeyBad;
   }
 
   get dir() {
@@ -234,10 +237,41 @@ export class TenantChannel {
         this.#record(userId, 'up');
         this.#log(`  ✓ ${userId} 的容器起来了`);
         return;
+      case 'key-bad': {
+        // 🔴 **容器说"那一把钥匙上游不认"**（2026-09-21 加）。
+        //    为什么必须由它来说：`turn/end` 那句 `code:'AUTH'` 只有
+        //    **盒子里的调度器**看得见，而"让用户能重新填"要宿主做。
+        //    ⇒ 收到就把"这一台有钥匙"这条记忆撤掉，并叫一声（宿主据此标成用不了）。
+        //    ⚠️ 这一条里**没有任何凭据**，只有"不灵了"这个事实。
+        this.#keyKnown.delete(userId);
+        this.#record(userId, 'key-bad');
+        this.#log(`  ⚠️ ${userId} 那边说那把钥匙用不了 —— 撤掉"有钥匙"这条记忆`);
+        try {
+          this.#onKeyBad?.(userId, 'rejected');
+        } catch (err) {
+          this.#log(`  ⚠️ key-bad 回调出错：${err?.message ?? err}`);
+        }
+        return;
+      }
       case 'tunnel-ready': {
         // ★ 容器自报"我这儿有没有钥匙" ⇒ 记下来（**它是这个事实的来源**）
-        if (msg?.hasKey === true) this.#keyKnown.add(userId);
-        else this.#keyKnown.delete(userId);
+        if (msg?.hasKey === true) {
+          this.#keyKnown.add(userId);
+        } else {
+          this.#keyKnown.delete(userId);
+          // 🔴 **它说"没有" ⇒ 宿主内存里那份就是错的**（2026-09-21 加）。
+          //    为什么必须清：宿主那本账是**内存**，它自己重启会忘、而用户
+          //    **不该因为宿主忘了就被再问一次钥匙**（这正是主人报过的那个 bug）；
+          //    反过来，容器**真的**没有钥匙（重启过 / 那把被撤了）时，
+          //    宿主还留着 ⇒ 用户看着"有钥匙"，其实模型那条路不通。
+          //    ⇒ **说"有"的那一方对**，两边都不留一个"我以为是"。
+          //    ⚠️ `absent`（不是 `rejected`）：我们**不知道**那把坏没坏。
+          try {
+            this.#onKeyBad?.(userId, 'absent');
+          } catch (err) {
+            this.#log(`  ⚠️ absent 回调出错：${err?.message ?? err}`);
+          }
+        }
         // 容器说"我这条连接能跑隧道" ⇒ 数据面就从这儿走
         const set = this.#tunnelConns.get(userId) ?? new Set();
         set.add(conn);

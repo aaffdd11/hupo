@@ -63,9 +63,41 @@ import { MessageWriter } from './message-writer.js';
 import { isReadOnlyTool } from './tools.js';
 
 /** 被截断时补的那句话。**必须是人话**，而且要说清"我没说完"。 */
-const TRUNCATED_LINE = '这条我说太长了，被长度限制截断，剩下的我没说完。';
-const INTERRUPTED_LINE = '这条我没说完就断了。';
-const EMPTY_LINE = '这次我没能给出结论，你再说一次。';
+export const TRUNCATED_LINE = '这条我说太长了，被长度限制截断，剩下的我没说完。';
+export const INTERRUPTED_LINE = '这条我没说完就断了。';
+/**
+ * 🔴 **钥匙不对**（上游回 401）。
+ *
+ * 为什么单独一句（主人 2026-09-21："apikey 是否完成也需要测试才行"那一次挖出来的）：
+ * dsh 在 `turn/end` 里**把原因说得很清楚** ——
+ *
+ *     reason: { kind: 'error', error: { message: 'Authentication Fails, …',
+ *                                      code: 'AUTH', status: 401 } }
+ *
+ * 而翻译层原来**一律**说 `INTERRUPTED_LINE`（"这条我没说完就断了"）。
+ * ⇒ 用户看到的是一句**他没法行动**的话：听着像"我们这边抽风了，再试一次"，
+ *   于是他会一遍遍重试 —— 而真正该做的是**回去把那串钥匙重新填一次**。
+ *
+ * ⚠️ 这是欠账里"失败分类器"最要紧的那一档：**用户自己能修的那种失败，
+ *    必须说成他能修的样子。**
+ * ⚠️ 用词：不许出现内部词（尤其 `模型`）。所以这里说"**钥匙**"。
+ */
+export const AUTH_LINE = '你填的那串钥匙它说用不了。刷新一下这一页，就能重新填。';
+
+/**
+ * 上游那一条失败，是不是"钥匙不对"。
+ *
+ * ⚠️ **认不出来就返回 `false`**（退回原来那句含糊的话）——
+ *    宁可含糊，也不许把别的失败**说成**"钥匙不对"（那会让人白改一遍钥匙）。
+ * @param {object} data `turn/end` 的 `data`
+ */
+export function isAuthFailure(data) {
+  const err = data?.reason?.error ?? data?.reason?.failure ?? null;
+  if (!err || typeof err !== 'object') return false;
+  if (String(err.code ?? '').toUpperCase() === 'AUTH') return true;
+  return Number(err.status) === 401;
+}
+export const EMPTY_LINE = '这次我没能给出结论，你再说一次。';
 
 /**
  * 卡住时补的那两句话（超时硬收口）。
@@ -409,6 +441,9 @@ export class TurnTranslator extends EventEmitter {
     this.#turns.delete(turn); // ★ 用 turn 删 —— 键和存的时候一致
 
     const kind = data?.reason?.kind ?? 'completed';
+    // 🔴 **"钥匙不对"要说成"钥匙不对"**（见 `AUTH_LINE` 顶上那段）。
+    //    它在两种情形下都要用：一句话都没说、以及只说了半句。
+    const stuckLine = isAuthFailure(data) ? AUTH_LINE : INTERRUPTED_LINE;
     const writer = rec.writer;
 
     if (!writer) {
@@ -419,7 +454,7 @@ export class TurnTranslator extends EventEmitter {
         origin: 'reactive',
         scopeId: this.#scopeId,
       });
-      w.chunk('deep', kind === 'completed' ? EMPTY_LINE : INTERRUPTED_LINE);
+      w.chunk('deep', kind === 'completed' ? EMPTY_LINE : stuckLine);
       w.end('failed');
       // ★ 「这一轮出事了」已经在这条通道上说过了（文件头 ⑥）
       this.#claimProcess(turn, 'failed');
@@ -430,7 +465,7 @@ export class TurnTranslator extends EventEmitter {
     if (kind !== 'completed') {
       // ③ **半句**：补一句说明，并**标成失败收尾**。
       //    绝不许把半句当完整回答（事故三）。
-      writer.chunk('deep', kind === 'max-tokens' ? TRUNCATED_LINE : INTERRUPTED_LINE);
+      writer.chunk('deep', kind === 'max-tokens' ? TRUNCATED_LINE : stuckLine);
       writer.end('failed');
       this.#claimProcess(turn, 'failed');
     } else {

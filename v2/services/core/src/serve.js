@@ -21,6 +21,7 @@ import { stepsFor } from './space-steps.js';
 import { Worlds } from './worlds.js';
 import { OWNER_ID, readTenantTemplate, tenancyFor, tenantNameFor, userIdNumber } from './tenants.js';
 import { ProvisionQueue } from './provision.js';
+import { dropTunnel, notifyHost } from './tenant-tunnel-agent.mjs';
 import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
 import { createServer } from './server.js';
@@ -103,11 +104,60 @@ const runtime = new AgentRuntime({
   // ⚠️ 卸一个 agent 时要**先让它的主人收口**：键里带着是谁的（`u1/main`）
   onEvict: (sessionId) => worlds.onEvict(sessionId),
 });
+/**
+ * 🔴 **上游说"用不了"的那几把钥匙**（`44-CONTAINER-MODEL-KEY.md` §六）。
+ *
+ * 为什么要有它：钥匙**填错了**是最常见的一种失败，而客户端只有在
+ * "这一台没有钥匙"时才进得去填钥匙那一屏 —— 不把那一把标掉，
+ * 用户就**永远回不去**（那句"刷新一下就能重新填"也就成了假话）。
+ *
+ * ⚠️ **只标在宿主内存里**（不落盘、不进日志）：它是一份"这一把不灵"的账，
+ *    不是钥匙本身 —— 钥匙照旧只在内存与盒内 tmpfs 里。
+ * ⚠️ 用户重新填一把 ⇒ 立刻从这里面摘掉（见 `setModelKey`）。
+ */
+const badKeys = new Set();
+
 worlds = new Worlds({
   cfg,
   runtime,
   log: (m) => console.log(m),
   warn: (m) => console.warn(m),
+  // ★ 上游回 401 ⇒ 把那一把标成"用不了"（`hasKey` 随之变回 false）
+  onAuthFailure: (userId) => {
+    // 🔴 **每一次都要真做，去重只留给日志**（2026-09-21 实测栽了一次）：
+    //    原来这里第一行是 `if (badKeys.has(userId)) return;` —— 于是
+    //    **一个容器一辈子只会撤一次钥匙**：用户第二把又填错时，
+    //    盒里那本账还记着"说过"，于是**不删、不告诉宿主** ⇒
+    //    宿主那边 `hasKey` 还是 `true` ⇒ **他刷新也回不到填钥匙那一屏**（卡住）。
+    //    ⚠️ 宿主清那本账的唯一时机是"他又填了一把"，**盒里那本没人清** ——
+    //      所以这里不能拿它当"做过了"的依据。
+    const first = !badKeys.has(userId);
+    badKeys.add(userId);
+    tenantKeys.delete(userId);
+    if (first) {
+      console.log(
+        `  🔑 ${userId} 那把钥匙上游说用不了 —— 标成"要重填"（他刷新那一页就能重新填）`,
+      );
+    }
+    // 🔴 **还要告诉宿主**（2026-09-21）：租户那一份调度器在**容器里**跑，
+    //    它标掉的是**盒内**那本账；而用户那一屏问的是**宿主** ——
+    //    不告诉它的话，宿主内存里那份会让 `hasKey` 还是 `true`，
+    //    于是"刷新一下就能重新填"**又变成一句假话**（这条我踩过一次了）。
+    //    ⚠️ 宿主上这条是**空操作**（那儿没有隧道，`liveSend` 是 null）。
+    const told = notifyHost({ v: 1, type: 'key-bad' });
+    // ⚠️ **它可能没送到**（连接恰好在重连 ⇒ 写进了空气）。实测栽过一次：
+    //    容器日志说"我告诉宿主了"，而宿主什么都没收到。
+    //    ⇒ 再**掐一下隧道**：三秒后它自己连回来，`tunnel-ready` 里会**自报**
+    //      "我这儿没有钥匙了" —— 那是一条**一定会送到**的路。
+    if (!told) dropTunnel();
+    // ⚠️ 顺手把盒里那一把也删掉：上游已经不认它了，留着只是让它继续被拿去试。
+    //    （宿主上没有这个文件，删不到就是删不到，不影响。）
+    try {
+      nodeFs.unlinkSync(process.env.HUPO_KEY_FILE ?? '/run/hupo/creds.yaml');
+    } catch {
+      /* 不在（宿主上就是这样）或者删不掉 —— 都不该把收口带走 */
+    }
+  },
 });
 
 // ★ **开机把每个人的世界热一遍**：对账 / 崩溃环 / 回收站都**按人各算一份**。
@@ -279,6 +329,25 @@ const channel = new TenantChannel({
     const uid = userOfTenant(tenant);
     return uid ? (tenantKeys.get(uid) ?? null) : null;
   },
+  // ★ **容器说"那把钥匙不灵了"**（`44-CONTAINER-MODEL-KEY.md` §六）：
+  //   把宿主这本账也收拾干净 —— 不然用户那一屏会一直说"有钥匙"，回不去重填。
+  onKeyBad: (tenant, why) => {
+    const uid = userOfTenant(tenant);
+    if (!uid) return;
+    // ⚠️ **两种情形要分开**（`why`）：
+    //   · `rejected` —— 上游说这一把不灵了 ⇒ **标成"要重填"**；
+    //   · `absent`   —— 容器说"我这儿没有钥匙"（它重启过 / 刚被撤掉）⇒
+    //                   **只清宿主这本账**，**不许**把那把标成坏的
+    //                   （我们并不知道它坏，只是宿主忘了而已）。
+    //    混成一种的话，容器每重启一次就会把用户一把**好好的**钥匙标成坏的。
+    if (why === 'rejected') badKeys.add(uid);
+    tenantKeys.delete(uid);
+    console.log(
+      why === 'rejected'
+        ? `  🔑 ${uid} 那把钥匙用不了（他那台说的）—— 他刷新那一页就能重新填`
+        : `  🔑 ${uid} 那台说它手上没有钥匙 —— 宿主这本账跟着清掉（别的地方都不用动）`,
+    );
+  },
   log: (m) => console.log(m),
 });
 // ★ **静态表里那几台** + **已经推出来的那几台**都要在开机时把耳朵支起来。
@@ -329,6 +398,8 @@ if (!tpl.ok) {
 function setModelKey(userId, key) {
   const tenant = tenantOf(userId);
   if (!tenant) return { ok: false, why: 'no-tenant' };
+  // ★ 他又填了一把 ⇒ 上一把"用不了"的账**当场清掉**
+  badKeys.delete(userId);
   tenantKeys.set(userId, key);
   channel.pushKey(tenant, key);
   console.log(`  🔑 ${userId} 的模型凭据已收下（送给他那台容器；**不落盘**）`);
@@ -412,7 +483,7 @@ const { listen, listenTrusted, close } = createServer({
         //    **或** 容器自己报的（它真的拿着）—— 后者才是权威。
         //    ⚠️ 少了后面那一半，宿主一重启就会**再问用户要一次钥匙**
         //      （主人报的"刷新后又要我输入 apikey"）。
-        hasKey: tenantKeys.has(userId) || channel.hasKeyFor(tenant),
+        hasKey: !badKeys.has(userId) && (tenantKeys.has(userId) || channel.hasKeyFor(tenant)),
         // ⚠️ 3 不是 2 —— 就绪时**三步都算走完**（传 2 会自相矛盾：state=ready 而第三步没打勾）
         steps: stepsFor(3),
       };
@@ -434,7 +505,7 @@ const { listen, listenTrusted, close } = createServer({
       kind: 'tenant',
       state,
       ...(state === 'full' ? { why: 'no-helper' } : {}),
-      hasKey: tenantKeys.has(userId) || channel.hasKeyFor(tenant),
+      hasKey: !badKeys.has(userId) && (tenantKeys.has(userId) || channel.hasKeyFor(tenant)),
       steps: stepsFor(state === 'full' ? 0 : 1),
     };
   },
