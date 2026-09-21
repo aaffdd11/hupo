@@ -625,6 +625,7 @@ $ bash scripts/check-apk.sh
 
 | 时间 | 为什么重建 | 动了清单里哪几个文件 | 结果 |
 |---|---|---|---|
+| 2026-09-21 深夜 | 自动开一台（服务侧 + 客户端 + 三个新脚本 + 新模板文件）⇒ 重建 | 全是**只报不拦**的：`src/{config,serve,server,tenants,tenant-channel}.js|mjs`、`scripts/{create-tenant-pool,create-tenant-users}.sh`（**`strict` 一处没动**） | ✅ 对上了 |
 | 2026-09-21 夜 | 修主人报的 *"刷新后又要我输入 apikey"*：钥匙在不在**改由容器自报**；顺手修掉池子脚本"镜像换了不重启已在跑的容器" | 全是**只报不拦**的 4 处：`src/tenant-channel.mjs`、`src/tenant-tunnel-agent.mjs`、`src/serve.js`、`scripts/create-tenant-pool.sh`（**`strict` 一处没动** ⇒ 服务本来也起得来，重建只是为了不留噪音） | ✅ 对上了（按 `/home/deploy` 算，一条不漏） |
 > 🔴 **注意 #9**：它是**手册结论**的改动（v1.8）⇒ **清单不重建，下次重启会拒绝启动**（`08-SPEC.md` 在 `strict` 里）。
 >
