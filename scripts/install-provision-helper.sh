@@ -135,6 +135,59 @@ if [ "$MODE" = "uninstall" ]; then
   exit 0
 fi
 
+# ── 🔴 装机前**该看的事实**（只读，什么都不改）────────────────────
+# ⚠️ 为什么要有这一段：文档里写着"上限**按磁盘算**"，而模板里其实是一个常数。
+#    两者不一致本身就要说清；更要紧的是**这个常数放不放得下** ——
+#    装的时候一切正常、等第一个申请来了才失败，是最坏的时机。
+#    ⇒ 装机前把这三件**算出来**给人看：镜像在不在 · 每台多大 · 磁盘放得下几台。
+OWNER_USER="${HUPO_OWNER_USER:-${SUDO_USER:-deploy}}"
+# ⚠️ `IMG` 必须在**用它的第一行之前**定义（脚本有 `set -u`，用未定义的变量会直接退出）
+IMG="${HUPO_TENANT_IMAGE:-localhost/hupo-tenant:local}"
+IMG_SZ=""
+IMG_THERE="?"
+as_owner() { sudo -u "$OWNER_USER" -H sh -c 'cd /tmp && exec env XDG_RUNTIME_DIR="/run/user/$(id -u)" "$@"' sh "$@"; }
+if id "$OWNER_USER" >/dev/null 2>&1 && command -v podman >/dev/null 2>&1; then
+  if as_owner podman image exists "$IMG" 2>/dev/null; then
+    IMG_THERE="1"
+    IMG_SZ="$(as_owner podman image inspect "$IMG" --format '{{.Size}}' 2>/dev/null | head -1)"
+  else
+    # ⚠️ 只有"**它明确说没有**"才算没有；查不动（比如没有 /run/user）就当"查不了"
+    if as_owner podman image inspect "$IMG" >/dev/null 2>&1; then IMG_THERE="?"; else IMG_THERE="0"; fi
+  fi
+fi
+
+tpl_get2() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$ROOT/$SRC_CONF" 2>/dev/null | head -1; }
+MAX_T="$(tpl_get2 max_tenants)"
+
+echo "── 装机前该看的事实 ────────────────────────────"
+say "租户镜像   $IMG"
+case "$IMG_THERE" in
+  1) say "           ✅ 在（$(awk -v b="${IMG_SZ:-0}" 'BEGIN{printf "%.0f", b/1048576}') MB）" ;;
+  0) say "           🔴 **不在**（$OWNER_USER 那份 rootless 存储里没有）⇒ 先建：bash scripts/build-tenant-image.sh" ;;
+  *) say "           ⚠️ 查不动（podman 起不来？）—— 这一条**没验**，不是过了" ;;
+esac
+if [ -n "$MAX_T" ] && [ -n "$IMG_SZ" ] && [ "${IMG_SZ:-0}" -gt 0 ]; then
+  need=$((MAX_T * IMG_SZ))
+  home_dir="$(getent passwd "$OWNER_USER" | cut -d: -f6)"
+  avail="$(df -B1 --output=avail "$home_dir" 2>/dev/null | tail -1 | tr -d ' ')"
+  if [ -n "${avail:-}" ] && [ "${avail:-0}" -gt 0 ]; then
+    fits=$((avail / IMG_SZ))
+    printf '  %s\n' "磁盘       $(awk -v b="$need" 'BEGIN{printf "%.1f", b/1073741824}') GB 才够 $MAX_T 台；可用 $(awk -v b="$avail" 'BEGIN{printf "%.1f", b/1073741824}') GB ⇒ **放得下 $fits 台**"
+    if [ "$fits" -lt "$MAX_T" ]; then
+      say "           ⚠️ **上限（模板里的 max_tenants=$MAX_T）比磁盘放得下的多** —— 第 $((fits + 1)) 个申请会失败。改 ${SRC_CONF} 里的 max_tenants，或腾地方"
+    else
+      say "           ✅ 放得下（模板里的上限就是 $MAX_T）"
+    fi
+  else
+    say "磁盘       ⚠️ 算不出可用空间（$home_dir）"
+  fi
+elif [ -z "$MAX_T" ]; then
+  say "磁盘       ⚠️ 读不出模板里的 max_tenants ⇒ 这一条**没验**"
+else
+  say "磁盘       ⚠️ 不知道镜像多大 ⇒ 这一条**没验**"
+fi
+echo
+
 # ── 装之前先看三件事：服务那个身份不该因为这个脚本变（A6）──────
 echo "── 服务那个身份（装完之后这三条必须**逐字相同**）──"
 id "$SERVICE_USER" 2>&1 | sed 's/^/  /'
@@ -148,6 +201,21 @@ if [ "$MODE" != "install" ]; then
 fi
 
 [ "$(id -u)" = "0" ] || { echo "✗ --yes 要 root。请：sudo bash scripts/install-provision-helper.sh --yes"; exit 2; }
+
+# 🔴 **镜像不在就不装**（放在**任何写盘之前** —— 这一步只读，所以拒绝时这台机器一点没动）
+# ⚠️ 为什么拒绝而不是"警告一下就算了"：装一个**永远不可能工作**的东西，
+#    比当场说清"先把这个建出来"更坏 —— 而且失败会推迟到第一个申请来的时候，
+#    那是**最坏的时机**（用户已经在等了）。
+# ⚠️ **`--root`（判据用的隔离模式）不受这一条管**：那一档压根不装系统单元、
+#    只是把文件摆到一个临时根里给判据看，跟本机有没有镜像没关系。
+#    （这不是"给判据开后门"：两者的**副作用**完全不同，所以该管的规矩也不同。）
+if [ -z "$TEST_ROOT" ] && [ "$IMG_THERE" = "0" ]; then
+  echo
+  echo "✗ 不动手：租户镜像不在（$IMG）"
+  echo "  这台机器上还没有那一份镜像 ⇒ 装了也建不出任何一台。"
+  echo "  先跑这一条，再回来装：bash scripts/build-tenant-image.sh"
+  exit 3
+fi
 
 # ── ① 四份 root 拥有的文件（A9）──────────────────────────────
 plan "拷四份到 root 拥有的位置（仓库那份是源码，这一份才是运行的那份）"
