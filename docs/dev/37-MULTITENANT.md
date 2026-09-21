@@ -279,3 +279,14 @@ sudo: a password is required
 | 代价 | 无额外东西 | 多一个小代理 + 一条本地口 |
 | 风险 | **agent 被注入时能把用户的 key 读出来发走**（那是用户的钱） | agent 拿不到明文，照样能调模型 |
 | 依据 | —— | userns 的 root 有 `CAP_DAC_OVERRIDE`：**agent 若是 root，任何权限位都拦不住它读** ⇒ 要拦就得让 agent 不是 root + key 在它范围外 |
+
+### 12.3 DSH 自己怎么做的（2026-09-21 去它安装树里查证过）
+
+主人问过：*"DeepSeek Harness 是怎么解决'服务能拿到 key 但 agent 看不到明文'的？"* ⇒ **答案在 `39-PERMISSIONS.md` §六**，这里只留结论：
+
+* DSH 做的是**四件**：配置里存**引用名**（`credentialRef`）、**到用时才 `resolve`**（在 provider 内部）、
+  `describe` **只回 `{configured, writable}` 不回值**、文件 **`0600` + 启动时拒绝**（"readable beyond its owner"）。
+* 🔴 **但"agent 看不见"这一半它没做**：工具层**零处**提到凭据文件；沙箱是 `readOnly: ["/"]` —— **整个文件系统可读，只是不可写**；
+  同 uid 的属主**读得到**自己的 `0600`。⇒ 根因是 **DSH 里 agent 与 harness 同 uid**，它的前提是"agent 可信"。
+* ⇒ **多租户里那个前提不成立**（agent 伺候的是别人）⇒ 所以 §12.2 右边那一列（**代理 + uid 边界**）**不是"更讲究的做法"，是必需品**。
+* ✅ 盒内那条边界的判据（uid 1000 读 `creds.yaml` ⇒ **`Permission denied`，不是 `No such file`**）**已在真容器里实测通过**，见 `39-PERMISSIONS.md` §5.6。

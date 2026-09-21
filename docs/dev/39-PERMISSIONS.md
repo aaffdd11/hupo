@@ -71,7 +71,7 @@
 
 ---
 
-## 五、🔴 另外两条"最容易做成形式主义"的（分别来自两位）
+## 四·补、🔴 另外两条"最容易做成形式主义"的（分别来自两位）
 
 * **威胁模型席**：*"`V4` 只查**存没存**、不查**发没发**"* —— 盒子里是 root、网络又够得着宿主，
   ⇒ **key 可以被读出来并发出去，而 V4 照样绿**。
@@ -118,6 +118,19 @@
 （他另外说的"注意沿用 `/data/main` 的布局"也对：我现在用的是 `HUPO_AGENT_CWD=/data/hupo-workspace`，
 不是 `§2.1` 的 `/data/main`。）
 
+**现在改到哪了**（2026-09-21 晚核过，`scripts/build-tenant-image.sh`）：
+
+| 他点的 | 现在 |
+|---|---|
+| `/etc/passwd` 只有 root | ✅ **已加** `agent:x:1000:1000:agent:/data/main`（`/etc/group` 同） |
+| `cwd` 不是 `/data/main` | ✅ 已改 `HUPO_AGENT_CWD=/data/main` |
+| 没有内核参数 | ✅ 运行示例已带 `--security-opt=no-new-privileges` · `--cap-drop=ALL` + 按需那组 · `--pids-limit` · `--memory`/`--memory-swap` |
+| **agent 的手真的以 uid 1000 跑** | ❌ **还没** —— 镜像里**只是有了这个身份**，`entry.mjs` 仍是 root，**`dsh` 本体也还没装进去** ⇒ *"身份已建、手还没换"* |
+| **key 由 root 小代理持有**（`/run/hupo/creds.yaml`） | ❌ **还没** —— 现在盒内**根本没有 key 那条路** |
+
+⇒ ⚠️ **别把"镜像里有 `agent:x:1000`"读成"边界已经在了"**：边界成立的判据是 §5.6 判据 1（**已实测通过，但测的是"布局能不能挡住"**），
+而不是"`/etc/passwd` 里有一行"。**真正的手换过去 + key 那个代理落地，才算这两条闭合。**
+
 ### 5.4 该收的内核能力（具体参数 + 会不会弄残用户）
 
 | 参数 | 为什么 | 会不会弄残 |
@@ -146,6 +159,22 @@
 | 4 | V1/V1b/V3/V4 照跑 | ⚠️ **V4 因"key 在盒里"必须重划范围**（见 §七②） |
 | 5 | 盒内连宿主 `:22` `:80` `:6001` `:8000` **全败** | 模型口 / `registry.npmjs.org` **通**（证明不是"网死了"） |
 
+#### ✅ 判据 1 已实测通过（2026-09-21，`localhost/hupo-tenant:local`）
+
+在**真容器**里跑的，不是读代码推的 —— 两个容器共享一个卷，`--user` 换身份（镜像是 `scratch + node`，**没有 shell**，所以用 `/bin/node -e`）：
+
+| 步骤 | 动作 | 实测结果 |
+|---|---|---|
+| ① | 容器 **root** 写 `creds.yaml`，`chmod 600` | `我是 uid=0` · `目录: creds.yaml=600 public.txt=644` |
+| ② | root 读它 | ✅ 读到了内容（服务侧拿得到） |
+| ③ | 容器 **uid 1000** 读同一份 | ✅ **`EACCES: permission denied, open '/run/hupo/creds.yaml'`** ← **正是要的这个失败方式**（**不是 `ENOENT`**） |
+| ④ | 同目录下 **0644** 那个，uid 1000 读 | ✅ **读到了** ⇒ 挡住它的是**权限位**，不是路径拼错、也不是挂载没进去 |
+| ⑤ | 宿主侧看属主 | `-rw------- 1 1001 1001 creds.yaml`（无根容器 root→`deploy`） |
+
+⚠️ **这条测的是"这套布局挡不挡得住"，不是"产品已经这么跑了"**：测的时候 `creds.yaml` 是我手动放的，
+**root 小代理 + UDS 那条路还没写**（§5.3 末表）。**边界成立 ≠ 已经接上。**
+
+
 ### 5.7 他点出别人漏的（两条很硬）
 
 * **宿主/控制面席漏**：**挂载表就是边界** —— 一条 mount 拼错 = **乙的卷进了甲的盒子**，容器白做；
@@ -154,6 +183,56 @@
 * **威胁模型席漏**：判据要"**重启后比 sha256**"而不是"cat 一次失败"（**威胁是持久化**）；
   **同 uid 读得到 `/proc/<pid>/environ`**（实测 56 条）⇒ **秘密绝不许走 env**；
   **盒内 agent 与网页终端若同 uid = 等于没分**；漏 `--pids-limit`/`--memory` ⇒ **fork 炸弹是最便宜的路径**。
+
+---
+
+## 六、DSH 自己是怎么做到"服务拿得到 key、agent 看不见明文"的
+
+> 主人 2026-09-21 问：*"DeepSeek Harness 是怎么解决'服务能拿到 API key 但 agent 看不到明文'的？"*
+
+⇒ 我去把它那颗安装树读了（`~/.nvm/.../node_modules/@deepseek-ai/dsh/`）。**结论：它不是靠"看不见"，是靠"默认不在场"。**
+**而且 agent 真要去找，它一点都拦不住** —— 这正好证明我们盒内那条 uid 边界**不是多余，是 DSH 自己没有的那一件**。
+
+### 6.1 它用的四件（都有出处）
+
+| # | 机制 | 在哪 | 它到底做了什么 |
+|---|---|---|---|
+| 1 | **存"引用"不存值** | `dsh-credentials/lib`：`REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/`，叫 `credentialRef` | 配置里那一格（`connection.apiKeyEnv`）写的是**名字**（如 `DEEPSEEK_API_KEY`），不是 key。模块原话：*"configuration surfaces describe a reference without ever seeing its value"* |
+| 2 | **到用时才解析，且在 provider 内部** | `dsh-llm-deepseek/lib`：`const ref = connection.apiKeyEnv; … await credentials.resolve(ref)` | 明文只在**发起模型调用那一刻**进适配器。`resolve` 之前，谁都只有一个名字 |
+| 3 | **问"配没配"只回布尔** | `dsh-api-settings-controller` 的 `credentials.describe` 结果 schema：`{configured: boolean, source?: string, writable: boolean}` | 网页 Models 页能显示"已配置"，**永远拿不到值** ⇒ 界面这条路也不漏 |
+| 4 | **落盘 0600 + 启动时拒绝** | `dsh-credentials-local/lib`：读 `$DSH_HOME/.credentials.yaml`，mode 有 group/other 位就抛 `is readable beyond its owner … run "chmod 600"` | 挡**别的用户**。本机实测：`600 deploy:deploy`，223 字节 |
+
+另外两件辅助的：**工具子进程环境是洗过的**（`dsh-subprocess-local` 的 `scrubbedParentEnv()` 剥掉 `/KEY|PASSWORD|SECRET|TOKEN/i` 和 `DSH_*`）；**秘密也不走 env**。
+
+### 6.2 🔴 但"agent 看不见"这一半，DSH **没有**做（三条实测）
+
+| # | 查什么 | 结果 |
+|---|---|---|
+| 1 | 工具层有没有"敏感路径黑名单" | ❌ **没有** —— 全树扫 `dsh-tool-*` / `dsh-fs*` / `dsh-file-*`，**零处**提到凭据文件（唯一命中的 `dsh-tool-cordis` 是另一回事） |
+| 2 | 沙箱限不限**读** | ❌ **不限** —— `dsh-sandbox-local` 的 Landlock 档是 `readOnly: ["/"]` + `readWrite: ["/dev/null","/tmp",workspaceRoot]`：**整个文件系统被授予只读**。三种模式里最严的也只是"哪儿都不能写"，**读从来没被限过** |
+| 3 | 同 uid 能不能读自己的 0600 | ✅ **读得到** —— 实测：`chmod 600` 的文件，属主自己 `head` 就出内容 |
+
+⇒ **根因**：DSH 里 **agent 和 harness 是同一个 uid**。`0600` 挡的是"别人"，**挡不住属主自己**；
+而 Landlock 那套的设计目标是**防误写/防炸宿主**，不是把 agent 当对手。
+**它的威胁模型是"别的用户、别的插件、别的配置面"，不是"agent 会主动翻"。**
+
+⚠️ 这条别读成"DSH 做得差"：**它的前提是"agent 是可信的"**（本机是主人自己的助手）。
+而我们要做的是**多租户**：agent 伺候的是**别人**，前提不成立了 ⇒ 那一半必须我们自己补。
+
+### 6.3 ⇒ 对我们的意义（**为什么盒内那条 uid 边界是必需品**）
+
+我们 §5.2 那套不是"另起一套"，而是**同样的第 1 条 + DSH 缺的那一件**：
+
+| DSH 有 | 我们对应 | 我们多出来的 |
+|---|---|---|
+| 引用不存值 | 注入的是 `base_url`，**不是 key** | —— |
+| 用时才解析 | **root 小代理**持有明文，agent 拿 UDS + `base_url` | —— |
+| `describe` 只回布尔 | agent 侧**不需要知道"配没配"** | —— |
+| **0600 挡别人** | `/run/hupo/creds.yaml` root `0600` + tmpfs | 🔴 **`agent` 是 uid 1000、不是 uid 0** ⇒ 这条终于**挡得住 agent 自己** |
+
+⇒ **一句话**：DSH 靠"引用"让秘密**不默认在场**；**"不默认在场" ≠ "拿不走"**。
+租户的 agent 是**不可信**的（他会照着别人的话去翻文件），所以**必须再加一道 uid**。
+⇒ 这也解释了 §5.1 那条取舍为什么**没有第二条路**：`CAP_DAC_OVERRIDE` 之下，**agent = uid 0 时任何权限位都是装饰**。
 
 ---
 
