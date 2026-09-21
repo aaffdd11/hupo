@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 
 import 'models/forbidden_words.dart';
 import 'screens/chat_screen.dart';
+import 'screens/landing_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/api.dart';
 import 'services/chat_controller.dart';
@@ -33,6 +34,9 @@ class _HupoAppState extends State<HupoApp> {
   ChatController? _controller;
   bool _booting = true;
   bool _needsSetup = false;
+  /// 未登录时的**两屏**：先 landing（说清它是什么），点"开始用"才进登录页。
+  /// ⚠️ 登录**之后**退出登录时不再走 landing：那时他是个熟客，直接给登录页。
+  bool _showLogin = false;
 
   @override
   void initState() {
@@ -72,7 +76,11 @@ class _HupoAppState extends State<HupoApp> {
   }
 
   void _onLoggedOut() {
-    setState(() => _controller = null);
+    // 退出了就直接给登录页（他是熟客，不用再看一遍 landing）
+    setState(() {
+      _controller = null;
+      _showLogin = true;
+    });
   }
 
   @override
@@ -88,9 +96,11 @@ class _HupoAppState extends State<HupoApp> {
       ),
       home: _booting
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
-          : _controller == null
-              ? LoginScreen(api: _api, needsSetup: _needsSetup, onLoggedIn: _onLoggedIn)
-              : ChatScreen(controller: _controller!, onLoggedOut: _onLoggedOut),
+          : _controller != null
+              ? ChatScreen(controller: _controller!, onLoggedOut: _onLoggedOut)
+              : _showLogin
+                  ? LoginScreen(api: _api, needsSetup: _needsSetup, onLoggedIn: _onLoggedIn)
+                  : LandingScreen(onStart: () => setState(() => _showLogin = true)),
     );
   }
 }

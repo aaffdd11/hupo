@@ -29,6 +29,7 @@ import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/timeline.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
+import 'package:hupo_app/screens/landing_screen.dart';
 import 'package:hupo_app/screens/login_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -331,6 +332,13 @@ void main() {
 
   group('D3.5：容器跟字算，五档不许溢出', () {
     for (final s in scales) {
+      testWidgets('第一屏（landing）@ ${s}x', (tester) async {
+        // ⚠️ 主人 2026-09-21 点名要的那一屏 —— 它是**未登录时的第一屏**，
+        //    所以它必须也过五档不溢出（手册 D3.5 那道硬闸）。
+        await _pump(tester, LandingScreen(onStart: () {}), s);
+        expect(_drain(tester), isEmpty, reason: '第一屏在 ${s}x 溢出了');
+      });
+
       testWidgets('登录页 @ ${s}x', (tester) async {
         await _pump(tester, _login(), s);
         expect(_drain(tester), isEmpty, reason: '登录页在 ${s}x 溢出了');
@@ -516,6 +524,11 @@ void main() {
     }
 
     for (final s in scales) {
+      testWidgets('第一屏（landing）@ ${s}x', (tester) async {
+        await _pump(tester, LandingScreen(onStart: () {}), s);
+        await sweep(tester, '第一屏 @${s}x');
+      });
+
       testWidgets('登录页 @ ${s}x', (tester) async {
         await _pump(tester, _login(), s);
         await sweep(tester, '登录页 @${s}x');

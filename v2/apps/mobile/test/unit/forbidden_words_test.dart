@@ -6,6 +6,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
+import 'package:hupo_app/models/landing_words.dart';
 import 'package:hupo_app/models/notice_words.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/process_words.dart';
@@ -34,7 +35,15 @@ void main() {
     // 这几句是界面里真会显示的（含 D2 定稿的登录页）
     // ⚠️ 用 `final` 不用 `const`：下面要**展开**关于页那份数据源（`const` 里展不开）
     final copies = [
-      '你说的事它真会去做，不只是陪聊。',
+      // ⚠️ landing 那一屏（主人 2026-09-21 点名要的）——**直接引数据源**，不手抄
+      ...landingPoints,
+      landingPromise,
+      landingTitle,
+      landingStart,
+      landingStartHint,
+      landingAndroid,
+      landingAndroidNotYet,
+      landingFootNote,
       '所以这道门只有你能开。',
       '装机器时给你的那一串',
       '打开',
