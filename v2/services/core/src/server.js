@@ -483,6 +483,13 @@ export function createServer({
         const bin = W.trash ? W.trash.list() : [];
         return sendJson(res, 200, buildExport(W.store.readAll(W.timeline.id), {
           hiddenIds: bin.flatMap((t) => t.messageIds),
+          // ⚠️ **这个数 = 删除次数**，而它**恰好等于"删掉的轮数"** ——
+          //    因为客户端**一次只删一轮**（`turnMessageIds(id)` ⇒ 一次 remove 调用）。
+          //    🔴 **别顺手把它"修"成别的东西**（2026-09-22 我差点改错）：改成
+          //    `sum(messageIds.length)` 数的是**消息条数**（一轮两条 ⇒ 会翻倍）。
+          //    ⚠️ 真正的缺口是：**API 允许一次删多轮**（我做验真钥匙的探针时一次删了 3 轮），
+          //    那时末尾那句会**少报**（说"1 条"）—— 现在 UI 走不到那条路，
+          //    记在账 #46 上（哪天真做多选删除，就得把"轮数"存进回收站里）。
           hiddenCount: bin.length,
         }));
       }
