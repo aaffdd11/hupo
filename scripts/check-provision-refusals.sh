@@ -81,7 +81,7 @@ for nm in '..%2f..%2fetc.req' '3.req.req' '0.req' '01.req' 'a.req' '1;id.req' '$
     # A5：拒了就必须**删掉**，不然 `.path` 单元会反复触发它
     bad "「$nm」被拒了，但**申请没删**（会反复触发）"
   elif [ ! -e "$f.failed" ]; then
-    bad "「$nm」被拒了，但**没留 `.failed` 标记**（那个人会在等待屏上永远等）"
+    bad "「$nm」被拒了，但**没留 「.failed」 标记**（那个人会在等待屏上永远等）"
   else
     ok "「$nm」⇒ 拒 + 删 + 留标记"
   fi
@@ -211,7 +211,117 @@ fi
 
 # ══════════════════════════════════════════════════════════════════
 echo
-echo "⑩ 这一趟**没有真建出任何租户**（判据脚本自己不许有副作用）"
+echo "⑩ 🔴 **助手那段编排**：它有没有按约定去调那两个脚本、调完有没有收干净"
+# ══════════════════════════════════════════════════════════════════
+# ⚠️ 这一节验的是**从来没被执行过一次的那一段**：助手自己的编排
+#    （校验 → 调 `create-tenant-users.sh` → 调 `create-tenant-pool.sh` → 删申请）。
+#    真跑它要建真的 OS 用户 ⇒ 那要主人签字。
+#    ⇒ **把两个脚本换成"桩"**：助手是按**自己所在目录**去找它们的
+#      ⇒ 把助手拷进一个临时目录、旁边放两个桩，它调的就是桩。
+#    于是**编排的骨架**（顺序 · 传下去的东西 · 成功/失败两条路的收尾）
+#    今天就能验掉，而**这台机器上什么都不会多出来**。
+ORCH="$WORK/orch"
+rm -rf "$ORCH"
+mkdir -p "$ORCH/lib" "$ORCH/req"
+chmod 0755 "$ORCH" "$ORCH/lib" "$ORCH/req"
+cp "$HELPER" "$ORCH/lib/provision-tenant-request.sh"
+chmod 0755 "$ORCH/lib/provision-tenant-request.sh"
+
+# 桩：把"被调了一次"和"当时那几个变量"记一行（`$ORCH` 现在展开、`\$` 留给运行时）
+stub() {  # stub <名字> <退出码>
+  cat > "$ORCH/lib/$1" <<STUB
+#!/usr/bin/env bash
+{
+  echo "called=$1"
+  echo "  users=\${HUPO_TENANT_USERS:-}"
+  echo "  owner=\${HUPO_OWNER_USER:-}"
+  echo "  tpl=\${HUPO_TENANT_TEMPLATE:-}"
+  echo "  args=\$*"
+} >> "\${STUB_LOG:?}"
+exit $2
+STUB
+  chmod 0755 "$ORCH/lib/$1"
+}
+stub create-tenant-users.sh 0
+stub create-tenant-pool.sh 0
+
+post_req() { : > "$ORCH/req/$1.req"; chown "$SERVICE_USER" "$ORCH/req/$1.req"; }
+run_orch() {
+  env HUPO_PROVISION_DIR="$ORCH/req" HUPO_PROVISION_STAMP="$ORCH/.last" \
+      HUPO_PROVISION_MIN_INTERVAL=0 HUPO_TENANT_TEMPLATE="$CONF" \
+      HUPO_SERVICE_USER="$SERVICE_USER" STUB_LOG="$ORCH/log" \
+      bash "$ORCH/lib/provision-tenant-request.sh" 2>&1
+}
+
+# ── 成功那条路 ──
+rm -f "$ORCH/log"; post_req 3
+out="$(run_orch)"
+order="$(grep '^called=' "$ORCH/log" 2>/dev/null | tr '\n' ' ')"
+if [ "$order" = "called=create-tenant-users.sh called=create-tenant-pool.sh " ]; then
+  ok "两个脚本**各调一次、顺序对**（先 users 再 pool）"
+else
+  bad "没按约定调（记到的是：${order:-无}）"
+fi
+if grep -q 'users=hupo-t3' "$ORCH/log" 2>/dev/null; then
+  ok "把那一台的名字传下去了（HUPO_TENANT_USERS=hupo-t3）"
+else
+  bad "没把名字传下去：$(grep 'users=' "$ORCH/log" 2>/dev/null | head -1)"
+fi
+if grep -q "tpl=$CONF" "$ORCH/log" 2>/dev/null; then
+  ok "模板路径也传下去了（两边读**同一份**）"
+else
+  bad "模板路径没传：$(grep 'tpl=' "$ORCH/log" 2>/dev/null | head -1)"
+fi
+if grep -q 'args=--yes' "$ORCH/log" 2>/dev/null; then
+  ok "是**真做**那个模式调的（「--yes」），不是只看"
+else
+  bad "调的时候没给 「--yes」：$(grep 'args=' "$ORCH/log" 2>/dev/null | head -1)"
+fi
+if [ -e "$ORCH/req/3.req" ]; then bad "建成了却**没收掉申请**（「.path」 单元会反复触发它）"; else ok "申请收掉了"; fi
+if [ -e "$ORCH/req/3.req.failed" ]; then bad "建成了却留了 「.failed」 标记"; else ok "没留 「.failed」（本来就没失败）"; fi
+
+# ── 失败那条路（负向对照：**也要收干净，只是多留一个痕**）──
+stub create-tenant-pool.sh 1
+rm -f "$ORCH/log"; post_req 4
+out="$(run_orch)"
+if [ -e "$ORCH/req/4.req" ]; then bad "失败了却**没删申请**（会反复触发）"; else ok "失败了也把申请删了"; fi
+if [ -e "$ORCH/req/4.req.failed" ]; then ok "留了 「.failed」 标记（那个人**不会**在等待屏上永远等）"; else bad "失败了却没留标记 ⇒ 用户会永远等"; fi
+if grep -q '✗ 第 4 号没建成' <<<"$out"; then ok "日志里如实说了没建成"; else bad "日志没说清：$(tail -1 <<<"$out")"; fi
+
+# ── 🔴 自证：调的是**桩**，真的那两个脚本一次都没被碰 ──
+if grep -q "$ROOT/scripts/create-tenant" "$ORCH/log" 2>/dev/null; then
+  bad "真脚本被调了 —— 这一节就不是隔离的了"
+else
+  ok "调的是**桩**（真那两个脚本一次都没被碰）"
+fi
+
+# ══════════════════════════════════════════════════════════════════
+echo
+echo "⑪ 🔴 判据脚本**自己**：注释里之外不许有反引号"
+# ══════════════════════════════════════════════════════════════════
+# ⚠️ **为什么单立一条**（2026-09-21，同一个错我犯了**两次**）：
+#    `echo "… `--yes` …"` 里的反引号会被 bash 当**命令替换**执行 ——
+#    于是那句提示变成了空的、stderr 里多一行 `--yes: command not found`，
+#    而**断言照样"过"**（因为它判的是 grep 的结果，不是那句话）。
+#    ⇒ 那种坏法**不报错、只是悄悄把话说错** —— 正是这个项目最忌的形状。
+#    ⇒ 这几份判据压根不需要反引号（一律用 `$( )`），所以**一刀切禁止**，
+#      让下一次再犯的时候**当场红**。
+# ⚠️ 反引号**不许写成字面量**（不然这一行自己就把自己抓了）：
+#    用八进制的 `\140` 让 grep 收到一个真反引号，而文件里没有那个字符。
+BT="$(printf '\140')"
+lint=0
+for jf in "$ROOT"/scripts/check-provision-*.sh; do
+  hits="$(grep -v '^[[:space:]]*#' "$jf" | grep -n "$BT" || true)"
+  if [ -n "$hits" ]; then
+    bad "$(basename "$jf") 注释外有反引号：$(head -1 <<<"$hits" | cut -c1-64)"
+    lint=1
+  fi
+done
+[ "$lint" = "0" ] && ok "这几份判据里（注释之外）一个反引号都没有"
+
+# ══════════════════════════════════════════════════════════════════
+echo
+echo "⑫ 这一趟**没有真建出任何租户**（判据脚本自己不许有副作用）"
 # ══════════════════════════════════════════════════════════════════
 if id hupo-t3 >/dev/null 2>&1; then
   bad "跑判据把 hupo-t3 建出来了 —— 这套判据有副作用"
@@ -223,8 +333,15 @@ rm -rf "$WORK"
 echo
 echo "──────────────────────────────"
 if [ "$fail" = "0" ]; then
-  echo "✅ 全过（$pass 条）—— **但只验了"拒"的那一半**"
-  echo "⚠️ "真建一台"要主人签字装完单元之后才验得了（契约 §五 末尾那句）。"
+  echo "✅ 全过（$pass 条）。这一趟覆盖的是："
+  echo "   ①-⑧ **拒的那一半**（路径穿越/注入/符号链接/属主/内容藏命令/超上限/坏模板/非 root）"
+  echo "   ⑨   **跨语言**：服务侧（JS）与特权侧（shell）推出来的名字/编号逐字相同"
+  echo "   ⑩   **助手那段编排**（拿桩验的）：调谁、按什么顺序、传什么、成败两条路怎么收尾"
+  echo "   ⑪   **判据自己**：注释外不许有反引号（它会悄悄把话替换掉）"
+  echo "   ⑫   这一趟**没有真建出任何租户**"
+  echo
+  echo "⚠️ **仍然没验**的只有"真建一台"与"装完之后服务身份不变" ——"
+  echo "   那两条要主人签字装完单元之后才验得了（契约 §五 末尾那句）。"
   exit 0
 else
   echo "✗ $fail 条没过（过 $pass 条）"

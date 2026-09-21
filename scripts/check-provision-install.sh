@@ -169,7 +169,7 @@ out="$(bash "$INSTALLER" --check --root "$TEST" 2>&1)"; rc=$?
 if [ "$rc" != "0" ] && grep -q '不一致' <<<"$out"; then
   ok "认出来了（退出码非 0），而且它说清了是哪一份：$(grep '不一致' <<<"$out" | head -1 | cut -c1-60)"
 else
-  bad "🔴 仓库改了、`--check` 还说一致（rc=$rc）—— 那这道核对就是摆设"
+  bad "🔴 仓库改了、「--check」 还说一致（rc=$rc）—— 那这道核对就是摆设"
 fi
 cp -f "$MUTATED.bak" "$MUTATED"; rm -f "$MUTATED.bak"; MUTATED=""
 out="$(bash "$INSTALLER" --check --root "$TEST" 2>&1)"
