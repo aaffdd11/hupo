@@ -303,6 +303,15 @@ portable_part() {
   else
     bad "🔴 回滚不灵：现在是 $(bash "$ROOT/scripts/build-tenant-code.sh" --root "$ROOTDIR" --current)"
   fi
+  # 🔴 **`--prune` 不许碰那条软链**（2026-09-21 从 `--list` 的输出里看出来的）：
+  #    `"$CODE_ROOT"/*/` 会把 `current` 也匹配进来 ⇒ 它会被当成"一版"删掉 ⇒
+  #    容器一重开就挂到一个不存在的路径上（`podman` 会把它建成**空目录**）。
+  bash "$ROOT/scripts/build-tenant-code.sh" --root "$ROOTDIR" --prune --yes >"$T/prune.txt" 2>&1
+  if [ -L "$ROOTDIR/current" ] && [ "$(bash "$ROOT/scripts/build-tenant-code.sh" --root "$ROOTDIR" --current)" = "$FP1" ]; then
+    ok "收拾旧版本**没碰那条软链**（current 还在，还指着 $FP1）"
+  else
+    bad "🔴 --prune 把 current 那条软链弄没了 —— 容器下次重开就挂到空目录上"
+  fi
   # 旧版本**不许**被顺手删掉（删了就回不去了）
   if [ -d "$ROOTDIR/$FP3" ] && [ -d "$ROOTDIR/$FP1" ]; then
     ok "回滚目标还在（没人顺手把旧版本删了）"

@@ -181,6 +181,12 @@ if [ "$MODE" = "list" ]; then
   echo "── 产品层版本（$CODE_ROOT）──────────────"
   for d in "$CODE_ROOT"/*/; do
     [ -f "$d/manifest.json" ] || continue
+    # 🔴 **`current` 是那条软链，不是一版**（2026-09-21 从 `--list` 的输出里看出来的）：
+    #    `"$CODE_ROOT"/*/` 会把软链也匹配进来 ⇒ 它会被当成"一版"列出来，
+    #    而下面 `--prune` 的同一段逻辑会**把它删掉** —— 那之后容器一重开
+    #    就挂到一个不存在的路径上（`podman` 会把它建成**空目录**）。
+    #    ⇒ 凡是软链一律不当版本看。
+    [ -L "${d%/}" ] && continue
     v="$(basename "$d")"
     when="$("$NODE" -e 'try{process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).builtAt)}catch{}' "$d/manifest.json" 2>/dev/null)"
     mark=" "; [ "$v" = "$CUR" ] && mark="←"
@@ -313,6 +319,7 @@ if [ "$MODE" = "prune" ]; then
   RM=()
   for d in "$CODE_ROOT"/*/; do
     [ -f "$d/manifest.json" ] || continue
+    [ -L "${d%/}" ] && continue   # ⚠️ 软链（`current`）不是一版，**永远不许删**
     v="$(basename "$d")"
     case " $KEEP " in *" $v "*) say "留 $v" ;; *) RM+=("$v") ;; esac
   done
