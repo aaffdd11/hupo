@@ -7,8 +7,6 @@
 //
 // ⚠️ 提示档（`test/widget` 的通用规矩）；五档不溢出/命中区在 `accessibility_test.dart`（硬闸）。
 
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;

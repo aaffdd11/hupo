@@ -21,6 +21,7 @@ import 'api.dart';
 import 'draft_store.dart';
 import 'process_level_store.dart';
 import 'stream.dart';
+import '../models/token_sub.dart';
 import 'timeline_store.dart';
 import 'token_store.dart';
 
@@ -36,7 +37,25 @@ class ChatController extends ChangeNotifier {
   })  : _token = token,
         local = local ?? TimelineStore(),
         drafts = drafts ?? DraftStore(),
-        levels = levels ?? ProcessLevelStore();
+        levels = levels ?? ProcessLevelStore() {
+    // ⚠️ 构造时就带令牌的场合（`main.dart` 冷启动那条路）也要先绑好命名空间，
+    //    否则第一次 `_restoreLocal()` 读的还是默认那一份（= 上一个人的）。
+    _bindNamespace(token);
+  }
+
+  /// **把两个缓存的命名空间绑到"这是谁"**（多租户 · `38-ISOLATION-SPLIT.md` §8.1）。
+  ///
+  /// ⚠️ 时机是硬要求：**必须在读缓存之前**（`_restoreLocal()` 之前）。
+  ///    晚一步，那一屏画的就还是上一个人的世界。
+  /// ⚠️ 令牌读不出 `sub` 时退回一个**谁都不属于**的名字（`cacheNamespaceFallback`），
+  ///    **绝不**退回某个可能撞上真人的值。
+  /// ⚠️ `levels`（过程档位）**故意不绑**：它是**设备级偏好**，按账号分反而会让
+  ///    同一个人换台设备就丢设置。见 §8.2 最后一句。
+  void _bindNamespace(String? token) {
+    final ns = cacheNamespaceOf(token);
+    local.namespace = ns;
+    drafts.namespace = ns;
+  }
 
   final Api api;
   final TokenStore tokens;
@@ -164,6 +183,8 @@ class ChatController extends ChangeNotifier {
   ///    ⇒ 顺序是：**先画本机 ⇒ 再续期 ⇒ 再连流**。
   Future<void> start({required String token, bool openStream = true}) async {
     _token = token;
+    // 🔴 **读缓存之前**先绑命名空间（晚一步 = 那一屏画的是上一个人的世界）
+    _bindNamespace(token);
     await tokens.write(token);
     _needsSetup = false;
     _lastError = null;
@@ -499,6 +520,11 @@ class ChatController extends ChangeNotifier {
     _draftsHandedOff = null; // 存档要清了 ⇒ "上一次交出去的那份"也不作数了
     local.clear();
     drafts.clear();
+    // 🔴 **还要清掉"别人的那一份"**（共用设备）：只清自己那份等于没清 ——
+    //    他退出了，下一个用这台机器的人照样能把那个世界画出来（`38` §8.2）。
+    //    ⚠️ 这两句**故意不 await**：清缓存是"最好有"，不许挡住回登录页那一屏。
+    local.clearAllNamespaces();
+    drafts.clearAllNamespaces();
   }
 
   void _maybeSave(Map<String, dynamic> event) {

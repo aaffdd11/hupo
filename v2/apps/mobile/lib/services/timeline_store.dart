@@ -32,9 +32,16 @@ class TimelineStore {
   TimelineStore({this.namespace = 'single'});
 
   /// 命名空间。**换一个就是另一份缓存**（互不可见）。
-  final String namespace;
+  ///
+  /// ⚠️ 多租户之后它**按人**（`token_sub.dart` 从令牌里读出的 `sub`）——
+  ///    所以它**不是 `final`**：换个人登录要能换一份。
+  ///    改它的时机只有一个：拿到令牌之后、**读缓存之前**（`ChatController._bindNamespace`）。
+  String namespace;
 
   static const _version = 1;
+
+  /// 这一族键的**前缀**：所有命名空间共用一个前缀，靠 `.` 后面那一段区分。
+  static String get keyPrefix => 'hupo_timeline_v$_version.';
 
   /// 留最后多少条。一屏大概十几条，200 条够翻好几屏，也不至于写不动。
   static const capEvents = 200;
@@ -139,6 +146,28 @@ class TimelineStore {
       final p = await SharedPreferences.getInstance();
       await p.remove(key);
     } catch (_) {}
+  }
+
+  /// **把所有命名空间的那份缓存都清掉**（不只是当前这个）。
+  ///
+  /// ⚠️ 为什么必须是"全部"而不是"自己那份"（`38-ISOLATION-SPLIT.md` §8.2）：
+  ///    **共用设备**上换个人登录时，上一个人的缓存**还在盘上**。
+  ///    只清自己那一份 = 等于没清 —— 他退出了，下一个用这台机器的人
+  ///    照样能把那个世界画出来。
+  ///
+  /// ⚠️ 跟着 [clear] 一起排队：退出登录可能**正好落在**一次写的中途，
+  ///    那次写会晚一步落地、把刚判死的缓存写回去（见 `_enqueue` 的说明）。
+  Future<void> clearAllNamespaces() => _enqueue(_clearAllNamespaces, null);
+
+  Future<void> _clearAllNamespaces() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      for (final k in p.getKeys().where((k) => k.startsWith(keyPrefix)).toList()) {
+        await p.remove(k);
+      }
+    } catch (_) {
+      // 清不掉也不许让界面挂掉（缓存是"最好有"）
+    }
   }
 
   /// 等到**已经交出去的那几次存取都做完**（排队队列追平）。
