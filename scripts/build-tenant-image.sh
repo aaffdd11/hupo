@@ -81,24 +81,43 @@ cat > "$R/app/entry.mjs" <<'ENTRY'
 import nodeFs from 'node:fs';
 
 // 卷里的目录：镜像建不了（会被挂载盖住），只能开机建。
+// ⚠️ 布局照 `02-ARCHITECTURE.md` §2.1：`main` 与 `workspaces/` **必须平行**
+//    （否则主目录的 agent 会写进子工作区——"算错一个相对路径"就发生）。
+//    ⚠️ 主目录 root **不是 home**（§2.2 规则 1）：home 当 root ⇒
+//       agent 读得到自己的 key、写得进 `.bashrc` = 持久化代码执行。
+const data = process.env.HUPO_DATA ?? '/data';
 const dirs = [
-  process.env.HUPO_DATA ?? '/data',
-  process.env.HUPO_AGENT_CWD ?? '/data/hupo-workspace',
+  data,
+  `${data}/main`,
+  `${data}/workspaces`,
+  `${data}/hupo`,
 ];
 for (const d of dirs) {
   try { nodeFs.mkdirSync(d, { recursive: true, mode: 0o700 }); } catch { /* 已存在 */ }
 }
+// 属主照权限席给的：`/data` 是 root `0711`（能穿过去、列不出别人），
+// 里面那三样归 **agent(1000) `0700`** —— 服务(root)读得到，别的租户读不到。
+for (const d of [`${data}/main`, `${data}/workspaces`, `${data}/hupo`]) {
+  try { nodeFs.chownSync(d, 1000, 1000); nodeFs.chmodSync(d, 0o700); } catch { /* 尽力 */ }
+}
+try { nodeFs.chmodSync(data, 0o711); } catch { /* 尽力 */ }
+
 // 起真正的服务（**同一个进程**，不多一层 shell）
 await import('./src/serve.js');
 ENTRY
 echo "  入口: /app/entry.mjs"
 
 # ── ③ 最小的 /etc（node 与 shell 都要用）──
+# ⚠️ 两个身份（容器内权限席的结论）：**服务/终端 = root**（uid0→宿主租户），
+#    **agent 的手 = uid 1000**。理由：userns 的 root 有 CAP_DAC_OVERRIDE
+#    ⇒ agent 若是 uid0，**任何权限位都拦不住它读 key**。
 cat > "$R/etc/passwd" <<'EOF'
 root:x:0:0:root:/data:/bin/sh
+agent:x:1000:1000:agent:/data/main:/bin/sh
 EOF
 cat > "$R/etc/group" <<'EOF'
 root:x:0:
+agent:x:1000:
 EOF
 echo "127.0.0.1 localhost" > "$R/etc/hosts"
 echo "nameserver 10.0.2.3" > "$R/etc/resolv.conf"
@@ -112,7 +131,7 @@ ctr="$("$BUILDAH" from scratch)"
   --env HUPO_PORT=8080 \
   --env HUPO_HOST=0.0.0.0 \
   --env HUPO_WEB=/nonexistent \
-  --env HUPO_AGENT_CWD=/data/hupo-workspace \
+  --env HUPO_AGENT_CWD=/data/main \
   --cmd '["/bin/node","/app/entry.mjs"]' \
   "$ctr" >/dev/null
 "$BUILDAH" commit "$ctr" "$IMG" >/dev/null
@@ -125,7 +144,14 @@ echo "✅ 镜像好了：$IMG（$( "$PODMAN" images --format '{{.Size}}' "$IMG" 
 echo "▶ 跑一台"
 PORT="${HUPO_TENANT_PORT:-18090}"
 DATA="$(mktemp -d)"
-cid="$("$PODMAN" run -d --rm -p "127.0.0.1:$PORT:8080" -v "$DATA:/data" "$IMG" 2>&1 | tail -1)"
+cid="$("$PODMAN" run -d --rm \
+    -p "127.0.0.1:$PORT:8080" -v "$DATA:/data" \
+    --security-opt=no-new-privileges \
+    --cap-drop=ALL \
+    --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=FOWNER --cap-add=FSETID \
+    --cap-add=SETUID --cap-add=SETGID --cap-add=SETFCAP --cap-add=MKNOD --cap-add=KILL \
+    --pids-limit=512 --memory=768m --memory-swap=768m \
+    "$IMG" 2>&1 | tail -1)"
 echo "  容器 ${cid:0:12} · 数据 $DATA · 口 127.0.0.1:$PORT"
 for _ in $(seq 1 20); do
   code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/version" 2>/dev/null || true)"
