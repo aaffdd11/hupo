@@ -5,7 +5,7 @@
 //     ① 容器起来 —— 是个**空壳**（没有 key、没有用户数据）
 //     ② 里面那个服务先等（它就是个"配置入口"，还不干正事）
 //     ③ 用户在网页上填**自己的** key ⇒ 中心当管道送进那个入口
-//     ④ 入口把 key 放到该在的地方（`/run/hupo/creds.yaml`，tmpfs · root 0600）
+//     ④ 入口把 key 放到该在的地方（`<HUPO_DATA>/creds.yaml`，**卷** · root 0600 —— `key-path.mjs`）
 //     ⑤ 这才启动真正那套服务
 //
 // ── 三条纪律 ──────────────────────────────────────────────
@@ -16,6 +16,8 @@
 
 import nodeFs from 'node:fs';
 import nodeNet from 'node:net';
+
+import { adoptKeyFile } from './key-path.mjs';
 
 /** `creds.yaml` 里那个字段名（`model-proxy.mjs` 的 `parseKey` 认得它）。 */
 export const KEY_FIELD = 'HUPO_MODEL_KEY';
@@ -47,11 +49,16 @@ export function writeKeyFile(keyFile, key, fs = nodeFs) {
  */
 export function watchForKey({
   socketPath,
-  keyFile,
+  keyFile = adoptKeyFile(),
   attemptMs = 60_000,
   idleMs = 5_000,
   log = (m) => console.log(m),
 } = {}) {
+  // 🔴 **归一必须写在函数体里，不能只写在默认值里**（2026-09-21 真机栽的第三层）：
+  //    默认值**只在参数是 `undefined` 时**才生效，而镜像里那个**旧入口**是
+  //    **显式**传 `keyFile: '/run/hupo/creds.yaml'`（tmpfs）进来的 ⇒ 默认值被绕过，
+  //    钥匙照样写进 tmpfs（现象：容器日志说"拿到凭据了"，而**卷里没有那个文件**）。
+  keyFile = adoptKeyFile(keyFile);
   let stopped = false;
   let timer = null;
 
@@ -110,12 +117,13 @@ export function watchForKey({
  */
 export function fetchKeyFromHost({
   socketPath,
-  keyFile,
+  keyFile = adoptKeyFile(),
   waitMs = 120_000,
   retryMs = 3_000,
   hardMs = null,
   log = (m) => console.log(m),
 } = {}) {
+  keyFile = adoptKeyFile(keyFile); // ⚠️ 同上：显式传进来的坏值也要在这里被纠正
   return new Promise((resolve) => {
     let done = false;
     let buf = '';

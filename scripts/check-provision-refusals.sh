@@ -359,7 +359,11 @@ BT="$(printf '\140')"
 #    我第一版把范围放宽到 `check-*.sh` ⇒ **四处假警报**，而假警报的下场
 #    就是下一个人把这道闸关掉（那正是这个项目最怕的）。排除的几份**各有理由**：
 #      · `check-crash-recovery.sh` / `check-persona.sh` / `check-tenant-data-plane.sh`
-#        —— 里面**嵌了 JS / Python**，那儿的反引号是**别的语言的语法**；
+#        / `check-key-delivery.sh`
+#        —— 里面**嵌了 JS / Python**，那儿的反引号是**别的语言的语法**
+#        （⚠️ 2026-09-21 我又栽了一次：把 `check-key-delivery.sh` 加进名单，
+#          然后**一刀切**把反引号换成「」⇒ 把它里面那些 **JS 模板字符串**改坏了，
+#          现象是 `SyntaxError: Invalid or unexpected token`，而判据自己还在往下跑）；
 #      · `create-tenant-users.sh` / `create-tenant-pool.sh`
 #        —— 末尾有**带引号的 heredoc**（给人看的文档），带引号 ⇒ shell 不展开 ⇒ 无害。
 #        ⚠️ 这两个的"不许有不带引号的 heredoc"由 `check-provision-install.sh` ⑥·补 管着 ——

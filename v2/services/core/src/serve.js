@@ -31,6 +31,8 @@ import { describeAdmission, readAdmission } from './admission.js';
 import { applyPrune, groupSlugFor, planPrune, scanEntries, summarize } from './prune.js';
 import { createTurnStatus, statusPath } from './turn-status.js';
 import { ROLLOUT_SWEEP_MS, compareTenantBuild, createNagBook, planRollout, readProductLayer } from './product-layer.js';
+import { DEFAULT_DROP_DIR, createKeyDrop, resolveDropName } from './key-drop.js';
+import { keyFileFor } from './key-path.mjs';
 import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
 
 
@@ -157,7 +159,7 @@ worlds = new Worlds({
     // ⚠️ 顺手把盒里那一把也删掉：上游已经不认它了，留着只是让它继续被拿去试。
     //    （宿主上没有这个文件，删不到就是删不到，不影响。）
     try {
-      nodeFs.unlinkSync(process.env.HUPO_KEY_FILE ?? '/run/hupo/creds.yaml');
+      nodeFs.unlinkSync(keyFileFor());
     } catch {
       /* 不在（宿主上就是这样）或者删不掉 —— 都不该把收口带走 */
     }
@@ -357,6 +359,11 @@ const rolloutTimer = setInterval(() => {
 }, ROLLOUT_SWEEP_MS);
 rolloutTimer.unref?.();
 
+// ⚠️ 先声明（投递看守在**下面**才建得起来：它要用 `channelTenantNames`）。
+//    用 `let` + `?.` 是因为通道**开机就可能连进容器**，而那时候它还没建好 ——
+//    直接引用一个 `const` 会撞 TDZ（那个回调被 try 包着，只会打一行警告、真事丢了）。
+let keyDrop = null;
+
 const channel = new TenantChannel({
   dir: cfg.tenantChannelDir,
   // ⚠️ 收到的 `tenant` 是**套接字名**；key 按 **userId** 存 ⇒ 这里要翻一次
@@ -378,6 +385,17 @@ const channel = new TenantChannel({
   },
   // ★ **容器说"那把钥匙不灵了"**（`44-CONTAINER-MODEL-KEY.md` §六）：
   //   把宿主这本账也收拾干净 —— 不然用户那一屏会一直说"有钥匙"，回不去重填。
+  // ★ **容器自报"我有钥匙了"**（2026-09-22 加 · `46-KEY-DELIVERY.md` §四）：
+  //   两种情况会走到这儿 —— 主人在**盒子里**放了一把（`put-key`），或者
+  //   主人从**本机投递**进来一把。两种情况下中心那本"这把用不了"的旧账都该清掉，
+  //   不然用户明明换了一把好的，界面上还挂着"刷新一下重新填"。
+  onKeyUp: (tenant) => {
+    const uid = userOfTenant(tenant);
+    if (!uid) return;
+    if (badKeys.delete(uid)) console.log(`  🔑 ${uid} 换了一把能用的 ⇒ 把"要重填"那条清掉`);
+    // ★ 投递那条路：**它自己说拿到了**，才把主人投的那个文件删掉（契约 §三.2）
+    keyDrop?.confirmed(uid);
+  },
   onKeyBad: (tenant, why) => {
     const uid = userOfTenant(tenant);
     if (!uid) return;
@@ -428,6 +446,39 @@ if (cfg.tenantChannelDir && channelTenantNames.length > 0) {
     console.warn(`  ⚠️ 租户通道没全开起来：${err?.message ?? err}（那几台容器会一直等配置）`);
   }
 }
+// ════════════════════════════════════════════════════════════
+// ★ **本机投递一把钥匙**（2026-09-22 · 契约 `docs/dev/46-KEY-DELIVERY.md` §三.2）
+//
+//   主人要的第三个入口：*"还要能从外面投进去（不动 root）"*。
+//   往 `<投递目录>/<租户名|编号|手机号>.key` 里写一把，宿主替他送进那台容器。
+//
+//   ⚠️ **它不新增能力**：能写那个目录的人就是 `deploy`（主人），他本来就能
+//      `podman exec`、就能跑 `scripts/…`。这条路的价值是**顺手**。
+//   ⚠️ **送到才删**：文件留到那一台**自报"我有钥匙了"**才删；认不出的挪进
+//      `.rejected/`（**留证据，不删**）—— 那里面可能是一把真钥匙。
+//   ⚠️ **钥匙永远不进日志**（这一整段里没有一处打 key）。
+// ════════════════════════════════════════════════════════════
+// ⚠️ **只在宿主那侧起**（2026-09-21 一次性容器里看出来的）：盒子里 `os.homedir()`
+//    是 `/data` ⇒ 默认目录会算成 `/data/.hupo-keys`，而"投递"这件事**压根不是盒里的事**
+//    ⇒ 盒里的横幅会报一个不存在的目录（那是**在说假话**）。
+const dropDir = process.env.HUPO_KEY_DROP ?? DEFAULT_DROP_DIR;
+const isHostSide = !process.env.HUPO_CHANNEL; // 盒里那条通道是必给的（`--env HUPO_CHANNEL=…`）
+if (isHostSide) {
+keyDrop = createKeyDrop({
+  dir: dropDir,
+  deliver: (userId, key) => setModelKey(userId, key),
+  resolve: (name) =>
+    resolveDropName(name, {
+      tenantNames: channelTenantNames,
+      userIdOfTenant: (t) => userOfTenant(t),
+      tenantOfUser: (u) => tenantOf(u),
+      userIdOfPhone: (p) => users.get(p)?.id ?? null,
+    }),
+  log: (m) => console.log(m),
+});
+keyDrop.start();
+}
+
 // ⚠️ 这条路关着的时候要**说一声**（不然"新号一直排队"看起来像别的地方坏了）
 if (!tpl.ok) {
   console.warn(
@@ -448,9 +499,15 @@ function setModelKey(userId, key) {
   // ★ 他又填了一把 ⇒ 上一把"用不了"的账**当场清掉**
   badKeys.delete(userId);
   tenantKeys.set(userId, key);
-  channel.pushKey(tenant, key);
-  console.log(`  🔑 ${userId} 的模型凭据已收下（送给他那台容器；**不落盘**）`);
-  return { ok: true };
+  const pushed = channel.pushKey(tenant, key);
+  // ⚠️ **这句话 2026-09-22 改过**：原来写"**不落盘**"，而钥匙现在会落在他自己那台
+  //    容器的**卷**里（`46-KEY-DELIVERY.md` §二）⇒ 那句话当时起就是**假话**了。
+  //    中心这一侧仍然不落盘（内存里那份宿主一重启就没了），落盘的是**他那台自己**。
+  console.log(
+    `  🔑 ${userId} 的模型凭据已收下（送给他那台容器；中心不留，他那台自己存在卷里）` +
+      (pushed > 0 ? '' : '（⚠️ 他那台现在没连着，等他连上会自动推过去）'),
+  );
+  return { ok: true, why: pushed > 0 ? 'pushed' : 'queued', pushed };
 }
 
 /**
@@ -771,6 +828,15 @@ console.log(
     }${channel.builds.size > 0 ? `｜在跑的：${[...channel.builds.entries()].map(([t, b2]) => `${t}=${b2}`).join(' ')}` : ''}`;
   })(),
 );
+if (isHostSide) {
+  console.log(
+    // ⚠️ **投递目录要写在横幅上**：主人得知道往哪儿放那个 `.key`
+    //    （`46-KEY-DELIVERY.md` §三.2）。⚠️ 它只是个**目录**，不含任何钥匙。
+    `  投递     ${dropDir}${
+      nodeFs.existsSync(dropDir) ? '' : '（还没有这个目录，服务会自己建）'
+    } · 放 <租户名|编号|手机号>.key，我替你送进那台容器`,
+  );
+}
 console.log(
   // ⚠️ **这一行是多租户接上之后必须有的**：不报它，就看不出「到底有几个人各过各的」。
   //    ⚠️ 它是**建了几份世界**，**不是「在线人数」** —— 这两个数不是一回事。

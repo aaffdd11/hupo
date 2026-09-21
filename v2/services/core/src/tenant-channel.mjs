@@ -1,7 +1,7 @@
 // **宿主 ↔ 容器那条通道**（多租户 ②-4）：把"这个人的 key"送进他的容器。
 //
 // ── 它解决什么 ────────────────────────────────────────────
-// key 必须住在容器里的 **tmpfs**（`/run/hupo/creds.yaml`，root 0600），
+// key 必须直接进到**那个人的容器里**（`<HUPO_DATA>/creds.yaml`，卷 · root 0600 —— `key-path.mjs`），
 // 而**宿主写不进容器的 tmpfs**（`37-MULTITENANT.md` §12.1 那五步里的第 ③ 步）。
 // ⇒ 反过来：**容器开机时连出来**，从宿主这里领走它那一份配置。
 // 这同时就是主人要的那个形状：**容器起来是个空壳 → 等着 → 配置到了才启动真正的服务**。
@@ -87,6 +87,14 @@ export class TenantChannel {
   #builds = new Map();
   /** 宿主侧那个回调（见构造参数 `onBuild`）。 */
   #onBuild = null;
+  /**
+   * 容器**自报"有钥匙了"**时的回调（2026-09-22 加 · 契约 `46-KEY-DELIVERY.md` §四）。
+   *
+   * ⚠️ 为什么需要它：钥匙现在可以在**盒子里**被放进来（`put-key.mjs`），
+   *    也可以由主人**投递**进来。这两种情况下宿主那本"这把用不了"的旧账得清掉 ——
+   *    不然用户明明换了一把好的，界面上还挂着"刷新一下重新填"。
+   */
+  #onKeyUp = null;
 
   /**
    * @param {object} o
@@ -94,7 +102,7 @@ export class TenantChannel {
    * @param {(userId:string)=>(string|null)} o.keyFor  **这个人的 key**；`null` = 还没有
    * @param {(m:string)=>void} [o.log]
    */
-  constructor({ dir, keyFor, log = () => {}, onKeyBad = null, onBuild = null }) {
+  constructor({ dir, keyFor, log = () => {}, onKeyBad = null, onBuild = null, onKeyUp = null }) {
     if (!dir) throw new Error('TenantChannel 需要 dir');
     if (typeof keyFor !== 'function') throw new Error('TenantChannel 需要 keyFor(userId)');
     this.#dir = dir;
@@ -102,6 +110,7 @@ export class TenantChannel {
     this.#log = log;
     this.#onKeyBad = onKeyBad;
     this.#onBuild = onBuild;
+    this.#onKeyUp = onKeyUp;
   }
 
   /** 每台自报的版本（`userId → 指纹`）。**算出来的，不是记出来的**。 */
@@ -271,7 +280,17 @@ export class TenantChannel {
       case 'tunnel-ready': {
         // ★ 容器自报"我这儿有没有钥匙" ⇒ 记下来（**它是这个事实的来源**）
         if (msg?.hasKey === true) {
+          const first = !this.#keyKnown.has(userId);
           this.#keyKnown.add(userId);
+          // ★ **它说"有"** ⇒ 中心那本"这把不灵了"的账跟着清掉（`46-KEY-DELIVERY.md` §四）。
+          //   ⚠️ 只在**从没有变成有**的时候叫（每次重连都叫会刷屏，而且没有新信息）。
+          if (first) {
+            try {
+              this.#onKeyUp?.(userId);
+            } catch (err) {
+              this.#log(`  ⚠️ key-up 回调出错：${err?.message ?? err}`);
+            }
+          }
         } else {
           this.#keyKnown.delete(userId);
           // 🔴 **它说"没有" ⇒ 宿主内存里那份就是错的**（2026-09-21 加）。
@@ -443,9 +462,14 @@ export class TenantChannel {
   }
 
   pushKey(userId, key) {
+    let n = 0;
     for (const conn of this.#conns.get(userId) ?? []) {
       this.#send(conn, { state: 'ready', key });
+      n += 1;
     }
+    // ⚠️ **要如实报"推出去了几条"**（2026-09-22 加）：投递那条路靠它判断
+    //    "那台现在通不通" —— 报个恒真的数就会在**没送到**的时候把主人的文件删掉。
+    return n;
   }
 
   close() {

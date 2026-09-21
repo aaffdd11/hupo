@@ -21,11 +21,36 @@
 import nodeFs from 'node:fs';
 import nodeNet from 'node:net';
 
+import { keyFileFor } from './key-path.mjs';
+
 /** 容器里那个服务听在哪。 */
 export const DEFAULT_LOCAL_TARGET = '127.0.0.1:8080';
 
 /** 一帧多大（base64 之前）。太大伤延迟，太小费帧头。 */
 const CHUNK = 32 * 1024;
+
+/**
+ * 钥匙文件在不在，**跟"最后报给宿主的那句话"比**。**纯函数**（`test/unit` 里钉）。
+ *
+ * 🔴 **基线必须是"最后报出去的"，不是"第一拍看到的样子"**（2026-09-21 真机栽的）：
+ *    主人一投递/一放，钥匙可能在**报到之后、第一拍之前**就出现了 ——
+ *    拿"第一拍"当基线的话，`last` 直接等于 `true` ⇒ **永远不会提示宿主**
+ *    ⇒ 页面一直说"还没有钥匙"，而钥匙明明在。
+ *
+ * @param {{announced: boolean|null, fs?: import('node:fs'), keyFile?: string}} o
+ *        `announced === null` = 还没报过到（那就不比，等 `announce()` 自己记上）
+ * @returns {{changed: boolean, now: boolean}}
+ */
+export function keyPresenceChanged({ announced, fs = nodeFs, keyFile = keyFileFor() } = {}) {
+  let now = false;
+  try {
+    now = fs.existsSync(keyFile);
+  } catch {
+    return { changed: false, now: false };
+  }
+  if (announced === null) return { changed: false, now }; // 还没报到 ⇒ 没什么可比的
+  return { changed: now !== announced, now };
+}
 
 /**
  * 跑隧道代理（**一直在重连**：宿主的服务重启不该让容器里的隧道永久断掉）。
@@ -189,6 +214,49 @@ export function runTunnelAgent({
     }
   };
 
+  /**
+   * **自报一次"我是谁、我这儿有没有钥匙"**（`tunnel-ready`）。
+   *
+   * ⚠️ 抽成一个函数是 2026-09-22 加的：原来这一坨只在**连上的那一刻**发一次，
+   *    而钥匙现在可以在**盒子里**被放进来（`put-key.mjs`，契约 `46-KEY-DELIVERY.md`）——
+   *    那时候连接**早就连着了** ⇒ 宿主那一屏会一直说"还没有钥匙"（**页面在说假话**）。
+   *    ⇒ 钥匙文件**在不在**一变，就再自报一次（见下面那个 `watchKeyPresence`）。
+   */
+  /** **最后报给宿主的是"有"还是"没有"** —— 看门拿它当基线（见 `keyPresenceChanged`）。 */
+  let announcedKey = null;
+
+  const announce = () => {
+    let hasKey = false;
+    try {
+      hasKey = nodeFs.existsSync(keyFileFor());
+    } catch {
+      /* 读不到就当没有 */
+    }
+    const buildId = process.env.HUPO_BUILD_ID ?? 'dev';
+    send({ v: 1, type: 'tunnel-ready', hasKey, buildId });
+    announcedKey = hasKey;
+    return hasKey;
+  };
+
+  /**
+   * 盯着钥匙文件在不在，**一变就再自报一次**。
+   *
+   * ⚠️ 为什么是"隔一会儿看一眼"而不是 `fs.watch`：`/data` 是**卷**（可能是
+   *    网络文件系统、也可能不支持 inotify），而且这件事**不需要实时** ——
+   *    早几秒知道和晚几秒知道，用户看到的都是同一句话。
+   */
+  const watchKeyPresence = () => {
+    const t = setInterval(() => {
+      const saw = keyPresenceChanged({ announced: announcedKey, fs: nodeFs });
+      if (!saw.changed) return;
+      log(saw.now ? '  · 盒子里有人放了一把钥匙 ⇒ 跟宿主说一声' : '  · 钥匙没了 ⇒ 跟宿主说一声');
+      announce();
+      log(`    （宿主那边现在知道这一台${saw.now ? '有' : '没有'}钥匙了）`);
+    }, 5000);
+    t.unref?.();
+    return { stop: () => clearInterval(t) };
+  };
+
   const connect = () => {
     if (stopped) return;
     conn = nodeNet.connect(socketPath);
@@ -197,20 +265,13 @@ export function runTunnelAgent({
       // ★ **顺带报一句"我这儿到底有没有钥匙"**（2026-09-21 主人报的问题：
       //   "为什么刷新后又要我输入 apikey"）。
       //   根因：宿主只在**内存**里记着"送过没有"，它一重启就忘 —— 而钥匙
-      //   **真的在容器里**（`/run/hupo/creds.yaml`，tmpfs）。
+      //   **真的在容器里**（`/data/creds.yaml`，卷里 —— 见 `key-path.mjs`）。
       //   ⇒ 让**容器**当这个事实的来源：它一说"我有"，宿主就不该再问用户要。
-      let hasKey = false;
-      try {
-        hasKey = nodeFs.existsSync(process.env.HUPO_KEY_FILE ?? '/run/hupo/creds.yaml');
-      } catch {
-        /* 读不到就当没有 */
-      }
-      // ★ 自报**版本指纹**（2026-09-21 加 · 契约 `docs/dev/45-TENANT-UPDATE.md` §二）：
+      // ★ 自报"有没有钥匙" + **版本指纹**（契约 `45-TENANT-UPDATE.md` §二）：
       //   宿主据此知道"这一台跑的是哪一版"，也是它决定叫不叫你重开的依据。
-      //   ⚠️ 兜底那份（镜像里的）没有 `manifest.json` ⇒ 它就是 `dev`，**如实报**。
-      const buildId = process.env.HUPO_BUILD_ID ?? 'dev';
-      send({ v: 1, type: 'tunnel-ready', hasKey, buildId });
-      log(`  隧道通了（→ ${localTarget}）· 版本 ${buildId}`);
+      //   ⚠️ 兜底那份（镜像里的）没有 `manifest.json` ⇒ 版本就是 `dev`，**如实报**。
+      const hasKey = announce();
+      log(`  隧道通了（→ ${localTarget}）· 版本 ${process.env.HUPO_BUILD_ID ?? 'dev'} · 钥匙：${hasKey ? '有' : '还没有'}`);
       try {
         onReady?.(); // 报到过了 ⇒ 从现在起认"重开"那句话
       } catch {
@@ -247,9 +308,11 @@ export function runTunnelAgent({
   };
 
   connect();
+  const presence = watchKeyPresence();
   return {
     stop() {
       stopped = true;
+      presence.stop();
       try {
         conn?.destroy();
       } catch {

@@ -122,3 +122,21 @@ test('重复叫它重开 ⇒ 只认一次（宿主每次重连都会说一遍，
 test('没给它状态文件路径 ⇒ **当场报错**（不许悄悄什么都不做）', () => {
   assert.throws(() => createReloader({}), /statusFile/);
 });
+
+// ── 顺带钉住"钥匙在不在"那条看门（契约 `46-KEY-DELIVERY.md` §四）──────
+
+test('🔴 基线是"最后报给宿主的那句话"，不是"第一拍看到的样子"', async () => {
+  const { keyPresenceChanged } = await import('../src/tenant-tunnel-agent.mjs');
+  const fake = (exists) => ({ existsSync: () => exists });
+  // 还没报到 ⇒ 不比（等 announce 自己记上）
+  assert.deepEqual(keyPresenceChanged({ announced: null, fs: fake(true) }), { changed: false, now: true });
+  // 报过"没有"、现在有了 ⇒ 要提示
+  assert.deepEqual(keyPresenceChanged({ announced: false, fs: fake(true) }), { changed: true, now: true });
+  // 报过"有"、现在还在 ⇒ 不提示（别刷屏）
+  assert.deepEqual(keyPresenceChanged({ announced: true, fs: fake(true) }), { changed: false, now: true });
+  // 报过"有"、现在没了 ⇒ 要提示
+  assert.deepEqual(keyPresenceChanged({ announced: true, fs: fake(false) }), { changed: true, now: false });
+  // ⚠️ 真机栽过的那个形状：钥匙在"报到"和"第一拍"之间出现 ——
+  //    拿"第一拍"当基线就会算成"没变"，于是**永远不提示宿主**（页面一直说没有钥匙）。
+  assert.equal(keyPresenceChanged({ announced: false, fs: fake(true) }).changed, true);
+});

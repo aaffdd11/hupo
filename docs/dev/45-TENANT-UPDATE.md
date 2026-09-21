@@ -16,7 +16,7 @@
 
 | 层 | 装什么 | 住在哪 | 多久变 | 谁动它 |
 |---|---|---|---|---|
-| **运行层** | node + 它的动态库 + **dsh 本体** + `/etc` + 入口 `entry.mjs` | **镜像**（只读） | 只有 dsh/node 升级时 | root（`create-tenant-pool.sh`），罕见 |
+| **运行层** | node + 它的动态库 + **dsh 本体** + `/etc` + **一个薄加载器** | **镜像**（只读） | 只有 dsh/node 升级时 | root（`create-tenant-pool.sh`），罕见 |
 | **产品层** | `src/` + `package.json` + 人格 + 能力 + 代理 patch | **宿主上一个目录**（`/srv/hupo/tenant-code/<指纹>/`），**建容器时 `:ro` 挂进 `/app/code`** | 每次改进产品 | `deploy`（`build-tenant-code.sh`），**每次翻转记账** |
 | **用户层** | `/data`（卷） | 租户家里（`0700` 他自己） | 用户自己 | 不动 |
 
@@ -260,3 +260,20 @@ sudo bash scripts/create-tenant-pool.sh --yes     # 单元变了就重启那一�
 ⇒ 把渲染抽成**纯函数**（`create-tenant-pool.sh --render` 写 stdout），判据直接对它跑
 `systemd-analyze verify` + 逐词检查注释还在不在（**也加了"不带引号的 heredoc"那道闸，
 而且把名单盖全到 root 侧那五份** —— 原来只盯两份，`create-tenant-pool.sh` 一直没人看）。
+
+---
+
+## 十一、🔴 2026-09-22 补：入口**也**搬进产品层了（"薄加载器"）
+
+**原因**：入口 `entry.mjs` 原来是 `build-tenant-image.sh` 生成进**镜像**的，
+而它**调的全是产品层的模块** ⇒ **改一次"谁调谁、传什么"就要重造镜像**。
+`46-KEY-DELIVERY.md` §七 记着我在一个小时里为这件事连栽三层（钥匙路径、显式传参绕过默认值、
+看门基线）。⇒ 结构上断掉：
+
+| 谁 | 干什么 |
+|---|---|
+| 镜像里的 `entry.mjs` | **只三件**：找产品层（找不到就回落到镜像里那份）· 把版本指纹塞进 `HUPO_BUILD_ID` · 把产品层的真入口 `import` 起来 |
+| 产品层的 `src/entry.mjs` | **其余全部**：卷里那几格目录、小代理、等钥匙、`serve.js`、隧道与"该重开了" |
+
+⚠️ 判据跟着动：`check-tenant-update.sh` 依旧盯"产品层与仓库同版"、"挂的是软链"；
+`check-key-delivery.sh` 新增"**谁也不许再读那条旧 env**"与"**归一必须写在函数体里**"。

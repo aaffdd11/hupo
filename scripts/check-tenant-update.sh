@@ -432,6 +432,14 @@ portable_part() {
   else
     ok "渲染的时候没有东西去执行注释"
   fi
+  # ③·补 🔴 **单元要显式说"这一侧是盒里"**（`HUPO_ROLE=tenant`）：
+  #    靠"有没有通道"猜过一次 ⇒ 冒烟跑按"我是宿主"起、横幅报了一个盒里不存在的投递目录。
+  if grep -q -- '--env HUPO_ROLE=tenant' "$U1"; then
+    ok "单元显式声明了角色（HUPO_ROLE=tenant）"
+  else
+    bad "🔴 单元没说角色 —— 盒里那侧会按"宿主"起（横幅会说假话）"
+  fi
+
   # ④ **真的语法校验**（systemd 自己的解析器，比 grep 强）
   if command -v systemd-analyze >/dev/null 2>&1; then
     if systemd-analyze verify "$U1" >"$T/sav.txt" 2>&1; then

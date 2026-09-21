@@ -5,7 +5,8 @@
 // 决策 ① 说"**agent 读不到自己的 key**"。可 dsh 调模型**必须**有一把 key。
 // ⇒ 把"持有"和"使用"分开：
 //
-//     明文  只住在 `/run/hupo/creds.yaml`（**tmpfs · root 0600**）
+//     明文  只住在 `<HUPO_DATA>/creds.yaml`（= 容器里 `/data/creds.yaml`；**卷 · root 0600**）
+//           ⚠️ 规则只有一处：`key-path.mjs`（2026-09-21 从 tmpfs 搬进卷里，重建容器不丢）
 //     持有  这个代理（root 身份跑）
 //     使用  agent 把请求发给**本机这个口**，代理替它把 `Authorization` 换成真 key
 //
@@ -30,11 +31,14 @@
 import nodeFs from 'node:fs';
 import nodeHttp from 'node:http';
 
+import { keyFileFor } from './key-path.mjs';
+
 /** 默认端口。⚠️ 与 `hupo-model-proxy.yml` 里那个 `baseURL` **必须一致**。 */
 export const DEFAULT_PROXY_PORT = 8787;
 
 /** key 住在哪（tmpfs · root 0600 · 由 ②-4 注入）。 */
-export const DEFAULT_KEY_FILE = '/run/hupo/creds.yaml';
+// ⚠️ **钥匙住哪**只有一处说了算（`key-path.mjs`）：卷里那个（重建容器不丢）。
+export const DEFAULT_KEY_FILE = '/data/creds.yaml';
 
 /** 真上游。 */
 export const DEFAULT_UPSTREAM = 'https://api.deepseek.com';
@@ -97,7 +101,7 @@ export function readKeyFile(file, fs = nodeFs) {
  * @param {(m:string)=>void} [o.log]  ⚠️ **只许传不敏感的东西**
  */
 export function startModelProxy({
-  keyFile = process.env.HUPO_KEY_FILE ?? DEFAULT_KEY_FILE,
+  keyFile = keyFileFor(),
   upstream = process.env.HUPO_UPSTREAM ?? DEFAULT_UPSTREAM,
   port = Number.parseInt(process.env.HUPO_PROXY_PORT ?? String(DEFAULT_PROXY_PORT), 10),
   host = '127.0.0.1',

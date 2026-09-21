@@ -97,7 +97,13 @@ UNIT
         #    `podman` 会把它建成一个**空目录**，于是 `current` 那个软链以后就别想再翻了）。
         [ -n "$CODE_LINK" ] && printf '  -v %s:/app/code:ro \\\n' "$CODE_LINK"
         printf '  -v %s:/run/hupo-host \\\n' "$(dirname "$chan")"
-        [ -n "$CODE_LINK" ] && printf '  --env HUPO_CODE_DIR=/app/code \\\n'
+        [ -n "$CODE_LINK" ] && printf '  --env HUPO_CODE_DIR=/app/code \
+'
+        # ⚠️ **显式说清「这一侧是盒里」**（2026-09-21 改）：原来靠「有没有通道」猜 ——
+        #    而冒烟跑（`build-tenant-image.sh --run`）没有通道 ⇒ 它按「我是宿主」起，
+        #    于是横幅报了一个盒里根本不存在的**投递目录**（在说假话）。
+        printf '  --env HUPO_ROLE=tenant \
+'
         printf '  --security-opt=no-new-privileges \\\n'
         printf '  --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \\\n'
         printf '  --pids-limit=512 --memory=768m --memory-swap=768m \\\n'

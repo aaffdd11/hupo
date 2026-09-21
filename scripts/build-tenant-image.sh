@@ -148,188 +148,46 @@ import nodePath from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // ════════════════════════════════════════════════════════════
-// ★ **产品层**（契约 `docs/dev/45-TENANT-UPDATE.md`）
+// **镜像里的入口：一个薄加载器**（契约 `docs/dev/45-TENANT-UPDATE.md`）。
 //
-//   真正要跑的那套东西（调度器 `src/` + 人格 + 能力 + 代理 patch）**不在镜像里**，
-//   而是宿主上一个目录**只读**挂进来的（`-v …:/app/code:ro`）。
-//   ⇒ 改进产品 = 宿主上写文件 + 这一台重开一次。
-//      **不用重造镜像、不用 `podman load`、不用重建容器、不需要 root。**
+//   它只做三件：① 找到**产品层**在哪（找不到就回落到镜像里那份）② 把**版本指纹**
+//   从产品层的 `manifest.json` 读出来塞进 env ③ 把产品层那个真入口跑起来。
 //
-//   ⚠️ **认不到就回落到镜像里那一份**（`/app`）：这是**过渡期的兜底**——
-//      `podman load` 换掉的是存储里的 tag，而**跑着的那台**还是创建那一刻的镜像；
-//      万一某台在"单元还没挂上"的窗口里重启，有兜底它照样起得来。
-//      回落到兜底时 `manifest.json` 不在 ⇒ 版本会是 `dev` ⇒ **宿主会看见并如实说**
+//   ⚠️ **别往这里加东西**：这里的东西**只能靠重造镜像改**，
+//      而"改一次接线就要重造镜像"已经在这个项目里连栽两次（见产品层 `src/entry.mjs` 那段）。
+//   ⚠️ 回落到镜像里那份时 `manifest.json` 不在 ⇒ 版本是 `dev` ⇒ **宿主会看见并如实说**
 //      （不许静默：一台悄悄跑着旧的，是这套东西最该防的那种状态）。
 // ════════════════════════════════════════════════════════════
 function pickCodeDir() {
   const want = process.env.HUPO_CODE_DIR ?? '';
   if (!want) return { dir: '/app', why: '宿主没给 HUPO_CODE_DIR' };
-  if (!nodeFs.existsSync(nodePath.join(want, 'src', 'serve.js'))) {
-    return { dir: '/app', why: `产品层里没有 ${want}/src/serve.js` };
+  if (!nodeFs.existsSync(nodePath.join(want, 'src', 'entry.mjs'))) {
+    return { dir: '/app', why: `产品层里没有 ${want}/src/entry.mjs` };
   }
   return { dir: want, why: '' };
 }
+
 const picked = pickCodeDir();
 const CODE = picked.dir;
 process.env.HUPO_CODE_DIR = CODE;
-const inCode = (rel) => nodePath.join(CODE, rel);
-const loadCode = (rel) => import(pathToFileURL(inCode(rel)).href);
 
-// 🔴 **指纹**：容器要能如实说"我跑的是哪一版"。
-//    它**只**来自产品层的 `manifest.json` —— 算指纹的地方**只有一处**
-//    （`scripts/build-tenant-code.sh`）；这里**不许**自己再算一遍（两处 = 一定会漂）。
+// 🔴 **指纹**：容器要能如实说"我跑的是哪一版"。它**只**来自产品层的 `manifest.json`
+//    —— 算指纹的地方**只有一处**（`scripts/build-tenant-code.sh`），这里**不许**再算一遍。
 let BUILD = 'dev';
 try {
-  const m = JSON.parse(nodeFs.readFileSync(inCode('manifest.json'), 'utf8'));
+  const m = JSON.parse(nodeFs.readFileSync(nodePath.join(CODE, 'manifest.json'), 'utf8'));
   if (typeof m?.fingerprint === 'string' && m.fingerprint) BUILD = m.fingerprint;
 } catch {
   /* 兜底那份没有 manifest ⇒ 就是 dev，**如实** */
 }
-// ⚠️ **必须在 `serve.js` 之前设**：`config.js` 是在**被 import 的那一刻**读 env 的。
+// ⚠️ **必须在产品层那个入口被 import 之前设**：`config.js` 是**被 import 的那一刻**读 env 的。
 process.env.HUPO_BUILD_ID = BUILD;
-// ⚠️ 这几份的默认值都是 `cwd/xxx`，而 cwd 是 `/app` ⇒ 不指过来就会挂到**兜底**那份上。
-//    `??=`：宿主/单元要是显式给了，就听它的（不许悄悄覆盖别人的显式选择）。
-process.env.HUPO_PERSONA ??= inCode('hupo-persona.yml');
-process.env.HUPO_CAPABILITIES ??= inCode('hupo-capabilities.yml');
-process.env.HUPO_LEDGER_SERVER ??= inCode('src/mcp-ledger-server.mjs');
-process.env.HUPO_MODEL_PATCH ??= inCode('hupo-model-proxy.yml');
 console.log(`  产品层：${CODE}${picked.why ? `（回落到镜像里那份：${picked.why}）` : ''} · 版本 ${BUILD}`);
 
-// 卷里的目录：镜像建不了（会被挂载盖住），只能开机建。
-// ⚠️ 布局照 `02-ARCHITECTURE.md` §2.1：`main` 与 `workspaces/` **必须平行**
-//    （否则主目录的 agent 会写进子工作区——"算错一个相对路径"就发生）。
-//    ⚠️ 主目录 root **不是 home**（§2.2 规则 1）：home 当 root ⇒
-//       agent 读得到自己的 key、写得进 `.bashrc` = 持久化代码执行。
-const data = process.env.HUPO_DATA ?? '/data';
-// 🔴 **换手**（②-2）：镜像里设了 `HUPO_AGENT_UID/GID=1000` ⇒ 服务（root）
-//    spawn agent 时**把身份降到 1000**。理由：userns 的容器 root 带着
-//    `CAP_DAC_OVERRIDE` ⇒ **agent 是 root 时任何权限位都拦不住它读 key**（决策 ①）。
-//    ⚠️ 所以下面这几格**必须归 1000**，否则换手之后 agent 连自己的东西都写不了。
-//    ⚠️ `/data/dsh` 是 **agent 的 `DSH_HOME`**（镜像里 `DSH_HOME=/data/dsh`）：
-//       它也得归 agent —— 而且它只能由**入口**建（`/data` 是 root `0711`，
-//       uid 1000 自己建不出这一格）。
-const owned = [`${data}/main`, `${data}/workspaces`, `${data}/hupo`, `${data}/dsh`];
-for (const d of [data, ...owned]) {
-  try { nodeFs.mkdirSync(d, { recursive: true, mode: 0o700 }); }
-  catch (e) { if (e.code !== 'EEXIST') throw e; }
-}
-// 属主照权限席给的：`/data` 是 root `0711`（能穿过去、列不出别人），
-// 里面那几样归 **agent(1000) `0700`** —— 服务(root)读得到，别的租户读不到。
-//
-// 🔴 **`chmod` 必须在 `chown` 之前**：反过来的话，文件已经属于 1000 了，
-//    root 再 chmod 就需要 `FOWNER`；而运行时**只带 4 条能力**（没有 FOWNER）。
-//    实测见 `docs/dev/39-PERMISSIONS.md` §5.4.1 的 E 组与 I 组。
-try { nodeFs.chmodSync(data, 0o711); } catch (e) { throw new Error(`entry: chmod ${data} 失败：${e.code}`); }
-for (const d of owned) {
-  // ⚠️ **必须幂等**（2026-09-21 真重启才发现的）：
-  //    第一次开机时这几格是 root 的，`chmod` 之后再 `chown` 就行；
-  //    但**第二次**开机它们**已经属于 agent(1000)** 了，root 再 `chmod` 就需要 `FOWNER`
-  //    ⇒ 少了它，**容器第二次就起不来**（报 `EPERM: chmod '/data/main'`），
-  //      而现象是"第一次好好的，重启就死" —— 这条只有真重启过才看得见。
-  const st = nodeFs.statSync(d);
-  const mode = st.mode & 0o777;
-  if (st.uid === 1000 && st.gid === 1000) {
-    if (mode !== 0o700) nodeFs.chmodSync(d, 0o700); // 已经是他的 ⇒ 这一步要 FOWNER
-    continue;
-  }
-  nodeFs.chmodSync(d, 0o700);          // 此刻还是 root 自己的
-  nodeFs.chownSync(d, 1000, 1000);     // 交给 agent
-}
-// ⚠️ **不许静默**：布局没铺成 ⇒ 边界就不在（而且这条边界是"悄悄失效"型的）。
-//    自查一遍，对不上就**拒绝启动**，别让一个"看着像在跑"的盒子起来。
-for (const d of owned) {
-  const st = nodeFs.statSync(d);
-  if (st.uid !== 1000 || st.gid !== 1000 || (st.mode & 0o777) !== 0o700) {
-    throw new Error(`entry: ${d} 的属主/权限不对（要 1000:1000 0700，实为 ${st.uid}:${st.gid} 0${(st.mode & 0o777).toString(8)}）—— 拒绝启动`);
-  }
-}
-const ds = nodeFs.statSync(data);
-if (ds.uid !== 0 || (ds.mode & 0o777) !== 0o711) {
-  throw new Error(`entry: ${data} 应为 root 0711，实为 ${ds.uid} 0${(ds.mode & 0o777).toString(8)} —— 拒绝启动`);
-}
+await import(pathToFileURL(nodePath.join(CODE, 'src', 'entry.mjs')).href);
 
-// ★ **盒子里的模型代理**（多租户 ②-3）：它**持有**那把 key，而 agent 只有占位符。
-//   ⚠️ 在**起服务之前**起它 —— 服务一收请求就可能 spawn agent，
-//      那时代理必须已经在听（否则第一句话会撞一个"连接被拒"）。
-//   ⚠️ 它自己和 agent 是**两个身份**：代理是 root（这个入口就是 root），
-//      agent 是 uid 1000 ⇒ agent 读不到那份 key 文件，但经这个口能用它。
-//   ⚠️ 起不来**不许**把整个服务带走（用户还能看到界面，只是模型那条路不通）——
-//      但**必须大声说**，不许静默降级。
-//   ⚠️ key 文件住在 `/run/hupo`（**tmpfs**，由运行参数挂进来）：
-//      它**不在** `/data`（那是卷、会落盘）也**不在** `/home`。
-try {
-  nodeFs.mkdirSync('/run/hupo', { recursive: true, mode: 0o700 });
-} catch { /* 挂载点上建不了是正常的（podman 已经建好了） */ }
-// ★ **领配置**（多租户 ②-4）：连回宿主那条通道，把这一台的模型凭据领回来，
-//   写进 `/run/hupo/creds.yaml`（tmpfs · root 0600）。
-//   ⚠️ **这是主人说的那五步的第 ②③④ 步**：容器起来是个空壳 ⇒ 等着 ⇒ 配置到了才往下走。
-//   ⚠️ 领不到**不许**把服务挡住：界面照常起来，只是模型那条路会**如实**说不通
-//      （`model-proxy` 没 key 时回 503 而不是去打扰上游）。
-//   ⚠️ 宿主上没有 `HUPO_CHANNEL` ⇒ 这一整段不执行（宿主行为逐字不变）。
-const channel = process.env.HUPO_CHANNEL ?? '';
-if (channel) {
-  try {
-    const { watchForKey } = await loadCode('src/tenant-shell.mjs');
-    // ⚠️ **故意不 await**：它是**后台**的，界面要照常起来。
-    //    容器要一直跑着（池子那个形状），而用户可能几分钟后才填 key ——
-    //    只领一次的话那台容器就永远没有凭据，直到有人手动重启它。
-    watchForKey({
-      socketPath: channel,
-      keyFile: process.env.HUPO_KEY_FILE ?? '/run/hupo/creds.yaml',
-      attemptMs: Number.parseInt(process.env.HUPO_CHANNEL_WAIT_MS ?? '60000', 10),
-      log: (m) => console.log(m),
-    });
-  } catch (err) {
-    console.error(`  ⚠️ 领配置那一步没做成：${err?.message ?? err}（界面照常，模型那条路会说不通）`);
-  }
-}
-
-try {
-  const { startModelProxy } = await loadCode('src/model-proxy.mjs');
-  await startModelProxy({ log: (m) => console.log(m) }).listen();
-} catch (err) {
-  console.error(`  ⚠️ 模型代理没起来：${err?.message ?? err} —— 模型那条路会不通（界面照常）`);
-}
-
-// 起真正的服务（**同一个进程**，不多一层 shell）
-await loadCode('src/serve.js');
-
-// ★ **数据面那条隧道**（②-4b 后半）：宿主把用户的请求经通道送进来，
-//   这里把它们接到**本机那个刚起来的服务**上。
-//   ⚠️ 放在 `serve.js` **之后**：隧道是按需连本机端口的，服务没起来时
-//      开进来的隧道会连不上 —— 晚一点起就没有这个窗口。
-//   ⚠️ 起不来**不许**把服务带走：界面（本机那套）照常，只是"从外面进来的请求"不通，
-//      而那种状态**必须说得出来**（这一行就是那句话）。
-if (channel) {
-  try {
-    const { runTunnelAgent } = await loadCode('src/tenant-tunnel-agent.mjs');
-    // ★ **"宿主说有新的一版，重开一下吧"**（契约 `docs/dev/45-TENANT-UPDATE.md` §三）。
-    //   ⚠️ 退不退由**这边**定：先把手上那一轮说完（读 `/data/status.json`，那个服务自己写的）。
-    //   ⚠️ `onReady` = 跟宿主报过到了 ⇒ **从那以后才认那句话**。
-    //      不这么写就是**开机死循环**：宿主手上可能还挂着上一轮的"要它重开"，
-    //      一开机就退、退完又报、报完又叫 …… 永远起不来。
-    //   ⚠️ 拿不到重开那支模块**不许**把隧道带走（大不了就是这一台不自动更新，
-    //      而宿主会一直如实说"它还是旧版"）。
-    let onReload = null;
-    let onReady = null;
-    try {
-      const { createReloader } = await loadCode('src/tenant-reload.mjs');
-      const reloader = createReloader({
-        statusFile: nodePath.join(process.env.HUPO_DATA ?? '/data', 'status.json'),
-        log: (m) => console.log(m),
-      });
-      onReload = () => reloader.please();
-      onReady = () => reloader.arm();
-    } catch (err) {
-      console.error(`  ⚠️ 自动更新那一步没装上：${err?.message ?? err}（这一台不会被叫着重开）`);
-    }
-    runTunnelAgent({ socketPath: channel, log: (m) => console.log(m), onReload, onReady });
-  } catch (err) {
-    console.error(`  ⚠️ 数据面那条隧道没起来：${err?.message ?? err}（本机照常，外面进不来）`);
-  }
-}
 ENTRY
-echo "  入口: /app/entry.mjs"
+echo "  入口: /app/entry.mjs（薄加载器 —— 真正的入口在产品层 src/entry.mjs）"
 
 # ── ③ 最小的 /etc（node 与 shell 都要用）──
 # ⚠️ 两个身份（容器内权限席的结论）：**服务/终端 = root**（uid0→宿主租户），
@@ -383,7 +241,7 @@ echo "nameserver 10.0.2.3" > "$R/etc/resolv.conf"
 #   `A9` 之外的另一半：**"权限位"不只在"不许谁读"，也在"该读的人读不读得到"**。
 #
 # ⚠️ 为什么 `a+rX` 是安全的：镜像里**没有任何秘密** ——
-#    那把 key 是**运行时**才进 `/run/hupo/creds.yaml`（tmpfs · 0700 的 /run/hupo 里），
+#    那把 key 是**运行时**才进 `/data/creds.yaml`（它的来源见 `46-KEY-DELIVERY.md`），
 #    **不在镜像里**。而 `/app` 里是 dsh、调度器源码、人格/能力 patch（都在 git 里）。
 #    决策 ① 要保护的是"**agent 读不到自己的 key**"，不是"agent 读不到代码"。
 # ⚠️ `X`（大写）只给**目录**和**本来就可执行**的文件加 x —— 不会把数据文件变成可执行。
@@ -439,7 +297,6 @@ ctr="$("$BUILDAH" from scratch)"
   --env HUPO_AGENT_GID=1000 \
   --env DSH_HOME=/data/dsh \
   --env HUPO_MODEL_TICKET=hupo-local-model-proxy \
-  --env HUPO_KEY_FILE=/run/hupo/creds.yaml \
   --env HUPO_TRUSTED_SOCKET=/run/hupo/local-api.sock \
   --env HUPO_LOCAL_TARGET=/run/hupo/local-api.sock \
   --cmd '["/bin/node","/app/entry.mjs"]' \
