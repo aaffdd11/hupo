@@ -193,11 +193,19 @@ for u in "${USERS[@]}"; do
   unit="$unit_dir/hupo-tenant.service"
   chan="$CHAN_DIR/$u/channel.sock"
 
+  # 🔴 **不许"有了就跳过"**（2026-09-21 就是被这个坑住的）：
+  #    模板改了之后，**已经落盘的那份不会跟着改** —— 而现象是
+  #    "某一台容器的隧道一直连不上"，**单元自己不报错**（它只是在等一个不会出现的套接字）。
+  #    ⇒ 改成**每次都按模板重写**（内容一样就是幂等；不一样就说明它该更新了），
+  #      并且**重写之后重启那台**（不然跑着的还是旧的）。
+  unit_changed=0
   if [ -f "$unit" ]; then
-    say "单元已有：$unit"
+    say "单元已有：$unit（**按模板核对**）"
   else
     plan "写单元 $unit"
-    if [ "$DO" = "1" ]; then
+  fi
+  if [ "$DO" = "1" ]; then
+    if [ -f "$unit" ]; then cp -f "$unit" "$unit.bak"; fi
       install -d -o "$u" -g "$u" -m 0700 "$unit_dir"
       cat > "$unit" <<UNIT
 [Unit]
@@ -234,14 +242,23 @@ WantedBy=default.target
 UNIT
       chown "$u:$u" "$unit"
       chmod 0644 "$unit"
+      if [ -f "$unit.bak" ] && ! cmp -s "$unit.bak" "$unit"; then
+        unit_changed=1
+        say "⚠️ 单元**变了**（旧模板）⇒ 要重启这一台"
+      fi
+      rm -f "$unit.bak"
       say "写好了"
-    fi
   fi
 
   # 让**他自己的** systemd 认这个单元并启用（linger 已开 ⇒ 开机就会起）
   if [ "$DO" = "1" ]; then
     as_user "$u" systemctl --user daemon-reload >/dev/null 2>&1 || true
-    if as_user "$u" systemctl --user is-enabled hupo-tenant.service >/dev/null 2>&1; then
+    if [ "$unit_changed" = "1" ]; then
+      plan "重启这一台（让新的挂载生效）"
+      as_user "$u" systemctl --user daemon-reload
+      as_user "$u" podman rm -f "hupo-tenant-$u" >/dev/null 2>&1
+      as_user "$u" systemctl --user restart --no-block hupo-tenant.service
+    elif as_user "$u" systemctl --user is-enabled hupo-tenant.service >/dev/null 2>&1; then
       say "单元已启用"
     else
       # ⚠️ **不能 `--now`**（2026-09-21 实测）：`ExecStartPre` 在**等通道的套接字**，
