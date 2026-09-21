@@ -183,6 +183,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   builder: (_) => SettingsScreen(
                     hasKey: widget.space.hasKey,
                     keyBad: widget.space.keyBad,
+                    // ⚠️ 本机那一份（主人自己那个号）**没有单独一台** ⇒ 那一屏只说实话
+                    localOnly: !widget.space.isTenant,
                     onSubmit: widget.onSendKey!,
                     onCancel: widget.onCancelMe,
                     onCancelled: widget.onLoggedOut,

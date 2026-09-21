@@ -29,6 +29,7 @@ class SettingsScreen extends StatelessWidget {
     required this.hasKey,
     required this.keyBad,
     required this.onSubmit,
+    this.localOnly = false,
     this.onCancel,
     this.onCancelled,
     this.onKeyChanged,
@@ -43,6 +44,9 @@ class SettingsScreen extends StatelessWidget {
   final Future<KeySend> Function(String key) onSubmit;
   final Future<CancelOutcome> Function()? onCancel;
   final VoidCallback? onCancelled;
+
+  /// 🔴 **"你自己这一份"那种（没有单独一台）** ⇒ 不给钥匙表单，只说实话。
+  final bool localOnly;
 
   /// 换成功之后叫一声（上层去重问一次状态，让别处也跟着对）。
   final VoidCallback? onKeyChanged;
@@ -60,6 +64,10 @@ class SettingsScreen extends StatelessWidget {
             children: [
               Text(configKeySection, style: t.textTheme.titleMedium),
               const SizedBox(height: 8),
+              if (localOnly) ...[
+                // 🔴 **本机那一份：说实话、不给假输入框**（见 `configLocalOnly` 那段）
+                Text(configLocalOnly, style: t.textTheme.bodyMedium),
+              ] else ...[
               // ★ **现状**：三种状态分开说（见 `keyStateLine` 那段）。
               Text(keyStateLine(hasKey: hasKey, keyBad: keyBad), style: t.textTheme.bodyMedium),
               if (hasKey) ...[
@@ -84,6 +92,7 @@ class SettingsScreen extends StatelessWidget {
                 onCancelled: onCancelled,
                 submitLabel: hasKey ? keySubmitChange : keySubmit,
               ),
+              ],
               const SizedBox(height: 24),
               const Divider(),
               // ⚠️ **关于搬进来了**（见 `space_words.dart` 那段）：

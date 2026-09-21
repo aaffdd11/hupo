@@ -50,12 +50,14 @@ Future<void> _pumpSettings(
   required bool keyBad,
   required Future<KeySend> Function(String) onSendKey,
   VoidCallback? onKeyChanged,
+  bool localOnly = false,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
       home: SettingsScreen(
         hasKey: hasKey,
         keyBad: keyBad,
+        localOnly: localOnly,
         onSubmit: onSendKey,
         onKeyChanged: onKeyChanged,
       ),
@@ -140,8 +142,31 @@ void main() {
     expect(find.text(configTitle), findsNothing, reason: '已经从配置页跳走了');
   });
 
+  testWidgets('🔴 "你自己这一份"（本机那种）⇒ **只说实话、不给假输入框**', (tester) async {
+    // ⚠️ 主人自己那个号是跑在这台机器上的那一份：**没有容器、钥匙不在这条路上配**。
+    //    原来配置页对他照样画一个输入框 + "还没有填" ⇒ 他填了会拿到
+    //    "没送过去。是我这边的问题"（**指错方向**）。
+    var sent = 0;
+    await _pumpSettings(
+      tester,
+      hasKey: false,
+      keyBad: false,
+      localOnly: true,
+      onSendKey: (_) async {
+        sent += 1;
+        return KeySend.ok;
+      },
+    );
+    expect(find.text(configLocalOnly), findsOneWidget);
+    expect(find.byType(TextField), findsNothing, reason: '不给一个填了会失败（而且说错话）的框');
+    expect(find.text(keyStateNone), findsNothing, reason: '对他说"还没有填"也是假话');
+    expect(sent, 0);
+    // 「关于」照样在（它是配置里的一半）
+    expect(find.text('关于'), findsOneWidget);
+  });
+
   test('每一句都过禁用词表（界面词表是硬闸）', () {
-    for (final s in [configEntry, configTitle, configKeySection, keyStateHas, keyStateNone, keyStateBad, configKeyHint, configKeyChanged, keySubmitChange]) {
+    for (final s in [configEntry, configTitle, configKeySection, keyStateHas, keyStateNone, keyStateBad, configKeyHint, configKeyChanged, keySubmitChange, configLocalOnly]) {
       expect(hasForbidden(s), isFalse, reason: s);
     }
   });
