@@ -31,7 +31,7 @@
 // ⚠️ **它不在硬闸里**：要一个浏览器 + 一个令牌。本机没有浏览器时它就该**跳过**
 //    （`--help` 会说清怎么弄一个：`npx @puppeteer/browsers install chrome@stable --path ~/.cache/hupo-chrome`）。
 //
-// 退出码：`0` 路通了 · `2` 没通 · `3` 环境不具备（没浏览器 / 没令牌）—— **区别于"路坏了"**
+// 退出码：0 路通了 · 2 没通 · 3 环境不具备（没浏览器 / 没令牌）· 4 只看了一眼屏幕（--no-token：那条流没验，别当“通了”）
 
 import nodeChild from 'node:child_process';
 import nodeFs from 'node:fs';
@@ -50,12 +50,24 @@ const valueOf = (f, dflt) => {
 const URL_ = valueOf('--url', 'https://w.stalkerai.cn/');
 const WAIT_MS = Number.parseInt(valueOf('--wait', '45000'), 10);
 const SHOT = valueOf('--shot', null);
-// ⚠️ **没有"点一下再截图"这个口**（2026-09-22 试过，两条路都不通）：
-//    Flutter web 把字画在 canvas 上 ⇒ 按坐标点，试了 `Input.dispatchMouseEvent`
-//    与 `Input.dispatchTouchEvent`（连聚焦模拟 `Emulation.setFocusEmulationEnabled`
-//    也加了）—— **页面逐字节不变**，说明输入根本没送到它那儿。
-//    ⇒ 不留一个"假装能用"的参数。要看某一屏，走
-//      `test/widget/*`（真点、真断言）+ 这份脚本的 `--shot`（看入口在不在屏幕上）。
+/**
+ * **点一下再截图**：`--click-at X,Y`（可给多次，按顺序点；坐标是**视口 CSS 像素**）。
+ *
+ * ── 为什么不用 CDP 的 `Input.dispatchMouseEvent` ─────────────
+ * ⚠️ 2026-09-22 实测：那条路**送不到 Flutter**（鼠标与触摸都试了，连
+ *    `Emulation.setFocusEmulationEnabled` 也加了）—— 页面**逐字节不变**。
+ *    ⇒ 改成**在页面里合成 pointer 事件**（Flutter web 监听的就是 pointerdown/up；
+ *      它**不查 `isTrusted`**）。实测点"退出"能回首页 ⇒ 这条路通。
+ * ⚠️ 它只用来**看一眼某一屏**（这个脚本的 `--shot` 用途），**不是判据** ——
+ *    判据是 `test/widget/*`（真点真断言）。
+ */
+const CLICKS = [];
+for (let i = 0; i < argv.length; i += 1) {
+  if (argv[i] === '--click-at' && argv[i + 1]) CLICKS.push(argv[i + 1]);
+}
+// ⚠️ **CDP 的 `Input.*` 送不到 Flutter**（2026-09-22 实测：鼠标与触摸都试了、
+//    连聚焦模拟也加了，**页面逐字节不变**）；而**页内合成 pointer 事件**可以
+//    （见上面 `CLICKS` 那段）。⇒ 点这一下走后者。
 const WIDTH = Number.parseInt(valueOf('--width', '1280'), 10);
 const HEIGHT = Number.parseInt(valueOf('--height', '757'), 10);
 const TOKEN = nodeProcess.env.HUPO_TOKEN ?? null;
@@ -109,8 +121,15 @@ if (!chrome) {
   console.error('   弄一个（不需要 root）：npx --yes @puppeteer/browsers install chrome@stable --path ~/.cache/hupo-chrome');
   nodeProcess.exit(3);
 }
-if (!TOKEN) {
-  console.error('⚠️ 环境不具备：没给令牌（设 HUPO_TOKEN）。**不是路坏了。**');
+/**
+ * `--no-token`：**只看"未登录"那两屏**（首页 / 登录页）。
+ * ⚠️ 那时**不能判"路通不通"**（没登录就没有那条流）⇒ 只截图、只说"没验那条流"。
+ * 为什么要有它：这个脚本的另一半用途是**看一眼某一屏长什么样**（改版时尤其需要），
+ * 而首页/登录页恰恰是"没令牌"才看得到的。
+ */
+const NO_TOKEN = has('--no-token');
+if (!TOKEN && !NO_TOKEN) {
+  console.error('⚠️ 环境不具备：没给令牌（设 HUPO_TOKEN；只看未登录那两屏加 --no-token）。**不是路坏了。**');
   nodeProcess.exit(3);
 }
 
@@ -247,6 +266,11 @@ async function main() {
   //    ⇒ 值要写成 JSON 字符串（`"eyJ…"` 这种带引号的形式）。
   const KEYS = ['flutter.hupo_auth_token', 'hupo_auth_token'];
   const encoded = JSON.stringify(TOKEN); // 这就是 json.encode 的结果
+  if (!TOKEN) {
+    // `--no-token`：**不灌令牌**，只把页面打开（看首页/登录页那两屏）
+    await send('Page.navigate', { url: URL_ });
+    console.log('  令牌：没给（--no-token）⇒ 看的是**未登录**那一屏；那条流**不验**。');
+  } else {
   await send('Page.addScriptToEvaluateOnNewDocument', {
     source:
       `try { if (location.origin === ${JSON.stringify(origin)}) {` +
@@ -272,16 +296,48 @@ async function main() {
   //    第一版这里吃过亏：我按裸键名灌，App 看不见，于是一路"没通"，
   //    而真正的原因（键名前缀）只能靠打出来才知道。
   const dump = await send('Runtime.evaluate', {
-    expression: `JSON.stringify({ href: location.href, keys: Object.keys(localStorage), hasFlutter: typeof window._flutter !== 'undefined' })`,
+    expression: `JSON.stringify({ href: location.href, w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio, keys: Object.keys(localStorage), hasFlutter: typeof window._flutter !== 'undefined' })`,
     returnByValue: true,
   });
   console.log(`  页面现场：${dump.result?.result?.value ?? '(读不到)'}`);
+  }
 
   // ④ 看那条流：等到"收到了帧"或超时
   const t0 = Date.now();
   while (Date.now() - t0 < WAIT_MS) {
     if (wsEvents.types.has('user/echo') || wsEvents.received > 0) break;
     await sleep(500);
+  }
+
+  // ④.5 **按顺序点几下**（可选）：用来"走到某一屏再看一眼"
+  for (const spec of CLICKS) {
+    const m = /^\s*([0-9.]+)\s*,\s*([0-9.]+)\s*$/.exec(spec);
+    if (!m) {
+      console.error(`⚠️ --click-at 要 "X,Y" 这种（实为 ${spec}）`);
+      continue;
+    }
+    const x = Number(m[1]);
+    const y = Number(m[2]);
+    const js = `(() => {
+      const x = ${x}, y = ${y};
+      const el = document.elementFromPoint(x, y) || document.body;
+      const mk = (type, buttons) => new PointerEvent(type, {
+        bubbles: true, cancelable: true, composed: true,
+        clientX: x, clientY: y, screenX: x, screenY: y,
+        pointerId: 1, pointerType: 'mouse', isPrimary: true,
+        button: 0, buttons, width: 1, height: 1, pressure: buttons ? 0.5 : 0,
+      });
+      el.dispatchEvent(mk('pointerover', 0));
+      el.dispatchEvent(mk('pointerenter', 0));
+      el.dispatchEvent(mk('pointermove', 0));
+      el.dispatchEvent(mk('pointerdown', 1));
+      el.dispatchEvent(mk('pointerup', 0));
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y }));
+      return el.tagName + '|' + (el.className || '');
+    })()`;
+    const r = await send('Runtime.evaluate', { expression: js, returnByValue: true });
+    console.log(`  🖱 点了 (${x}, ${y}) → 落在 ${r.result?.result?.value ?? '?'}`);
+    await sleep(1400); // 让它把新一屏画出来
   }
 
   // ⑤ 截图（给"人/助手看一眼"用）
@@ -324,6 +380,12 @@ async function main() {
     for (const e of pageErrors.slice(0, 5)) console.log(`      · ${e}`);
   }
   cleanup();
+  if (!TOKEN) {
+    // `--no-token`：**这一趟没判那条路**（未登录就没有流）⇒ 用**单独的退出码 4**，
+    // 免得"0 = 路通了"被读成一句没验过的好话。
+    console.log(`👀 只看了一眼屏幕（未登录那两屏）—— 那条流**没有验**（${URL_}）`);
+    nodeProcess.exit(4);
+  }
   if (ok) {
     console.log(`✅ 浏览器那条路通了（${URL_}）`);
     nodeProcess.exit(0);

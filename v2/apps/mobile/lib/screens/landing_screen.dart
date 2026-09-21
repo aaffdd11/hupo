@@ -18,16 +18,22 @@
 
 import 'package:flutter/material.dart';
 
+import '../models/design.dart' as d;
+import '../widgets/brand_mark.dart';
+
 import '../models/landing_words.dart';
 
 /// 这一屏自己的暖色（参考站那套：米底 + 暖红）。
 /// ⚠️ **只包这一屏**，不动全局主题 —— 免得把聊天那几屏的颜色一起改了。
-const Color _paper = Color(0xFFF8F5EE);
-const Color _accent = Color(0xFFC8452F);
-const Color _ink = Color(0xFF2B2320);
-const Color _muted = Color(0xFF7A6E66);
-const Color _card = Color(0xFFFFFDF9);
-const Color _line = Color(0xFFE8E0D4);
+// ⚠️ 这套颜色**搬去 `models/design.dart` 了**（契约 `docs/dev/49-STYLE.md`）——
+//    首页原来是它的事实源头，但**写在自己文件里** ⇒ 别的屏只能各抄一份。
+//    现在**全站一处出处**，这里只留几个短名字指过去（读起来仍然顺）。
+const Color _paper = d.paper;
+const Color _accent = d.accent;
+const Color _ink = d.ink;
+const Color _muted = d.muted;
+const Color _card = d.card;
+const Color _line = d.line;
 
 class LandingScreen extends StatelessWidget {
   const LandingScreen({super.key, required this.onStart});
@@ -60,7 +66,7 @@ class LandingScreen extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
               children: [
-                _brandRow(theme),
+                const BrandMark(),
                 const SizedBox(height: 22),
                 // ── 主标题区（**入口紧跟其后**，见文件头 ①）──
                 Text(
@@ -192,26 +198,6 @@ class LandingScreen extends StatelessWidget {
   }
 
   /// 顶栏：一个暖红色的方块标记 + 品牌名。
-  Widget _brandRow(ThemeData theme) => Row(
-        children: [
-          Container(
-            width: 30,
-            height: 30,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(color: _accent, borderRadius: BorderRadius.circular(9)),
-            child: Text(
-              landingBrand.substring(0, 1),
-              style: theme.textTheme.labelLarge?.copyWith(color: Colors.white),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            landingBrand,
-            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-          ),
-        ],
-      );
-
   /// 两个入口：实心药丸 + 描边药丸。
   /// ⚠️ **`Wrap` 不是 `Row`**：最大字号下要能折到第二行，否则就是一条溢出。
   Widget _ctaRow(BuildContext context, ThemeData theme) => Wrap(

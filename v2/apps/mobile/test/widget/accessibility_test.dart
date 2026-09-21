@@ -90,6 +90,16 @@ List<Object> _drain(WidgetTester tester) {
 ///    ⇒ 这一条闸也跟着走**真入口**，一步都不少。
 Future<void> _openAbout(WidgetTester tester, double scale) async {
   await _openConfig(tester, scale);
+  // ⚠️ **先滚到「关于」那儿再点**（2026-09-22 配置页改成"卡片 + 可滚列"之后抓到的）：
+  //    大字号下它在**折叠线以下**，而 `ListView` **不会把屏幕外的孩子建出来**
+  //    ⇒ 直接 `find.text('关于')` 会"一个都没找到"（而人是要滚一下的）。
+  //    ⇒ 判据**像用户那样滚**（`scrollUntilVisible`），不是把那一行硬塞进屏幕。
+  await tester.scrollUntilVisible(
+    find.text('关于'),
+    240,
+    scrollable: find.byType(Scrollable).first,
+  );
+  await tester.pumpAndSettle();
   await tester.tap(find.text('关于'));
   await tester.pumpAndSettle();
 }

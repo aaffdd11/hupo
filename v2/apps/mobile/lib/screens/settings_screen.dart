@@ -18,6 +18,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../models/design.dart' as d;
 import '../models/space_words.dart';
 import '../services/api.dart';
 import '../widgets/key_form.dart';
@@ -57,56 +58,80 @@ class SettingsScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text(configTitle)),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(configKeySection, style: t.textTheme.titleMedium),
-              const SizedBox(height: 8),
-              if (localOnly) ...[
-                // 🔴 **本机那一份：说实话、不给假输入框**（见 `configLocalOnly` 那段）
-                Text(configLocalOnly, style: t.textTheme.bodyMedium),
-              ] else ...[
-              // ★ **现状**：三种状态分开说（见 `keyStateLine` 那段）。
-              Text(keyStateLine(hasKey: hasKey, keyBad: keyBad), style: t.textTheme.bodyMedium),
-              if (hasKey) ...[
-                const SizedBox(height: 4),
-                Text(configKeyHint, style: t.textTheme.bodySmall),
-              ],
-              const SizedBox(height: 16),
-              KeyForm(
-                // ⚠️ 换成功之后**顺手叫一声**（上层拿它去重问一次状态）——
-                //    不然用户回到聊天页时，别处可能还挂着"没有钥匙"那句旧话。
-                onSubmit: (k) async {
-                  final r = await onSubmit(k);
-                  if (r == KeySend.ok && context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text(configKeyChanged)),
-                    );
-                    onKeyChanged?.call();
-                  }
-                  return r;
-                },
-                onCancel: onCancel,
-                onCancelled: onCancelled,
-                submitLabel: hasKey ? keySubmitChange : keySubmit,
-              ),
-              ],
-              const SizedBox(height: 24),
-              const Divider(),
-              // ⚠️ **关于搬进来了**（见 `space_words.dart` 那段）：
-              //    顶栏再加一个图标就是 7 个 —— 手机上那一条会挤成一团。
-              //    它本来就是配置那一类东西（"这台设备上行不行"）。
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.info_outline),
-                title: const Text('关于'),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const AboutScreen()),
+        child: Center(
+          child: ConstrainedBox(
+            // ⚠️ **和首页同一条窄列**（契约 `49-STYLE.md`）：一行太长没人读得下去
+            constraints: const BoxConstraints(maxWidth: 640),
+            // ⚠️ `ListView` 不是 `Column`：字体放到最大时**能滚**，而不是溢出
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: d.gapL, vertical: d.gapL),
+              children: [
+                // ── 钥匙那一段：**小标 + 白卡**（首页那套语言）──
+                Text(
+                  configKeySection,
+                  style: t.textTheme.labelLarge?.copyWith(color: d.accent, letterSpacing: 1.2),
                 ),
-              ),
-            ],
+                const SizedBox(height: d.gapS + 2),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(d.gapM),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (localOnly) ...[
+                          // 🔴 **本机那一份：说实话、不给假输入框**（见 `configLocalOnly` 那段）
+                          Text(configLocalOnly, style: t.textTheme.bodyMedium?.copyWith(color: d.ink)),
+                        ] else ...[
+                          // ★ **现状**：三种状态分开说（见 `keyStateLine` 那段）。
+                          Text(
+                            keyStateLine(hasKey: hasKey, keyBad: keyBad),
+                            style: t.textTheme.bodyMedium?.copyWith(color: d.ink),
+                          ),
+                          if (hasKey) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              configKeyHint,
+                              style: t.textTheme.bodySmall?.copyWith(color: d.muted),
+                            ),
+                          ],
+                          const SizedBox(height: d.gapM),
+                          KeyForm(
+                            // ⚠️ 换成功之后**顺手叫一声**（上层拿它去重问一次状态）——
+                            //    不然用户回到聊天页时，别处可能还挂着"没有钥匙"那句旧话。
+                            onSubmit: (k) async {
+                              final r = await onSubmit(k);
+                              if (r == KeySend.ok && context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text(configKeyChanged)),
+                                );
+                                onKeyChanged?.call();
+                              }
+                              return r;
+                            },
+                            onCancel: onCancel,
+                            onCancelled: onCancelled,
+                            submitLabel: hasKey ? keySubmitChange : keySubmit,
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: d.gapM),
+                // ⚠️ **关于搬进来了**（见 `space_words.dart` 那段）：
+                //    顶栏再加一个图标就是 7 个 —— 手机上那一条会挤成一团。
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.info_outline),
+                    title: const Text('关于'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(builder: (_) => const AboutScreen()),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

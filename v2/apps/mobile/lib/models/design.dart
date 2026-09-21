@@ -1,0 +1,53 @@
+// **一套外观，只有这一个出处**（契约 `docs/dev/49-STYLE.md`）。
+//
+// ── 为什么要有它 ──────────────────────────────────────────
+// 首页（`landing_screen.dart`）本来就是这套颜色的**事实源头**，但它把六个常量
+// **写在自己文件里**（`_paper` / `_accent` / …）⇒ 别的屏想跟着它就得**再抄一遍**。
+// 而"同一份数字写两处 = 一定会漂"是这个项目的老毛病（今天已经栽过两次同样的形状）。
+//
+// 2026-09-22 主人：*"我们现在统一一下页面风格。看看首页，就知道登录页需要改了，
+// 配置页也要改。聊天页也要改。"* ⇒ 把首页那套**提上来**当全站的底子。
+//
+// ── 三条纪律 ──────────────────────────────────────────────
+//   ① **数值只住在这里**（颜色、圆角、间距）—— 别处一律 `import` 它；
+//   ② ⚠️ **不 import `package:flutter/material.dart`**（楼层闸：`models` 是纯逻辑层）。
+//      这里只用 `dart:ui` 的 `Color`（一个纯值类型）——
+//      `ThemeData` 是在界面层拼的（`screens/app_theme.dart`）；
+//   ③ ⚠️ **不许写死字号**（手册 D3：容器跟字算）：这里只有**形状**，
+//      一个 `fontSize` 都不许出现。
+//
+// ⚠️ 换颜色之前先想一眼**对比度**：正文（`ink`）压在纸底（`paper`）上、
+//    主色（`accent`）上的白字 —— 这两对现在是够的。要改就先量一遍。
+
+import 'dart:ui' show Color;
+
+/// 纸底（全站背景）。首页用的就是它。
+const Color paper = Color(0xFFF8F5EE);
+
+/// 陶土红（主色：主按钮、强调、"它正在做"那类小标）。
+const Color accent = Color(0xFFC8452F);
+
+/// 正文黑（**不是纯黑**：纯黑压在纸底上偏硬）。
+const Color ink = Color(0xFF2B2320);
+
+/// 次要灰（说明文字、提示）。
+const Color muted = Color(0xFF7A6E66);
+
+/// 卡片白（比纯白暖一点，压在纸底上不刺眼）。
+const Color card = Color(0xFFFFFDF9);
+
+/// 描边 / 分隔线（暖灰）。
+const Color line = Color(0xFFE8E0D4);
+
+/// 主色上那层"很淡的同色"（用户气泡、选中态这类地方）。
+const Color accentTint = Color(0xFFF7E4DF);
+
+/// 圆角（收成三档，别再各写各的）。
+const double radiusCard = 18; // 卡片 / 大块
+const double radiusField = 12; // 输入框 / 小卡片
+const double radiusChip = 10; // 小方块（首页那种"记 / 办 / 实"）
+
+/// 间距（同样收成三档：别再散着写 10 / 12 / 14）。
+const double gapS = 8;
+const double gapM = 16;
+const double gapL = 24;

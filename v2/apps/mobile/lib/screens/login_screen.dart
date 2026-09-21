@@ -19,6 +19,8 @@
 
 import 'package:flutter/material.dart';
 
+import '../widgets/brand_mark.dart';
+
 import '../models/login_words.dart';
 import '../services/api.dart';
 
@@ -113,6 +115,10 @@ class _LoginScreenState extends State<LoginScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // ★ **和首页同一个标志**（契约 `49-STYLE.md`）：两屏摆在一起
+                //   要像**一个产品**。⚠️ 居中的列 ⇒ 标志也居中（`Center`）。
+                const Center(child: BrandMark()),
+                const SizedBox(height: 18),
                 Text('助手', style: theme.textTheme.headlineMedium, textAlign: TextAlign.center),
                 const SizedBox(height: 16),
                 Text(loginPromise, style: theme.textTheme.bodyLarge, textAlign: TextAlign.center),

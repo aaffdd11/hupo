@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'models/forbidden_words.dart';
 import 'screens/chat_screen.dart';
 import 'screens/landing_screen.dart';
+import 'screens/app_theme.dart';
 import 'screens/login_screen.dart';
 import 'services/api.dart';
 import 'models/space.dart';
@@ -147,12 +148,11 @@ class _HupoAppState extends State<HupoApp> {
     return MaterialApp(
       title: '助手',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF4A90D9),
-        // 刻意**不写死字号**（手册 D3.5：容器跟字算，字不跟容器）。
-        // 系统字体调多大，这里就多大；溢不溢出由布局负责，不靠封顶掩盖。
-      ),
+      // ★ **全站一套外观**（契约 `docs/dev/49-STYLE.md`）：数值只有 `models/design.dart`
+      //   一处出处，这里只是把它拼成 `ThemeData`。改那六个颜色/三档圆角，
+      //   **首页 · 登录页 · 配置页 · 聊天页一起跟着变**。
+      //   ⚠️ 刻意**不写死字号**（手册 D3.5：容器跟字算，字不跟容器）。
+      theme: buildAppTheme(),
       home: _booting
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
           : _controller != null && spaceScreenFor(_space ?? const SpaceInfo(), keySent: _keySent) == SpaceScreen.waiting
