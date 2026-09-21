@@ -175,6 +175,7 @@ PORT="${HUPO_TENANT_PORT:-18090}"
 DATA="$(mktemp -d)"
 cid="$("$PODMAN" run -d --rm \
     -p "127.0.0.1:$PORT:8080" -v "$DATA:/data" \
+    --read-only --tmpfs /tmp \
     --security-opt=no-new-privileges \
     --cap-drop=ALL \
     --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID \
@@ -189,6 +190,12 @@ done
 echo "  /api/version → ${code:-（没起来）}"
 echo -n "  对外开了吗："; ss -ltn 2>/dev/null | grep ":$PORT" | awk '{print $4}' | tr '\n' ' '; echo "（应只有 127.0.0.1）"
 echo "  容器里 uid 映射：$(podman exec "$cid" /bin/node -e 'process.stdout.write(require("node:fs").readFileSync("/proc/self/uid_map","utf8"))' 2>/dev/null | tr -s ' ')"
+# ⚠️ 判据要挑**存在的**路径：scratch 镜像里没有 /usr，拿它试写会得到 ENOENT —
+#    那证明的是"路径不存在"，不是"只读"（这就是"看着像过了"）。
+echo -n "  根真只读吗（挑存在的 /etc/hosts）："
+"$PODMAN" exec "$cid" /bin/node -e 'try{require("node:fs").appendFileSync("/etc/hosts","# canary\n");console.log("🔴 写得进去 —— 根不是只读")}catch(e){console.log("✅ 【"+e.code+"】")}' 2>/dev/null
+echo -n "  正对照（/tmp 与 /data 该能写）："
+"$PODMAN" exec "$cid" /bin/node -e 'const fs=require("node:fs");const o=[];for(const p of ["/tmp/canary","/data/canary"]){try{fs.writeFileSync(p,"y");o.push(p+" ✓")}catch(e){o.push(p+" 【"+e.code+"】")}}console.log(o.join(" | "))' 2>/dev/null
 echo "  日志尾巴："; "$PODMAN" logs "$cid" 2>&1 | tail -5 | sed 's/^/    /'
 "$PODMAN" kill "$cid" >/dev/null 2>&1
 echo "（容器已收，数据留在 $DATA）"
