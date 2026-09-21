@@ -117,6 +117,22 @@ if [ -n "$DIRTY" ] && printf '%s\n' "$DIRTY" | grep -qE '(^|/)(data/|auth\.json)
   exit 1
 fi
 
+# ── 文档闸：分层文档的**指针**（链接可达 + #锚点可解析 + L0 不许有数值）──
+# ⚠️ 同样放在 `git add` **之前**：红了就**什么都没动**（和上面那一条同一个道理）。
+# ⚠️ 只对 `scripts/check-docs.mjs` 里那份 **RATCHET 名单**判红 —— 仓里旧文档本来就有断链，
+#    一上来全红 ⇒ 这种闸会被绕过（本项目栽过"会误报的闸很快被绕开"）。
+#    ⇒ 名单是**棘轮**：新写的分层文档进名单；旧的哪天顺手清干净了也加进去，只紧不松。
+if command -v node >/dev/null 2>&1; then
+  if ! node scripts/check-docs.mjs; then
+    echo "✗ 文档闸红了（上面标 ❌ 的那几份）⇒ 拒绝提交。**什么都没动。**" >&2
+    echo "  · 只列问题不拦：node scripts/check-docs.mjs --report" >&2
+    echo "  · 修法：链接指向真文件；#锚点抄目标文件的真标题（或抄它写的 <a id=…>）。" >&2
+    exit 1
+  fi
+else
+  echo "⚠️ 找不到 node ⇒ **文档闸这一条没验**（不是通过）。" >&2
+fi
+
 # ── 暂存 ────────────────────────────────────────────────────
 if [ "$PUSH_ONLY" = "0" ]; then
   if [ "$ALL" = "1" ]; then
