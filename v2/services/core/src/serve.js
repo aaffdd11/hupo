@@ -248,6 +248,9 @@ const { listen, close } = createServer({
   users,
   devCode: cfg.devCode,
   setModelKey,
+  tenantOf,
+  // ⚠️ 隧道没通时返回 `null`（调用方**如实回 503**，不许假装通了）
+  proxyFor: (tenant) => channel.openSocket(tenant),
   log: (m) => console.log(m),
 });
 

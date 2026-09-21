@@ -69,8 +69,10 @@ test('🔴 `HUPO_TENANT_MAP` 解析：**坏的那条丢掉，绝不猜**（猜�
 // ── ① 一个租户一个套接字（路径就是身份）─────────────────────
 
 test('★ 路径：一个租户一个套接字；userId 不许当路径用（防穿越）', () => {
-  assert.equal(channelPathFor('/run/x', 'u1'), '/run/x/u1.sock');
-  assert.equal(channelPathFor('/run/x', 'owner'), '/run/x/owner.sock');
+  // ⚠️ **一个租户一个目录**，套接字在目录里（容器挂的是那个**目录** ——
+  //    挂文件的话，宿主重启换 inode 之后容器就永远重连不上了）
+  assert.equal(channelPathFor('/run/x', 'u1'), '/run/x/u1/channel.sock');
+  assert.equal(channelPathFor('/run/x', 'owner'), '/run/x/owner/channel.sock');
   for (const bad of ['../x', 'a/b', '', null, 'x'.repeat(65)]) {
     assert.throws(() => channelPathFor('/run/x', bad), /不能当文件名/, `${bad} 该被拒`);
   }

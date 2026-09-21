@@ -25,6 +25,7 @@
 import nodeFs from 'node:fs';
 import nodeNet from 'node:net';
 import nodePath from 'node:path';
+import { Duplex } from 'node:stream';
 
 /** 协议版本。**一旦上线就冻结**（手册 §2.1 纪律 2）。 */
 export const CHANNEL_VERSION = 1;
@@ -40,7 +41,12 @@ export function channelPathFor(dir, userId) {
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(String(userId ?? ''))) {
     throw new Error(`userId 不能当文件名：${JSON.stringify(userId)}`);
   }
-  return nodePath.join(dir, `${userId}.sock`);
+  // 🔴 **一个租户一个目录，套接字放在目录里面**（2026-09-21 改的，实测逼出来的）：
+  //    套接字每次重启都要**先删再建**（新 inode），而容器挂的是**那一个文件**
+  //    ⇒ 宿主一重启，挂载点就指着**已经被删掉的旧 inode** ⇒ 容器**永远重连不上**。
+  //    改成挂**目录**之后，目录的 inode 是稳的，里面的套接字换了也不影响。
+  // ⚠️ 边界没变：**每个租户只挂自己那一个目录**（里面只有他自己的套接字）。
+  return nodePath.join(dir, userId, 'channel.sock');
 }
 
 /**
@@ -57,6 +63,11 @@ export class TenantChannel {
   /** userId → 已经连着的那些连接（"key 晚到"时要主动推给它们） */
   #conns = new Map();
   #seen = []; // 最近几条状态（给横幅/排障用，**不含 key**）
+  /** userId(=租户名) → 声明过"我能跑隧道"的那些连接 */
+  #tunnelConns = new Map();
+  /** 隧道 id → 那一头的 Duplex */
+  #tunnels = new Map();
+  #nextTunnelId = 1;
 
   /**
    * @param {object} o
@@ -91,7 +102,12 @@ export class TenantChannel {
     const had = this.#servers.get(userId);
     if (had) return had;
 
-    nodeFs.mkdirSync(this.#dir, { recursive: true, mode: 0o700 });
+    nodeFs.mkdirSync(this.#dir, { recursive: true, mode: 0o755 });
+    // ⚠️ 每个租户自己那一个目录（**容器挂的就是它**）
+    nodeFs.mkdirSync(nodePath.dirname(channelPathFor(this.#dir, userId)), {
+      recursive: true,
+      mode: 0o755,
+    });
     const sock = channelPathFor(this.#dir, userId);
     try {
       nodeFs.unlinkSync(sock); // 上次没收干净（重启之后 listen 会 EADDRINUSE）
@@ -194,6 +210,32 @@ export class TenantChannel {
         this.#record(userId, 'up');
         this.#log(`  ✓ ${userId} 的容器起来了`);
         return;
+      case 'tunnel-ready': {
+        // 容器说"我这条连接能跑隧道" ⇒ 数据面就从这儿走
+        const set = this.#tunnelConns.get(userId) ?? new Set();
+        set.add(conn);
+        this.#tunnelConns.set(userId, set);
+        conn.on('close', () => {
+          set.delete(conn);
+          if (set.size === 0) this.#tunnelConns.delete(userId);
+        });
+        this.#record(userId, 'tunnel');
+        this.#log(`  ✓ ${userId} 的隧道通了（数据面走这条）`);
+        return;
+      }
+      case 'data': {
+        const tun = this.#tunnels.get(msg?.id);
+        if (tun && typeof msg.b64 === 'string') tun.push(Buffer.from(msg.b64, 'base64'));
+        return;
+      }
+      case 'close': {
+        const tun = this.#tunnels.get(msg?.id);
+        if (tun) {
+          this.#tunnels.delete(msg.id);
+          tun.push(null); // 对面关了 ⇒ 让读的一头知道
+        }
+        return;
+      }
       case 'error':
         // ⚠️ **照实记，但不含 key**：`msg.why` 是容器自己写的一句话
         this.#record(userId, 'error', { why: String(msg?.why ?? '').slice(0, 200) });
@@ -202,6 +244,57 @@ export class TenantChannel {
       default:
         this.#send(conn, { state: 'error', why: 'unknown-type' });
     }
+  }
+
+  /**
+   * **开一条到那个租户的"虚拟 socket"**（数据面 · ②-4b 后半）。
+   *
+   * 返回一个 `Duplex`：写进去的字节会经通道送到容器，容器接上它**本机那个服务**；
+   * 对面回的字节从这头读出来。
+   * ⇒ `http.request({ createConnection: () => sock })` 和 `ws` 的 `createConnection`
+   *   **都能直接用它**，于是 HTTP 与 WebSocket **走同一套**，不用写两份。
+   *
+   * ⚠️ 没有隧道就返回 `null` —— **调用方必须如实回 503**，不许假装通了。
+   */
+  openSocket(userId) {
+    const set = this.#tunnelConns.get(userId);
+    const conn = set ? [...set].at(-1) : null;
+    if (!conn) return null;
+    const id = this.#nextTunnelId++;
+
+    const self = this;
+    const sock = new Duplex({
+      read() {},
+      write(chunk, _enc, cb) {
+        const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        for (let i = 0; i < b.length; i += 32 * 1024) {
+          self.#send(conn, {
+            v: CHANNEL_VERSION,
+            type: 'data',
+            id,
+            b64: b.subarray(i, i + 32 * 1024).toString('base64'),
+          });
+        }
+        cb();
+      },
+      final(cb) {
+        self.#send(conn, { v: CHANNEL_VERSION, type: 'close', id });
+        cb();
+      },
+      destroy(err, cb) {
+        self.#tunnels.delete(id);
+        self.#send(conn, { v: CHANNEL_VERSION, type: 'close', id });
+        cb(err);
+      },
+    });
+    this.#tunnels.set(id, sock);
+    this.#send(conn, { v: CHANNEL_VERSION, type: 'open', id });
+    return sock;
+  }
+
+  /** 有几个租户的隧道通着（给横幅/排障用）。 */
+  get tunnelCount() {
+    return this.#tunnelConns.size;
   }
 
   #send(conn, obj) {
@@ -220,6 +313,14 @@ export class TenantChannel {
   }
 
   close() {
+    for (const [, sock] of this.#tunnels) {
+      try {
+        sock.destroy();
+      } catch {
+        /* 已经没了 */
+      }
+    }
+    this.#tunnels.clear();
     for (const set of this.#conns.values()) {
       for (const conn of set) {
         try {

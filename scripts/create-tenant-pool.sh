@@ -191,7 +191,7 @@ for u in "${USERS[@]}"; do
   vol="$home/tenant"
   unit_dir="$home/.config/systemd/user"
   unit="$unit_dir/hupo-tenant.service"
-  chan="$CHAN_DIR/$u.sock"
+  chan="$CHAN_DIR/$u/channel.sock"
 
   if [ -f "$unit" ]; then
     say "单元已有：$unit"
@@ -211,14 +211,18 @@ Type=simple
 #    超时是防"宿主服务一直没起来"时在这里无限等（等不到就让 systemd 重试，
 #    重试链上有 Restart=on-failure 顶着）。
 ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'until [ -S $chan ]; do sleep 1; done'
-ExecStart=/usr/bin/podman run --rm --name hupo-tenant-$u \
+# ⚠️ **`--replace` 不能省**（2026-09-21 实测）：systemd 重启时先把旧的 SIGTERM 掉，
+#    而 `--rm` **不保证**把那个停下来的容器清掉 ⇒ 下一次 `podman run --name` 直接报
+#    "the container name ... is already in use"（**退出码 125**），
+#    现象是"容器起不来，但上一次的日志是好的"。
+ExecStart=/usr/bin/podman run --replace --rm --name hupo-tenant-$u \
   --read-only --tmpfs /tmp --tmpfs /run/hupo:rw,nosuid,nodev,mode=0700 \
   -v $vol:/data \
-  -v $chan:/run/hupo-host.sock \
+  -v $(dirname $chan):/run/hupo-host \
   --security-opt=no-new-privileges \
-  --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID \
+  --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
   --pids-limit=512 --memory=768m --memory-swap=768m \
-  --env HUPO_CHANNEL=/run/hupo-host.sock \
+  --env HUPO_CHANNEL=/run/hupo-host/channel.sock \
   --env HUPO_CHANNEL_WAIT_MS=60000 \
   $IMG
 Restart=on-failure

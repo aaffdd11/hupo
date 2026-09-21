@@ -214,6 +214,15 @@ export function createServer({
   /** 临时验证码。**空串 = 关**（默认就是关）。 */
   devCode = '',
   /**
+   * **数据面**（多租户 ②-4b 后半）：把这个人的请求**转发到他自己的容器**去。
+   *
+   * `proxyFor(sub)` → 一个"能给 http.request 当 socket 用"的 Duplex，或者 `null`
+   * （那台容器的隧道没通）。`null` 时**如实回 503**，不许假装通了。
+   */
+  proxyFor = null,
+  /** `userId → 租户名`；不在表里的（例如主人）走**本机**那条路。 */
+  tenantOf = () => null,
+  /**
    * **用户填了自己的模型凭据**（多租户 ②-4b）。`null` = 这台部署没开这条路（路由 404）。
    *
    * ⚠️ 约定：`setModelKey(userId, key)`，返回值里**不含 key**；调用方**不许**把它写日志。
@@ -273,6 +282,23 @@ export function createServer({
         if (!r) return sendJson(res, 401, { error: 'expired' });
         return sendJson(res, 200, { token: r.token, expiresAt: r.expiresAt });
       }
+      // ── ★ **数据面**：这个人在容器里 ⇒ 请求**转发进他的容器** ──────────
+      // ⚠️ **只转发"属于他自己那一份"的路由**：账号/续期/审计/填 key 都是**中心**的事
+      //    （它们在宿主上做，不进容器）。
+      // ⚠️ 隧道没通 ⇒ **503 + 一句人话**，**不许**偷偷在本机替他答
+      //    （那会让他看到"一个不属于他的世界"—— 比报错坏得多）。
+      const tenant = tenantOf(claim.sub);
+      if (tenant && TENANT_ROUTES.some((p) => path === p || path.startsWith(`${p}/`))) {
+        const sock = proxyFor ? proxyFor(tenant) : null;
+        if (!sock) {
+          return sendJson(res, 503, {
+            error: 'tenant-not-ready',
+            text: '你那台还在准备，稍等一下再试。',
+          });
+        }
+        return proxyToTenant(sock, req, res);
+      }
+
       // ★ **按身份取世界**（多租户那一步）：从这里往下，一律用 `W`，
       //   **不许**再直接摸上面那几个单例 —— 那正是"甲看到乙"的来源。
       //   ⚠️ `sub` 只来自**验过签的令牌**（`claim`），不读 URL / body / 头。
@@ -364,6 +390,69 @@ export function createServer({
    * ⚠️ `confirm:true` 是**必须的**：删是破坏性动作，**不许一个手滑的请求就能触发**
    *    （契约 §8.2）。少它一律 400，而且**什么都不做**。
    */
+  /**
+   * **属于"用户自己那一份"的路由** —— 这些在容器里答。
+   * ⚠️ 别的（`/api/renew`、`/api/audit`、`/api/model-key`）是**中心**的事，**不进容器**：
+   *    续期/审计用的是宿主的密钥与吊销表；填 key 是"中心当管道"那一步。
+   */
+  const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash'];
+
+  /**
+   * 把一条 HTTP 请求**原样**转进那个人的容器，并把响应**流式**带回来。
+   *
+   * ⚠️ 用 `createConnection` 把"通道那条隧道"当成 socket 塞给 `http.request`
+   *    ⇒ HTTP 的序列化/解析**不用自己写**（也就少一整类"自己写解析器写错"的事）。
+   */
+  function proxyToTenant(sock, req, res) {
+    const headers = { ...req.headers };
+    // hop-by-hop 的头不许原样带过去
+    for (const h of ['host', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade']) {
+      delete headers[h];
+    }
+    // ⚠️ **必须有上限**（2026-09-21 实测）：隧道那头要是没回话，
+    //    这个请求会**一直挂着**，而客户端看到的是"转圈"或空响应 ——
+    //    那是本项目最忌的"看起来在跑"。到点**如实说"它没应"**。
+    const deadline = setTimeout(() => {
+      try {
+        up.destroy();
+      } catch {
+        /* 已经没了 */
+      }
+      if (!res.headersSent) {
+        sendJson(res, 504, { error: 'tenant-timeout', text: '你那台刚才没应，等会儿再试。' });
+      }
+    }, 20_000);
+    deadline.unref?.();
+
+    const up = http.request(
+      {
+        createConnection: () => sock,
+        method: req.method,
+        path: req.url,
+        headers,
+      },
+      (upRes) => {
+        clearTimeout(deadline);
+        const out = { ...upRes.headers };
+        delete out['transfer-encoding'];
+        res.writeHead(upRes.statusCode ?? 502, out);
+        upRes.pipe(res); // 流式（别缓冲）
+      },
+    );
+    up.on('error', (err) => {
+      clearTimeout(deadline);
+      // ⚠️ 隧道断了要说**实话**，别回一个笼统的 500
+      log(`[tenant] 转发失败：${err?.message ?? err}`);
+      if (!res.headersSent) {
+        sendJson(res, 502, { error: 'tenant-unreachable', text: '你那台刚才断了一下。' });
+      } else {
+        res.destroy();
+      }
+    });
+    req.pipe(up);
+    return undefined;
+  }
+
   async function handleTrashWrite(req, res, kind, W) {
     let body;
     try {

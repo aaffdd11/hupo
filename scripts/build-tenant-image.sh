@@ -178,7 +178,18 @@ for (const d of [data, ...owned]) {
 //    实测见 `docs/dev/39-PERMISSIONS.md` §5.4.1 的 E 组与 I 组。
 try { nodeFs.chmodSync(data, 0o711); } catch (e) { throw new Error(`entry: chmod ${data} 失败：${e.code}`); }
 for (const d of owned) {
-  nodeFs.chmodSync(d, 0o700);          // 此刻还是 root 自己的 ⇒ 不需要 FOWNER
+  // ⚠️ **必须幂等**（2026-09-21 真重启才发现的）：
+  //    第一次开机时这几格是 root 的，`chmod` 之后再 `chown` 就行；
+  //    但**第二次**开机它们**已经属于 agent(1000)** 了，root 再 `chmod` 就需要 `FOWNER`
+  //    ⇒ 少了它，**容器第二次就起不来**（报 `EPERM: chmod '/data/main'`），
+  //      而现象是"第一次好好的，重启就死" —— 这条只有真重启过才看得见。
+  const st = nodeFs.statSync(d);
+  const mode = st.mode & 0o777;
+  if (st.uid === 1000 && st.gid === 1000) {
+    if (mode !== 0o700) nodeFs.chmodSync(d, 0o700); // 已经是他的 ⇒ 这一步要 FOWNER
+    continue;
+  }
+  nodeFs.chmodSync(d, 0o700);          // 此刻还是 root 自己的
   nodeFs.chownSync(d, 1000, 1000);     // 交给 agent
 }
 // ⚠️ **不许静默**：布局没铺成 ⇒ 边界就不在（而且这条边界是"悄悄失效"型的）。
@@ -239,6 +250,21 @@ try {
 
 // 起真正的服务（**同一个进程**，不多一层 shell）
 await import('./src/serve.js');
+
+// ★ **数据面那条隧道**（②-4b 后半）：宿主把用户的请求经通道送进来，
+//   这里把它们接到**本机那个刚起来的服务**上。
+//   ⚠️ 放在 `serve.js` **之后**：隧道是按需连本机端口的，服务没起来时
+//      开进来的隧道会连不上 —— 晚一点起就没有这个窗口。
+//   ⚠️ 起不来**不许**把服务带走：界面（本机那套）照常，只是"从外面进来的请求"不通，
+//      而那种状态**必须说得出来**（这一行就是那句话）。
+if (channel) {
+  try {
+    const { runTunnelAgent } = await import('./src/tenant-tunnel-agent.mjs');
+    runTunnelAgent({ socketPath: channel, log: (m) => console.log(m) });
+  } catch (err) {
+    console.error(`  ⚠️ 数据面那条隧道没起来：${err?.message ?? err}（本机照常，外面进不来）`);
+  }
+}
 ENTRY
 echo "  入口: /app/entry.mjs"
 
@@ -258,7 +284,11 @@ echo "  入口: /app/entry.mjs"
 #    · CHOWN          ：把 main/workspaces/hupo 交给 1000。实测：没有它 ⇒ chown EPERM。
 #    · DAC_OVERRIDE   ：服务要读**用户自己的**话（/data/main 是 1000:0700）。
 #                       实测：没有它 ⇒ root 读 main.jsonl 也 EACCES（那是它该读的东西）。
-#    · ⚠️ **chmod 要放在 chown 之前** ⇒ 否则还需要 FOWNER（实测：chown 之后再 chmod ⇒ EPERM）。
+#    · ⚠️ **`FOWNER` 又加回来了**（2026-09-21 真重启之后改的）：
+#      "chmod 放在 chown 之前"那条只对**第一次**开机成立 —— 重启时那几格**已经属于 agent**，
+#      root 再 chmod 就需要 `FOWNER`，少了它**容器第二次就起不来**。
+#      多这一条**不改变边界**：root 本来就有 `DAC_OVERRIDE`（比它更强），
+#      而"agent 是 uid 1000、不是 root"这条没动。
 #    · ❌ **dpkg 那组（FSETID/SETFCAP/MKNOD/KILL/SYS_CHROOT）已经不给了** ——
 #      它们原来的理由是"agent 要 apt 装包"，而决定 ① 把这个理由拿掉了
 #      （apt = root = 读得到 key，与 ① 不可兼得）。⇒ 10 条收到 4 条。
@@ -313,7 +343,7 @@ cid="$("$PODMAN" run -d --rm \
     --read-only --tmpfs /tmp --tmpfs /run/hupo:rw,nosuid,nodev,mode=0700 \
     --security-opt=no-new-privileges \
     --cap-drop=ALL \
-    --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID \
+    --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
     --pids-limit=512 --memory=768m --memory-swap=768m \
     "$IMG" 2>&1 | tail -1)"
 echo "  容器 ${cid:0:12} · 数据 $DATA · 口 127.0.0.1:$PORT"
