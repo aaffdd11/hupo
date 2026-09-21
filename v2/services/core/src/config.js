@@ -150,6 +150,15 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     agentUid: parseIdOrNull(env.HUPO_AGENT_UID),
     agentGid: parseIdOrNull(env.HUPO_AGENT_GID),
 
+    /**
+     * **让模型那条路走盒内的 root 小代理**（多租户 ②-3）。
+     *
+     * 它是一份 patch 文件（`--patch` 那一层），内容是给 `llm-deepseek` 那一条
+     * 设 `baseURL` + `apiKeyEnv` —— 见 `src/model-proxy.mjs` 顶上那段。
+     * ⚠️ 默认 `null` = **不改**（宿主上模型直连，行为逐字不变）。
+     */
+    modelPatchPath: env.HUPO_MODEL_PATCH || null,
+
     /** 空闲多久可以淘汰。手册说 30 分钟**不够**，但改它要配合准入，先沿用。 */
     agentIdleEvictMs: Number.parseInt(env.HUPO_AGENT_IDLE_MS ?? String(30 * 60 * 1000), 10),
 

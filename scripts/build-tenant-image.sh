@@ -73,6 +73,24 @@ if [ -d "$CORE/node_modules/ws" ]; then cp -r "$CORE/node_modules/ws" "$R/app/no
 cp "$CORE/hupo-persona.yml" "$R/app/hupo-persona.yml"
 [ -f "$CORE/hupo-capabilities.yml" ] && cp "$CORE/hupo-capabilities.yml" "$R/app/hupo-capabilities.yml"
 [ -f "$CORE/src/mcp-ledger-server.mjs" ] && cp "$CORE/src/mcp-ledger-server.mjs" "$R/app/src/mcp-ledger-server.mjs"
+
+# ── ②·代理：让模型那条路走盒内的 root 小代理（多租户 ②-3）──
+# ⚠️ 这一份是**静态**的：端口写死 8787，和 `model-proxy.mjs` 的默认值一致。
+#    为什么不做成模板：它**没有任何按人不同的东西** —— 每个租户一台容器，
+#    端口各自独立（容器有自己的网络命名空间）⇒ 一份就够。
+cat > "$R/app/hupo-model-proxy.yml" <<'MODELPATCH'
+# 让模型那条路走**盒内的 root 小代理**（多租户 ②-3 · `src/model-proxy.mjs`）。
+#
+# 为什么这样写：决策 ① 要求"**agent 读不到自己的 key**"，可 dsh 调模型必须有 key。
+# ⇒ 把"持有"与"使用"分开：明文只在 `/run/hupo/creds.yaml`（tmpfs · root 0600），
+#    由 root 小代理持有；agent 那一侧只有一个**占位符**（名字刻意**避开**
+#    `_API_KEY` / `_TOKEN` / `_SECRET` / `DEEPSEEK` —— 否则会踩 V4b 的 env 扫描）。
+- id: llm-deepseek
+  config:
+    baseURL: http://127.0.0.1:8787
+    apiKeyEnv: HUPO_MODEL_TICKET
+MODELPATCH
+echo "  模型代理 patch: /app/hupo-model-proxy.yml"
 echo "  服务: $(find "$R/app/src" -name '*.js' | wc -l) 个 js + ws"
 
 # ── ②·dsh：**agent 本体**（多租户 ②-1）──
@@ -176,6 +194,25 @@ if (ds.uid !== 0 || (ds.mode & 0o777) !== 0o711) {
   throw new Error(`entry: ${data} 应为 root 0711，实为 ${ds.uid} 0${(ds.mode & 0o777).toString(8)} —— 拒绝启动`);
 }
 
+// ★ **盒子里的模型代理**（多租户 ②-3）：它**持有**那把 key，而 agent 只有占位符。
+//   ⚠️ 在**起服务之前**起它 —— 服务一收请求就可能 spawn agent，
+//      那时代理必须已经在听（否则第一句话会撞一个"连接被拒"）。
+//   ⚠️ 它自己和 agent 是**两个身份**：代理是 root（这个入口就是 root），
+//      agent 是 uid 1000 ⇒ agent 读不到那份 key 文件，但经这个口能用它。
+//   ⚠️ 起不来**不许**把整个服务带走（用户还能看到界面，只是模型那条路不通）——
+//      但**必须大声说**，不许静默降级。
+//   ⚠️ key 文件住在 `/run/hupo`（**tmpfs**，由运行参数挂进来）：
+//      它**不在** `/data`（那是卷、会落盘）也**不在** `/home`。
+try {
+  nodeFs.mkdirSync('/run/hupo', { recursive: true, mode: 0o700 });
+} catch { /* 挂载点上建不了是正常的（podman 已经建好了） */ }
+try {
+  const { startModelProxy } = await import('./src/model-proxy.mjs');
+  await startModelProxy({ log: (m) => console.log(m) }).listen();
+} catch (err) {
+  console.error(`  ⚠️ 模型代理没起来：${err?.message ?? err} —— 模型那条路会不通（界面照常）`);
+}
+
 // 起真正的服务（**同一个进程**，不多一层 shell）
 await import('./src/serve.js');
 ENTRY
@@ -232,6 +269,9 @@ ctr="$("$BUILDAH" from scratch)"
   --env HUPO_AGENT_UID=1000 \
   --env HUPO_AGENT_GID=1000 \
   --env DSH_HOME=/data/dsh \
+  --env HUPO_MODEL_PATCH=/app/hupo-model-proxy.yml \
+  --env HUPO_MODEL_TICKET=hupo-local-model-proxy \
+  --env HUPO_KEY_FILE=/run/hupo/creds.yaml \
   --cmd '["/bin/node","/app/entry.mjs"]' \
   "$ctr" >/dev/null || { echo "✗ buildah config 失败 —— 镜像会缺 Cmd/Env，不许往下走"; exit 3; }
 "$BUILDAH" commit "$ctr" "$IMG" >/dev/null
@@ -246,7 +286,7 @@ PORT="${HUPO_TENANT_PORT:-18090}"
 DATA="$(mktemp -d)"
 cid="$("$PODMAN" run -d --rm \
     -p "127.0.0.1:$PORT:8080" -v "$DATA:/data" \
-    --read-only --tmpfs /tmp \
+    --read-only --tmpfs /tmp --tmpfs /run/hupo:rw,nosuid,nodev,mode=0700 \
     --security-opt=no-new-privileges \
     --cap-drop=ALL \
     --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID \

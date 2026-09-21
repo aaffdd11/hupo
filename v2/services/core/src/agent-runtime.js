@@ -303,6 +303,10 @@ export class DshAgent extends EventEmitter {
     //   ⚠️ 顺序：能力层挂在人格**之后** ⇒ 它改不了人格那一条
     //      （`system-prompt` 只有人格那份 patch 会碰）。
     if (cfg.capabilitiesPath) args.push('--patch', cfg.capabilitiesPath);
+    // ★ **模型那条路**（多租户 ②-3）：让 dsh 把请求发给盒内的 root 小代理
+    //   （它持有真 key，而 agent 那一侧只有一个占位符）。
+    //   ⚠️ 挂在**最后**：它只改 `llm-deepseek` 那一条，不碰上面两层。
+    if (cfg.modelPatchPath) args.push('--patch', cfg.modelPatchPath);
 
     const gen = (this.#gen += 1);
 
