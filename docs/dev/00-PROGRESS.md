@@ -690,6 +690,7 @@ deepseek harness 才行。"* —— **他是对的**：在那之前我验的只�
 
 | 时间 | 为什么重建 | 动了清单里哪几个文件 | 结果 |
 |---|---|---|---|
+| 2026-09-21/22 深夜（第十一回） | 🔴 **主人报「我无法黏贴」** ⇒ 钥匙屏与聊天条各加一个「粘贴」按钮（**手册 `strict`**：08-SPEC §6.7 新增第 5 条）+ 闸 5 条 | **`docs/handbook/{08-SPEC,CHANGELOG}.md`（strict）**；另有 `apps/mobile/{models,screens,widgets}` 与 `test/widget/paste_test.dart` | ✅ 对上了（重建 + 重启验过；客户端三道硬闸全过；重新部署 `921bca8c889d`；**真站点截图看过那两处按钮**） |
 | 2026-09-21 深夜（第十回） | 🔴 **补上"删掉一台租户"**（手册 X3 ④ 的那一半；也是验"真建一台"时自己撞上的那笔账）+ 手册三处（**`strict`**） | **`docs/handbook/{05-DECISIONS,06-OPERATIONS,CHANGELOG}.md`（strict）**；另有 `scripts/{remove-tenant,check-tenant-removal}.sh`（只报不拦） | ✅ 对上了（重建 + 重启验过：横幅「完整性 对上了」· 本机/公网 200 · 租户通道回到 **2 个**） |
 | 2026-09-21 深夜（**收口**） | 🔴 **主人签字 → 装上 → 真建出一台**（`hupo-t3`）+ 手册三处改成实际状态（`strict`）+ 四条判据的自证改成"跑前跑后逐字比" | **`docs/handbook/{04-ROADMAP,06-OPERATIONS,CHANGELOG}.md`（strict）**；另有 `scripts/{install-provision-helper,check-provision-*}.sh`（只报不拦） | ✅ 对上了（改完立刻重建 + 重启验过：横幅「完整性 对上了」· 本机/公网 200 · **租户通道从 2 个变 3 个** —— 新的那台重启后也被接上了） |
 | 2026-09-21 深夜（第九回） | ① **修账**（§六 第 27 条重复三次 / 第 10 条停在旧状态 / 新账一条没进表 / §〇 缺三条）；② **看截图抓到一个真缺陷** —— "给不了"那一屏**标题与正文互相矛盾**（标题"正在给你开"、正文"给你开不了"）⇒ `full` 有了自己的标题；③ `check-web-browser.mjs` 头部记下它那个陷阱（拿**非聊天令牌**跑会误报"没通"） | 只报不拦的：`apps/mobile/{models,screens}`、`test/widget/waiting_test.dart`、`scripts/check-web-browser.mjs`（**`strict` 一处没动**）。⚠️ 客户端改了 ⇒ 重新部署（指纹 `a53c7f2ff56b`）+ 截图复验 + 主人令牌那条路复验（88 帧）| ✅ 对上了 |

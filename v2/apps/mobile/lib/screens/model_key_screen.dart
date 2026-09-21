@@ -11,6 +11,7 @@
 // ⚠️ 界面上**没有** `模型` / `工具` / `客户端` 这些词（词表硬闸会拦，见 `forbidden_words.dart`）。
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/space_words.dart';
 import '../services/api.dart';
@@ -34,6 +35,27 @@ class _ModelKeyScreenState extends State<ModelKeyScreen> {
   void dispose() {
     _c.dispose();
     super.dispose();
+  }
+
+  /// 从剪贴板读一把填进去。
+  /// ⚠️ 读不到**不算错**（用户可能没授权、或者剪贴板是空的）—— 说清还能怎么办就行。
+  Future<void> _paste() async {
+    String? text;
+    try {
+      final d = await Clipboard.getData(Clipboard.kTextPlain);
+      text = d?.text;
+    } catch (_) {
+      text = null;
+    }
+    if (!mounted) return;
+    if (text == null || text.trim().isEmpty) {
+      setState(() => _err = keyPasteFailed);
+      return;
+    }
+    // ⚠️ **只 trim 首尾**：钥匙中间的空格/换行要留着，让服务端那条
+    //    "有空格换行"的检查去说他 —— 在这儿替他改，是我们在猜他要粘什么。
+    _c.text = text.trim();
+    setState(() => _err = null);
   }
 
   Future<void> _submit() async {
@@ -83,6 +105,15 @@ class _ModelKeyScreenState extends State<ModelKeyScreen> {
                     labelText: keyLabel,
                     border: const OutlineInputBorder(),
                   ),
+                ),
+                const SizedBox(height: 10),
+                // 🔴 **粘贴**（2026-09-21 主人报"我无法黏贴"之后加的）。
+                //    ⚠️ 手机上没有这个按钮就**真的粘不进来**：空框长按不弹菜单
+                //      （Flutter 的选择菜单要有可选中的文字才弹）。见 `keyPaste` 那段。
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(48, 48)),
+                  onPressed: _busy ? null : _paste,
+                  child: Text(keyPaste),
                 ),
                 if (_err != null) ...[
                   const SizedBox(height: 8),

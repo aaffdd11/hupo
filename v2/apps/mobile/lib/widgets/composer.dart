@@ -13,6 +13,9 @@
 // 09 是"网好时打字、出电梯才发"——把他锁住等于毁掉唯一顺畅的用法。
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../models/space_words.dart';
 
 class Composer extends StatefulWidget {
   /// ⚠️ **刻意没有 `enabled` 参数**——手册 D5.14 说"打字框永远不许锁"。
@@ -38,6 +41,27 @@ class _ComposerState extends State<Composer> {
     super.dispose();
   }
 
+  /// 从剪贴板读一段，**接在光标处**（不是替换 —— 聊天里他可能已经打了一半）。
+  Future<void> _paste() async {
+    String? text;
+    try {
+      final d = await Clipboard.getData(Clipboard.kTextPlain);
+      text = d?.text;
+    } catch (_) {
+      text = null;
+    }
+    if (!mounted || text == null || text.isEmpty) return;
+    // 接在**光标处**（没有光标就接在末尾）—— 顺手把光标挪到粘完的位置
+    final v = _controller.value;
+    final at = v.selection.isValid ? v.selection.end : v.text.length;
+    final next = v.text.substring(0, at) + text + v.text.substring(at);
+    _controller.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: at + text.length),
+    );
+    _focus.requestFocus();
+  }
+
   void _submit() {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
@@ -55,6 +79,16 @@ class _ComposerState extends State<Composer> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
+          // 🔴 **粘贴**（2026-09-21 主人报「我无法黏贴」之后加的）。
+          //    ⚠️ 同一个病：Flutter 把字画在 canvas 上，**空输入框长按不弹菜单**
+          //      （它自己的选择菜单要有可选中的文字才弹）⇒ 手机没物理键盘就粘不进来。
+          //    ⇒ 一个按钮按下去就是「用户手势」，能合法读剪贴板。
+          //    ⚠️ 命中区 ≥44（`IconButton` 默认 48）。
+          IconButton(
+            tooltip: composerPaste,
+            icon: const Icon(Icons.content_paste),
+            onPressed: _paste,
+          ),
           Expanded(
             child: TextField(
               controller: _controller,
