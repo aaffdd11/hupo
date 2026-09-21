@@ -70,7 +70,10 @@ REQ_DIR_STATE="$(prefix /run/hupo-provision-state)"
 say()  { echo "  $1"; }
 plan() { echo "▶ $1"; }
 
-SRC_SCRIPTS=(provision-tenant-request.sh create-tenant-users.sh create-tenant-pool.sh)
+# ⚠️ **`remove-tenant.sh` 也要拷**（2026-09-22 加"取消注册"时才发现的）：
+#    助手要调它去回收 —— 只拷了"建"的那几份，回收那一步会 `No such file`，
+#    而现象是"用户点了取消注册、却什么都没发生"。
+SRC_SCRIPTS=(provision-tenant-request.sh create-tenant-users.sh create-tenant-pool.sh remove-tenant.sh)
 SRC_CONF="v2/services/core/tenant-template.conf"
 
 # ── `--check`：**仓库那份 vs 装着那份**（这是"生效了没有"的唯一判据）──
@@ -223,6 +226,7 @@ install -d -o root -g root -m 0755 "$LIBEXEC"
 install -o root -g root -m 0755 "$ROOT/scripts/provision-tenant-request.sh" "$LIBEXEC/provision-tenant-request.sh"
 install -o root -g root -m 0755 "$ROOT/scripts/create-tenant-users.sh" "$LIBEXEC/create-tenant-users.sh"
 install -o root -g root -m 0755 "$ROOT/scripts/create-tenant-pool.sh" "$LIBEXEC/create-tenant-pool.sh"
+install -o root -g root -m 0755 "$ROOT/scripts/remove-tenant.sh" "$LIBEXEC/remove-tenant.sh"
 install -d -o root -g root -m 0755 "$(dirname "$ETC_CONF")"
 install -o root -g root -m 0444 "$ROOT/$SRC_CONF" "$ETC_CONF"
 say "拷好了：$(ls "$LIBEXEC" | tr '\n' ' ')"

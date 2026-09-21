@@ -31,6 +31,8 @@ import {
   homeFromPasswd,
   integrityReport,
   protectedPaths,
+  rebuildCommand,
+  repoRootFor,
   resolveServiceHome,
   verifyBaseline,
 } from '../src/integrity.js';
@@ -544,4 +546,36 @@ test('🔴 受保护目录里的东西**不许被静默跳过**（哪怕它叫 s
   } finally {
     f.cleanup();
   }
+});
+
+// ══════════════════════════════════════════════════════════════════
+// 🔴 **"往上几级"只许有一处说法**（2026-09-22 栽过）
+// ══════════════════════════════════════════════════════════════════
+// 现象：`serve.js` 里手写成 `'../../..'` ⇒ 只到 `v2/` ⇒
+//   ① **10 条受保护路径里 7 条不存在** ⇒ 开机那条"落了单的文件"闸**空转**；
+//   ② 服务拒绝启动时打的那条补救命令指向**不存在的文件**。
+// ⇒ 这一条钉两件事：那个 repo 底下每条受保护路径**都存在**，
+//   而且**补救命令里的那个脚本真的在**。
+
+test('🔴 `repoRootFor(src)` 指的必须是真的仓库根（每条受保护路径都在）', () => {
+  const srcDir = nodePath.resolve(import.meta.dirname, '../src');
+  const repo = repoRootFor(srcDir);
+  // ① 仓库根的标志物
+  assert.ok(
+    nodeFs.existsSync(nodePath.join(repo, 'scripts/verify-integrity.mjs')),
+    `repoRootFor 指错地方了：${repo}（那底下没有 scripts/verify-integrity.mjs）`,
+  );
+  // ② 每一条受保护路径都要真的在（**这正是那个 7/10 的毛病**）
+  const ps = protectedPaths({ repo, home: nodeOs.homedir() });
+  const miss = ps.filter((e) => !nodeFs.existsSync(e.path));
+  assert.deepEqual(
+    miss.map((e) => e.path),
+    [],
+    '有受保护路径在这个 repo 底下不存在 ⇒ 那条闸在**空转**',
+  );
+  // ③ 补救命令里那个脚本要真的在（**服务起不来时它是要被人照着跑的**）
+  const cmd = rebuildCommand({ repo });
+  const m = /\/\S+verify-integrity\.mjs/.exec(cmd);
+  assert.ok(m, `补救命令里没有脚本路径：${cmd}`);
+  assert.ok(nodeFs.existsSync(m[0]), `补救命令指向的脚本不存在：${m[0]}`);
 });

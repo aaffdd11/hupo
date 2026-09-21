@@ -26,7 +26,7 @@ import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
 import { createServer } from './server.js';
 import { describeAgentIdentity, loadConfig, preflight } from './config.js';
-import { integrityReport } from './integrity.js';
+import { integrityReport, repoRootFor } from './integrity.js';
 import { describeAdmission, readAdmission } from './admission.js';
 import { applyPrune, groupSlugFor, planPrune, scanEntries, summarize } from './prune.js';
 import { createTurnStatus, statusPath } from './turn-status.js';
@@ -56,7 +56,10 @@ const adm = readAdmission();
 //    **别的项目**和**这个 GUI 自己的可 resume 记录**一起删（AGENTS §六.5）。
 // ⚠️ 而且它**不许阻断启动**：清记录是维护动作，出任何事都只记一句（照开机对账那条规矩）。
 const ig = integrityReport({
-  repo: nodePath.resolve(import.meta.dirname, '../../..'),
+  // ⚠️ **不许在这儿手写"往上几级"**（2026-09-22：写成 `'../../..'` ⇒ 只到 `v2/`，
+  //    7 条受保护路径不存在、那条闸空转、补救命令指向不存在的文件）。
+  //    ⇒ 那一段只住在 `integrity.js` 的 `REPO_ROOT_FROM_SRC`。
+  repo: repoRootFor(import.meta.dirname),
   home: nodeOs.homedir(),
 });
 problems.push(...ig.problems);
@@ -445,6 +448,22 @@ const { listen, listenTrusted, close } = createServer({
   tenantOf,
   // ★ **新号登录时替他申请一台**（除了改状态，这是登录路径上唯一新增的动作）
   ensureTenant,
+  /**
+   * ★ **他自己要注销 ⇒ 请特权侧把他那一台回收掉**（2026-09-22）。
+   *
+   * 🔴 **判据都在这边**（服务知道"谁对应哪一台、哪几台不许动"）：
+   *    · 主人那一份（`local`）—— 没有单独一台可回收；
+   *    · **静态表里那两台** —— 🔴 **不许自助回收**：它们是**早期手工开的**，
+   *      而 `remove-tenant.sh` 那边也**硬拒**它们 ⇒ 两边一致，不给"网页说好了、
+   *      实际没动"那种假话留缝。
+   * ⚠️ 这条路的身份**只来自验签令牌里的 `sub`** ⇒ "取消别人"不可能发生。
+   */
+  cancelTenant: (userId) => {
+    if (userId === OWNER_ID) return { ok: false, why: 'local' };
+    if (cfg.tenantMap.has(userId)) return { ok: false, why: 'protected' };
+    if (!tenantOf(userId)) return { ok: false, why: 'no-tenant' };
+    return queue.cancel(userId);
+  },
   // ★ **"主人那一份"只有一个**：别人要么走他那台容器，要么如实说没准备好
   isLocalUser: (userId) => userId === OWNER_ID,
   // ⚠️ 这一段**只查不发**（`hasTunnel` / `outstanding` 都没有副作用）——

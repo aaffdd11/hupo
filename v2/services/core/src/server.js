@@ -247,6 +247,13 @@ export function createServer({
   /** 这个 `sub` 是不是"主人那一份"（宿主上直接服务的那种）。 */
   isLocalUser = () => false,
   /**
+   * 🔴 **他自己要注销 ⇒ 请特权侧把他那一台回收掉**（2026-09-22）。
+   *
+   * ⚠️ 返回 `{ok, why}`；`why` 会被翻译成**人话**（下面是那张表）——
+   *    **内部代号不许直接回给界面**。
+   */
+  cancelTenant = null,
+  /**
    * **他要一台，就替他申请一台**（契约 `docs/dev/43-AUTO-PROVISION.md`）。
    *
    * 🔴 调用它 = **产生副作用**（投一张申请），所以它**只在登录那一刻**被调，
@@ -426,6 +433,50 @@ export function createServer({
         const r = setModelKey(claim.sub, key);
         if (!r?.ok) return sendJson(res, 409, { error: r?.why ?? 'cannot-set' });
         return sendJson(res, 200, { ok: true });
+      }
+
+      // ── 🔴 **注销：他自己要把这台机器上的那一份收回去**（2026-09-22）──────
+      // ⚠️ **这是不可逆的**，所以：① 身份只从令牌来（**只能注销自己**）；
+      //   ② 特权侧收不掉时**如实说**，不许回一句"好了"；③ 账号那一行跟着删
+      //   （不删的话他下次登录会**又建一台**出来 —— 那就白回收了）。
+      // ⚠️ 它不是公开路由（`PUBLIC_ROUTES` 没它），也没有 `trusted` 那一版：
+      //   容器里那条可信口**没有令牌**，注销是**中心**的事。
+      if (path === '/api/cancel' && req.method === 'POST') {
+        if (trusted) return sendJson(res, 404, { error: 'not-found' });
+        if (!cancelTenant) return sendJson(res, 404, { error: 'not-found' });
+        const r = cancelTenant(claim.sub);
+        if (!r?.ok) {
+          // **每一种"不行"都说清是哪一种**（混成一句会让人一直重试）
+          const why = r?.why ?? 'unknown';
+          const table = {
+            'no-helper': '这台机器还没接上回收那条路，先别动。',
+            'protected': '你这一台是我们早期手工开的，得找我来收。',
+            local: '你自己这一份就在这台机器上，没有单独一台要收。',
+            'no-tenant': '你名下现在没有单独一台，不用收。',
+            'bad-id': '你这一份的编号我看不懂，先别动。',
+          };
+          const status = why === 'no-helper' ? 503 : 409;
+          return sendJson(res, status, {
+            error: why,
+            text: table[why] ?? '没能给你收掉，等会儿再试一次。',
+          });
+        }
+        // ★ 收掉了：**令牌全撤 + 账号那一行也删**
+        //   ⚠️ 顺序：先请特权侧收（上面那一步已经投出去了），再抹自己这边的账 ——
+        //     反过来的话，他会以为"注销了"而容器还在（那就是**假话**）。
+        auth.revokeUser(claim.sub);
+        let forgot = false;
+        try {
+          forgot = users ? users.removeById(claim.sub) : false;
+        } catch (err) {
+          // 删不掉要**说出来**（下一次登录会又建一台 —— 那是能看见的后果）
+          log(`  ⚠️ 注销时账号那一行没删掉（${claim.sub}）：${err?.message ?? err}`);
+        }
+        return sendJson(res, 200, {
+          ok: true,
+          forgot,
+          text: '已经在收了。你那台盒子会在一会儿之内停掉，位置也就腾出来了。',
+        });
       }
 
       if (path === '/api/export' && req.method === 'GET') {

@@ -120,6 +120,20 @@ class _HupoAppState extends State<HupoApp> {
     return r;
   }
 
+  /// 🔴 **取消注册**（主人 2026-09-22）：请服务端把我那一台收回去。
+  /// ⚠️ 成功了服务端会把令牌全撤 ⇒ 直接回登录页。
+  Future<CancelOutcome> _cancelMe() async {
+    final token = await _tokens.read();
+    if (token == null) return CancelOutcome.failed;
+    final r = await _api.cancelMe(token);
+    if (r == CancelOutcome.ok) {
+      // 令牌已经不作数了 ⇒ 本机那份也清掉（不然界面上还"像登着"）
+      await _tokens.clear();
+      _onLoggedOut();
+    }
+    return r;
+  }
+
   void _onLoggedOut() {
     // 退出了就直接给登录页（他是熟客，不用再看一遍 landing）
     setState(() {
@@ -164,7 +178,11 @@ class _HupoAppState extends State<HupoApp> {
                   },
                 )
               : _controller != null && spaceScreenFor(_space ?? const SpaceInfo(), keySent: _keySent) == SpaceScreen.key
-                  ? ModelKeyScreen(onSubmit: _sendKey)
+                  ? ModelKeyScreen(
+                      onSubmit: _sendKey,
+                      onCancel: _cancelMe,
+                      onCancelled: _onLoggedOut,
+                    )
                   : _controller != null
               ? ChatScreen(controller: _controller!, onLoggedOut: _onLoggedOut)
               : _showLogin

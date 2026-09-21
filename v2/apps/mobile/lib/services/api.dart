@@ -261,6 +261,31 @@ class Api {
     }
   }
 
+  /// 🔴 **注销：请服务端把我那一台收回去**（2026-09-22 主人："贴 apikey 的时候，
+  /// 也要有个撤回的功能……就是取消注册，这样我就不用浪费资源了"）。
+  ///
+  /// ⚠️ **它是不可逆的** —— 调用方**必须先让他看清删掉什么**再调（见那一屏的确认框）。
+  /// ⚠️ 服务端会把 **`why` 代号**回来；**界面的话由客户端自己说**（`space_words.dart`），
+  ///    不直接渲染服务端给的句子 —— 那样界面文案才在**禁用词硬闸**的扫描范围里。
+  Future<CancelOutcome> cancelMe(String token) async {
+    try {
+      final r = await _c
+          .post(_u('/api/cancel'), headers: {'authorization': 'Bearer $token'})
+          .timeout(const Duration(seconds: 20));
+      if (r.statusCode == 200) return CancelOutcome.ok;
+      final e = (jsonDecode(r.body) as Map)['error'];
+      return switch (e) {
+        'no-helper' => CancelOutcome.noHelper,
+        'protected' => CancelOutcome.protectedOne,
+        'local' => CancelOutcome.local,
+        'no-tenant' => CancelOutcome.noTenant,
+        _ => CancelOutcome.failed,
+      };
+    } catch (_) {
+      return CancelOutcome.failed;
+    }
+  }
+
   /// **续期**：用现在这个令牌换一个新的（欠账 13 · 决策 A）。
   ///
   /// 策略（空闲窗 + 绝对上限）**住在服务端**——客户端不复制那几个天数，
@@ -623,3 +648,10 @@ enum KeySend { ok, blank, badChars, tooLong, failed }
 
 /// 要验证码的结果。**码本身不在里面**（界面上永远拿不到它）。
 enum CodeSend { sent, noSms, badPhone, failed }
+
+/// **注销**的结果（`POST /api/cancel`）。
+///
+/// ⚠️ 分这么细是因为**每一种该说的话不一样**：`noHelper` 是"我们这边还没接上"、
+///    `protectedOne` 是"你这一台得找人来收"、`failed` 是"没送上去"。
+///    混成一句"失败"他会一直重试（这个项目里已经栽过好几次）。
+enum CancelOutcome { ok, noHelper, protectedOne, local, noTenant, failed }

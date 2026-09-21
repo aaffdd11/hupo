@@ -17,10 +17,23 @@ import '../models/space_words.dart';
 import '../services/api.dart';
 
 class ModelKeyScreen extends StatefulWidget {
-  const ModelKeyScreen({super.key, required this.onSubmit});
+  const ModelKeyScreen({
+    super.key,
+    required this.onSubmit,
+    this.onCancel,
+    this.onCancelled,
+  });
 
   /// 交给上层去发（这一屏**只管界面与那四句失败话**）。
   final Future<KeySend> Function(String key) onSubmit;
+
+  /// 🔴 **取消注册**（主人 2026-09-22）。`null` ⇒ 不显示那个入口
+  /// （单看这一屏的测试可以不传）。
+  /// ⚠️ 它**不可逆**，所以这一屏**先弹确认框把"删掉什么"列清楚**再调它。
+  final Future<CancelOutcome> Function()? onCancel;
+
+  /// 收掉之后回登录页（令牌已经被服务端撤了）。
+  final VoidCallback? onCancelled;
 
   @override
   State<ModelKeyScreen> createState() => _ModelKeyScreenState();
@@ -56,6 +69,54 @@ class _ModelKeyScreenState extends State<ModelKeyScreen> {
     //    "有空格换行"的检查去说他 —— 在这儿替他改，是我们在猜他要粘什么。
     _c.text = text.trim();
     setState(() => _err = null);
+  }
+
+  /// 🔴 **取消注册**：先**列清单**、再问一次，然后才真调。
+  ///
+  /// ⚠️ 顺序是死的：**先说清删什么**（手册 X3 ②），**再动手**。
+  ///    反过来的话，用户是"点了才知道会删" —— 那不可逆。
+  Future<void> _cancel() async {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text(keyCancelTitle),
+        // 这一句就是"删前列清单"
+        content: const Text(keyCancelWhat),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text(keyCancelNo),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text(keyCancelYes),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
+    final r = await widget.onCancel!();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      // ⚠️ **几种结果分开说**（`CancelOutcome` 就是把它们分开的那个类型）
+      _err = switch (r) {
+        CancelOutcome.ok => keyCancelOk,
+        CancelOutcome.noHelper => keyCancelNoHelper,
+        CancelOutcome.protectedOne => keyCancelProtected,
+        CancelOutcome.local => keyCancelLocal,
+        CancelOutcome.noTenant => keyCancelNone,
+        CancelOutcome.failed => keyCancelFailed,
+      };
+    });
+    if (r == CancelOutcome.ok) {
+      // 令牌已经被服务端撤了 ⇒ 回登录页
+      widget.onCancelled?.call();
+    }
   }
 
   Future<void> _submit() async {
@@ -131,6 +192,18 @@ class _ModelKeyScreenState extends State<ModelKeyScreen> {
                 ),
                 const SizedBox(height: 12),
                 Text(keyPrivacy, style: t.textTheme.bodySmall, textAlign: TextAlign.center),
+                // 🔴 **取消注册**（主人 2026-09-22："隐蔽一点"）。
+                //    ⚠️ "隐蔽"= **入口不抢眼**（小字 + 次要色 + 放在主流程**下面**），
+                //      **不是**"不告诉他就删" —— 点下去先弹一个把话列清楚的确认框。
+                if (widget.onCancel != null && widget.onCancelled != null)
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(48, 44),
+                      foregroundColor: t.colorScheme.onSurfaceVariant,
+                    ),
+                    onPressed: _busy ? null : _cancel,
+                    child: Text(keyCancelEntry, style: t.textTheme.bodySmall),
+                  ),
               ],
             ),
           ),

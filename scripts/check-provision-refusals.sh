@@ -350,8 +350,28 @@ echo "⑪ 🔴 判据脚本**自己**：注释里之外不许有反引号"
 # ⚠️ 反引号**不许写成字面量**（不然这一行自己就把自己抓了）：
 #    用八进制的 `\140` 让 grep 收到一个真反引号，而文件里没有那个字符。
 BT="$(printf '\140')"
+# ⚠️ **扫的范围要够宽**（2026-09-22 改）：原来只扫 `check-provision-*.sh`，
+#    而我第四次犯这个错时人在 `check-tenant-removal.sh` 里 —— **它不在扫描范围**，
+#    于是又漏过去了（现象：那句话被替换成空的，而**断言照样过**）。
+#    ⇒ 改成扫**我自己的全部判据脚本 + 那条特权链**：`check-*.sh` 与
+#      `remove-tenant.sh` / `install-provision-helper.sh` / `create-tenant-*.sh`。
+# ⚠️ **只扫"纯 shell 的那几份"**（它们压根不需要反引号，一律用 `$( )`）。
+#    我第一版把范围放宽到 `check-*.sh` ⇒ **四处假警报**，而假警报的下场
+#    就是下一个人把这道闸关掉（那正是这个项目最怕的）。排除的几份**各有理由**：
+#      · `check-crash-recovery.sh` / `check-persona.sh` / `check-tenant-data-plane.sh`
+#        —— 里面**嵌了 JS / Python**，那儿的反引号是**别的语言的语法**；
+#      · `create-tenant-users.sh` / `create-tenant-pool.sh`
+#        —— 末尾有**带引号的 heredoc**（给人看的文档），带引号 ⇒ shell 不展开 ⇒ 无害。
+#        ⚠️ 这两个的"不许有不带引号的 heredoc"由 `check-provision-install.sh` ⑥·补 管着 ——
+#          两道闸**合起来**才覆盖那个风险（一个管"有没有引号"，一个管"纯 shell 里有没有反引号"）。
+LINT_FILES=(
+  check-provision-refusals.sh check-provision-install.sh check-provision-trigger.sh
+  check-provision-after-install.sh check-tenant-removal.sh
+  remove-tenant.sh install-provision-helper.sh provision-tenant-request.sh
+)
 lint=0
-for jf in "$ROOT"/scripts/check-provision-*.sh; do
+for jf in "${LINT_FILES[@]/#/$ROOT/scripts/}"; do
+  [ -f "$jf" ] || continue
   hits="$(grep -v '^[[:space:]]*#' "$jf" | grep -n "$BT" || true)"
   if [ -n "$hits" ]; then
     bad "$(basename "$jf") 注释外有反引号：$(head -1 <<<"$hits" | cut -c1-64)"

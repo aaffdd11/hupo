@@ -99,7 +99,7 @@ fi
 [ "$DRY" = "1" ] || date +%s > "$STAMP"
 
 # 处理完（无论成败）都把申请删掉；失败额外留一个 `.failed` 空标记
-mark_failed() {  # mark_failed <申请文件>（标记放**投放口外面**，见 `FAILED_DIR` 那段）
+mark_failed() {  # mark_failed <申请文件>（标记放**投放口外面**，见 FAILED_DIR 那段）
   [ "$DRY" = "1" ] && return 0
   mkdir -p "$FAILED_DIR" 2>/dev/null || true
   : > "$FAILED_DIR/${1##*/}.failed" 2>/dev/null || true
@@ -113,6 +113,70 @@ finish_fail() {  # finish_fail <文件> <为什么>
   mark_failed "$f"
   [ "$DRY" = "1" ] || rm -f -- "$f"
 }
+
+# ══════════════════════════════════════════════════════════════════
+# ★ **先处理"回收"**（2026-09-22 加：主人要"取消注册"以省下资源）
+#
+# 为什么放在**建之前**：用户**反悔了**（"我不想填钥匙了"）——
+#   那就别再给他建了。这一趟会把同一个编号的待办 `.req` 一并撤掉。
+#
+# ⚠️ 它走的是**同一个投放口**（同一目录、同一条 `.path` 触发），只是名字不同
+#    （`<n>.cancel`）——**不新增任何特权面**：服务能做的仍然只是
+#    "放一个空文件、名字里有一个整数"。
+# 🔴 **只有本人能取消**：那个整数来自**验签令牌里的 `sub`**（见 `server.js`）——
+#    "取消别人"在这条路上**不可能发生**。
+# ══════════════════════════════════════════════════════════════════
+cancelled_any=0
+while IFS= read -r -d '' f; do
+  base="${f##*/}"
+  n="${base%.cancel}"
+  cancelled_any=1
+
+  # 校验与申请那一侧**逐条相同**（同一套规矩，不因为"是删"就放松）
+  if ! [[ "$n" =~ ^[1-9][0-9]{0,2}$ ]]; then
+    finish_fail "$f" "名字不是 1..${MAX_TENANTS} 的整数（只认 <整数>.cancel）"; continue
+  fi
+  if [ "$n" -gt "$MAX_TENANTS" ]; then
+    finish_fail "$f" "第 $n 号超过上限 $MAX_TENANTS"; continue
+  fi
+  if [ -L "$f" ]; then finish_fail "$f" "是个符号链接（回收申请必须是普通文件）"; continue; fi
+  if [ ! -f "$f" ]; then finish_fail "$f" "不是普通文件"; continue; fi
+  owner="$(stat -c %u -- "$f" 2>/dev/null || echo '?')"
+  if [ "$owner" != "$SERVICE_UID" ]; then
+    finish_fail "$f" "文件属主是 $owner，不是服务那个 uid（$SERVICE_UID）"; continue
+  fi
+
+  name="${NAME_PREFIX}${n}"
+  # ★ **先把待办撤掉**：反悔了就不该再建（顺序不能反 —— 先删人再撤申请的话，
+  #   那个待办会在下一次触发时把刚删掉的又建回来）
+  if [ -e "$REQ_DIR/$n.req" ]; then
+    [ "$DRY" = "1" ] || rm -f -- "$REQ_DIR/$n.req"
+    log "· 第 $n 号的待办申请一并撤了（他反悔了）"
+  fi
+
+  log "▶ 第 $n 号 → 回收 $name"
+  if [ "$DRY" = "1" ]; then
+    say "（只验不删：$name 会由 remove-tenant.sh 回收）"
+    continue
+  fi
+
+  # ⚠️ `--n` 那一侧会自己硬拒静态表里那两台（`hupo-a`/`hupo-b`）——
+  #    所以"自助回收"**碰不到老用户那两台**，这一条由**下一个脚本**兜着。
+  if bash "$LIBDIR/remove-tenant.sh" --n "$n" --yes; then
+    log "✓ 第 $n 号回收了（$name）"
+    clear_failed "$f"
+    rm -f -- "$f"
+  else
+    log "✗ 第 $n 号没回收成（$name）—— 上面那几行就是原因"
+    mark_failed "$f"
+    rm -f -- "$f"
+  fi
+done < <(find "$REQ_DIR" -maxdepth 1 -name '*.cancel' -print0 2>/dev/null)
+
+if [ "$cancelled_any" = "1" ] && [ "$DRY" = "0" ]; then
+  # 回收完腾出了位置 ⇒ 把统计戳刷新一下（下一次触发不用再等限速）
+  date +%s > "$STAMP" 2>/dev/null || true
+fi
 
 # ⚠️ **用 `find` 而不是 glob**（2026-09-21 判据抓到的）：
 #    shell 的 `*` **不匹配点开头的名字** ⇒ 一个叫 `.req` 的垃圾文件会
@@ -164,5 +228,5 @@ while IFS= read -r -d '' f; do
   fi
 done < <(find "$REQ_DIR" -maxdepth 1 -name '*.req' -print0 2>/dev/null)
 
-[ "$done_any" = "1" ] || log "（目录里没有 *.req，白跑一趟）"
+[ "$done_any" = "1" ] || [ "$cancelled_any" = "1" ] || log "（目录里 *.req / *.cancel 都没有，白跑一趟）"
 exit 0

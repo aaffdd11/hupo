@@ -80,6 +80,58 @@ done
 
 # ══════════════════════════════════════════════════════════════════
 echo
+echo "── 判据一·补 🔴 **服务写的名字 vs 助手认的名字**必须逐字一致"
+# ══════════════════════════════════════════════════════════════════
+# ⚠️ **这一条的来历**（2026-09-22，我自己栽的）：
+#    服务侧写的回收申请是 ``${p}.cancel``，而 ``p`` 是 ``<dir>/3.req``
+#    ⇒ 落地成了 **``3.req.cancel``**；而助手扫的是 ``*.cancel``、去掉后缀拿到 ``3.req``
+#    ⇒ 它把 ``3.req`` 当编号 ⇒ **拒**。
+#    现象是：**用户点了"取消注册"、而什么都没发生**（而两边各自的单测都是绿的）。
+#    ⇒ 这正是"跨产物一致性"那一类（与租户名那条 T7 同族）。
+NODE_BIN2="${HUPO_NODE_BIN:-}"
+if [ -z "$NODE_BIN2" ]; then
+  for c in /home/deploy/.nvm/versions/node/*/bin/node "$(command -v node 2>/dev/null || true)"; do
+    [ -x "$c" ] && NODE_BIN2="$c" && break
+  done
+fi
+if [ -z "$NODE_BIN2" ]; then
+  bad "找不到 node ⇒ 这一条**没验**（不是过了）"
+else
+  tmpd="$(mktemp -d)"
+  made="$(cd "$ROOT/v2/services/core" && "$NODE_BIN2" --input-type=module -e "
+    import nodeFs from 'node:fs';
+    import { ProvisionQueue } from './src/provision.js';
+    const q = new ProvisionQueue({ dir: '$tmpd', failedDir: '$tmpd/f' });
+    q.cancel('u3');
+    process.stdout.write(nodeFs.readdirSync('$tmpd').filter((x) => x.endsWith('.cancel')).join(' '));
+  " 2>&1)"
+  rm -rf "$tmpd"
+  # ① 服务侧产出的名字：**必须就是 `<整数>.cancel`**
+  if grep -qE '^[1-9][0-9]{0,2}\.cancel$' <<<"$made"; then
+    ok "服务侧写的是「$made」（形状对：<整数>.cancel）"
+  else
+    bad "🔴 服务侧写出来的名字是「$made」—— **不是「<整数>.cancel」那个形状**，助手会拒它"
+  fi
+  # ② 助手那一侧：扫的是 `*.cancel`、而且**去掉的就是 `.cancel`**
+  if grep -q "name '\*.cancel'" "$ROOT/scripts/provision-tenant-request.sh"; then
+    ok "助手扫的是 *.cancel"
+  else
+    bad "助手扫的不是 *.cancel —— 两边又对不上了"
+  fi
+  if grep -q 'base%\.cancel' "$ROOT/scripts/provision-tenant-request.sh"; then
+    ok "助手去掉的后缀也是 .cancel"
+  else
+    bad "助手去掉的后缀不是 .cancel"
+  fi
+  # ③ 两边合起来：**助手拿到的编号必须是一个整数**（这一步才是真正的"对得上"）
+  if grep -qE '^[1-9][0-9]{0,2}\.cancel$' <<<"$made"; then
+    n_of="$(sed 's/\.cancel$//' <<<"$made")"
+    if [ "$n_of" = "3" ]; then ok "助手能从它里面读出编号 3"; else bad "读出来的编号是「$n_of」"; fi
+  fi
+fi
+
+# ══════════════════════════════════════════════════════════════════
+echo
 echo "── 判据二：**真删一台**（要显式给名字；它是**不可逆**的）"
 # ══════════════════════════════════════════════════════════════════
 if [ -z "$THROWAWAY" ]; then

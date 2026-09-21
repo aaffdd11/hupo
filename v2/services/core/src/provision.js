@@ -116,6 +116,59 @@ export class ProvisionQueue {
   }
 
   /**
+   * 🔴 **注销：请他那一台真的被回收掉**（2026-09-22 主人："贴 apikey 的时候，
+   * 也要有个撤回的功能……就是取消注册，这样我就不用浪费资源了"）。
+   *
+   * ⚠️ 它与 `request()` 走**同一个投放口**（同一个目录、同一条 `.path` 触发），
+   *    只是文件名不同（`<n>.cancel`）—— 这样**不新增任何特权面**：
+   *    服务能做的仍然只是"放一个空文件，名字里有一个整数"。
+   * 🔴 **只有本人能取消**：这个 `userId` 只来自**验签令牌**里的 `sub`
+   *    （见 `server.js` 那条路由）—— 所以"取消别人"这件事在这条路上**不可能发生**。
+   * ⚠️ 幂等：已经在飞的取消不重复投。
+   */
+  cancel(userId) {
+    const p = this.#pathFor(userId);
+    if (!p) return { ok: false, why: 'bad-id' };
+    if (!this.available) {
+      if (!this.#complained) {
+        this.#complained = true;
+        this.#log(
+          `  ⚠️ 申请目录不在（${this.#dir}）⇒ **"自动开一台"与"回收"这两条路都关着**`,
+        );
+      }
+      return { ok: false, why: 'no-helper' };
+    }
+    if (this.cancelling(userId)) return { ok: true, why: 'already' };
+    // 🔴 **名字必须与助手扫的那一个逐字相同**（2026-09-22 我在这儿栽了一次）：
+    //    `#pathFor` 给的是 `<dir>/3.req`，而助手扫的是 `*.cancel` 并把 `.cancel` 去掉、
+    //    指望剩下的**就是一个整数**。我第一版写成 `${p}.cancel` ⇒ 落地是 `3.req.cancel`
+    //    ⇒ 助手把 `3.req` 当编号 ⇒ **拒**，而现象是"用户点了取消注册、什么都没发生"。
+    //    ⇒ 正确的名字是 **`3.cancel`**（与 `3.req` 平行）。
+    //    ⚠️ 这条一致性现在有闸：`check-tenant-removal.sh` 里"服务写的名字 vs 助手认的名字"。
+    const q = `${p.replace(/\.req$/, '')}.cancel`;
+    try {
+      this.#fs.writeFileSync(q, '', { flag: 'wx', mode: 0o600 });
+    } catch (err) {
+      if (err?.code === 'EEXIST') return { ok: true, why: 'already' };
+      this.#log(`  ⚠️ 回收申请没投出去（${userId}）：${err?.message ?? err}`);
+      return { ok: false, why: 'failed' };
+    }
+    this.#log(`  ♻️ 投了一张**回收**申请（第 ${userIdNumber(userId)} 号）—— 等特权侧来收`);
+    return { ok: true, why: 'asked' };
+  }
+
+  /** 有没有**在飞的**回收申请（要求普通文件，同 `outstanding` 那条道理）。 */
+  cancelling(userId) {
+    const p = this.#pathFor(userId);
+    if (!p) return false;
+    try {
+      return this.#fs.lstatSync(`${p}.cancel`).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * 有没有**在飞的**申请。
    * ⚠️ 要求是**普通文件**：一个符号链接不算（特权侧也会拒它，但状态不该被它骗着
    *    一直说"正在开"）。

@@ -87,6 +87,29 @@ const String keyPaste = '粘贴';
 /// 读不到剪贴板时说的话（⚠️ 不许只说"失败"——要告诉他**还能怎么办**）。
 const String keyPasteFailed = '读不到剪贴板。用键盘上的粘贴键，或者手动输入也行。';
 
+/// 🔴 **取消注册**（主人 2026-09-22："贴 apikey 的时候，也要有个撤回的功能。
+/// 隐蔽一点。就是取消注册。这样我就不用浪费资源了"）。
+///
+/// ⚠️ **"隐蔽"= 入口不抢眼**（小字、次要色、放在最下面），
+///    **不是"不告诉你就删"** —— 它是**不可逆**的，手册 X3 ② 对"删一轮对话"
+///    都要求**删前列清单**，删**整台**更得列。
+const String keyCancelEntry = '不想填了，取消注册';
+
+/// 确认框：标题 + **删掉什么**（这一行就是"删前列清单"）+ 两个按钮。
+const String keyCancelTitle = '取消注册？';
+const String keyCancelWhat =
+    '你那一台盒子、里面的对话、还有记账的东西——都会没，位置也就腾出来了。这一步没法撤销。';
+const String keyCancelNo = '先算了';
+const String keyCancelYes = '确定取消';
+
+/// 几种结果**分开说**（不许混成一句"失败"）。
+const String keyCancelOk = '已经在收了。你那一台会在一会儿之内停掉。';
+const String keyCancelNoHelper = '这台机器还没接上"回收"那条路。等接上了再试。';
+const String keyCancelProtected = '你这一台是我们早期手工开的，得找人帮你收。';
+const String keyCancelLocal = '你自己这一份就在这台机器上，没有单独一台要收。';
+const String keyCancelNone = '你名下现在没有单独一台，不用收。';
+const String keyCancelFailed = '没送上去。等会儿再试一次。';
+
 /// 聊天那条输入框上的「粘贴」（同一个病，见 `keyPaste` 那段）。
 const String composerPaste = '粘贴';
 const String keyPrivacy = '它只送到你自己那一台，不留在我们这边。';

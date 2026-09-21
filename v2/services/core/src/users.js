@@ -112,6 +112,26 @@ export class Users {
   }
 
   /** **删一个号**（只给清理与注销用）。返回删掉没有。 */
+  /**
+   * `id → 手机号`（反查）。
+   *
+   * ⚠️ 为什么需要：注销那一条路上，我们手上只有令牌里的 `sub`（= 用户 id），
+   *    而要删的是"那个手机号那一行"。**不许反过来拿 id 去扫全表猜**。
+   * @returns {string|null}
+   */
+  phoneOf(id) {
+    for (const [phone, rec] of this.#byPhone) {
+      if (rec?.id === id) return phone;
+    }
+    return null;
+  }
+
+  /** 按**用户 id** 删（注销用）。@returns {boolean} 真删掉了才 true */
+  removeById(id) {
+    const phone = this.phoneOf(id);
+    return phone ? this.remove(phone) : false;
+  }
+
   remove(phone) {
     const p = normalizePhone(phone);
     if (!p || !this.#byPhone.has(p)) return false;

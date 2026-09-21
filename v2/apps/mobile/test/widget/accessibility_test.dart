@@ -353,7 +353,17 @@ void main() {
       });
 
       testWidgets('填钥匙那屏 @ ${s}x', (tester) async {
-        await _pump(tester, ModelKeyScreen(onSubmit: (_) async => KeySend.ok), s);
+        // ⚠️ 把"取消注册"那个入口也带进来（它是 2026-09-22 新加的，
+        //    而**加一个控件就会加高度** ⇒ 五档字号必须重新过一遍）
+        await _pump(
+          tester,
+          ModelKeyScreen(
+            onSubmit: (_) async => KeySend.ok,
+            onCancel: () async => CancelOutcome.ok,
+            onCancelled: () {},
+          ),
+          s,
+        );
         expect(_drain(tester), isEmpty, reason: '填钥匙那屏在 ${s}x 溢出了');
       });
 
@@ -559,7 +569,17 @@ void main() {
       });
 
       testWidgets('填钥匙那屏 @ ${s}x', (tester) async {
-        await _pump(tester, ModelKeyScreen(onSubmit: (_) async => KeySend.ok), s);
+        // ⚠️ 把"取消注册"那个入口也带进来（它是 2026-09-22 新加的，
+        //    而**加一个控件就会加高度** ⇒ 五档字号必须重新过一遍）
+        await _pump(
+          tester,
+          ModelKeyScreen(
+            onSubmit: (_) async => KeySend.ok,
+            onCancel: () async => CancelOutcome.ok,
+            onCancelled: () {},
+          ),
+          s,
+        );
         await sweep(tester, '填钥匙那屏 @${s}x');
       });
 

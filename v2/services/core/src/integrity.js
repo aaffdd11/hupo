@@ -314,6 +314,29 @@ export function verifyBaseline({ baseline, exists = true }) {
  *    一条跑不通的"修法"就是一句空话 —— 而且是在最需要它的时刻（服务起不来）出现。
  *    ⇒ 用 `process.execPath`（**现在正在跑的这个 node 的绝对路径**）+ 脚本的绝对路径。
  */
+/**
+ * **从 `src/` 往上找到仓库根的那一段**。
+ *
+ * 🔴 **只许有这一个出处**（2026-09-22 我在这儿栽过）：
+ *    `serve.js` 里原来写的是 `'../../..'` —— 从 `…/hupo/v2/services/core/src`
+ *    往上三级只到 **`…/hupo/v2`**，而仓库根还要再往上一级。
+ *    后果两条，都在最不该出错的时候：
+ *      ① **10 条受保护路径里 7 条不存在** ⇒ 开机那条"**落了单的文件**"闸（欠账 #31）
+ *         **一直在空转**（扫的是不存在的目录 ⇒ 永远报不出漏）；
+ *      ② 服务**拒绝启动**时打给主人的那条补救命令指向 **`…/v2/scripts/verify-integrity.mjs`**
+ *         —— **那个文件不存在**。而这个项目的 `integrity.js` 里正好写着
+ *         *"一条跑不通的修法就是一句空话 —— 而且是在最需要它的时刻出现"*。
+ *    ⚠️ 跨重启那份对比**仍然是对的**（它按清单里的真路径走）——
+ *      所以坏的是上面那两条，不是"整套闸都没用"。
+ *    ⇒ 把那一段收成**一个常量 + 一个函数**，让"往上几级"只有一处说法。
+ */
+export const REPO_ROOT_FROM_SRC = '../../../..';
+
+/** @param {string} srcDir `src/` 那一层的绝对路径（一般是 `import.meta.dirname`） */
+export function repoRootFor(srcDir) {
+  return nodePath.resolve(srcDir, REPO_ROOT_FROM_SRC);
+}
+
 export function rebuildCommand({ repo }) {
   return `sudo ${process.execPath} ${nodePath.join(repo, 'scripts/verify-integrity.mjs')} --build`;
 }
