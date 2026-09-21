@@ -220,6 +220,18 @@ export function createServer({
    * （那台容器的隧道没通）。`null` 时**如实回 503**，不许假装通了。
    */
   proxyFor = null,
+  /**
+   * **可信的本地监听**（多租户 ②-4b 后半 · 选项甲）：容器里那条
+   * `/run/hupo/local-api.sock`（**`0600` root · 在 `0700` 的 `/run/hupo` 里**）——
+   * 只有 root 开得开它，而隧道代理就是 root。
+   *
+   * ⇒ 从这条听进来的请求**已经由宿主验过身份了**，所以这里：
+   *    * **不查令牌**、**也不受 `fail-closed` 影响**（容器里本来就没设口令）；
+   *    * 身份固定成 `trustedSub`（容器里那个租户就是 `owner` —— 见 `34-CONTAINER.md` §8.4）。
+   *
+   * 🔴 **安全性来自内核**：不是"我们信它"，是"**别人开不开这个文件**"由文件权限说了算。
+   */
+  trustedSub = 'owner',
   /** `userId → 租户名`；不在表里的（例如主人）走**本机**那条路。 */
   tenantOf = () => null,
   /**
@@ -237,7 +249,7 @@ export function createServer({
   const worldFor = worlds ? (sub) => worlds.worldFor(sub) : () => shared;
 
   const server = http.createServer((req, res) => {
-    handleRequest(req, res).catch((err) => {
+    handleRequest(req, res, false).catch((err) => {
       // 兜底：HTTP 层自己不许把异常漏出去变成未捕获
       log(`[http] 未处理异常：${err?.stack ?? err}`);
       if (!res.headersSent) sendJson(res, 500, { error: 'internal' });
@@ -247,7 +259,7 @@ export function createServer({
 
   // ── HTTP ────────────────────────────────────────────────
 
-  async function handleRequest(req, res) {
+  async function handleRequest(req, res, trusted = false) {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
 
@@ -265,19 +277,29 @@ export function createServer({
 
     // 其余 /api/* 一律要令牌；**没设口令时 fail-closed**
     if (path.startsWith('/api/')) {
-      if (auth.needsSetup) {
-        return sendJson(res, 503, {
-          error: 'not-setup',
-          text: '这台机器还没设密码，先设好再用。',
-        });
+      // ★ **可信本地那条路**（选项甲）：身份已经由**宿主**验过了，
+      //   而"只有 root 能开这个套接字"是**内核**保证的（`0600` + `0700` 的父目录）。
+      //   ⇒ 不查令牌、也不吃 `fail-closed`（容器里本来就没口令）。
+      let claim;
+      if (trusted) {
+        claim = { sub: trustedSub, trusted: true };
+      } else {
+        if (auth.needsSetup) {
+          return sendJson(res, 503, {
+            error: 'not-setup',
+            text: '这台机器还没设密码，先设好再用。',
+          });
+        }
+        const token = tokenFromRequest(req);
+        claim = token ? auth.verify(token) : null;
       }
-      const token = tokenFromRequest(req);
-      const claim = token ? auth.verify(token) : null;
       if (!claim) return sendJson(res, 401, { error: 'unauthorized' });
 
       // ★ **续期**（决策 A）：用现在这个令牌换一个新的，`exp` 往前挪。
       //   ⚠️ 它**不是**公开路由（`PUBLIC_ROUTES` 仍然只有三个）：没有有效令牌就拿不到新的。
       if (path === '/api/renew' && req.method === 'POST') {
+        // ⚠️ 可信那条路**没有令牌可续**（身份是宿主给的）⇒ 如实说，别去动宿主的撤销表
+        if (trusted) return sendJson(res, 404, { error: 'not-found' });
         const r = auth.renew(tokenFromRequest(req));
         if (!r) return sendJson(res, 401, { error: 'expired' });
         return sendJson(res, 200, { token: r.token, expiresAt: r.expiresAt });
@@ -785,9 +807,40 @@ export function createServer({
     });
   }
 
+  /**
+   * **额外听一条只有 root 开得开的 UDS**（容器专用 · 选项甲）。
+   * ⚠️ 宿主上**不调它** ⇒ 宿主行为逐字不变。
+   */
+  let trustedServer = null;
+  function listenTrusted(socketPath) {
+    const s = http.createServer((req, res) => {
+      handleRequest(req, res, true).catch((err) => {
+        log(`[http/local] 未处理异常：${err?.stack ?? err}`);
+        if (!res.headersSent) sendJson(res, 500, { error: 'internal' });
+        else res.destroy();
+      });
+    });
+    return new Promise((resolve, reject) => {
+      s.once('error', reject);
+      s.listen(socketPath, () => {
+        // 🔴 **权限就是这条路的全部安全性**：`0600` ⇒ 只有属主（容器里的 root）开得开。
+        //    ⚠️ 改宽它 = 把"以这个用户身份说话"的资格递给别人。
+        try {
+          nodeFs.chmodSync(socketPath, 0o600);
+        } catch (err) {
+          reject(new Error(`可信套接字的权限没设成 0600：${err?.message ?? err}`));
+          return;
+        }
+        trustedServer = s;
+        resolve({ path: socketPath });
+      });
+    });
+  }
+
   return {
     server,
     webRoot,
+    listenTrusted,
     /** ⚠️ 只在 127.0.0.1 上听。对外由 VPS 那条隧道走（stcp 不占公网端口）。 */
     listen(port, host = '127.0.0.1') {
       return new Promise((resolve) => server.listen(port, host, () => resolve(server.address())));
@@ -805,12 +858,19 @@ export function createServer({
       }
       // keep-alive 的空闲连接也会让 close() 等下去
       server.closeIdleConnections?.();
-      return new Promise((resolve) => {
-        wss.close(() => {
-          server.close(() => resolve());
-          server.closeIdleConnections?.();
-        });
-      });
+      // ⚠️ 可信那条也要关（不然它会把进程留住）
+      const closeTrusted = trustedServer
+        ? new Promise((r) => trustedServer.close(() => r()))
+        : Promise.resolve();
+      return Promise.all([
+        new Promise((resolve) => {
+          wss.close(() => {
+            server.close(() => resolve());
+            server.closeIdleConnections?.();
+          });
+        }),
+        closeTrusted,
+      ]).then(() => undefined);
     },
   };
 }

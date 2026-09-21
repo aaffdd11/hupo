@@ -240,7 +240,7 @@ function setModelKey(userId, key) {
   return { ok: true };
 }
 
-const { listen, close } = createServer({
+const { listen, listenTrusted, close } = createServer({
   // ★ **多租户那一侧**：每个请求按令牌里的 `sub` 取那个人的世界。
   //   ⚠️ 上面那五个单例**不再传**了 —— 传了就等于"所有人共用一份"。
   worlds,
@@ -313,7 +313,27 @@ for (const w of worlds.all()) {
 if (reconciled.noticed) console.log(`  🔔 已通知   ${reconciled.noticed}（时间线里有一条）`);
 if (crashNotice) console.log('  🔔 已通知   crash（时间线里有一条）');
 
+// ★ **可信的本地 UDS**（选项甲）：容器里额外听一条 `0600` 的套接字 ——
+//   隧道代理（root）从它进来，请求就**不再需要令牌**（身份由内核的文件权限保证）。
+//   ⚠️ 先删掉上次留下的：套接字文件不删，`listen` 会撞 `EADDRINUSE`
+//      （而那句话看起来像"端口被占"）。
+if (cfg.trustedSocketPath) {
+  try {
+    nodeFs.unlinkSync(cfg.trustedSocketPath);
+  } catch {
+    /* 不存在是正常的 */
+  }
+}
 const addr = await listen(cfg.port, cfg.host);
+if (cfg.trustedSocketPath) {
+  try {
+    nodeFs.mkdirSync(nodePath.dirname(cfg.trustedSocketPath), { recursive: true, mode: 0o700 });
+    await listenTrusted(cfg.trustedSocketPath);
+    console.log(`  可信口   ${cfg.trustedSocketPath}（0600 · 只有 root 开得开）`);
+  } catch (err) {
+    console.warn(`  ⚠️ 可信口没起来：${err?.message ?? err}（隧道进来的请求会拿不到身份）`);
+  }
+}
 
 // 启动横幅**报告状态**，不喊口号（手册 §11.4）
 console.log('── 琥珀 · 调度器（v2）────────────────────────');

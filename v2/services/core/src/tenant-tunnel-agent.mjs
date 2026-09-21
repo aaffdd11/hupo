@@ -41,7 +41,10 @@ export function runTunnelAgent({
   log = (m) => console.log(m),
   reconnectMs = 3000,
 } = {}) {
-  const [host, portStr] = String(localTarget).split(':');
+  // ⚠️ 目标可以是 **UDS 路径**（`/run/hupo/local-api.sock` · 选项甲）或者 `host:port`。
+  //    前者只连本机那条 **`0600`、只有 root 开得开**的口 —— 身份由内核保证。
+  const isUnix = String(localTarget).startsWith('/');
+  const [host, portStr] = isUnix ? ['', ''] : String(localTarget).split(':');
   const port = Number.parseInt(portStr ?? '8080', 10);
   let stopped = false;
   let conn = null;
@@ -58,7 +61,7 @@ export function runTunnelAgent({
 
   const openTunnel = (id) => {
     // ⚠️ **目标写死**（只连本机那个服务）：`open` 帧里就算带了地址也不认。
-    const sock = nodeNet.connect(port, host);
+    const sock = isUnix ? nodeNet.connect(localTarget) : nodeNet.connect(port, host);
     tunnels.set(id, sock);
     sock.on('data', (d) => {
       for (let i = 0; i < d.length; i += CHUNK) {

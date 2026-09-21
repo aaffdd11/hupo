@@ -326,6 +326,8 @@ ctr="$("$BUILDAH" from scratch)"
   --env HUPO_MODEL_PATCH=/app/hupo-model-proxy.yml \
   --env HUPO_MODEL_TICKET=hupo-local-model-proxy \
   --env HUPO_KEY_FILE=/run/hupo/creds.yaml \
+  --env HUPO_TRUSTED_SOCKET=/run/hupo/local-api.sock \
+  --env HUPO_LOCAL_TARGET=/run/hupo/local-api.sock \
   --cmd '["/bin/node","/app/entry.mjs"]' \
   "$ctr" >/dev/null || { echo "✗ buildah config 失败 —— 镜像会缺 Cmd/Env，不许往下走"; exit 3; }
 "$BUILDAH" commit "$ctr" "$IMG" >/dev/null

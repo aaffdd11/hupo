@@ -193,6 +193,13 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      */
     tenantMap: parseTenantMap(env.HUPO_TENANT_MAP),
 
+    /**
+     * **可信的本地 UDS**（选项甲 · 容器专用）：容器里额外听一条 `0600` 的套接字，
+     * 只有 root 开得开 ⇒ 从它进来的请求由**内核**保证"是宿主隧道代理"。
+     * ⚠️ 宿主上**不设它**（`''` = 不开）⇒ 宿主行为逐字不变。
+     */
+    trustedSocketPath: env.HUPO_TRUSTED_SOCKET || '',
+
     /** 通道套接字放哪个目录（每个租户一个）。`''` = 不开这条通道。 */
     tenantChannelDir: env.HUPO_CHANNEL_DIR ?? '/run/hupo-channel',
 
