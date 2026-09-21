@@ -106,8 +106,17 @@ class _KeyFormState extends State<KeyForm> {
       CancelOutcome.protectedOne => keyCancelProtected,
       CancelOutcome.local => keyCancelLocal,
       CancelOutcome.noTenant => keyCancelNone,
+      CancelOutcome.needsRelogin => keyCancelRelogin,
       CancelOutcome.failed => keyCancelFailed,
     };
+    // ★ **要重新登一次**（账 #39）：服务端在这一步**什么都没做** ⇒
+    //   把他的原话念给他听（"现在什么都没动"），然后**送他回登录那一屏** ——
+    //   因为下一步就是"重新登一次，再点一遍"。
+    if (r == CancelOutcome.needsRelogin) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      widget.onCancelled?.call();
+      return;
+    }
     if (r == CancelOutcome.ok) {
       // ⚠️ **收掉了就回登录页**：令牌已经被服务端撤了，留在这儿只会到处 401。
       //    先说一句"已经在收了"，再走 —— 不然用户不知道刚才那一下干了什么。

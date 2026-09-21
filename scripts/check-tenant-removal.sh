@@ -38,6 +38,23 @@ if [ "$(id -u)" != "0" ]; then
   echo "✗ 这个判据要 root（它要真删一台来看看清没清干净）。请：sudo bash $0"; exit 2
 fi
 
+# ⚠️ **`sudo` 底下 PATH 里没有 node**（这台机器只有 nvm 里那一个）⇒ 兜一圈找它，
+#    和别的判据同一条规矩（少了它，下面那条"服务侧那行生成得出来吗"会**假红**）。
+NODE="${NODE_BIN:-}"
+if [ -z "$NODE" ]; then
+  for c in /home/deploy/.nvm/versions/node/*/bin/node "$(command -v node 2>/dev/null || true)"; do
+    [ -x "$c" ] && { NODE="$c"; break; }
+  done
+fi
+
+# 🔴 **判据的试跑不许写进主人那份账**（2026-09-22 一跑就露出来了：它把一堆
+#    "拒了 hupo-t99" 之类的噪音写进了 `/var/log/hupo/tenant-audit.log`，
+#    而主人一读会以为**真有人**去删那些不存在的租户）。
+#    ⇒ 除了"真删那一半"（那是**真事**，该留痕），其余一律写临时文件。
+AUDIT_TMP="$(mktemp -d)"
+export HUPO_TENANT_AUDIT="$AUDIT_TMP/tenant-audit.log"
+export HUPO_SERVICE_AUDIT="$AUDIT_TMP/service-audit.log"
+
 pass=0; fail=0; skipped=0
 ok()   { echo "  ✓ $1"; pass=$((pass + 1)); }
 bad()  { echo "  ✗ $1"; fail=$((fail + 1)); }
@@ -132,6 +149,58 @@ fi
 
 # ══════════════════════════════════════════════════════════════════
 echo
+# ══════════════════════════════════════════════════════════════════
+echo "── 判据一·补2 🔴 **给主人看的那一笔账**（账 #39：两边形状必须逐字一致）"
+# ══════════════════════════════════════════════════════════════════
+# ⚠️ 为什么要**跨产物**比形状：这一行两边各写一次（服务 `src/audit.js` / 特权侧这个脚本），
+#    而"两边各写一份 = 一定会漂" —— 漂了账就分成两半、谁也读不全。
+#    这个项目已经栽过两次同一种病（`3.req.cancel`、仓库根算错一级）。
+TMP_AUDIT="$(mktemp -d)"
+# ① 特权侧：让他去删那台**永远不许删**的 ⇒ 走"拒"那条路（**什么都不动**），并留一行
+out="$(HUPO_TENANT_AUDIT="$TMP_AUDIT/tenant-audit.log" bash "$REMOVER" --name hupo-a --yes 2>&1 | tail -1)"
+if [ -s "$TMP_AUDIT/tenant-audit.log" ]; then
+  shell_line="$(tail -1 "$TMP_AUDIT/tenant-audit.log")"
+  ok "特权侧拒了也留痕：$(cut -c1-46 <<<"$shell_line")…"
+else
+  shell_line=""
+  bad "🔴 特权侧拒了**没留痕**（账 #39 要的就是这一行）"
+fi
+# ② 服务侧：拿同一个形状生成一行（用真代码，不是我手写的样本）
+js_line="$(cd "$ROOT" && "$NODE" -e '
+  import("./v2/services/core/src/audit.js").then((m) => {
+    process.stdout.write(m.auditLine({ at: Date.now(), what: "拒了", tenant: "hupo-a", userId: null, detail: "试" }));
+  });' 2>/dev/null || true)"
+if [ -n "$js_line" ]; then
+  ok "服务侧那行也生成出来了：$(cut -c1-46 <<<"$js_line")…"
+else
+  bad "🔴 服务侧的 auditLine 生成不出来"
+fi
+# ③ **比形状**：两行必须都长成 `[时间] 事件 · 字段 · 字段 · 字段 · 说明`
+SHAPE='^\[[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\] [^·]+ · [^·]* · [^·]* · [^·]* · .*$'
+if [ -n "$shell_line" ] && grep -qE "$SHAPE" <<<"$shell_line"; then
+  ok "特权侧那行的形状对（「[时间] 事件 · 租户 · 用户 · 手机 · 说明」）"
+else
+  bad "🔴 特权侧那行的形状不对：$(cut -c1-70 <<<"$shell_line")"
+fi
+if [ -n "$js_line" ] && grep -qE "$SHAPE" <<<"$js_line"; then
+  ok "服务侧那行的形状也对 —— **两边逐字同一种形状**"
+else
+  bad "🔴 服务侧那行的形状不对：$(cut -c1-70 <<<"$js_line")"
+fi
+# ④ 🔴 **两样东西永远不许出现**：钥匙、没掩码的手机号
+for f in "$TMP_AUDIT/tenant-audit.log"; do
+  [ -f "$f" ] || continue
+  if grep -qE 'sk-[A-Za-z0-9]{8,}' "$f"; then bad "🔴 审计里出现了钥匙"; else ok "审计里没有钥匙"; fi
+  if grep -qE '[^0-9*]1[0-9]{10}[^0-9]' "$f"; then bad "🔴 审计里出现了没掩码的手机号"; else ok "手机号没有明文（要么掩码、要么 「—」）"; fi
+done
+# ⑤ 读账那一支**跑得起来**（并起来给人看）
+if bash "$ROOT/scripts/show-audit.sh" >/dev/null 2>&1; then
+  ok "「scripts/show-audit.sh」 跑得起来（把两边并起来给人看）"
+else
+  bad "🔴 读账那一支跑不起来"
+fi
+rm -rf "$TMP_AUDIT"
+
 echo "── 判据二：**真删一台**（要显式给名字；它是**不可逆**的）"
 # ══════════════════════════════════════════════════════════════════
 if [ -z "$THROWAWAY" ]; then

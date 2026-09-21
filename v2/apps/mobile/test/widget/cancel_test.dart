@@ -113,4 +113,31 @@ void main() {
       }
     }
   });
+
+// ── 账 #39：注销前要"再确认一次身份"（2026-09-22 加）──────────────────
+
+testWidgets('🔴 服务端说"要重新登一次" ⇒ 如实说清、送回登录页，而且**不说"已经在收了"**', (tester) async {
+  // ⚠️ 这一种是"**什么都没发生**"：没投申请、没撤令牌、没删账号。
+  //    所以界面**不许**说成"已经在收了"（那会让他以为删掉了），
+  //    也不许说成"失败"（那会让他一直重试同一个按钮 —— 重试多少次都一样）。
+  var loggedOut = 0;
+  await tester.pumpWidget(
+    MaterialApp(
+      home: ModelKeyScreen(
+        onSubmit: (_) async => KeySend.ok,
+        onCancel: () async => CancelOutcome.needsRelogin,
+        onCancelled: () => loggedOut += 1,
+      ),
+    ),
+  );
+  await tester.pump();
+  await tester.tap(find.text(keyCancelEntry));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(keyCancelYes));
+  await tester.pumpAndSettle();
+
+  expect(find.text(keyCancelRelogin), findsOneWidget);
+  expect(find.text(keyCancelOk), findsNothing, reason: '不许说"已经在收了"（那一步没发生）');
+  expect(loggedOut, 1, reason: '要送他回登录那一屏 —— 下一步就是重新登一次');
+});
 }

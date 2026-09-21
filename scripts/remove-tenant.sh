@@ -47,7 +47,31 @@ done
 
 say()  { echo "  $1"; }
 plan() { echo "▶ $1"; }
-die()  { echo "✗ $1"; exit 2; }
+
+# ── 给主人看的那一笔账（账 #39 · 契约 `43-AUTO-PROVISION.md` §十四）──────
+#   🔴 **形状与 JS 那边（`src/audit.js`）逐字一致**：
+#        `[YYYY-MM-DD HH:MM:SS] 事件 · 租户 · 用户 · 手机 · 说明`
+#      ⚠️ 两边各写一份格式 = **一定会漂**，而漂了账就分成两半。
+#         判据里有一条**跨产物**的闸：拿真跑出来的两种行去比形状。
+#      ⚠️ **钥匙一个字符都不许有**；**手机号只写掩码**（这一侧压根不知道手机号
+#         ⇒ 一律写 `—`：特权侧只知道租户名，**不许去读人家的手机号**）。
+#      ⚠️ 写不进去**不许把动作带走** —— 但要说一声（只有 root 时才有资格抱怨：
+#         非 root 的"只看"跑不进去是正常的）。
+AUDIT="${HUPO_TENANT_AUDIT:-/var/log/hupo/tenant-audit.log}"
+audit() {  # audit <事件> <租户名> <用户> <说明>
+  local what="$1" tenant="${2:--}" who="${3:--}" detail="${4:--}"
+  [ -n "$what" ] || return 0
+  mkdir -p "$(dirname "$AUDIT")" 2>/dev/null || true
+  if printf '[%s] %s · %s · %s · %s · %s\n' "$(date '+%F %T')" "$what" "$tenant" "$who" "—" "$detail" >>"$AUDIT" 2>/dev/null; then
+    chmod 0644 "$AUDIT" 2>/dev/null || true
+  elif [ "$(id -u)" = "0" ]; then
+    echo "  ⚠️ 审计那一行没写进去（$AUDIT）—— 这一件**没有留下痕迹**"
+  fi
+}
+
+# ⚠️ **拒了也要记账**（"有人想删、没让他删、为什么" —— 那正是最该看见的一行）。
+#    所以 `die` 先记一笔再退。`NAME` 可能还没定（比如模板读不出来）⇒ 用 `${NAME:--}`。
+die()  { audit "拒了" "${NAME:--}" "${WHO:--}" "$1"; echo "✗ $1"; exit 2; }
 
 tpl_get() { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$TEMPLATE" 2>/dev/null | head -1; }
 NAME_PREFIX="$(tpl_get name_prefix)"
@@ -70,6 +94,12 @@ else
   die "要给一个要删的租户：--n <编号> 或 --name <名字>（⚠️ 不给就是不给，**没有"删全部"这种参数**）"
 fi
 
+# ⚠️ **审计那一行里的"用户"列**：派生的租户，userId 就是 `u<N>`
+#    （`tenants.js` 的 `tenantNameFor(u<N>) === <前缀><N>` ⇒ 两边指的是同一台）。
+#    静态表那两台没有编号 ⇒ 写 `—`（**不许猜**）。
+WHO="—"
+[ -n "${WANT_N:-}" ] && WHO="u${WANT_N}"
+
 # ① 🔴 静态表里那两台：**永远不许删**（这一条在任何别的判断之前）
 for p in "${PROTECTED[@]}"; do
   if [ "$NAME" = "$p" ]; then
@@ -85,6 +115,7 @@ case "$NAME" in
     esac
     [ "$N" -ge 1 ] && [ "$N" -le "$MAX_TENANTS" ] \
       || die "「$NAME」的编号 $N 超出模板的范围（1..$MAX_TENANTS）"
+    WHO="u$N"   # ⚠️ 名字认下来了 ⇒ 审计那一列的"用户"也定下来了
     ;;
   *) die "「$NAME」不是模板推得出来的名字（要 ${NAME_PREFIX}<1..$MAX_TENANTS>）" ;;
 esac
@@ -112,6 +143,7 @@ if id "$NAME" >/dev/null 2>&1; then
   fi
 else
   say "查无此人 —— 但**残留照清**（半路失败会留下 subuid 条目 / 通道目录 / 待办申请）"
+  audit "真收掉了" "$NAME" "$WHO" "本来就查无此人 —— 清残留"
 fi
 
 as_user() {  # 以那个租户身份跑（CD /tmp 不能省；sudo -u 会保留当前目录）
@@ -214,8 +246,10 @@ grep -q "^$NAME:" /etc/subgid 2>/dev/null && { echo "  ✗ /etc/subgid 里还有
 [ -d "/var/lib/systemd/linger/$NAME" ] && { echo "  ✗ linger 还在"; left=1; }
 if [ "$left" = "0" ]; then
   echo "  ✓ 用户 / 家目录 / subuid / subgid / 通道 / linger —— **一样都不剩**"
+  audit "真收掉了" "$NAME" "$WHO" "用户/家目录/subuid/subgid/通道/linger 都不剩"
 else
   echo "  ⚠️ 上面那几样**没清干净** —— 再跑一次这个脚本（它是幂等的）"
+  audit "没收成" "$NAME" "$WHO" "有残留没清干净 —— 再跑一次（脚本是幂等的）"
 fi
 echo
 echo "⚠️ **还有一步**：重启一次宿主服务，让它别再替一个不存在的租户听着："

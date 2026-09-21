@@ -34,6 +34,7 @@ import { ROLLOUT_SWEEP_MS, compareTenantBuild, createNagBook, planRollout, readP
 import { DEFAULT_DROP_DIR, createKeyDrop, resolveDropName } from './key-drop.js';
 import { keyFileFor } from './key-path.mjs';
 import { keyStateOf } from './key-state.js';
+import { auditPath } from './audit.js';
 import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
 
 
@@ -541,7 +542,11 @@ const { listen, listenTrusted, close } = createServer({
   // ★ **多租户那一侧**：每个请求按令牌里的 `sub` 取那个人的世界。
   //   ⚠️ 上面那五个单例**不再传**了 —— 传了就等于"所有人共用一份"。
   worlds,
-  auth, webRoot, buildId: cfg.buildId,
+  auth,
+  webRoot,
+  buildId: cfg.buildId,
+  // ★ **给主人看的那一笔账**（账 #39）：注销/回收那条路上每一件都留一行
+  auditFile: auditPath(cfg.dataDir),
   users,
   devCode: cfg.devCode,
   setModelKey,

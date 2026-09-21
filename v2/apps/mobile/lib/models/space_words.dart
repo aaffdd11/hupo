@@ -110,6 +110,13 @@ const String keyCancelLocal = '你自己这一份就在这台机器上，没有�
 const String keyCancelNone = '你名下现在没有单独一台，不用收。';
 const String keyCancelFailed = '没送上去。等会儿再试一次。';
 
+/// 🔴 **要重新登一次**（账 #39 · 契约 `43-AUTO-PROVISION.md` §十四）。
+///
+/// ⚠️ 这一句要同时说清两件：**为什么要重登**（确认是你）、**现在什么都没动**
+///    （他刚才点了那一下，别让他以为已经删了）。删东西这件事上，
+///    "以为删了其实没删"和"以为没删其实删了"**都是坏事**。
+const String keyCancelRelogin = '为了确认是你，得先重新登一次。登完再点一遍就好 —— 现在什么都没动。';
+
 /// 聊天那条输入框上的「粘贴」（同一个病，见 `keyPaste` 那段）。
 const String composerPaste = '粘贴';
 const String keyPrivacy = '它只送到你自己那一台，不留在我们这边。';

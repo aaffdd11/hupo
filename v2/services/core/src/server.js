@@ -11,6 +11,8 @@
 //      不要"先连上再关"——那会给爬虫留下一个可以站着的连接。
 
 import http from 'node:http';
+import { reauthOk } from './reauth.js';
+import { appendAudit, auditLine } from './audit.js';
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 import { WebSocketServer } from 'ws';
@@ -213,6 +215,11 @@ export function createServer({
   admit = readAdmission,
   /** 用户表（手机号 → 用户）。`null` = 这台部署还没开手机号登录。 */
   users = null,
+  /**
+   * **给主人看的那一笔账**写哪（账 #39 · `audit.js`）。`null` = 不记
+   * （单租户的老测试就是这样；多租户那条路由 `serve.js` 传 `auditPath(dataDir)`）。
+   */
+  auditFile = null,
   /** 临时验证码。**空串 = 关**（默认就是关）。 */
   devCode = '',
   /**
@@ -286,6 +293,33 @@ export function createServer({
   });
 
   // ── HTTP ────────────────────────────────────────────────
+
+  /**
+   * **记一行账**（账 #39）：谁想收哪一台、收没成、为什么。
+   * ⚠️ 它是**旁路**：写不进去要说一声，但**不许把动作带走**。
+   * ⚠️ **手机号只写掩码**（`auditLine` 里做），**钥匙从不出现**。
+   */
+  const audit = (what, userId, { tenant = null, detail = null } = {}) => {
+    if (!auditFile) return false;
+    let phone = null;
+    try {
+      phone = users?.phoneOf?.(userId) ?? null;
+    } catch {
+      /* 查不到就写 `—` */
+    }
+    let tName = tenant;
+    try {
+      tName = tenant ?? tenantOf(userId) ?? null;
+    } catch {
+      /* 同上 */
+    }
+    return appendAudit({
+      file: auditFile,
+      line: auditLine({ at: now(), what, tenant: tName, userId, phone, detail }),
+      fs: nodeFs,
+      onError: (m) => log(m),
+    });
+  };
 
   async function handleRequest(req, res, trusted = false) {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
@@ -444,7 +478,25 @@ export function createServer({
       if (path === '/api/cancel' && req.method === 'POST') {
         if (trusted) return sendJson(res, 404, { error: 'not-found' });
         if (!cancelTenant) return sendJson(res, 404, { error: 'not-found' });
+        // 🔴 **身份再确认**（账 #39 的前一半 · `reauth.js`）：
+        //    注销**不可逆**，而这条路原来**只认令牌** ⇒ 一个被盗的令牌就能
+        //    删掉一个人所有的东西。⇒ 要求"**最近真的登录过**"（看令牌的 `iat`，
+        //    而**续期不会刷新 `iat`** ⇒ 旧令牌刷不过去）。
+        //    ⚠️ 在这一步**什么都没发生**（没投申请、没撤令牌、没删账号）——
+        //      判据里有一条专门盯这个。
+        // ⚠️ **把服务自己的时钟传进去**（`now()` 是注入的：测试要能造"旧令牌"，
+        //    而少了这一句它就用**真实墙上时间**去比 —— 判据会时灵时不灵）。
+        if (!reauthOk({ iat: claim?.iat, now: now() })) {
+          audit('拒了', claim?.sub, { detail: '要重新登录一次（令牌不是刚签的）' });
+          return sendJson(res, 409, {
+            error: 'needs-relogin',
+            text: '为了确认是你，这一步得先重新登一次。登完再点一遍就好 —— 现在什么都没动。',
+          });
+        }
         const r = cancelTenant(claim.sub);
+        // ⚠️ **拒了也记一笔**（"有人想删、没让他删" 正是最该看见的一行）
+        if (!r?.ok) audit('拒了', claim.sub, { detail: r?.why ?? 'unknown' });
+        else audit('收到请求', claim.sub, { detail: '已投给特权侧，等它真收' });
         if (!r?.ok) {
           // **每一种"不行"都说清是哪一种**（混成一句会让人一直重试）
           const why = r?.why ?? 'unknown';

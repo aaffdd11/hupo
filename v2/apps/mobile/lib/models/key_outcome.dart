@@ -14,4 +14,17 @@ enum KeySend { ok, blank, badChars, tooLong, failed }
 /// ⚠️ 分这么细是因为**每一种该说的话不一样**：`noHelper` 是"我们这边还没接上"、
 ///    `protectedOne` 是"你这一台得找人来收"、`failed` 是"没送上去"。
 ///    混成一句"失败"他会一直重试（这个项目里已经栽过好几次）。
-enum CancelOutcome { ok, noHelper, protectedOne, local, noTenant, failed }
+enum CancelOutcome {
+  ok,
+  noHelper,
+  protectedOne,
+  local,
+  noTenant,
+
+  /// 🔴 **要你先重新登一次**（账 #39：注销不可逆，而这条路原来只认令牌 ⇒
+  /// 一个被盗的令牌就能删掉一个人所有的东西）。契约 `43-AUTO-PROVISION.md` §十四。
+  /// ⚠️ 走到这一种时**什么都没发生**（没投申请、没撤令牌、没删账号）——
+  /// 界面必须这么说，不许说成"失败"或者"已经在收了"。
+  needsRelogin,
+  failed,
+}

@@ -283,6 +283,9 @@ class Api {
         'protected' => CancelOutcome.protectedOne,
         'local' => CancelOutcome.local,
         'no-tenant' => CancelOutcome.noTenant,
+        // ★ **要重新登一次**（账 #39）：服务端在这一步**什么都没做**，
+        //   客户端要把他送回登录那一屏（登完再来一遍）。
+        'needs-relogin' => CancelOutcome.needsRelogin,
         _ => CancelOutcome.failed,
       };
     } catch (_) {
