@@ -27,7 +27,12 @@ import {
   tenantUidFor,
   userIdNumber,
 } from '../src/tenants.js';
-import { ProvisionQueue, requestFileName } from '../src/provision.js';
+import {
+  DEFAULT_FAILED_DIR,
+  DEFAULT_PROVISION_DIR,
+  ProvisionQueue,
+  requestFileName,
+} from '../src/provision.js';
 
 // ⚠️ 这一份模板是**照着 `tenant-template.conf` 手抄的** —— 抄错这条闸就白设了。
 //    所以下面另有一条"读真文件"的用例（`readTenantTemplate`），两边一起看才有意义。
@@ -215,13 +220,34 @@ test('🔴 A5：`outstanding` 只认**普通文件**（一个符号链接不算"
 
 test('🔴 A5：失败标记 —— 有它才算"建不了"，没有就是"还没建/正在建"', () => {
   const dir = tmpdir();
-  const q = new ProvisionQueue({ dir });
+  const failedDir = tmpdir();
+  const q = new ProvisionQueue({ dir, failedDir });
   assert.equal(q.failed('u3'), false);
-  nodeFs.writeFileSync(nodePath.join(dir, '3.req.failed'), '');
+  nodeFs.writeFileSync(nodePath.join(failedDir, '3.req.failed'), '');
   assert.equal(q.failed('u3'), true);
   // ⚠️ 符号链接冒充失败标记 ⇒ 不算（同 outstanding 那条道理）
   const dir2 = tmpdir();
-  const q2 = new ProvisionQueue({ dir: dir2 });
-  nodeFs.symlinkSync('/etc/hostname', nodePath.join(dir2, '3.req.failed'));
+  const failedDir2 = tmpdir();
+  const q2 = new ProvisionQueue({ dir: dir2, failedDir: failedDir2 });
+  nodeFs.symlinkSync('/etc/hostname', nodePath.join(failedDir2, '3.req.failed'));
   assert.equal(q2.failed('u3'), false);
+});
+
+test('🔴 标记**不在申请目录里**（放在那儿会让 .path 单元反复触发）', () => {
+  // ⚠️ 真机量出来的：`DirectoryNotEmpty=` 会反复触发（探针：一个文件跑出 5 次，
+  //    然后撞上 systemd 的启动限速 ⇒ 单元进 failed ⇒ 之后的新申请没人管）。
+  //    ⇒ **投放口里只许有待办申请**，标记住旁边。
+  const dir = tmpdir();
+  const failedDir = tmpdir();
+  const q = new ProvisionQueue({ dir, failedDir });
+  q.request('u3');
+  assert.deepEqual(nodeFs.readdirSync(dir), ['3.req'], '投放口里只该有那一张申请');
+  // 标记的默认位置**不是**申请目录（这条钉的是"两处不许合并"）
+  assert.notEqual(DEFAULT_PROVISION_DIR, DEFAULT_FAILED_DIR);
+  // ⚠️ 按**路径段**比，不按字符串前缀：`…/hupo-provision-state` 在字符串上
+  //    确实"以 …/hupo-provision 开头"（我第一次就写错成那样）。
+  //    要钉的是"**它不在申请目录里面**"⇒ 比父目录与末段。
+  assert.equal(nodePath.dirname(DEFAULT_FAILED_DIR), nodePath.dirname(DEFAULT_PROVISION_DIR), '该是同一个父目录下的两个兄弟');
+  assert.notEqual(nodePath.basename(DEFAULT_FAILED_DIR), nodePath.basename(DEFAULT_PROVISION_DIR));
+  assert.equal(q.failed('u3'), false);
 });

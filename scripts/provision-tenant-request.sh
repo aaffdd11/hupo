@@ -27,6 +27,12 @@ set -uo pipefail
 #    那两个脚本就躺在**它旁边**（A9：root 只跑 root 自己那一份拷贝）。
 LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQ_DIR="${HUPO_PROVISION_DIR:-/run/hupo-provision}"
+# 🔴 **标记不许放在投放口里**（2026-09-21 真机量出来的）：
+#    `DirectoryNotEmpty=` 会**反复触发**（探针实测：一个文件跑出 5 次，
+#    然后撞上 systemd 的启动限速）。⇒ 只要投放口里**留下任何东西**
+#    （失败标记就是），它就会一直触发 ⇒ 单元进 `failed` ⇒ **之后的新申请没人管**。
+# ⇒ 所以：**投放口里只许有待办申请**；失败标记放旁边一个目录。
+FAILED_DIR="${HUPO_PROVISION_FAILED_DIR:-/run/hupo-provision-state}"
 SERVICE_USER="${HUPO_SERVICE_USER:-deploy}"
 DRY="${HUPO_PROVISION_DRY_RUN:-0}"
 
@@ -93,11 +99,18 @@ fi
 [ "$DRY" = "1" ] || date +%s > "$STAMP"
 
 # 处理完（无论成败）都把申请删掉；失败额外留一个 `.failed` 空标记
+mark_failed() {  # mark_failed <申请文件>（标记放**投放口外面**，见 `FAILED_DIR` 那段）
+  [ "$DRY" = "1" ] && return 0
+  mkdir -p "$FAILED_DIR" 2>/dev/null || true
+  : > "$FAILED_DIR/${1##*/}.failed" 2>/dev/null || true
+}
+clear_failed() { [ "$DRY" = "1" ] || rm -f -- "$FAILED_DIR/${1##*/}.failed"; }
+
 finish_fail() {  # finish_fail <文件> <为什么>
   local f="$1" why="$2"
   log "✗ 拒了 ${f##*/}：$why"
-  # ⚠️ 标记建**之前**先删申请，顺序反了的话中间那一刻服务会同时看到两个
-  [ "$DRY" = "1" ] || { : > "$f.failed" 2>/dev/null || true; }
+  # ⚠️ 先记标记、再删申请：删完之后投放口就**空了**（那正是 `DirectoryNotEmpty` 要的）
+  mark_failed "$f"
   [ "$DRY" = "1" ] || rm -f -- "$f"
 }
 
@@ -142,10 +155,11 @@ while IFS= read -r -d '' f; do
   if HUPO_TENANT_USERS="$name" bash "$LIBDIR/create-tenant-users.sh" --yes \
        && HUPO_TENANT_USERS="$name" HUPO_OWNER_USER="$SERVICE_USER" bash "$LIBDIR/create-tenant-pool.sh" --yes; then
     log "✓ 第 $n 号建好了（$name）"
-    rm -f -- "$f.failed" "$f"
+    clear_failed "$f"
+    rm -f -- "$f"
   else
     log "✗ 第 $n 号没建成（$name）—— 上面那几行就是原因"
-    : > "$f.failed" 2>/dev/null || true
+    mark_failed "$f"
     rm -f -- "$f"
   fi
 done < <(find "$REQ_DIR" -maxdepth 1 -name '*.req' -print0 2>/dev/null)

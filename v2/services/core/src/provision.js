@@ -25,6 +25,18 @@ import { userIdNumber } from './tenants.js';
 /** 申请目录。`/run` 是 tmpfs ⇒ 重启即空（在飞的申请由下一次状态查询重新投）。 */
 export const DEFAULT_PROVISION_DIR = '/run/hupo-provision';
 
+/**
+ * **失败标记放哪**（**不在**申请目录里）。
+ *
+ * 🔴 为什么非分开不可（2026-09-21 真机量出来的）：`.path` 单元上那句
+ *    `DirectoryNotEmpty=` **会反复触发**（探针实测：投放口里留一个文件，
+ *    服务被拉起 5 次，然后撞上 systemd 的**启动限速** ⇒ 单元进 `failed`）。
+ *    ⇒ 只要投放口里**留下任何东西**（失败标记就是），它就会一直触发，
+ *    而"一直触发到限速"的另一面是：**之后的新申请没人管了**。
+ *    ⇒ 所以：**投放口里只许有待办申请**；标记住旁边。
+ */
+export const DEFAULT_FAILED_DIR = '/run/hupo-provision-state';
+
 /** 申请文件的名字。**只认这个形状**（助手那侧也是同一条正则）。 */
 export function requestFileName(n) {
   return Number.isSafeInteger(n) && n > 0 ? `${n}.req` : null;
@@ -32,13 +44,21 @@ export function requestFileName(n) {
 
 export class ProvisionQueue {
   #dir;
+  /** 见 `DEFAULT_FAILED_DIR`：标记**不在**申请目录里。 */
+  #failedDir;
   #fs;
   #log;
   /** 只抱怨一次"助手没装"，别把日志刷爆 */
   #complained = false;
 
-  constructor({ dir = DEFAULT_PROVISION_DIR, fs = nodeFs, log = () => {} } = {}) {
+  constructor({
+    dir = DEFAULT_PROVISION_DIR,
+    failedDir = DEFAULT_FAILED_DIR,
+    fs = nodeFs,
+    log = () => {},
+  } = {}) {
     this.#dir = dir;
+    this.#failedDir = failedDir;
     this.#fs = fs;
     this.#log = log;
   }
@@ -124,8 +144,10 @@ export class ProvisionQueue {
   failed(userId) {
     const p = this.#pathFor(userId);
     if (!p) return false;
+    // ⚠️ 标记在**旁边那个目录**里（见 `DEFAULT_FAILED_DIR`），不在申请目录里 ——
+    //    放在申请目录里会让 `.path` 单元反复触发（真机量过）。
     try {
-      return this.#fs.lstatSync(`${p}.failed`).isFile();
+      return this.#fs.lstatSync(nodePath.join(this.#failedDir, `${nodePath.basename(p)}.failed`)).isFile();
     } catch {
       return false;
     }

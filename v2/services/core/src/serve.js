@@ -302,6 +302,8 @@ const tpl = readTenantTemplate();
 const queue = new ProvisionQueue({
   // ⚠️ `''` 时退回默认那个路径（`/run/hupo-provision`）—— 但判据里可以指到临时目录
   ...(cfg.provisionDir ? { dir: cfg.provisionDir } : {}),
+  // ⚠️ 标记**另放一个目录**（同 `provision.js` 顶上那段：留在投放口里会反复触发）
+  ...(cfg.provisionFailedDir ? { failedDir: cfg.provisionFailedDir } : {}),
   log: (m) => console.log(m),
 });
 

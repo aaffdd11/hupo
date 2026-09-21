@@ -41,7 +41,8 @@ bad()  { echo "  ✗ $1"; fail=$((fail + 1)); }
 # 跑一次助手。**REQ_DIR 指向临时目录**，MIN_INTERVAL=0（判据不该因为限速而假绿）。
 run_helper() {
   local dry="$1"
-  env HUPO_PROVISION_DIR="$REQ" HUPO_PROVISION_STAMP="$WORK/.last" \
+  env HUPO_PROVISION_DIR="$REQ" HUPO_PROVISION_FAILED_DIR="$WORK/state" \
+      HUPO_PROVISION_STAMP="$WORK/.last" \
       HUPO_PROVISION_MIN_INTERVAL=0 HUPO_PROVISION_DRY_RUN="$dry" \
       HUPO_TENANT_TEMPLATE="$CONF" HUPO_SERVICE_USER="$SERVICE_USER" \
       bash "$HELPER" 2>&1
@@ -80,10 +81,13 @@ for nm in '..%2f..%2fetc.req' '3.req.req' '0.req' '01.req' 'a.req' '1;id.req' '$
   elif [ -e "$f" ]; then
     # A5：拒了就必须**删掉**，不然 `.path` 单元会反复触发它
     bad "「$nm」被拒了，但**申请没删**（会反复触发）"
-  elif [ ! -e "$f.failed" ]; then
-    bad "「$nm」被拒了，但**没留 「.failed」 标记**（那个人会在等待屏上永远等）"
+  elif [ ! -e "$WORK/state/$(basename "$f").failed" ]; then
+    bad "「$nm」被拒了，但**没留「.failed」标记**（那个人会在等待屏上永远等）"
+  elif [ -e "$f.failed" ]; then
+    # 🔴 标记**不许**留在投放口里（留在那儿会让 .path 反复触发到限速）
+    bad "「$nm」的标记**留在了投放口里** —— 那会让 .path 反复触发"
   else
-    ok "「$nm」⇒ 拒 + 删 + 留标记"
+    ok "「$nm」⇒ 拒 + 删 + 在投放口**外面**留标记"
   fi
 done
 
@@ -247,7 +251,8 @@ stub create-tenant-pool.sh 0
 
 post_req() { : > "$ORCH/req/$1.req"; chown "$SERVICE_USER" "$ORCH/req/$1.req"; }
 run_orch() {
-  env HUPO_PROVISION_DIR="$ORCH/req" HUPO_PROVISION_STAMP="$ORCH/.last" \
+  env HUPO_PROVISION_DIR="$ORCH/req" HUPO_PROVISION_FAILED_DIR="$ORCH/state" \
+      HUPO_PROVISION_STAMP="$ORCH/.last" \
       HUPO_PROVISION_MIN_INTERVAL=0 HUPO_TENANT_TEMPLATE="$CONF" \
       HUPO_SERVICE_USER="$SERVICE_USER" STUB_LOG="$ORCH/log" \
       bash "$ORCH/lib/provision-tenant-request.sh" 2>&1
@@ -278,14 +283,24 @@ else
   bad "调的时候没给 「--yes」：$(grep 'args=' "$ORCH/log" 2>/dev/null | head -1)"
 fi
 if [ -e "$ORCH/req/3.req" ]; then bad "建成了却**没收掉申请**（「.path」 单元会反复触发它）"; else ok "申请收掉了"; fi
-if [ -e "$ORCH/req/3.req.failed" ]; then bad "建成了却留了 「.failed」 标记"; else ok "没留 「.failed」（本来就没失败）"; fi
+if [ -e "$ORCH/state/3.req.failed" ]; then bad "建成了却留了「.failed」标记"; else ok "没留「.failed」（本来就没失败）"; fi
+if [ "$(ls -A "$ORCH/req" 2>/dev/null | wc -l)" = "0" ]; then
+  ok "投放口**空了**（这正是「只放待办」那条规则要的）"
+else
+  bad "投放口里还剩东西：$(ls -A "$ORCH/req" | tr "\n" " ")"
+fi
 
 # ── 失败那条路（负向对照：**也要收干净，只是多留一个痕**）──
 stub create-tenant-pool.sh 1
 rm -f "$ORCH/log"; post_req 4
 out="$(run_orch)"
 if [ -e "$ORCH/req/4.req" ]; then bad "失败了却**没删申请**（会反复触发）"; else ok "失败了也把申请删了"; fi
-if [ -e "$ORCH/req/4.req.failed" ]; then ok "留了 「.failed」 标记（那个人**不会**在等待屏上永远等）"; else bad "失败了却没留标记 ⇒ 用户会永远等"; fi
+if [ -e "$ORCH/state/4.req.failed" ]; then ok "在**投放口外面**留了「.failed」标记（那个人不会在等待屏上永远等）"; else bad "失败了却没留标记 ⇒ 用户会永远等"; fi
+if [ "$(ls -A "$ORCH/req" 2>/dev/null | wc -l)" = "0" ]; then
+  ok "失败之后投放口**也是空的**（不然 .path 会反复触发到限速）"
+else
+  bad "失败之后投放口里还剩东西：$(ls -A "$ORCH/req" | tr "\n" " ")"
+fi
 if grep -q '✗ 第 4 号没建成' <<<"$out"; then ok "日志里如实说了没建成"; else bad "日志没说清：$(tail -1 <<<"$out")"; fi
 
 # ── 🔴 自证：调的是**桩**，真的那两个脚本一次都没被碰 ──
@@ -327,6 +342,17 @@ if id hupo-t3 >/dev/null 2>&1; then
   bad "跑判据把 hupo-t3 建出来了 —— 这套判据有副作用"
 else
   ok "没有多出任何租户用户"
+fi
+# ⚠️ 标记目录也要在**临时目录**里（不然判据会往真机写东西 —— 这本身是副作用）
+if [ -e /run/hupo-provision-state ]; then
+  bad "真机的标记目录被建出来了（/run/hupo-provision-state）—— 判据该把它指到临时目录"
+else
+  ok "真机的标记目录**没被碰过**（判据把它指到临时目录了）"
+fi
+if [ -e /run/hupo-provision ]; then
+  bad "真机的投放口被建出来了（/run/hupo-provision）"
+else
+  ok "真机的投放口**没被碰过**"
 fi
 
 rm -rf "$WORK"

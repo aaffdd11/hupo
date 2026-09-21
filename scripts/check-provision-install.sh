@@ -125,6 +125,20 @@ if [ -d "$req" ]; then
 else
   bad "投放口没建：$req"
 fi
+# ⚠️ **失败标记住另一个目录**（真机量出来的：留在投放口里会让 .path 反复触发）
+state="$TEST/run/hupo-provision-state"
+if [ -d "$state" ]; then
+  ms="$(stat -c '%a %U:%G' "$state")"
+  # ⚠️ `stat -c %a` 给的是 `755`，**没有前导零**（我第一次把期望值写成 `0755` 就假红了一次）
+  if [ "$ms" = "755 root:root" ]; then ok "标记目录 ⇒ $ms（在投放口**外面**）"; else bad "标记目录是 $ms（期望 755 root:root）"; fi
+else
+  bad "标记目录没建：$state"
+fi
+if grep -q "^Environment=HUPO_PROVISION_FAILED_DIR=$state" "$svc" 2>/dev/null; then
+  ok "单元里把标记目录指对了"
+else
+  bad "单元里没把标记目录指对：$(grep 'FAILED_DIR' "$svc" 2>/dev/null || echo 无)"
+fi
 
 # ══════════════════════════════════════════════════════════════════
 echo

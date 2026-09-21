@@ -207,6 +207,12 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      */
     provisionDir: env.HUPO_PROVISION_DIR ?? '',
 
+    /**
+     * **失败标记**放哪个目录（**不是**申请目录 —— 见 `provision.js` 顶上那段：
+     * 投放口里留下任何东西都会让 `.path` 单元反复触发，最后撞上启动限速）。
+     */
+    provisionFailedDir: env.HUPO_PROVISION_FAILED_DIR ?? '',
+
     /** 通道套接字放哪个目录（每个租户一个）。`''` = 不开这条通道。 */
     tenantChannelDir: env.HUPO_CHANNEL_DIR ?? '/run/hupo-channel',
 

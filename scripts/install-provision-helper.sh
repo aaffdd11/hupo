@@ -65,6 +65,7 @@ ETC_CONF="$(prefix /etc/hupo/tenant-template.conf)"
 TMPFILES="$(prefix /etc/tmpfiles.d/hupo-provision.conf)"
 UNIT_DIR="$(prefix /etc/systemd/system)"
 REQ_DIR="$(prefix /run/hupo-provision)"
+REQ_DIR_STATE="$(prefix /run/hupo-provision-state)"
 
 say()  { echo "  $1"; }
 plan() { echo "▶ $1"; }
@@ -165,8 +166,15 @@ cat > "$TMPFILES" <<EOF
 # ⚠️ 1733 = 服务（$SERVICE_USER）能进、能放文件，但**列不出**别人的东西，
 #    也**替换不掉** root 放的文件（sticky）。属主是 root ⇒ 他连删别人的都做不到。
 d $REQ_DIR 1733 root $SERVICE_USER -
+
+# ⚠️ **失败标记另放一个目录**（2026-09-21 真机量出来的）：
+#    投放口里留下任何东西（标记就是）⇒ `DirectoryNotEmpty=` 会**反复触发**
+#    ⇒ 撞上 systemd 的启动限速 ⇒ 单元进 `failed` ⇒ **之后的新申请没人管**。
+#    ⇒ 投放口里**只许有待办申请**。
+d $REQ_DIR_STATE 0755 root root -
 EOF
 install -d -o root -g "$SERVICE_USER" -m 1733 "$REQ_DIR"
+install -d -o root -g root -m 0755 "$REQ_DIR_STATE"
 say "目录：$(stat -c '%a %U:%G' "$REQ_DIR")  ← 必须是 1733 root:$SERVICE_USER"
 
 # ── ③ 两个单元 ───────────────────────────────────────────────
@@ -180,9 +188,15 @@ plan "写 $UNIT_DIR/hupo-provision.path"
 cat > "$UNIT_DIR/hupo-provision.path" <<EOF
 [Unit]
 Description=琥珀 · 新租户申请（看一眼投放口）
-# ⚠️ 两个触发条件都要：
-#   · DirectoryNotEmpty 管"从空变成非空"那一瞬；
-#   · PathChanged 管"已经有东西了、又来了一个"（只有前者的话，第二次申请不会触发）。
+# ⚠️ **两个条件为什么都在**（2026-09-21 真机量过，不是照着文档抄的）：
+#   · DirectoryNotEmpty —— **承重的那个**。它管"从空变非空"，也管
+#     "起来时目录里已经有待办"（**开机**那一种 —— 那时候没有"变化"可听）。
+#     ⚠️ 而且它**会反复触发**：实测投放口里留一个文件不动，服务被拉起 5 次
+#     （然后撞上 systemd 的启动限速）。⇒ **投放口里只许有待办申请**
+#     （失败标记住在 $REQ_DIR_STATE，不在这个目录里）。
+#   · PathChanged —— **保险**：万一某个 systemd 版本对"从空变非空"不响，
+#     它兜住。代价是"删掉申请"那一下也会多跑一次空转（无害）。
+#     ⚠️ 我一度以为它是承重的（以为 DirectoryNotEmpty 不管"又来一个"）—— **量完才知道不是**。
 [Path]
 DirectoryNotEmpty=$REQ_DIR
 PathChanged=$REQ_DIR
@@ -203,6 +217,7 @@ Type=oneshot
 ExecStart=$LIBEXEC/provision-tenant-request.sh
 Environment=HUPO_TENANT_TEMPLATE=$ETC_CONF
 Environment=HUPO_SERVICE_USER=$SERVICE_USER
+Environment=HUPO_PROVISION_FAILED_DIR=$REQ_DIR_STATE
 # 建一台要 load 镜像（几十秒到几分钟）⇒ 给够；超时也不会留下半个（脚本自己幂等）
 TimeoutStartSec=20min
 # 同一时刻只跑一个（systemd 的 oneshot 本来就不会并发）⇒ 这就是"串行"那道闸
