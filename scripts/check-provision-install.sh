@@ -37,6 +37,29 @@ pass=0; fail=0
 ok()  { echo "  ✓ $1"; pass=$((pass + 1)); }
 bad() { echo "  ✗ $1"; fail=$((fail + 1)); }
 
+# ── **真机状态指纹**：跑判据**之前**记一份，跑完再比 ──────────────────
+# ⚠️ 为什么需要它（2026-09-21 **装上之后**才发现的）：这几份判据原来断言的是
+#    "真机上那几处**一处都没有**" —— 那只在**还没装**的时候成立。
+#    装上之后它们集体报红，而**真机上什么都没有被这次测试改动**。
+#    ⇒ 正确的问题是"**这次测试有没有改动真机**"，不是"真机上有没有东西"。
+#    记一份指纹（路径 + 属主/权限 + 内容哈希 + 投放口条目数 + 单元状态），
+#    跑完逐字比 —— 这样**装之前装之后都成立**。
+real_state() {
+  {
+    for f in /usr/local/libexec/hupo/*.sh /etc/hupo/tenant-template.conf \
+             /etc/systemd/system/hupo-provision.path /etc/systemd/system/hupo-provision.service \
+             /etc/tmpfiles.d/hupo-provision.conf; do
+      [ -e "$f" ] || continue
+      printf '%s %s %s\n' "$f" "$(stat -c '%U:%G:%a' "$f")" "$(sha256sum "$f" | cut -c1-16)"
+    done
+    printf 'req-entries=%s\n' "$(ls -A /run/hupo-provision 2>/dev/null | wc -l)"
+    printf 'tenants=%s\n' "$(getent passwd | awk -F: '/^hupo-/{print $1}' | sort | tr '\n' ',')"
+    printf 'path=%s\n' "$(systemctl is-active hupo-provision.path 2>/dev/null || echo none)"
+  } 2>/dev/null
+}
+
+REAL_BEFORE="$(real_state)"
+
 TEST="$(mktemp -d /tmp/hupo-prov-install.XXXXXX)"
 chmod 0755 "$TEST"
 # ⚠️ 让服务那个身份**进得来**（不然下面"改不动"那一条会因为"根本进不去"而假绿 ——
@@ -188,6 +211,27 @@ fi
 cp -f "$MUTATED.bak" "$MUTATED"; rm -f "$MUTATED.bak"; MUTATED=""
 out="$(bash "$INSTALLER" --check --root "$TEST" 2>&1)"
 if grep -q '✅ 一致' <<<"$out"; then ok "还原之后又一致了"; else bad "还原之后还是不一致"; fi
+
+# ══════════════════════════════════════════════════════════════════
+echo
+echo "⑥·补 🔴 **不许有不带引号的 heredoc**（它在注释里也会执行反引号与 \$( )）"
+# ══════════════════════════════════════════════════════════════════
+# ⚠️ **这条闸的来历**（2026-09-21，签字安装**当场**踩到的）：
+#    安装器用 `cat > 文件 <<EOF`（**不带引号**，为了展开变量）写 tmpfiles 与单元，
+#    而我在**注释**里写了反引号 ⇒ 不带引号的 heredoc **会做命令替换**
+#    ⇒ `DirectoryNotEmpty=` 与 `failed` 被当命令执行、在写出去的文件里**变成空**。
+#    指令行没坏（那是运气），而**原来那道 lint 结构上抓不到** ——
+#    它排除了注释行，而这个反引号**就在注释行上**。
+#    ⇒ 从根上断掉这类：**这几份脚本不许有不带引号的 heredoc**，
+#      值一律走 printf 或带引号的 heredoc。
+for hf in "$ROOT/scripts/install-provision-helper.sh" "$ROOT/scripts/provision-tenant-request.sh"; do
+  n="$(grep -c '<<[A-Za-z]' "$hf" 2>/dev/null || true)"
+  if [ "${n:-0}" = "0" ]; then
+    ok "$(basename "$hf")：没有不带引号的 heredoc"
+  else
+    bad "$(basename "$hf") 里有 $n 处**不带引号**的 heredoc（注释里的反引号会被执行）"
+  fi
+done
 
 # ══════════════════════════════════════════════════════════════════
 echo
@@ -345,10 +389,13 @@ if [ "$rc" = "3" ] && grep -q '不动手：租户镜像不在' <<<"$out"; then
 else
   bad "镜像不在却还是往下走了（rc=$rc）：$(tail -2 <<<"$out")"
 fi
-if [ -e /usr/local/libexec/hupo ] || [ -e /etc/systemd/system/hupo-provision.path ]; then
-  bad "🔴 拒绝那条**没挡住写盘** —— 真机上多出东西了"
+# ⚠️ 原来这里问的是"真机上有没有那几样" —— 装上之后必然为真 ⇒ **假红**。
+#    真问题是"**这一次拒绝有没有改动真机**" ⇒ 与跑判据之前的指纹比。
+if [ "$(real_state)" = "$REAL_BEFORE" ]; then
+  ok "拒绝的时候，真机状态**与跑判据之前逐字相同**"
 else
-  ok "拒绝的时候**这台机器一点没动**（那一步在任何写盘之前）"
+  bad "🔴 拒绝那一步改动了真机："
+  diff <(printf '%s\n' "$REAL_BEFORE") <(real_state) | sed 's/^/      /'
 fi
 if grep -q 'build-tenant-image.sh' <<<"$out"; then ok "remedy 写清了（先建镜像）"; else bad "没说清该怎么办"; fi
 
@@ -367,17 +414,20 @@ fi
 echo
 echo "⑪ 🔴 **自证：这一趟在这台机器上什么都没多出来**（"隔离"要验它真的隔离了）"
 # ══════════════════════════════════════════════════════════════════
-stray=0
-[ -e "$REAL_LIBEXEC" ] && { bad "多出来了：$REAL_LIBEXEC"; stray=1; }
-for u in "${REAL_UNITS[@]}"; do [ -e "$u" ] && { bad "多出来了：$u"; stray=1; }; done
-[ -e "$REAL_TMPFILES" ] && { bad "多出来了：$REAL_TMPFILES"; stray=1; }
-[ -e "$REAL_REQ" ] && { bad "多出来了：$REAL_REQ"; stray=1; }
-[ "$stray" = "0" ] && ok "真机上那几处**一处都没动**（$REAL_LIBEXEC / 单元 / tmpfiles / 投放口）"
-# ⚠️ 顺带确认真机上**没装**（这正是"等主人签字"那个状态）
-if systemctl is-active hupo-provision.path >/dev/null 2>&1; then
-  bad "真机上那个 .path 单元居然是 active —— 有人装过了？"
+# ⚠️ 比的是"**这次测试有没有改动真机**"，不是"真机上有没有东西"
+#    （装之前后者是对的；装上之后它就假红了 —— 2026-09-21 真踩到）
+if [ "$(real_state)" = "$REAL_BEFORE" ]; then
+  ok "真机状态与跑之前**逐字相同**（装没装都对：装之前是「一处都没多出来」，装之后是「没被动过」）"
 else
-  ok "真机上那条路**没启用**（等主人签字）"
+  bad "真机状态被这次测试改了："
+  diff <(printf '%s\n' "$REAL_BEFORE") <(real_state) | sed 's/^/      /'
+fi
+# ⚠️ 顺带确认真机上**没装**（这正是"等主人签字"那个状态）
+# ⚠️ 这条只是**如实报状态**（装没装都对）；"这次判据有没有动它"由上面的指纹管。
+if [ "$(systemctl is-active hupo-provision.path 2>/dev/null)" = "active" ]; then
+  ok "真机上那条路**已经启用**（装过了）"
+else
+  ok "真机上那条路**没启用**（还没装）"
 fi
 if command -v git >/dev/null 2>&1; then
   # ⚠️ **只查被变异的那一份**（2026-09-21 判据自己抓到的）：

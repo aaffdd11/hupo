@@ -27,6 +27,21 @@ LIBEXEC="/usr/local/libexec/hupo"
 REQ_DIR="/run/hupo-provision"
 PHONE=""
 WAIT_S="${HUPO_BUILD_WAIT_S:-180}"
+# ⚠️ 登录要那个**临时验证码**，而它住在机器本地的 `data/tenants.env` 里
+#    （`restart-core.sh` 会 source 它，这个脚本原来没读 ⇒ 登录回 `bad-code`）。
+#    这里**只取那一个键**，不 source 整个文件（那是机器状态，读它比执行它稳）。
+ENV_FILE="$ROOT/v2/services/core/data/tenants.env"
+# ⚠️ 本机**没有系统 node**（`/usr/bin/node` 不存在）⇒ 要自己找一条出来
+NODE_BIN="${HUPO_NODE_BIN:-}"
+if [ -z "$NODE_BIN" ]; then
+  for c in /home/deploy/.nvm/versions/node/*/bin/node "$(command -v node 2>/dev/null || true)"; do
+    [ -x "$c" ] && NODE_BIN="$c" && break
+  done
+fi
+if [ -z "${HUPO_DEV_CODE:-}" ] && [ -f "$ENV_FILE" ]; then
+  HUPO_DEV_CODE="$(sed -n 's/^HUPO_DEV_CODE=//p' "$ENV_FILE" | head -1)"
+  export HUPO_DEV_CODE
+fi
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -122,8 +137,10 @@ if [ -z "$PHONE" ]; then
   skip "没给 --phone ⇒ 这一条**没验**（不是过了）"
 else
   # ⚠️ 先记下**这次之前**已经有哪几台 —— 跑完要自证"只多了一台"
+  # ⚠️ 只数**派生**出来的那种（`<前缀><数字>`）——`hupo-a`/`hupo-b` 是**表里那两台**，
+  #    它们不参与"自动开一台"。所以这行如实说"派生的"。
   before="$(getent passwd | awk -F: -v p="$NAME_PREFIX" '$1 ~ "^"p"[0-9]+$" {print $1}' | sort | tr '\n' ' ')"
-  echo "  建之前已有的租户：${before:-（没有）}"
+  echo "  建之前已有的**派生**租户：${before:-（没有）}"
 
   # 用**服务自己那条路**登录（就是用户会做的事）
   login_json="$(curl -s -X POST -H 'content-type: application/json' \
@@ -132,6 +149,9 @@ else
   token="$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' <<<"$login_json")"
   if [ -z "$token" ]; then
     bad "登录没成：$(cut -c1-160 <<<"$login_json")"
+    if [ -z "${HUPO_DEV_CODE:-}" ]; then
+      bad "拿不到临时验证码（$ENV_FILE 里没有 HUPO_DEV_CODE）⇒ 这一条根本没法跑"
+    fi
   else
     ok "用 $PHONE 登录成了（是不是新号他那边会说）"
     state=""
@@ -151,7 +171,13 @@ else
     echo "  状态：${state:-（一直没到终态，等了 ${WAIT_S}s）} ｜ 建之后：${after:-（没有）}"
 
     if [ -z "$new_tenants" ]; then
-      bad "🔴 **一台都没多出来** —— 申请没变成容器（看 journalctl -u hupo-provision.service）"
+      # ⚠️ 这**不一定是失败**：同一个号再跑一次时，他那台**已经在了** ——
+      #    而 A4 要的正是"重复申请**不重建**"。⇒ 分开说，别把对的报成错的。
+      if [ "$state" = "ready" ]; then
+        ok "没有新建 —— 那个号那台**已经在了**（这正是 A4：重复申请不重建、不清空）"
+      else
+        bad "🔴 **一台都没多出来**，而且状态是 ${state:-（空）} —— 申请没变成容器（看 journalctl -u hupo-provision.service）"
+      fi
     else
       n_new="$(wc -w <<<"$new_tenants")"
       if [ "$n_new" != "1" ]; then
@@ -159,16 +185,64 @@ else
       else
         ok "只多了一台：$new_tenants"
       fi
+    fi
+
+    # ── 不管新不新，**那台本身**都要逐条验（重复跑也要查）──
+    # ⚠️ 为什么要从手机号反推：第二次跑时"新多出来的"是空的，
+    #    而那台仍然该被验 —— 拿 users.json 里 phone→id 查出它第几号即可。
+    t=""
+    if [ -n "$new_tenants" ]; then
       t="${new_tenants%% *}"
-      t_uid="$(id -u "$t" 2>/dev/null || echo '?')"
+    else
+      # ⚠️ 这一段**读的是机器本地的 users.json**（里面有手机号）：只取 id，不打印
+      who="$(cd "$ROOT/v2/services/core" && "$NODE_BIN" -e "
+        const j = JSON.parse(require('fs').readFileSync('data/users.json', 'utf8'));
+        process.stdout.write(j.users['$PHONE'] ? j.users['$PHONE'].id : '');
+      " 2>/dev/null)"
+      case "$who" in
+        u[1-9]*) t="$NAME_PREFIX${who#u}" ;;
+      esac
+    fi
+    if [ -z "$t" ]; then
+      bad "推不出他那台叫什么（phone→id 没查到？）"
+    elif ! id "$t" >/dev/null 2>&1; then
+      bad "他那台 **$t 不在**"
+    else
+      t_uid="$(id -u "$t")"
       t_n="${t#"$NAME_PREFIX"}"
       want_uid=$((UID_BASE + t_n))
-      if [ "$t_uid" = "$want_uid" ]; then ok "他的名字与编号对得上模板（$t ⇒ uid $t_uid）"; else bad "$t 的 uid 是 $t_uid，模板说该是 $want_uid"; fi
+      if [ "$t_uid" = "$want_uid" ]; then ok "名字与编号对得上模板（$t ⇒ uid $t_uid）"; else bad "$t 的 uid 是 $t_uid，模板说该是 $want_uid"; fi
       home="$(getent passwd "$t" | cut -d: -f6)"
-      if [ "$(stat -c '%a %U:%G' "$home/tenant" 2>/dev/null)" = "700 $t:$t" ]; then
-        ok "他那份卷 ⇒ 700 $t:$t（别人读不到）"
+      # 🔴 **边界是 $home 的 0700，不是卷那个数字**（2026-09-21 真机量出来的）。
+      #    ⚠️ 我第一版判的是"卷 == 700" ⇒ 对着一个**好的**系统报红：
+      #      容器起来之后会**自己**把 /data（= 这个卷）改成 **711**，
+      #      为了让盒里的 agent（**另一个 uid**）走得进去。
+      #    ⇒ **判边界（谁也进不去），不判数字** —— 判数字既会误报、又会漏报。
+      hm="$(stat -c '%a' "$home" 2>/dev/null)"
+      if [ "$hm" = "700" ]; then ok "他的 home ⇒ 700（**这才是边界**）"; else bad "home 是 $hm（期望 700）"; fi
+      vm="$(stat -c '%a %U:%G' "$home/tenant" 2>/dev/null)"
+      ok "他那份卷 ⇒ ${vm:-不在}（容器起来后会自己改成 711，见注释）"
+      # 🔴 **边界那一对**（正对照 + 负向对照）——不依赖"卷里已经有文件"：
+      #    · 正对照：**他自己**进得去（不然下面那条"进不去"说明不了什么）；
+      #    · 负向对照：**另一个租户**进不去，而且必须是 **Permission denied**，
+      #      **不是**"没有这个目录"（EACCES 与 ENOENT 是两回事 —— 手册 V4 那条纪律）。
+      other="$(getent passwd | awk -F: '/^hupo-/{print $1}' | grep -v "^$t$" | head -1)"
+      if sudo -u "$t" -H sh -c "ls '$home/tenant' >/dev/null" 2>/dev/null; then
+        ok "正对照：**他自己**进得去那份卷"
       else
-        bad "卷不对：$(stat -c '%a %U:%G' "$home/tenant" 2>/dev/null || echo '不在')"
+        bad "他自己都进不去 —— 那下面那条说明不了什么"
+      fi
+      if [ -z "$other" ]; then
+        skip "没有另一个租户可比 ⇒ 负向对照**没做**"
+      else
+        err="$(sudo -u "$other" -H sh -c "ls '$home/tenant'" 2>&1 >/dev/null || true)"
+        if [ -z "$err" ]; then
+          bad "🔴 **$other 进得去** $t 那份卷 —— 隔离破了"
+        elif grep -qi 'permission denied' <<<"$err"; then
+          ok "$other 进不去 ⇒ **Permission denied**（隔离还在；不是"没这个目录"）"
+        else
+          bad "$other 进不去，但理由不是权限：$err"
+        fi
       fi
       if [ -f "/var/lib/systemd/linger/$t" ]; then ok "linger 开着（他没登录时容器也在）"; else bad "linger 没开"; fi
       if [ -S "/run/hupo-channel/$t/channel.sock" ]; then ok "宿主在替他听那条通道"; else bad "通道没在听（/run/hupo-channel/$t/）"; fi

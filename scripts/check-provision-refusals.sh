@@ -38,6 +38,32 @@ pass=0; fail=0
 ok()   { echo "  ✓ $1"; pass=$((pass + 1)); }
 bad()  { echo "  ✗ $1"; fail=$((fail + 1)); }
 
+# ── **真机状态指纹**：跑判据**之前**记一份，跑完再比 ──────────────────
+# ⚠️ 为什么需要它（2026-09-21 **装上之后**才发现的）：这几份判据原来断言的是
+#    "真机上那几处**一处都没有**" —— 那只在**还没装**的时候成立。
+#    装上之后它们集体报红，而**真机上什么都没有被这次测试改动**。
+#    ⇒ 正确的问题是"**这次测试有没有改动真机**"，不是"真机上有没有东西"。
+#    记一份指纹（路径 + 属主/权限 + 内容哈希 + 投放口条目数 + 单元状态），
+#    跑完逐字比 —— 这样**装之前装之后都成立**。
+real_state() {
+  {
+    for f in /usr/local/libexec/hupo/*.sh /etc/hupo/tenant-template.conf \
+             /etc/systemd/system/hupo-provision.path /etc/systemd/system/hupo-provision.service \
+             /etc/tmpfiles.d/hupo-provision.conf; do
+      [ -e "$f" ] || continue
+      printf '%s %s %s\n' "$f" "$(stat -c '%U:%G:%a' "$f")" "$(sha256sum "$f" | cut -c1-16)"
+    done
+    printf 'req-entries=%s\n' "$(ls -A /run/hupo-provision 2>/dev/null | wc -l)"
+    # ⚠️ 租户名单也要进指纹：这一条判据**一台都不该建**，而它的老写法是
+    #    `if id hupo-t3` —— 那只在"还没有那台"的时候成立（2026-09-21 真建出
+    #    `hupo-t3` 之后它就假红了：把"合法的存在"当成了自己的副作用）。
+    printf 'tenants=%s\n' "$(getent passwd | awk -F: '/^hupo-/{print $1}' | sort | tr '\n' ',')"
+    printf 'path=%s\n' "$(systemctl is-active hupo-provision.path 2>/dev/null || echo none)"
+  } 2>/dev/null
+}
+
+REAL_BEFORE="$(real_state)"
+
 # 跑一次助手。**REQ_DIR 指向临时目录**，MIN_INTERVAL=0（判据不该因为限速而假绿）。
 run_helper() {
   local dry="$1"
@@ -338,21 +364,23 @@ done
 echo
 echo "⑫ 这一趟**没有真建出任何租户**（判据脚本自己不许有副作用）"
 # ══════════════════════════════════════════════════════════════════
-if id hupo-t3 >/dev/null 2>&1; then
-  bad "跑判据把 hupo-t3 建出来了 —— 这套判据有副作用"
+# ⚠️ 原来这里是 `if id hupo-t3 ...` —— 那只在**还没有那台**的时候成立。
+#    2026-09-21 真建出 `hupo-t3` 之后它就假红了（判据把"合法的存在"当成了自己的副作用）。
+#    ⇒ 改成比**租户名单指纹**（已在 `real_state` 里）：这次跑不许**多**出任何一台。
+now_tenants="$(getent passwd | awk -F: '/^hupo-/{print $1}' | sort | tr '\n' ',')"
+was_tenants="$(sed -n 's/^tenants=//p' <<<"$REAL_BEFORE")"
+if [ "$now_tenants" = "$was_tenants" ]; then
+  ok "租户名单**没变**（这套判据一台都没建）"
 else
-  ok "没有多出任何租户用户"
+  bad "跑判据多出了租户：之前 [$was_tenants] 现在 [$now_tenants]"
 fi
 # ⚠️ 标记目录也要在**临时目录**里（不然判据会往真机写东西 —— 这本身是副作用）
-if [ -e /run/hupo-provision-state ]; then
-  bad "真机的标记目录被建出来了（/run/hupo-provision-state）—— 判据该把它指到临时目录"
+# ⚠️ 同上：比"有没有改动"，不比"有没有东西"（装上之后投放口本来就在）
+if [ "$(real_state)" = "$REAL_BEFORE" ]; then
+  ok "真机状态与跑之前**逐字相同**（装之前是「没多出来」，装之后是「没被动过」）"
 else
-  ok "真机的标记目录**没被碰过**（判据把它指到临时目录了）"
-fi
-if [ -e /run/hupo-provision ]; then
-  bad "真机的投放口被建出来了（/run/hupo-provision）"
-else
-  ok "真机的投放口**没被碰过**"
+  bad "真机状态被这次判据改了："
+  diff <(printf '%s\n' "$REAL_BEFORE") <(real_state) | sed 's/^/      /'
 fi
 
 rm -rf "$WORK"
@@ -366,8 +394,8 @@ if [ "$fail" = "0" ]; then
   echo "   ⑪   **判据自己**：注释外不许有反引号（它会悄悄把话替换掉）"
   echo "   ⑫   这一趟**没有真建出任何租户**"
   echo
-  echo "⚠️ **仍然没验**的只有"真建一台"与"装完之后服务身份不变" ——"
-  echo "   那两条要主人签字装完单元之后才验得了（契约 §五 末尾那句）。"
+  echo "⚠️ **这一趟没验**的只有「真建一台」与「装完之后服务身份不变」 ——"
+  echo "   那两条归 scripts/check-provision-after-install.sh（2026-09-21 已经跑过：16 条全过）。"
   exit 0
 else
   echo "✗ $fail 条没过（过 $pass 条）"

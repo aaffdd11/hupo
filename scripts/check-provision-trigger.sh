@@ -56,6 +56,29 @@ pass=0; fail=0
 ok()  { echo "  ✓ $1"; pass=$((pass + 1)); }
 bad() { echo "  ✗ $1"; fail=$((fail + 1)); }
 
+# ── **真机状态指纹**：跑判据**之前**记一份，跑完再比 ──────────────────
+# ⚠️ 为什么需要它（2026-09-21 **装上之后**才发现的）：这几份判据原来断言的是
+#    "真机上那几处**一处都没有**" —— 那只在**还没装**的时候成立。
+#    装上之后它们集体报红，而**真机上什么都没有被这次测试改动**。
+#    ⇒ 正确的问题是"**这次测试有没有改动真机**"，不是"真机上有没有东西"。
+#    记一份指纹（路径 + 属主/权限 + 内容哈希 + 投放口条目数 + 单元状态），
+#    跑完逐字比 —— 这样**装之前装之后都成立**。
+real_state() {
+  {
+    for f in /usr/local/libexec/hupo/*.sh /etc/hupo/tenant-template.conf \
+             /etc/systemd/system/hupo-provision.path /etc/systemd/system/hupo-provision.service \
+             /etc/tmpfiles.d/hupo-provision.conf; do
+      [ -e "$f" ] || continue
+      printf '%s %s %s\n' "$f" "$(stat -c '%U:%G:%a' "$f")" "$(sha256sum "$f" | cut -c1-16)"
+    done
+    printf 'req-entries=%s\n' "$(ls -A /run/hupo-provision 2>/dev/null | wc -l)"
+    printf 'tenants=%s\n' "$(getent passwd | awk -F: '/^hupo-/{print $1}' | sort | tr '\n' ',')"
+    printf 'path=%s\n' "$(systemctl is-active hupo-provision.path 2>/dev/null || echo none)"
+  } 2>/dev/null
+}
+
+REAL_BEFORE="$(real_state)"
+
 cleanup() {
   systemctl disable --now hupo-probe.path >/dev/null 2>&1 || true
   systemctl stop hupo-probe.service >/dev/null 2>&1 || true
@@ -199,10 +222,12 @@ for p in "$P_PATH_UNIT" "$P_SVC_UNIT" "$P_TMPFILES" "$P_DIR" "$P_LOG" "$P_TMP_DI
 done
 if systemctl list-unit-files 2>/dev/null | grep -q '^hupo-probe'; then bad "还留着 unit file"; stray=1; fi
 [ "$stray" = "0" ] && ok "探针那几样**一样都没留下**（单元 / tmpfiles / 目录 / 日志）"
-if [ -e /usr/local/libexec/hupo ] || systemctl is-active hupo-provision.path >/dev/null 2>&1; then
-  bad "真那条路居然被装上了 —— 这一条判据不该动它"
+# ⚠️ 同上：比"有没有改动"，不比"有没有装"（2026-09-21 装上之后才发现的）
+if [ "$(real_state)" = "$REAL_BEFORE" ]; then
+  ok "真那条路的状态与跑之前**逐字相同**（它装没装都不该被这一条判据动到）"
 else
-  ok "真那条路**仍然是没装**的（等主人签字）"
+  bad "真那条路被这一条判据改了："
+  diff <(printf '%s\n' "$REAL_BEFORE") <(real_state) | sed 's/^/      /'
 fi
 
 echo

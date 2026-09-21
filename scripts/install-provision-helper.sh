@@ -229,18 +229,25 @@ say "拷好了：$(ls "$LIBEXEC" | tr '\n' ' ')"
 
 # ── ② 申请目录：1733（服务能进能放文件、列不出别人的、替换不掉 root 的）──
 plan "写 $TMPFILES（开机把 $REQ_DIR 建出来）"
-cat > "$TMPFILES" <<EOF
+# ⚠️ **注释走带引号的 heredoc、指令行走 printf**（2026-09-21 签字安装时真踩到）：
+#    不带引号的 heredoc **会做命令替换** —— 而我在注释里写了反引号
+#    ⇒ `DirectoryNotEmpty=` 与 `failed` 被当命令执行、在文件里替换成**空**。
+#    （指令行没事，所以功能没坏 —— 但那是**运气**，不是设计。）
+#    ⇒ 规矩：**这几份脚本里不许有不带引号的 heredoc**（判据里有闸）。
+{
+  cat <<'TPLEOF'
 # 琥珀 · 新租户申请的投放口（契约 docs/dev/43-AUTO-PROVISION.md §三 A3）
-# ⚠️ 1733 = 服务（$SERVICE_USER）能进、能放文件，但**列不出**别人的东西，
+# ⚠️ 1733 = 服务那个身份能进、能放文件，但**列不出**别人的东西，
 #    也**替换不掉** root 放的文件（sticky）。属主是 root ⇒ 他连删别人的都做不到。
-d $REQ_DIR 1733 root $SERVICE_USER -
-
+#
 # ⚠️ **失败标记另放一个目录**（2026-09-21 真机量出来的）：
 #    投放口里留下任何东西（标记就是）⇒ `DirectoryNotEmpty=` 会**反复触发**
 #    ⇒ 撞上 systemd 的启动限速 ⇒ 单元进 `failed` ⇒ **之后的新申请没人管**。
 #    ⇒ 投放口里**只许有待办申请**。
-d $REQ_DIR_STATE 0755 root root -
-EOF
+TPLEOF
+  printf 'd %s 1733 root %s -\n' "$REQ_DIR" "$SERVICE_USER"
+  printf 'd %s 0755 root root -\n' "$REQ_DIR_STATE"
+} > "$TMPFILES"
 install -d -o root -g "$SERVICE_USER" -m 1733 "$REQ_DIR"
 install -d -o root -g root -m 0755 "$REQ_DIR_STATE"
 say "目录：$(stat -c '%a %U:%G' "$REQ_DIR")  ← 必须是 1733 root:$SERVICE_USER"
@@ -253,43 +260,50 @@ say "目录：$(stat -c '%a %U:%G' "$REQ_DIR")  ← 必须是 1733 root:$SERVICE
 #    又是一次"看起来装好了"。⇒ 显式建目录，建不成就不往下走。
 install -d -o root -g root -m 0755 "$UNIT_DIR" || { echo "✗ 建不出单元目录：$UNIT_DIR"; exit 3; }
 plan "写 $UNIT_DIR/hupo-provision.path"
-cat > "$UNIT_DIR/hupo-provision.path" <<EOF
+{
+  cat <<'PATHEOF'
 [Unit]
 Description=琥珀 · 新租户申请（看一眼投放口）
 # ⚠️ **两个条件为什么都在**（2026-09-21 真机量过，不是照着文档抄的）：
 #   · DirectoryNotEmpty —— **承重的那个**。它管"从空变非空"，也管
 #     "起来时目录里已经有待办"（**开机**那一种 —— 那时候没有"变化"可听）。
 #     ⚠️ 而且它**会反复触发**：实测投放口里留一个文件不动，服务被拉起 5 次
-#     （然后撞上 systemd 的启动限速）。⇒ **投放口里只许有待办申请**
-#     （失败标记住在 $REQ_DIR_STATE，不在这个目录里）。
+#     （然后撞上 systemd 的启动限速）。⇒ **投放口里只许有待办申请**。
 #   · PathChanged —— **保险**：万一某个 systemd 版本对"从空变非空"不响，
 #     它兜住。代价是"删掉申请"那一下也会多跑一次空转（无害）。
-#     ⚠️ 我一度以为它是承重的（以为 DirectoryNotEmpty 不管"又来一个"）—— **量完才知道不是**。
+#     ⚠️ 我一度以为它是承重的 —— **量完才知道不是**。
 [Path]
-DirectoryNotEmpty=$REQ_DIR
-PathChanged=$REQ_DIR
+PATHEOF
+  printf 'DirectoryNotEmpty=%s\n' "$REQ_DIR"
+  printf 'PathChanged=%s\n' "$REQ_DIR"
+  cat <<'PATHEOF2'
 Unit=hupo-provision.service
 
 [Install]
 WantedBy=paths.target
-EOF
-
+PATHEOF2
+} > "$UNIT_DIR/hupo-provision.path"
 plan "写 $UNIT_DIR/hupo-provision.service"
-cat > "$UNIT_DIR/hupo-provision.service" <<EOF
+# ⚠️ 同样：注释走带引号的 heredoc、值走 printf（不带引号的 heredoc 会执行注释里的反引号）
+{
+  cat <<'SVCEOF'
 [Unit]
 Description=琥珀 · 建一台新租户（受控 · 跑完就退）
 # ⚠️ 它**不 Enable**：只在 .path 看见申请时被拉起。**没有常驻 root 进程。**
 [Service]
 Type=oneshot
 # ⚠️ 这里指的是 root 拥有的那一份拷贝 —— 改仓库里的脚本**不会**改到它（A9）。
-ExecStart=$LIBEXEC/provision-tenant-request.sh
-Environment=HUPO_TENANT_TEMPLATE=$ETC_CONF
-Environment=HUPO_SERVICE_USER=$SERVICE_USER
-Environment=HUPO_PROVISION_FAILED_DIR=$REQ_DIR_STATE
+SVCEOF
+  printf 'ExecStart=%s/provision-tenant-request.sh\n' "$LIBEXEC"
+  printf 'Environment=HUPO_TENANT_TEMPLATE=%s\n' "$ETC_CONF"
+  printf 'Environment=HUPO_SERVICE_USER=%s\n' "$SERVICE_USER"
+  printf 'Environment=HUPO_PROVISION_FAILED_DIR=%s\n' "$REQ_DIR_STATE"
+  cat <<'SVCEOF2'
 # 建一台要 load 镜像（几十秒到几分钟）⇒ 给够；超时也不会留下半个（脚本自己幂等）
 TimeoutStartSec=20min
 # 同一时刻只跑一个（systemd 的 oneshot 本来就不会并发）⇒ 这就是"串行"那道闸
-EOF
+SVCEOF2
+} > "$UNIT_DIR/hupo-provision.service"
 chmod 0644 "$UNIT_DIR/hupo-provision.path" "$UNIT_DIR/hupo-provision.service"
 say "单元写好了"
 
