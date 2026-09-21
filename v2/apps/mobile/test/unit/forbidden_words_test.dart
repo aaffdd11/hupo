@@ -35,15 +35,22 @@ void main() {
     // 这几句是界面里真会显示的（含 D2 定稿的登录页）
     // ⚠️ 用 `final` 不用 `const`：下面要**展开**关于页那份数据源（`const` 里展不开）
     final copies = [
-      // ⚠️ landing 那一屏（主人 2026-09-21 点名要的）——**直接引数据源**，不手抄
-      ...landingPoints,
+      // ⚠️ landing 那一屏（主人 2026-09-21 点名要的，版式参考 gengshu.me）——
+      //    **直接引数据源**，不手抄（手抄会漂）
+      landingKicker,
       landingPromise,
-      landingTitle,
+      landingLead,
+      landingBrand,
       landingStart,
+      landingDownload,
       landingStartHint,
-      landingAndroid,
       landingAndroidNotYet,
+      landingDownloadTitle,
+      landingFaqTitle,
       landingFootNote,
+      for (final (a, b, c) in landingCards) ...[a, b, c],
+      for (final (a, b, c) in landingPlatforms) ...[a, b, c],
+      for (final (a, b) in landingFaq) ...[a, b],
       '所以这道门只有你能开。',
       '装机器时给你的那一串',
       '打开',

@@ -24,9 +24,13 @@ void main() {
     await _pump(tester);
     expect(find.text(landingPromise), findsOneWidget, reason: '手册 〇 那句承诺必须在这儿');
     expect(find.text(landingStart), findsOneWidget);
-    expect(find.text(landingAndroid), findsOneWidget);
-    for (final p in landingPoints) {
-      expect(find.text(p), findsOneWidget, reason: '三句支撑少了一句：$p');
+    expect(find.text(landingDownload), findsOneWidget);
+    // ⚠️ 三张卡在**首屏之外** ⇒ 要像用户那样**滚下去**再看
+    //    （`ListView` 是懒的，不滚就不会建 ⇒ 直接 find 会说"找不到"，那是假的）
+    for (final (mark, title, _) in landingCards) {
+      await tester.scrollUntilVisible(find.text(title), 240);
+      expect(find.text(title), findsOneWidget, reason: '三张卡少了一张：$title');
+      expect(find.text(mark), findsOneWidget, reason: '标记少了一个：$mark');
     }
     // ⚠️ "第一次要等一下"必须**在点之前**就说（别让他登录完才发现）
     expect(find.text(landingStartHint), findsOneWidget);
@@ -34,7 +38,7 @@ void main() {
 
   testWidgets('🔴 点"下载安卓版" ⇒ **如实说没上线**，而且不许装出"正在下载"', (tester) async {
     await _pump(tester);
-    await tester.tap(find.text(landingAndroid));
+    await tester.tap(find.text(landingDownload));
     await tester.pump();
 
     expect(find.text(landingAndroidNotYet), findsOneWidget, reason: '★ 必须说没上线');
