@@ -86,21 +86,34 @@ import nodeFs from 'node:fs';
 //    ⚠️ 主目录 root **不是 home**（§2.2 规则 1）：home 当 root ⇒
 //       agent 读得到自己的 key、写得进 `.bashrc` = 持久化代码执行。
 const data = process.env.HUPO_DATA ?? '/data';
-const dirs = [
-  data,
-  `${data}/main`,
-  `${data}/workspaces`,
-  `${data}/hupo`,
-];
-for (const d of dirs) {
-  try { nodeFs.mkdirSync(d, { recursive: true, mode: 0o700 }); } catch { /* 已存在 */ }
+const owned = [`${data}/main`, `${data}/workspaces`, `${data}/hupo`];
+for (const d of [data, ...owned]) {
+  try { nodeFs.mkdirSync(d, { recursive: true, mode: 0o700 }); }
+  catch (e) { if (e.code !== 'EEXIST') throw e; }
 }
 // 属主照权限席给的：`/data` 是 root `0711`（能穿过去、列不出别人），
 // 里面那三样归 **agent(1000) `0700`** —— 服务(root)读得到，别的租户读不到。
-for (const d of [`${data}/main`, `${data}/workspaces`, `${data}/hupo`]) {
-  try { nodeFs.chownSync(d, 1000, 1000); nodeFs.chmodSync(d, 0o700); } catch { /* 尽力 */ }
+//
+// 🔴 **`chmod` 必须在 `chown` 之前**：反过来的话，文件已经属于 1000 了，
+//    root 再 chmod 就需要 `FOWNER`；而运行时**只带 4 条能力**（没有 FOWNER）。
+//    实测见 `docs/dev/39-PERMISSIONS.md` §5.4.1 的 E 组与 I 组。
+try { nodeFs.chmodSync(data, 0o711); } catch (e) { throw new Error(`entry: chmod ${data} 失败：${e.code}`); }
+for (const d of owned) {
+  nodeFs.chmodSync(d, 0o700);          // 此刻还是 root 自己的 ⇒ 不需要 FOWNER
+  nodeFs.chownSync(d, 1000, 1000);     // 交给 agent
 }
-try { nodeFs.chmodSync(data, 0o711); } catch { /* 尽力 */ }
+// ⚠️ **不许静默**：布局没铺成 ⇒ 边界就不在（而且这条边界是"悄悄失效"型的）。
+//    自查一遍，对不上就**拒绝启动**，别让一个"看着像在跑"的盒子起来。
+for (const d of owned) {
+  const st = nodeFs.statSync(d);
+  if (st.uid !== 1000 || st.gid !== 1000 || (st.mode & 0o777) !== 0o700) {
+    throw new Error(`entry: ${d} 的属主/权限不对（要 1000:1000 0700，实为 ${st.uid}:${st.gid} 0${(st.mode & 0o777).toString(8)}）—— 拒绝启动`);
+  }
+}
+const ds = nodeFs.statSync(data);
+if (ds.uid !== 0 || (ds.mode & 0o777) !== 0o711) {
+  throw new Error(`entry: ${data} 应为 root 0711，实为 ${ds.uid} 0${(ds.mode & 0o777).toString(8)} —— 拒绝启动`);
+}
 
 // 起真正的服务（**同一个进程**，不多一层 shell）
 await import('./src/serve.js');
@@ -111,6 +124,22 @@ echo "  入口: /app/entry.mjs"
 # ⚠️ 两个身份（容器内权限席的结论）：**服务/终端 = root**（uid0→宿主租户），
 #    **agent 的手 = uid 1000**。理由：userns 的 root 有 CAP_DAC_OVERRIDE
 #    ⇒ agent 若是 uid0，**任何权限位都拦不住它读 key**。
+#
+# 🔴 主人 2026-09-21 拍板 ①：**agent 读不到自己的 key**（"原则上就是 agent 读不到"）。
+#    ⇒ 由此**推出运行时要带哪几条能力**（实测验出来的，见 39-PERMISSIONS.md §5.4）：
+#
+#      --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE \
+#                     --cap-add=SETUID --cap-add=SETGID --security-opt=no-new-privileges
+#
+#    · SETUID/SETGID  ：root 服务**把 agent 降权到 1000** 的唯一办法。
+#                       实测：全丢 ⇒ 降权 EPERM（边界根本装不上）；补上 ⇒ 成。
+#    · CHOWN          ：把 main/workspaces/hupo 交给 1000。实测：没有它 ⇒ chown EPERM。
+#    · DAC_OVERRIDE   ：服务要读**用户自己的**话（/data/main 是 1000:0700）。
+#                       实测：没有它 ⇒ root 读 main.jsonl 也 EACCES（那是它该读的东西）。
+#    · ⚠️ **chmod 要放在 chown 之前** ⇒ 否则还需要 FOWNER（实测：chown 之后再 chmod ⇒ EPERM）。
+#    · ❌ **dpkg 那组（FSETID/SETFCAP/MKNOD/KILL/SYS_CHROOT）已经不给了** ——
+#      它们原来的理由是"agent 要 apt 装包"，而决定 ① 把这个理由拿掉了
+#      （apt = root = 读得到 key，与 ① 不可兼得）。⇒ 10 条收到 4 条。
 cat > "$R/etc/passwd" <<'EOF'
 root:x:0:0:root:/data:/bin/sh
 agent:x:1000:1000:agent:/data/main:/bin/sh
@@ -148,8 +177,7 @@ cid="$("$PODMAN" run -d --rm \
     -p "127.0.0.1:$PORT:8080" -v "$DATA:/data" \
     --security-opt=no-new-privileges \
     --cap-drop=ALL \
-    --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=FOWNER --cap-add=FSETID \
-    --cap-add=SETUID --cap-add=SETGID --cap-add=SETFCAP --cap-add=MKNOD --cap-add=KILL \
+    --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID \
     --pids-limit=512 --memory=768m --memory-swap=768m \
     "$IMG" 2>&1 | tail -1)"
 echo "  容器 ${cid:0:12} · 数据 $DATA · 口 127.0.0.1:$PORT"
