@@ -89,14 +89,38 @@ done
 
 echo "── 建完之后怎么验（**两条都要，缺一条就没意义**）──────────"
 cat <<'EOF'
-  # 正：甲能在自己那台里干活
-  sudo -u hupo-a podman run --rm -v /home/hupo-a/tenant:/data localhost/hupo-base:local \
-       /bin/sh -c 'echo A > /data/a.secret && cat /data/a.secret'
-  # 反：乙读甲那份 **必须是 Permission denied**
-  sudo -u hupo-b cat /home/hupo-a/tenant/a.secret
-  # （⚠️ "No such file" 不算 —— 那只说明路径写错了）
-  # 反（容器里）：乙的容器挂甲那份，必须非 0 退出
-  sudo -u hupo-b podman run --rm -v /home/hupo-a/tenant:/data localhost/hupo-base:local cat /data/a.secret
+  ⚠️ 三条**踩过的**前提，别省：
+    ① cd /tmp —— `sudo -u` **保留当前目录**，而租户读不到仓库目录 ⇒ 不换目录会报
+       `cannot chdir to …: Permission denied` 然后 `Error: setting up the process`（实测踩过）
+    ② `-H` —— 不写它 HOME 可能还是 /root，podman 会去错的存储目录
+    ③ 镜像**不共享**：无根镜像在各家自己的存储里，得**各自 load 一次**
+       （deploy 侧先 `podman save -o /tmp/hupo-base.tar localhost/hupo-base:local`）
+
+  cd /tmp
+  for u in hupo-a hupo-b; do sudo -u $u -H podman load -i /tmp/hupo-base.tar; done
+
+  # ① 正对照：甲在自己那台里能写能读（**不能省** —— 没有它，后面"读不到"可能只是没跑起来）
+  sudo -u hupo-a -H podman run --rm -v /home/hupo-a/tenant:/data localhost/hupo-base:local \
+       /bin/sh -c 'echo sk-甲的 > /data/key.txt && cat /data/key.txt'
+
+  # ② 乙在宿主上读甲那份 ⇒ 必须 **Permission denied**（⚠️ "No such file" 不算）
+  sudo -u hupo-b cat /home/hupo-a/tenant/key.txt
+
+  # ③ 乙的**容器**去挂甲那份 ⇒ podman 退出码必须是 **125**（不是 0）
+  sudo -u hupo-b -H podman run --rm -v /home/hupo-a/tenant:/data localhost/hupo-base:local cat /data/key.txt; echo "rc=$?"
+
+  # ④ 对照：乙读**自己**那份必须成功（rc=0）—— 否则 ②③ 的失败说明不了什么
+  sudo -u hupo-b -H podman run --rm -v /home/hupo-b/tenant:/data localhost/hupo-base:local \
+       /bin/sh -c 'echo sk-乙的 > /data/key.txt && cat /data/key.txt'
+
+  # ⑤ 最关键的一条：**调度器那个身份（deploy）**读得到甲的吗 ⇒ 必须读不到
+  cat /home/hupo-a/tenant/key.txt
+
+  # ⑥ 资源上限的前提（实测发现）：新用户**没有 systemd 用户会话** ⇒ podman 回落 cgroupfs。
+  #    §10.3 那些 MemoryMax 要用得上，得给每个租户开 linger：
+  #      sudo loginctl enable-linger hupo-a
 EOF
 echo
 echo "⚠️ 这一步只是**把边界的地基打好**；容器怎么起、key 怎么进去，见 docs/dev/37-MULTITENANT.md。"
+echo "⚠️ 2026-09-21 实测结果（这套命令全跑过）：①②③④⑤ 全部如期 —— 其中 ⑤"
+echo "   （连 deploy 都读不到租户的 key）是「key 不经过调度器」在文件系统这一层的落点。"
