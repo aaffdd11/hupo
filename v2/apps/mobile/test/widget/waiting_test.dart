@@ -62,6 +62,10 @@ void main() {
     ));
 
     expect(find.text(waitingFull), findsOneWidget, reason: '🔴 必须明说给不了');
+    // 🔴 **标题与正文不许互相矛盾**（2026-09-21 看截图才发现：标题说"正在给你开"、
+    //    正文说"给你开不了"，同一屏上两句反话）。⇒ 标题也要换成"给不了"那一句。
+    expect(find.text(waitingFullTitle), findsOneWidget, reason: '🔴 标题也要说给不了');
+    expect(find.text(waitingTitle), findsNothing, reason: '🔴 "正在给你开"在这里是假话');
     expect(find.text(waitingBody), findsNothing, reason: '不许同时叠一句"还在开"');
     expect(find.textContaining('已经等了'), findsNothing, reason: '这一台不会来了，别量他等了多久');
 

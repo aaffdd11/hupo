@@ -124,7 +124,12 @@ class _WaitingScreenState extends State<WaitingScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Text(waitingTitle, style: t.textTheme.titleLarge, textAlign: TextAlign.center),
+                // 🔴 **给不了的时候标题也要换**（说"正在给你开"就是自相矛盾 —— 看截图才发现的）
+                Text(
+                  widget.full ? waitingFullTitle : waitingTitle,
+                  style: t.textTheme.titleLarge,
+                  textAlign: TextAlign.center,
+                ),
                 const SizedBox(height: 12),
                 // ★ **真进度**（主人 2026-09-21）：把服务端**真的知道的那三步**画出来。
                 //   ⚠️ 只有"做完了没有" —— **没有百分比、没有进度条**（不许假进度）。
