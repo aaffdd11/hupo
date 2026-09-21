@@ -17,6 +17,7 @@ import { AgentRuntime } from './agent-runtime.js';
 import { Auth } from './auth.js';
 import { Users, maskPhone } from './users.js';
 import { TenantChannel } from './tenant-channel.mjs';
+import { stepsFor } from './space-steps.js';
 import { Worlds } from './worlds.js';
 import { OWNER_ID } from './tenants.js';
 import { CRASH_WINDOW_MS } from './boot-marker.js';
@@ -232,46 +233,6 @@ turnStatus.start();
 //    这是**刻意的**（"中心不留用户的 key"）。
 // ════════════════════════════════════════════════════════════
 const tenantKeys = new Map(); // userId → key（**只在内存**）
-const tenantOf = (userId) => cfg.tenantMap.get(userId) ?? null;
-const userOfTenant = (tenant) => {
-  for (const [uid, t] of cfg.tenantMap) if (t === tenant) return uid;
-  return null;
-};
-
-const channel = new TenantChannel({
-  dir: cfg.tenantChannelDir,
-  // ⚠️ 收到的 `tenant` 是**套接字名**；key 按 **userId** 存 ⇒ 这里要翻一次
-  keyFor: (tenant) => {
-    const uid = userOfTenant(tenant);
-    return uid ? (tenantKeys.get(uid) ?? null) : null;
-  },
-  log: (m) => console.log(m),
-});
-let channelTenants = 0;
-const channelTenantNames = [...new Set(cfg.tenantMap.values())];
-if (cfg.tenantChannelDir && channelTenantNames.length > 0) {
-  try {
-    for (const t of channelTenantNames) {
-      channel.listenFor(t);
-      channelTenants += 1;
-    }
-  } catch (err) {
-    console.warn(`  ⚠️ 租户通道没全开起来：${err?.message ?? err}（那几台容器会一直等配置）`);
-  }
-}
-
-/**
- * **用户填了自己的 key** ⇒ 只做两件事：记在内存里、推给他那台容器。
- * ⚠️ 返回值里**不含 key**；日志里也不含。
- */
-function setModelKey(userId, key) {
-  const tenant = tenantOf(userId);
-  if (!tenant) return { ok: false, why: 'no-tenant' };
-  tenantKeys.set(userId, key);
-  channel.pushKey(tenant, key);
-  console.log(`  🔑 ${userId} 的模型凭据已收下（送给他那台容器；**不落盘**）`);
-  return { ok: true };
-}
 
 const { listen, listenTrusted, close } = createServer({
   // ★ **多租户那一侧**：每个请求按令牌里的 `sub` 取那个人的世界。
@@ -290,17 +251,21 @@ const { listen, listenTrusted, close } = createServer({
     //    ⚠️ 一个**新号**在 `tenantMap` 里**没有对应租户** —— 那**不是** `local`：
     //       `local` 的语义是"本机那份 = 主人那一份"，把新号当成它
     //       就是**让新用户看见主人的东西**（多租户要防的第一件事）。
-    //    ⇒ 没有租户的新号：**如实说"你那台还没准备好"**（`preparing`），
-    //      让他看到等待屏，而不是进到不属于他的世界里。
     const tenant = tenantOf(userId);
     if (!tenant) {
       if (userId === OWNER_ID) return { kind: 'local' };
-      return { kind: 'tenant', state: 'preparing', hasKey: false, unassigned: true };
+      // ⚠️ **没分到**不是"正在开" —— 池子里没有空了（见 `41-SPECIAL-CODE.md` §四）。
+      //    如实说 `queued`，别让他以为马上就好。
+      return { kind: 'tenant', state: 'queued', hasKey: false, steps: stepsFor(0) };
     }
+    const up = channel.hasTunnel(tenant);
     return {
       kind: 'tenant',
-      state: channel.hasTunnel(tenant) ? 'ready' : 'preparing',
+      state: up ? 'ready' : 'starting',
       hasKey: tenantKeys.has(userId),
+      // ★ **真进度**（主人 2026-09-21："创建 docker 空间要能够对用户展示进度"）：
+      //   这三条**每一条都是服务端真的知道的事实**，不是编的、也没有百分比。
+      steps: stepsFor(up ? 2 : 1),
     };
   },
   // ⚠️ 隧道没通时返回 `null`（调用方**如实回 503**，不许假装通了）

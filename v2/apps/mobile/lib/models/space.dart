@@ -28,19 +28,33 @@ enum SpaceScreen {
 
 /// 服务端说的"我那台到哪一步了"。**认不出来就当"就绪"**（见纪律 1）。
 class SpaceInfo {
-  const SpaceInfo({this.kind = 'local', this.state = 'ready', this.hasKey = false});
+  const SpaceInfo({
+    this.kind = 'local',
+    this.state = 'ready',
+    this.hasKey = false,
+    this.steps = const [],
+  });
 
   /// `local` = 主人那种（本机那份，没有单独一台）；`tenant` = 有自己一台。
   final String kind;
 
-  /// `preparing` / `ready`（别的值一律当 `ready` —— 认不出别把人挡住）。
+  /// `queued`（池子里没空了）/ `starting`（他那台正在起）/ `ready`。
+  /// ⚠️ **只有 `ready` 才算就绪** —— 别的值一律**不许**当就绪
+  ///    （认不出就进聊天 = 把他送进一个还没准备好的世界）。
   final String state;
+
+  /// **开空间那三步**（真进度：`assigned` / `starting` / `ready`）。
+  /// ⚠️ 缺字段 ⇒ 空列表（老服务端）⇒ 界面**只显示那句话**，不编步骤。
+  final List<SpaceStep> steps;
 
   /// 他那台上有没有填过钥匙。
   final bool hasKey;
 
   bool get isTenant => kind == 'tenant';
   bool get ready => state == 'ready';
+
+  /// 他这一步是不是"连队都没排上"（池子里没有空位）—— ⚠️ 那不是"马上就好"，别骗他。
+  bool get queued => state == 'queued';
 
   /// **宽容解析**：不是对象 / 缺字段 / 字段类型不对 ⇒ 一律退回"就绪的本机那种"。
   factory SpaceInfo.fromJson(Object? raw) {
@@ -50,13 +64,48 @@ class SpaceInfo {
     final hasKey = raw['hasKey'];
     return SpaceInfo(
       kind: kind == 'tenant' ? 'tenant' : 'local',
-      state: state == 'preparing' ? 'preparing' : 'ready',
+      // ⚠️ **缺 `state` 才当就绪**（老服务端兼容）；**给了 `state` 就照它算** ——
+      //    认不出的值**不许**当就绪（那会把人送进一个还没准备好的世界）。
+      state: (state is String && state.isNotEmpty) ? state : 'ready',
       hasKey: hasKey == true,
+      steps: parseSteps(raw['steps']),
     );
   }
 
-  Map<String, dynamic> toJson() => {'kind': kind, 'state': state, 'hasKey': hasKey};
+  Map<String, dynamic> toJson() => {
+        'kind': kind,
+        'state': state,
+        'hasKey': hasKey,
+        'steps': steps.map((e) => e.toJson()).toList(),
+      };
 }
+
+/// 开空间那三步里的一步。**只有"做完了没有"**，**没有百分比**。
+class SpaceStep {
+  const SpaceStep({required this.step, required this.done});
+  final String step;
+  final bool done;
+
+  /// 宽容解析：认不出的名字 ⇒ 丢掉（**不许编一步出来**）。
+  static List<SpaceStep> parseList(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <SpaceStep>[];
+    for (final e in raw) {
+      if (e is! Map) continue;
+      final name = e['step'];
+      if (name is! String || !kKnownSteps.contains(name)) continue;
+      out.add(SpaceStep(step: name, done: e['done'] == true));
+    }
+    return out;
+  }
+
+  Map<String, dynamic> toJson() => {'step': step, 'done': done};
+}
+
+/// 服务端会说的那三步（**认不出的丢掉** —— 见 `parseList`）。
+const Set<String> kKnownSteps = {'assigned', 'starting', 'ready'};
+
+List<SpaceStep> parseSteps(Object? raw) => SpaceStep.parseList(raw);
 
 /// **该进哪一屏**。纯函数。
 ///

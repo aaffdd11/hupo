@@ -144,6 +144,9 @@ class _HupoAppState extends State<HupoApp> {
           : _controller != null && spaceScreenFor(_space ?? const SpaceInfo(), keySent: _keySent) == SpaceScreen.waiting
               ? WaitingScreen(
                   busy: _askingSpace,
+                  // ★ **真进度**：服务端真的知道的那三步（没有百分比）
+                  steps: (_space ?? const SpaceInfo()).steps,
+                  queued: (_space ?? const SpaceInfo()).queued,
                   onRetry: () async {
                     final t = await _tokens.read();
                     if (t != null) await _askSpace(t);

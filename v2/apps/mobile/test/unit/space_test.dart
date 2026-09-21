@@ -37,10 +37,38 @@ void main() {
       expect(yesKey.hasKey, true);
     });
 
-    test('认不出的 state / kind ⇒ 退回"就绪的那种"（不许猜成"还在开"）', () {
-      expect(SpaceInfo.fromJson({'kind': 'wat', 'state': 'weird'}).isTenant, false);
-      expect(SpaceInfo.fromJson({'kind': 'tenant', 'state': 'weird'}).ready, true);
-      // ⚠️ 猜成"还在开"会把人**永久**挡在等待屏上 —— 那个方向更坏
+    test('认不出的 kind ⇒ 退回"本机那种"（老服务端兼容）', () {
+      expect(SpaceInfo.fromJson({'kind': 'wat'}).isTenant, false);
+    });
+
+    test('🔴 **给了 `state` 就照它算**：认不出的值**不许**当就绪', () {
+      // ⚠️ 这一条是安全相关的：把"还没准备好"当成就绪 = **把人送进一个还没准备好的世界**。
+      //    另一头（当成就绪）也不对，所以"缺 state ⇒ 就绪"和"给了不认识的 state ⇒ 不就绪"
+      //    是**两条不同的路**，必须分开。
+      expect(SpaceInfo.fromJson({'kind': 'tenant', 'state': 'weird'}).ready, false);
+      expect(SpaceInfo.fromJson({'kind': 'tenant', 'state': 'queued'}).ready, false);
+      expect(SpaceInfo.fromJson({'kind': 'tenant', 'state': 'starting'}).ready, false);
+      expect(SpaceInfo.fromJson({'kind': 'tenant', 'state': 'ready'}).ready, true);
+      // 缺字段 = 老服务端 ⇒ 就绪（兼容那条纪律）
+      expect(SpaceInfo.fromJson({'kind': 'tenant'}).ready, true);
+    });
+
+    test('★ 三步：解析 · 认不出的名字**丢掉**（不许编一步出来）', () {
+      final s = SpaceInfo.fromJson({
+        'kind': 'tenant',
+        'state': 'starting',
+        'steps': [
+          {'step': 'assigned', 'done': true},
+          {'step': 'starting', 'done': false},
+          {'step': 'wat', 'done': true},
+          'x',
+        ],
+      });
+      expect(s.steps.length, 2, reason: '认不出的那两步要丢掉');
+      expect(s.steps.first.done, true);
+      expect(s.steps.last.step, 'starting');
+      // 负向对照：缺 steps ⇒ 空（界面就只显示那句话，不编步骤）
+      expect(SpaceInfo.fromJson({'kind': 'tenant'}).steps, isEmpty);
     });
   });
 
@@ -78,7 +106,8 @@ void main() {
   });
 
   group('那两屏的文案', () {
-    const all = <String>[
+    // ⚠️ `final` 不是 `const`：下面要展开一个 Map（`spaceStepWords.values`），const 做不到
+    final all = <String>[
       waitingTitle,
       waitingBody,
       waitingRetry,
@@ -94,6 +123,8 @@ void main() {
       keyBadChars,
       keyTooLong,
       keyFailed,
+      waitingQueued,
+      ...spaceStepWords.values,
     ];
 
     test('🔴 **不许假进度**：一个百分号都没有', () {

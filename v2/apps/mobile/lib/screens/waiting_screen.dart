@@ -12,6 +12,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../models/space.dart';
 import '../models/space_words.dart';
 
 class WaitingScreen extends StatelessWidget {
@@ -21,7 +22,15 @@ class WaitingScreen extends StatelessWidget {
     this.busy = false,
     this.askedTooLong = false,
     this.retryFailed = false,
+    this.steps = const [],
+    this.queued = false,
   });
+
+  /// **开空间那三步**（真进度）。空 ⇒ 只显示那句话（老服务端 / 认不出来）。
+  final List<SpaceStep> steps;
+
+  /// 池子里没有空位了（那不是"马上就好"）。
+  final bool queued;
 
   /// 用户按了"再看看"。（多久算太久**住在服务端**，客户端不复制那个数。）
   final VoidCallback onRetry;
@@ -54,6 +63,24 @@ class WaitingScreen extends StatelessWidget {
               children: [
                 Text(waitingTitle, style: t.textTheme.titleLarge, textAlign: TextAlign.center),
                 const SizedBox(height: 12),
+                // ★ **真进度**（主人 2026-09-21）：把服务端**真的知道的那三步**画出来。
+                //   ⚠️ 只有"做完了没有" —— **没有百分比、没有进度条**（不许假进度）。
+                if (queued)
+                  Text(waitingQueued, style: t.textTheme.bodyMedium, textAlign: TextAlign.center)
+                else if (steps.isNotEmpty)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (var i = 0; i < steps.length; i++)
+                        _StepRow(
+                          label: spaceStepWords[steps[i].step] ?? steps[i].step,
+                          done: steps[i].done,
+                          // 第一个还没做完的 = **正在做的那一步**
+                          current: !steps[i].done && steps.take(i).every((e) => e.done),
+                        ),
+                    ],
+                  ),
+                const SizedBox(height: 12),
                 Text(note, style: t.textTheme.bodyMedium, textAlign: TextAlign.center),
                 const SizedBox(height: 24),
                 // ⚠️ 命中区 ≥44：`minimumSize` 而不是写死宽高
@@ -66,6 +93,36 @@ class WaitingScreen extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 清单里的一行：✓ 做完了 / … 正在做 / · 还没轮到。
+/// ⚠️ 三个符号就够 —— **没有百分比**（不许假进度）。
+class _StepRow extends StatelessWidget {
+  const _StepRow({required this.label, required this.done, required this.current});
+  final String label;
+  final bool done;
+  final bool current;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context);
+    final mark = done ? '✓' : (current ? '…' : '·');
+    final style = done
+        ? t.textTheme.bodyMedium
+        : (current
+            ? t.textTheme.bodyMedium
+            : t.textTheme.bodySmall?.copyWith(color: t.disabledColor));
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 24, child: Text(mark, style: style)),
+          Expanded(child: Text(label, style: style)),
+        ],
       ),
     );
   }

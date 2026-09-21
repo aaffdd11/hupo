@@ -10,6 +10,17 @@
 
 /// 等待那一屏。
 const String waitingTitle = '正在给你开一个只属于自己的空间';
+
+/// **开空间那三步的人话**（服务端只说 `assigned`/`starting`/`ready` 三个名字）。
+/// ⚠️ **没有百分比**：我们不知道"还要多久"，编一个数字就是假进度。
+const Map<String, String> spaceStepWords = {
+  'assigned': '给你留好一台，只属于你',
+  'starting': '把它开起来',
+  'ready': '马上就好',
+};
+
+/// 排队那一步（池子里没有空位了）—— ⚠️ **如实说**，别让他以为马上就好。
+const String waitingQueued = '前面还有人，得等一下：我们这边地方有限。';
 const String waitingBody = '这一步通常很快。要是等久了，按下面那个按钮再看看。';
 const String waitingRetry = '再看看';
 const String waitingStillLong = '还在开，比平常久了一点。没坏，再等一会儿就行。';
