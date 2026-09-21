@@ -15,17 +15,11 @@ import nodePath from 'node:path';
 
 import { AgentRuntime } from './agent-runtime.js';
 import { Auth } from './auth.js';
-import { Dispatcher } from './dispatcher.js';
-import { SayService } from './say.js';
-import { Trash } from './trash.js';
-import { Store } from './store.js';
-import { Ledger, LEDGER_TIMELINE_ID } from './ledger.js';
 import { Users, maskPhone } from './users.js';
-import { LedgerSocket } from './ledger-socket.js';
-import { reconcileOnBoot } from './reconcile.js';
-import { CRASH_WINDOW_MS, markCleanExit, recordStart } from './boot-marker.js';
+import { Worlds } from './worlds.js';
+import { OWNER_ID } from './tenants.js';
+import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
-import { Timeline } from './timeline.js';
 import { createServer } from './server.js';
 import { loadConfig, preflight } from './config.js';
 import { integrityReport } from './integrity.js';
@@ -33,7 +27,6 @@ import { describeAdmission, readAdmission } from './admission.js';
 import { applyPrune, groupSlugFor, planPrune, scanEntries, summarize } from './prune.js';
 import { createTurnStatus, statusPath } from './turn-status.js';
 import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
-import { Notice, UNDO_RESTORE } from './notice.js';
 
 
 const cfg = loadConfig(process.env, process.cwd());
@@ -85,44 +78,69 @@ if (problems.length > 0) {
 }
 for (const n of notes) console.warn(`  ⚠️ ${n}`);
 
-const store = new Store({ dataDir: cfg.dataDir });
-const timeline = new Timeline({
-  id: 'main',
-  store,
-  onSubscriberError: (err, event) => {
-    console.error(`[timeline] 订阅者出错（${event.type}）：${err?.message ?? err}`);
-  },
-});
-// ★ **系统通知那个口**（批 3 第三件 · 契约 `docs/dev/29-NOTICE.md`）。
-// ⚠️ 给了 `store` ⇒ 开机从盘上恢复**限频账**：重启不该把同一件事再喊一遍
-//    （R1.2 的"通知疲劳"）。不给的话，一个崩溃环会把同一句话喊一遍又一遍。
-const notice = new Notice({ timeline, store, timelineId: 'main', log: (m) => console.warn(m) });
-// ★ **开机对账**：把上一次没说完的话收干净，并告诉用户"可能没做完"。
-// ⚠️ 位置就在这儿：**在服务开始收请求之前**。晚一步的话，
-//    客户端可能已经连上、把那条没收口的气泡渲染成"还在做"了。
-// ⚠️ 而且它**不许阻断启动**（手册 §15.3）——函数内部自己包住了。
-// ★ **崩溃环判定**（§11.1）：判断"是不是刚崩过几次"。
-// ⚠️ 必须在对账**之前** —— 降级状态是"要不要续做"的输入之一。
-const boot = recordStart(cfg.dataDir);
-if (boot.degraded) {
-  console.warn(
-    `  ⚠️ ${HUMAN_LINES.degraded}\n` +
-      `     （${CRASH_WINDOW_MS / 60000} 分钟内启动了 ${boot.starts} 次，上一次没善终 ⇒ **这次不续做**）`,
-  );
+const auth = new Auth({ dataDir: cfg.dataDir });
+// ★ **用户表**（多租户第一步 · 契约 `docs/dev/37-MULTITENANT.md` §三）：
+//   手机号 → 用户。落在 `data/users.json`（0600、gitignore 里）。
+const users = new Users({ dataDir: cfg.dataDir });
+// ★ 把主人那个号绑到**原来那个账号**（`owner`）——不绑的话，"先用口令登过的那份数据"
+//   和"后来用手机号进来的那个人"会是两个身份（今天看不出来，将来数据一分就分家）。
+let ownerBind = null;
+if (cfg.ownerPhone) {
+  try {
+    ownerBind = users.bind(cfg.ownerPhone, 'owner');
+  } catch (err) {
+    console.warn(`  ⚠️ 主人那个号没绑上（${err?.message ?? err}）——手机号登录会当新用户`);
+  }
 }
 
-const reconciled = reconcileOnBoot({
-  timeline,
-  store,
-  // 续做只在**没降级**时开（§11.1：崩溃环里继续续做只会放大问题）
-  resume: { degraded: boot.degraded },
-  // ★ 「续做」那两类（`resumed` / `not-resumed`）走**通知通道**，不再另起气泡
-  //   （契约 `29-NOTICE.md` §5.1 + §二"同一件事只走一条通道"）。
-  notice,
-  log: (m) => console.warn(m),
+// ════════════════════════════════════════════════════════════
+// ★ **一人一份完整的世界**（多租户那一步 · `docs/dev/38-ISOLATION-SPLIT.md` §二）
+//
+// ⚠️ 这一段原来是一串**单例**（`store` / `timeline` / `notice` / `say` / `trash` /
+//    `ledger` / `ledgerSocket` / `dispatcher`）。单例在多租户下有两个**静默串号**：
+//      ① 所有人的 agent 会话键都是 `'main'` ⇒ 甲说的话进乙的窗口；
+//      ② 所有人共用一个 `DSH_HOME` ⇒ 会话记录互相看得见（N21）。
+//    ⇒ 现在全部按 userId 各配一份，见 `worlds.js`。
+//
+// ⚠️ **顺序上有个环**：runtime 要问 worlds"这个键是谁的 cfg"，
+//    而 worlds 要拿着 runtime 才能建派发器 ⇒ 先声明、后赋值，
+//    `cfgFor` 是个**闭包**（调用时才读 `worlds`，那时已经赋好了）。
+// ════════════════════════════════════════════════════════════
+let worlds = null;
+const runtime = new AgentRuntime({
+  cfg,
+  // 🔴 DSH_HOME / 工作目录**按人取** —— 少了这一句，甲乙共用一个 DSH_HOME
+  cfgFor: (agentKey) => worlds.cfgForAgentKey(agentKey),
+  // ⚠️ 卸一个 agent 时要**先让它的主人收口**：键里带着是谁的（`u1/main`）
+  onEvict: (sessionId) => worlds.onEvict(sessionId),
 });
-if (!reconciled.ok) {
-  console.warn(`  ⚠️ 开机对账没做成：${reconciled.error}（**不影响启动**）`);
+worlds = new Worlds({
+  cfg,
+  runtime,
+  log: (m) => console.log(m),
+  warn: (m) => console.warn(m),
+});
+
+// ★ **开机把每个人的世界热一遍**：对账 / 崩溃环 / 回收站都**按人各算一份**。
+//   ⚠️ 先 `owner`（他那一份是**原来那份**，`data/` 原地不动），再所有登记过的用户。
+//   ⚠️ 一个人失败不许把开机带走（`warmUp` 自己吞）。
+const warmed = worlds.warmUp([OWNER_ID, ...users.ids()]);
+// 主人那一份：横幅、进程级兜底、开机那几句话都报**他这一份**
+// （横幅是本机的排障视图，不是给用户看的；用户各自看自己的界面）。
+const ownerWorld = worlds.worldFor(OWNER_ID);
+const { timeline, notice, ledger } = ownerWorld;
+const boot = ownerWorld.boot;
+const reconciled = boot.reconciled;
+
+// ★ **崩溃环判定**（§11.1）：判断"是不是刚崩过几次"。
+// ⚠️ 现在它是**按人各算一份**的（`worlds.js` 里每人一个 `recordStart`）。
+//    这里把降级的那些人**挨个喊一声** —— 一个进程崩过，不代表所有人都不该续做。
+for (const w of worlds.all()) {
+  if (!w.boot.degraded) continue;
+  console.warn(
+    `  ⚠️ ${w.userId}：${HUMAN_LINES.degraded}\n` +
+      `     （${CRASH_WINDOW_MS / 60000} 分钟内启动了 ${w.boot.starts} 次，上一次没善终 ⇒ **这一份这次不续做**）`,
+  );
 }
 
 // ★ **崩溃/报警那条通知**（批 3 第三件 · 欠账 **#22**："报警没有推送渠道"）。
@@ -147,66 +165,15 @@ if (boot.uncleanLastRun && reconciled.told === 0) {
   }
 }
 
-const auth = new Auth({ dataDir: cfg.dataDir });
-// ★ **用户表**（多租户第一步 · 契约 `docs/dev/37-MULTITENANT.md` §三）：
-//   手机号 → 用户。落在 `data/users.json`（0600、gitignore 里）。
-const users = new Users({ dataDir: cfg.dataDir });
-// ★ 把主人那个号绑到**原来那个账号**（`owner`）——不绑的话，"先用口令登过的那份数据"
-//   和"后来用手机号进来的那个人"会是两个身份（今天看不出来，将来数据一分就分家）。
-let ownerBind = null;
-if (cfg.ownerPhone) {
-  try {
-    ownerBind = users.bind(cfg.ownerPhone, 'owner');
-  } catch (err) {
-    console.warn(`  ⚠️ 主人那个号没绑上（${err?.message ?? err}）——手机号登录会当新用户`);
-  }
-}
-const say = new SayService({ timeline, store, timelineId: 'main' });
-// 回收站（批 3 第二件）。⚠️ **必须 sync**：不 sync 的话重启之后回收站是空的，
-// 而屏幕上那些话还藏着 —— 用户会以为永远拿不回来了（契约 `docs/dev/28-DELETE.md`）。
-const trash = new Trash({ timeline, store, timelineId: 'main' }).sync();
+// ⚠️ 下面这几样**不再各自 `new` 一份**了 —— 它们现在住在 `worlds.js` 里，按人各一份。
+//    `timeline` / `notice` / `ledger` 在上面取主人那一份时已经解出来了，
+//    别的（`say` / `trash` / `ledgerSocket` / `dispatcher`）**一律走 `worlds` 的方法**，
+//    免得又出现"两处都能拿到同一件东西"。
 
-// ★ **账本**（批 4 第一件 · 契约 `docs/dev/31-LEDGER.md` v2 §7.5）。
-//
-// ⚠️ 它**另起一条日志**（`data/ledger.jsonl`），**不塞进 `main.jsonl`**：
-//    那条是"可见时间线"，账本是一份**用户数据**，两件事混一起会让 ⑲ 的
-//    删除/回收站语义变复杂（契约 §五）。
-// ⚠️ 一条日志一个取号器 ⇒ 它有自己的 `Timeline`，和可见时间线互不干扰。
-// ⚠️ **必须 sync**：不 sync 的话重启之后账本的回收站是空的，
-//    而被主人收起来的那几笔还藏着 —— 他会以为永远拿不回来了。
-const ledgerTimeline = new Timeline({ id: LEDGER_TIMELINE_ID, store });
-const ledger = new Ledger({ store, timeline: ledgerTimeline }).sync();
-
-// ★ **账本那条本地通道**（契约 §7.2）：模型那侧的工具经它过来，
-//   **写盘只有这一处**（MCP 那支进程自己不写盘）。
-// ⚠️ 它不是"另一条对外接口"：只听本机的一个文件（0600），
-//    对外那一面仍然是 8020 上那套要令牌的服务面。
-const ledgerSocket = new LedgerSocket({
-  ledger,
-  socketPath: cfg.ledgerSocketPath,
-  log: (m) => console.warn(m),
-}).listen();
-
-// agent 运行时 + 粘合层。
-// ⚠️ `onEvict` 是「**先收口再卸**」里的那个收口——runtime 没有翻译层，
-//    它不知道哪条消息还没说完，只能回调出来（手册 §5.5）。
-const runtime = new AgentRuntime({
-  cfg,
-  onEvict: (sessionId) => dispatcher.onEvict(sessionId),
-});
-const dispatcher = new Dispatcher({
-  timeline,
-  runtime,
-  scopeId: timeline.id,
-  store,
-  recap: cfg.recap,
-  turnDeadlineMs: cfg.turnDeadlineMs,
-  // ★ 把通知那本账接进过程通道（契约 §三②：同一件事只走一条通道）。
-  //   见 `dispatcher.#announceTurn()` 与 `session-translate.js` 文件头 ⑥。
-  notice,
-});
-
-// 出事谁接：进程级兜底（手册 §5.2 第 3 层）
+// 出事谁接：进程级兜底（手册 §5.2 第 3 层）。
+// ⚠️ **已知的窄口**（记在 `38` §二·补）：进程级崩溃是**宿主级**事件，
+//    而这条兜底只能往**一份**时间线上写 ⇒ 这里写的是**主人那一份**。
+//    别的用户不会被这条叫醒。要不要按人各装一条，等有人真的多起来再定。
 installProcessGuard({ timeline, notice });
 
 const webRoot = nodeFs.existsSync(nodePath.join(cfg.webRoot, 'index.html')) ? cfg.webRoot : null;
@@ -217,17 +184,17 @@ const webRoot = nodeFs.existsSync(nodePath.join(cfg.webRoot, 'index.html')) ? cf
 //   ⚠️ 它**只是旁路信息**：写不进去也不许影响服务（`createTurnStatus` 自己吞掉异常）。
 const turnStatus = createTurnStatus({
   file: statusPath(cfg.dataDir),
-  snapshot: () => ({
-    openMessageId: timeline.openMessageId,
-    pending: dispatcher?.pendingDeliveries ?? 0,
-    // ⚠️ "轮已经宣布、但一个字都还没说"那一段也得算忙（实测有 3 秒以上）
-    turns: dispatcher?.armedDeadlines ?? 0,
-  }),
+  // ⚠️ **聚合**（`38-ISOLATION-SPLIT.md` §三③）：一人一份会让重启脚本读不懂
+  //    （它只看这一个文件）。规则是**任一忙就算忙** —— 宁等不切。
+  snapshot: () => worlds.busySnapshot(),
 });
 turnStatus.start();
 
 const { listen, close } = createServer({
-  timeline, store, auth, say, dispatcher, trash, webRoot, buildId: cfg.buildId,
+  // ★ **多租户那一侧**：每个请求按令牌里的 `sub` 取那个人的世界。
+  //   ⚠️ 上面那五个单例**不再传**了 —— 传了就等于"所有人共用一份"。
+  worlds,
+  auth, webRoot, buildId: cfg.buildId,
   users,
   devCode: cfg.devCode,
   log: (m) => console.log(m),
@@ -240,26 +207,12 @@ const { listen, close } = createServer({
 //
 // ⚠️ 两件事都**不许阻断启动 / 不许把进程带走**：它们是维护动作，
 //    而且台账（`turn/deleted` 那些墓碑）还在盘上 ⇒ 下一轮还会再试一次，不会漏掉。
-function sweepTrash() {
-  // ① ★ **到期前一周"告一声"**（契约 `29-NOTICE.md` §5.1）——
-  //    ⑲ 留下的那笔账（`28-DELETE.md` §七）在这一件上还。
-  //    ⚠️ 它**带撤销**：浮窗与时间线**两处**都渲染它（主人那条约束 3），
-  //       动作就是回收站那个"拿回来"。
-  //    ⚠️ 限频认的是**撤销那一组 id**（`subjectOf`）⇒ 同一条过期提醒
-  //       在窗口内只喊一次，一个钟头一趟也不会重复喊。
-  for (const it of trash.expiringSoon()) {
-    try {
-      notice.notice({ kind: 'expiring', undo: { ...UNDO_RESTORE, messageIds: it.messageIds } });
-    } catch (err) {
-      // 一条发不出去不该让剩下的也发不出去
-      console.warn(`  ⚠️ 到期提醒没发出去（${it.messageIds.length} 条）：${err?.message ?? err}`);
-    }
+// ⚠️ 现在它是**按人各扫一遍**（`worlds.sweepTrash()` 自己吞掉单个人的失败）。
+const sweepTrash = () => {
+  for (const done of worlds.sweepTrash()) {
+    console.log(`  🗑 ${done.userId} 的回收站到点，彻底删掉 ${done.messageIds.length} 条（释放 ${done.freedBytes} 字节）`);
   }
-  // ② 到点就真删
-  for (const done of trash.purgeExpired()) {
-    console.log(`  🗑 回收站到点，彻底删掉 ${done.messageIds.length} 条（释放 ${done.freedBytes} 字节）`);
-  }
-}
+};
 try {
   sweepTrash();
 } catch (err) {
@@ -281,19 +234,25 @@ trashSweep.unref?.();
 //    投递失败也要算一次"发起过"，否则一个每次投递都失败的活会被无限重试。
 // ⚠️ 那句对用户说的话**不在这儿**：它由对账按契约 `29-NOTICE.md` §5.1
 //    走**通知通道**发（`resumed` / `not-resumed`）——**同一件事只走一条通道**。
-if (reconciled.resume) {
-  const { ref, text, attempt } = reconciled.resume;
-  console.log(`  ▶ 续做：把「${text.slice(0, 24)}…」重做一遍（第 ${attempt} 次）`);
-  try {
-    timeline.emit({ type: RESUMED_EVENT, ref, attempt });
-    dispatcher.deliver(text, { messageId: ref }).catch((err) => {
-      console.warn(`  ⚠️ 续做投递失败：${err?.message ?? err}（额度已经记过了）`);
-    });
-  } catch (err) {
-    console.warn(`  ⚠️ 续做没发起：${err?.message ?? err}`);
+// ⚠️ 现在**按人各做各的**：甲那份要续做，与乙没关系。一个人失败不许影响别人。
+for (const w of worlds.all()) {
+  const r = w.boot.reconciled;
+  if (r?.resume) {
+    const { ref, text, attempt } = r.resume;
+    console.log(`  ▶ ${w.userId} 续做：把「${text.slice(0, 24)}…」重做一遍（第 ${attempt} 次）`);
+    try {
+      w.timeline.emit({ type: RESUMED_EVENT, ref, attempt });
+      w.dispatcher.deliver(text, { messageId: ref }).catch((err) => {
+        console.warn(`  ⚠️ ${w.userId} 续做投递失败：${err?.message ?? err}（额度已经记过了）`);
+      });
+    } catch (err) {
+      console.warn(`  ⚠️ ${w.userId} 续做没发起：${err?.message ?? err}`);
+    }
+  } else if ((r?.total ?? 0) > 0) {
+    console.log(`  · ${w.userId} 没有自动重做（原因：${r.resumeReason}）`);
   }
-} else if (reconciled.total > 0) {
-  console.log(`  · 没有自动重做（原因：${reconciled.resumeReason}）`);
+  if (r?.noticed) console.log(`  🔔 ${w.userId} 已通知 ${r.noticed}（时间线里有一条）`);
+  if (!r?.ok) console.warn(`  ⚠️ ${w.userId} 开机对账没做成：${r?.error}（**不影响启动**）`);
 }
 // ⚠️ 这两行要**如实报**：通知发没发出去、发的哪一条，是"用户到底看没看见"的唯一线索
 //    （横幅是本机那一眼，通知才是**用户那一眼**）。
@@ -329,7 +288,9 @@ console.log(
   }`,
 );
 console.log(`  agent    ${cfg.dshBin} --profile ${cfg.agentProfile}（最多 ${cfg.agentMaxProcesses} 个）`);
-console.log(`  工作目录 ${cfg.agentCwd}`);
+// ⚠️ 下面这几行**报的是「主人那一份」**（横幅是本机排障视图，不是给用户看的）。
+//    多租户之后每个人的 DSH_HOME / 工作目录都不同 —— 不标明就会被读成「所有人的」。
+console.log(`  工作目录 ${cfg.agentCwd}（主人那一份；别人各在自己那一格里）`);
 console.log(
   // ⚠️ 这一行必须说**它到底记不记得**——那是用户最先会问的问题。
   //    所以报的是"额度"（能记多少），不是"功能已启用"这种口号。
@@ -356,7 +317,7 @@ console.log(
 console.log(
   // ⚠️ 这一行必须说**上一轮是怎么结束的**——否则"它上次是不是被硬杀的"
   //    只能靠猜，而那是排障时第一个要问的问题。
-  `  上次收尾 ${
+  `  上次收尾(主人) ${
     reconciled.total === 0
       ? '干净（没有未说完的话）'
       : `⚠️ 有 ${reconciled.total} 处没说完（未收口气泡 ${reconciled.orphans} 条` +
@@ -366,14 +327,14 @@ console.log(
 );
 console.log(
   // ⚠️ "上次是怎么结束的"要一眼看见：它是排障时第一个要问的问题
-  `  上次退出 ${boot.uncleanLastRun ? '⚠️ 没善终（被硬杀 / 断电）' : '干净'}` +
+  `  上次退出(主人) ${boot.uncleanLastRun ? '⚠️ 没善终（被硬杀 / 断电）' : '干净'}` +
     `（${CRASH_WINDOW_MS / 60000} 分钟内第 ${boot.starts} 次启动${boot.degraded ? '，**已降级：这次不续做**' : ''}）`,
 );
-console.log(`  时间线   已有事件 ${timeline.seq} 条`);
+console.log(`  时间线   主人那一份已有事件 ${timeline.seq} 条（别人各数各的）`);
 console.log(
   // ⚠️ 这一行要**如实报账本那两支东西在不在**：能力层缺了的时候，
   //    "它今天没记账"看起来只是它忘了 —— 而那正是查不出来的故障。
-  `  账本     ${ledger.list().length} 笔（回收站 ${ledger.listBin().length} 组）` +
+  `  账本(主人) ${ledger.list().length} 笔（回收站 ${ledger.listBin().length} 组）` +
     `；本地通道 ${nodeFs.existsSync(cfg.ledgerSocketPath) ? '通了' : '⚠️ 没起来'}`,
 );
 console.log(`  能力层   ${cfg.capabilitiesPath}（${nodeFs.existsSync(cfg.capabilitiesPath) ? '已挂上' : '⚠️ 文件不在'}）`);
@@ -390,6 +351,11 @@ console.log(
       ? `｜主人号 ${maskPhone(cfg.ownerPhone)}${ownerBind.changed ? ' 刚绑上' : ' 已绑'} → owner`
       : ''),
 );
+console.log(
+  // ⚠️ **这一行是多租户接上之后必须有的**：不报它，就看不出「到底有几个人各过各的」。
+  //    ⚠️ 它是**建了几份世界**，**不是「在线人数」** —— 这两个数不是一回事。
+  `  世界     ${worlds.size} 份（owner + 登记过的用户，各过各的；不是在线人数）`,
+);
 console.log('──────────────────────────────────────────────');
 
 // 优雅退出：先停止接新连接，再关。
@@ -401,16 +367,18 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     closing = true;
     console.log(`\n收到 ${sig}，收工。`);
     // ⚠️ 顺序：**先把话说圆、再放 agent 走**
-    await dispatcher.shutdown();
+    // ⚠️ 现在**每个人都要收**：只收主人那一份 = 别人的话被切断
+    //    （而且他们的 agent 会成为孤儿进程）。
+    await worlds.shutdownDispatchers();
     await runtime.shutdown();
     await close();
     turnStatus.stop();
     clearInterval(trashSweep);
-    // ⚠️ 账本那条口要关掉**并把套接字文件删掉**：留着它，下次
+    // ⚠️ 账本那些口要关掉**并把套接字文件删掉**：留着它，下次
     //    `listen()` 会撞上 `EADDRINUSE`，而那句话看起来像"端口被占"。
-    ledgerSocket.close();
-    // ★ 留下"这次是好好走的"标记 ⇒ 下次开机才知道上一次是不是被硬杀的
-    markCleanExit(cfg.dataDir);
+    worlds.closeSockets();
+    // ★ 每个人各留一个"这次是好好走的"标记 ⇒ 下次开机才知道上一次是不是被硬杀的
+    worlds.markCleanExitAll();
     process.exit(0);
   });
 }

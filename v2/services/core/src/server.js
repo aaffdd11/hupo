@@ -184,13 +184,25 @@ export function cacheControlFor(relPath) {
 }
 
 export function createServer({
-  timeline,
-  store,
+  timeline = null,
+  store = null,
   auth,
-  say,
+  say = null,
   dispatcher = null,
   /** 回收站（批 3 第二件）。`null` = 这台部署没开这条路（路由一律 404）。 */
   trash = null,
+  /**
+   * 多租户：**按 `claim.sub` 取那个人的世界**（`worlds.js`）。
+   *
+   * ⚠️ 它和上面那几个单例**只能给一边**：
+   *    * 给了 `worlds` ⇒ 每个请求按令牌里的 `sub` 取（多租户，生产走这条）；
+   *    * 不给 ⇒ 五个单例对所有人是同一份（**单租户**，所有既有测试走这条）。
+   * ⇒ 合起来只有**一条**取值路径（`worldFor`），不是两套逻辑在跑。
+   *
+   * ⚠️ **身份只能从令牌来**（`claim.sub`），**不许从 URL / body / 头里读**：
+   *    那些都是请求方可控的，读它们等于"报个别人的名字就能看别人的东西"。
+   */
+  worlds = null,
   webRoot = null,
   buildId = 'dev',
   now = Date.now,
@@ -202,6 +214,13 @@ export function createServer({
   /** 临时验证码。**空串 = 关**（默认就是关）。 */
   devCode = '',
 }) {
+  /**
+   * 🔴 **这一个函数是"我是谁"与服务对象之间唯一的接缝。**
+   * ⚠️ 单租户时它返回**同一个对象**（所以旧行为逐字不变）；多租户时按人取。
+   */
+  const shared = { timeline, store, say, dispatcher, trash };
+  const worldFor = worlds ? (sub) => worlds.worldFor(sub) : () => shared;
+
   const server = http.createServer((req, res) => {
     handleRequest(req, res).catch((err) => {
       // 兜底：HTTP 层自己不许把异常漏出去变成未捕获
@@ -248,9 +267,13 @@ export function createServer({
         if (!r) return sendJson(res, 401, { error: 'expired' });
         return sendJson(res, 200, { token: r.token, expiresAt: r.expiresAt });
       }
-      if (path === '/api/say' && req.method === 'POST') return handleSay(req, res, claim);
+      // ★ **按身份取世界**（多租户那一步）：从这里往下，一律用 `W`，
+      //   **不许**再直接摸上面那几个单例 —— 那正是"甲看到乙"的来源。
+      //   ⚠️ `sub` 只来自**验过签的令牌**（`claim`），不读 URL / body / 头。
+      const W = worldFor(claim.sub);
+      if (path === '/api/say' && req.method === 'POST') return handleSay(req, res, claim, W);
       if (path === '/api/health' && req.method === 'GET') {
-        return sendJson(res, 200, { ok: true, timelineId: timeline.id, seq: timeline.seq });
+        return sendJson(res, 200, { ok: true, timelineId: W.timeline.id, seq: W.timeline.seq });
       }
       if (path === '/api/audit' && req.method === 'GET') {
         return sendJson(res, 200, { entries: auth.auditLog });
@@ -262,17 +285,17 @@ export function createServer({
       //    `trash.list()` 是唯一知道"谁被删过"的地方，所以这道闸打在这儿。
       // ⚠️ 没开回收站的部署也照样导得出（只是没有"被删掉的那几条"要报）。
       if (path === '/api/export' && req.method === 'GET') {
-        const bin = trash ? trash.list() : [];
-        return sendJson(res, 200, buildExport(store.readAll(timeline.id), {
+        const bin = W.trash ? W.trash.list() : [];
+        return sendJson(res, 200, buildExport(W.store.readAll(W.timeline.id), {
           hiddenIds: bin.flatMap((t) => t.messageIds),
           hiddenCount: bin.length,
         }));
       }
       // ── 回收站（批 3 第二件 · 契约 `docs/dev/28-DELETE.md` §8.2）────────
       // ⚠️ 键是 `messageIds`（不是轮号）：盘上没有轮号，见契约 §三·补。
-      if (trash) {
+      if (W.trash) {
         if (path === '/api/trash' && req.method === 'GET') {
-          return sendJson(res, 200, { items: trash.list(), ttlDays: trash.ttlDays });
+          return sendJson(res, 200, { items: W.trash.list(), ttlDays: W.trash.ttlDays });
         }
         if (path === '/api/trash/plan' && req.method === 'POST') {
           // ⚠️ **只读**：少 `confirm` 也能调 —— "先看清单"这一步不许有门槛。
@@ -282,10 +305,10 @@ export function createServer({
           } catch {
             return sendJson(res, 400, { error: 'bad-json' });
           }
-          return sendJson(res, 200, trash.plan(body?.messageIds));
+          return sendJson(res, 200, W.trash.plan(body?.messageIds));
         }
         if (path === '/api/trash/remove' && req.method === 'POST') {
-          return handleTrashWrite(req, res, 'remove');
+          return handleTrashWrite(req, res, 'remove', W);
         }
         if (path === '/api/trash/restore' && req.method === 'POST') {
           let body;
@@ -294,10 +317,10 @@ export function createServer({
           } catch {
             return sendJson(res, 400, { error: 'bad-json' });
           }
-          return sendJson(res, 200, { ok: trash.restore(body?.messageIds) });
+          return sendJson(res, 200, { ok: W.trash.restore(body?.messageIds) });
         }
         if (path === '/api/trash/purge' && req.method === 'POST') {
-          return handleTrashWrite(req, res, 'purge');
+          return handleTrashWrite(req, res, 'purge', W);
         }
       }
       return sendJson(res, 404, { error: 'not-found' });
@@ -314,7 +337,7 @@ export function createServer({
    * ⚠️ `confirm:true` 是**必须的**：删是破坏性动作，**不许一个手滑的请求就能触发**
    *    （契约 §8.2）。少它一律 400，而且**什么都不做**。
    */
-  async function handleTrashWrite(req, res, kind) {
+  async function handleTrashWrite(req, res, kind, W) {
     let body;
     try {
       body = await readJson(req, 16 * 1024);
@@ -324,12 +347,12 @@ export function createServer({
     if (body?.confirm !== true) return sendJson(res, 400, { error: 'confirm-required' });
     try {
       if (kind === 'remove') {
-        const r = trash.remove(body?.messageIds);
+        const r = W.trash.remove(body?.messageIds);
         return sendJson(res, 200, {
-          ok: true, messageIds: r.messageIds, purgeAt: r.at + trash.ttlMs,
+          ok: true, messageIds: r.messageIds, purgeAt: r.at + W.trash.ttlMs,
         });
       }
-      const r = trash.purge(body?.messageIds);
+      const r = W.trash.purge(body?.messageIds);
       return sendJson(res, 200, { ok: true, freedBytes: r.freedBytes });
     } catch (err) {
       // 认不出来的输入 / 已经彻底删过 / 压实失败 —— 都要**说清哪一种**，别回一个笼统的 500
@@ -390,7 +413,7 @@ export function createServer({
     return sendJson(res, 200, { token, expiresAt });
   }
 
-  async function handleSay(req, res, claim) {
+  async function handleSay(req, res, claim, W) {
     let body;
     try {
       body = await readJson(req, 64 * 1024);
@@ -403,7 +426,7 @@ export function createServer({
       //      （显示"没发出去"，而服务端其实收下了，那一轮还在跑）。
       //   ⚠️ 拒了 ⇒ **什么都没写**（`say.say()` 根本没被调用）——这就是
       //      §9.1 那句"不建空 jsonl 文件"的落点。
-      if (!say.isDuplicate(body?.messageId)) {
+      if (!W.say.isDuplicate(body?.messageId)) {
         const adm = admit();
         if (!adm.ok) {
           log(`[准入] 拒了一句（内存 ${Math.round((adm.ratio ?? 0) * 100)}% ≥ ${Math.round(ADMIT_RATIO * 100)}%）`);
@@ -411,7 +434,7 @@ export function createServer({
         }
       }
 
-      const result = say.say({
+      const result = W.say.say({
         messageId: body?.messageId,
         text: body?.text,
         clientAt: body?.clientAt,
@@ -419,10 +442,10 @@ export function createServer({
       // ⚠️ **只有真落盘了才交给 agent**。
       //    重复（duplicate）**绝不能**再投一次——
       //    那正是"重发 = agent 干两遍"（评审 E2）。
-      if (!result.duplicate && dispatcher) {
+      if (!result.duplicate && W.dispatcher) {
         // 投递是异步的（`session/prompt` 立刻返回，答案从事件流回来），
         // 所以**不等它**——等它会把 HTTP 响应也拖住。
-        dispatcher.deliver(body?.text, { messageId: body?.messageId }).catch((err) => {
+        W.dispatcher.deliver(body?.text, { messageId: body?.messageId }).catch((err) => {
           log(`[dispatch] 投递失败：${err?.message ?? err}`);
         });
       }
@@ -540,6 +563,9 @@ export function createServer({
   });
 
   function onStream(ws, url, claim) {
+    // ★ **这条流也是按人取的**（多租户）：补发与订阅都必须走**他那一份**时间线，
+    //   否则甲连上来的流会补发出乙的话。身份同样只从验过签的 `claim` 来。
+    const W = worldFor(claim.sub);
     const rawSince = url.searchParams.get('sinceSeq');
     const sinceSeq = rawSince === null ? 0 : Number.parseInt(rawSince, 10);
     // ⚠️ **`dev=1` 与 `level` 是并存的，不是别名。** 两个理由：
@@ -559,7 +585,7 @@ export function createServer({
     // 补发（手册 §2.2，决策 P-h）
     let plan;
     try {
-      plan = planResume({ events: store.readAll(timeline.id), sinceSeq });
+      plan = planResume({ events: W.store.readAll(W.timeline.id), sinceSeq });
     } catch {
       ws.close(1008, 'bad-sinceSeq');
       return;
@@ -588,7 +614,7 @@ export function createServer({
     }));
 
     // 实时
-    const off = timeline.subscribe((event) => {
+    const off = W.timeline.subscribe((event) => {
       // 这一条连接收不收它（四档 + `dev` 那条附加通道）—— 见 `levelAllows`
       if (!levelAllows(event, { level, dev: devMode })) return;
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));

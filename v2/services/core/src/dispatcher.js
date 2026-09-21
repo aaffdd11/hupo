@@ -78,7 +78,41 @@ export class Dispatcher {
    */
   #notice;
 
-  constructor({ timeline, runtime, scopeId = null, store, recap = {}, turnDeadlineMs = TURN_DEADLINE_MS, notice = null }) {
+  /**
+   * agent 那个**进程池的键**。
+   *
+   * ⚠️ 为什么它**不是** `scopeId`（2026-09-21，多租户接线时定的）：
+   *   `scopeId` 是**写到事件里的字段**（`session-translate.js` 把它塞进 `message/start`），
+   *   盘上已有的事件里是 `'main'` —— 动它 = **动历史字节**（协议字段一旦上线就冻结）。
+   *   而这一条是**进程池的内部键**：只用来回答"这句话该进哪个 agent 的窗口"。
+   *   两件事混用，就会为了修串号去改协议。⇒ 分开。
+   *
+   * 🔴 多租户下它**必须按人不同**（`u1/main`）：所有人共用 `'main'` 时，
+   *   `runtime.get('main')` 对谁都是**同一个 agent** ⇒ **甲说的话进乙的窗口**
+   *   （静默串号，两边日志都"正常"）。见 `docs/dev/38-ISOLATION-SPLIT.md` §三①。
+   */
+  #agentKey;
+
+  /**
+   * agent 那个进程池的键：**多租户下按人不同**。
+   * ⚠️ 三个用处必须走这里（超时收口 / 投递 / `onEvict` 比对），
+   *    少一处就会出现"某一头认的是 `main`、另一头认的是 `u1/main`"⇒ 收口失效。
+   */
+  get #agentSessionKey() {
+    return this.#agentKey ?? this.#timeline.id;
+  }
+
+  constructor({
+    timeline,
+    runtime,
+    scopeId = null,
+    /** agent 进程池的键。默认退回 `timeline.id`（单租户时就是 `'main'`）。多租户**必须传**。 */
+    agentKey = null,
+    store,
+    recap = {},
+    turnDeadlineMs = TURN_DEADLINE_MS,
+    notice = null,
+  }) {
     if (!store) {
       // ⚠️ **不许默认没有 recap 就悄悄开工。**
       //    没有 store ⇒ 每次重启的用户体验都是"它失忆了"，
@@ -88,6 +122,7 @@ export class Dispatcher {
     this.#timeline = timeline;
     this.#runtime = runtime;
     this.#scopeId = scopeId;
+    this.#agentKey = agentKey;
     this.#store = store;
     this.#recapOptions = { ...RECAP_DEFAULTS, ...recap };
     this.#turnDeadlineMs = turnDeadlineMs;
@@ -287,7 +322,7 @@ export class Dispatcher {
 
     // ③ 回收资源。下一个实例要重新喂背景（它同样什么都不记得）
     this.#recapFedTo = null;
-    this.#runtime.stop(this.#timeline.id, { reason: 'turn-deadline' }).catch((err) => {
+    this.#runtime.stop(this.#agentSessionKey, { reason: 'turn-deadline' }).catch((err) => {
       this.#lastError = `卸 agent 失败：${err?.message ?? err}`;
     });
   }
@@ -307,7 +342,7 @@ export class Dispatcher {
    *    用户看到两条一样的回答。所以按**实例身份**比一下再挂。
    */
   #ensureAgent() {
-    const id = this.#timeline.id;
+    const id = this.#agentSessionKey;
     const agent = this.#runtime.agent(id);
     if (agent === this.#wiredAgent) return agent;
     this.#wiredAgent = agent;
@@ -432,7 +467,7 @@ export class Dispatcher {
    * 顺序是死的：**先收口，再让它卸**。反了的话用户永远等不到收尾。
    */
   async onEvict(sessionId) {
-    if (sessionId !== this.#timeline.id) return;
+    if (sessionId !== this.#agentSessionKey) return;
     this.#translator.forceClose('failed');
     this.#closeUndelivered('failed');
     this.#clearAllDeadlines(); // 这一轮已经收口了，计时器不该再响

@@ -47,6 +47,12 @@ export function childEnv({ home, extra = {} } = {}) {
 
 export class AgentRuntime extends EventEmitter {
   #cfg;
+  /**
+   * **按会话取一份 cfg**（多租户）。
+   * ⚠️ 不给的话就是"所有人共用一份 cfg" —— 单租户时正确，多租户时是串号。
+   * 见 `agent()` 里的注释与 `docs/dev/38-ISOLATION-SPLIT.md` §二（`DSH_HOME` 必须切）。
+   */
+  #cfgFor;
   #spawnFn;
   #agents = new Map(); // 我们的 sessionId → DshAgent
   /** 这个 runtime 已经起过**几个 agent 实例**。只用来造 DSH 会话 id，见下。 */
@@ -55,9 +61,10 @@ export class AgentRuntime extends EventEmitter {
   #onEvict;
   #bootId;
 
-  constructor({ cfg, spawnFn = nodeSpawn, onEvict = null, bootId = null }) {
+  constructor({ cfg, cfgFor = null, spawnFn = nodeSpawn, onEvict = null, bootId = null }) {
     super();
     this.#cfg = cfg;
+    this.#cfgFor = cfgFor ?? (() => cfg);
     this.#spawnFn = spawnFn;
     this.#onEvict = onEvict;
     /**
@@ -134,7 +141,10 @@ export class AgentRuntime extends EventEmitter {
         sessionId,
         // ★ 传给 agent 的是**带 bootId 的那个**（见 constructor 的注释）
         dshSessionId: this.#nextDshSessionId(sessionId),
-        cfg: this.#cfg,
+        // ⚠️ **按会话取 cfg**（多租户）：`DSH_HOME` 与 `agentCwd` 都长在里面，
+        //    给它一份全局 cfg，甲和乙就会共用一个 DSH_HOME
+        //    ⇒ 会话记录互相看得见（N21：键是绝对路径，换个 home 就是换个账号）。
+        cfg: this.#cfgFor(sessionId),
         spawnFn: this.#spawnFn,
       });
       a.on('exit', (info) => {

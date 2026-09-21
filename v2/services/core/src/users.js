@@ -47,6 +47,22 @@ export class Users {
     return this.#byPhone.size;
   }
 
+  /**
+   * 已经登记过的**用户 id**（去重）。
+   *
+   * ⚠️ 用途只有一个：**开机把每个人的世界都热一遍**（对账 / 回收站 / 崩溃环都按人算，
+   *    见 `worlds.js`）。**不要**拿它当"在线用户"——这里没有在线这个概念。
+   * ⚠️ 一个 id 可能被两个号绑（正常：一个主人身份），所以要**去重**。
+   */
+  ids() {
+    const out = [];
+    for (const rec of this.#byPhone.values()) {
+      const id = rec?.id;
+      if (typeof id === 'string' && id.length > 0 && !out.includes(id)) out.push(id);
+    }
+    return out;
+  }
+
   #load() {
     let text;
     try {
