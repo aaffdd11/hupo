@@ -671,34 +671,96 @@ export function createServer({
     handleProtocols: (protocols) => (protocols.has('bearer') ? 'bearer' : false),
   });
 
-  server.on('upgrade', (req, socket, head) => {
+  /**
+   * WS 的握手处理。**抽成函数**是因为它有两条听入口：
+   * 普通那条（要令牌）与**可信本地那条**（容器里 · 身份由内核保证 · 选项甲）。
+   */
+  function handleUpgrade(req, socket, head, trusted) {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     if (url.pathname !== '/api/stream') {
       return rejectUpgrade(socket, 404, 'Not Found', { error: 'not-found' });
     }
-    if (auth.needsSetup) {
-      return rejectUpgrade(socket, 503, 'Service Unavailable', {
-        error: 'not-setup',
-        text: '这台机器还没设密码，先设好再用。',
-      });
-    }
-    // 令牌走**子协议**：`['bearer', <token>]`（手册 §2.1）
-    const proto = req.headers['sec-websocket-protocol'];
-    let token = null;
-    if (typeof proto === 'string') {
-      const parts = proto.split(',').map((s) => s.trim());
-      const i = parts.indexOf('bearer');
-      if (i !== -1) token = parts[i + 1] ?? null;
-    }
-    const claim = token ? auth.verify(token) : null;
-    if (!claim) {
-      // ⚠️ 在**握手阶段**拒，不要"先连上再关"
-      return rejectUpgrade(socket, 401, 'Unauthorized', { error: 'unauthorized' });
+    let claim;
+    if (trusted) {
+      // ⚠️ 可信那条**同一个道理**：不查令牌、也不吃 fail-closed
+      //    （少了这一句，容器里的流会因为"没设密码"被 503 —— 而宿主已经验过了）
+      claim = { sub: trustedSub, trusted: true };
+    } else {
+      if (auth.needsSetup) {
+        return rejectUpgrade(socket, 503, 'Service Unavailable', {
+          error: 'not-setup',
+          text: '这台机器还没设密码，先设好再用。',
+        });
+      }
+      // 令牌走**子协议**：`['bearer', <token>]`（手册 §2.1）
+      const proto = req.headers['sec-websocket-protocol'];
+      let token = null;
+      if (typeof proto === 'string') {
+        const parts = proto.split(',').map((s) => s.trim());
+        const i = parts.indexOf('bearer');
+        if (i !== -1) token = parts[i + 1] ?? null;
+      }
+      claim = token ? auth.verify(token) : null;
+      if (!claim) {
+        // ⚠️ 在**握手阶段**拒，不要"先连上再关"
+        return rejectUpgrade(socket, 401, 'Unauthorized', { error: 'unauthorized' });
+      }
+      // ── ★ **数据面**：这个人在容器里 ⇒ 把这次升级**原样转进去** ──────────
+      const tenant = tenantOf(claim.sub);
+      if (tenant) {
+        const sock = proxyFor ? proxyFor(tenant) : null;
+        if (!sock) {
+          return rejectUpgrade(socket, 503, 'Service Unavailable', {
+            error: 'tenant-not-ready',
+            text: '你那台还在准备，稍等一下再试。',
+          });
+        }
+        return proxyUpgrade(req, socket, head, sock);
+      }
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       onStream(ws, url, claim);
     });
-  });
+  }
+
+  /**
+   * 🔴 **把一次 WebSocket 升级原样转进隧道**（多租户 · 数据面）。
+   *
+   * ⚠️ 为什么是"搬字节"而不是"用 `ws` 客户端再连一次"：
+   *    用 `ws` 就等于**把协议实现两遍**（子协议、扩展、掩码、关闭握手…），
+   *    每一处细节都可能和容器那台不一致。
+   *    ⇒ 这里只做一件事：**把客户端的原始请求行与头原样写进隧道**，
+   *      让**容器那台自己**完成握手；握手之后两边都是裸字节，直接对拷。
+   */
+  function proxyUpgrade(req, socket, head, sock) {
+    const lines = [`${req.method} ${req.url} HTTP/1.1`];
+    for (let i = 0; i + 1 < req.rawHeaders.length; i += 2) {
+      lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+    }
+    sock.write(`${lines.join('\r\n')}\r\n\r\n`);
+    if (head && head.length > 0) sock.write(head);
+
+    const done = () => {
+      try {
+        socket.destroy();
+      } catch {
+        /* 已经没了 */
+      }
+      try {
+        sock.destroy();
+      } catch {
+        /* 已经没了 */
+      }
+    };
+    socket.on('error', done);
+    socket.on('close', done);
+    sock.on('error', done);
+    sock.on('close', done);
+    socket.pipe(sock);
+    sock.pipe(socket);
+  }
+
+  server.on('upgrade', (req, socket, head) => handleUpgrade(req, socket, head, false));
 
   function onStream(ws, url, claim) {
     // ★ **这条流也是按人取的**（多租户）：补发与订阅都必须走**他那一份**时间线，
@@ -820,6 +882,8 @@ export function createServer({
         else res.destroy();
       });
     });
+    // ⚠️ 可信那条也要处理 upgrade（流就是从这儿进来的）
+    s.on('upgrade', (req, sock2, head) => handleUpgrade(req, sock2, head, true));
     return new Promise((resolve, reject) => {
       s.once('error', reject);
       s.listen(socketPath, () => {
