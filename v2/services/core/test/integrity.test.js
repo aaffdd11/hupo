@@ -140,6 +140,64 @@ test('清单**完整**时 ⇒ 一条漏都没有（负向对照：不然上面�
   }
 });
 
+test('🔴 **新加的文件**也要算漏（第二次实测踩到的那一类）', () => {
+  const f = fixture();
+  try {
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    // 建完清单之后**又加了一个脚本** —— 这正是 2026-09-21 那次"横幅照样对上了"的形状
+    const extra = f.write('scripts/check-something.sh', '#!/bin/bash\n');
+    const gaps = coverageGaps({ repo: f.repo, home: f.home, baseline });
+    const scripts = gaps.find((g) => g.path === nodePath.join(f.repo, 'scripts'));
+    assert.ok(scripts, `没查出 scripts 下多了一个文件：${JSON.stringify(gaps.map((g) => g.path))}`);
+    assert.equal(scripts.kind, 'files', '是"落了单"不是"整条没有"');
+    assert.deepEqual(scripts.missing, [extra]);
+    assert.equal(scripts.mode, 'report', 'scripts/ 是只报不拦');
+
+    // ★ 重建之后就不该再有漏（负向对照）
+    const again = buildBaseline({ repo: f.repo, home: f.home });
+    assert.deepEqual(coverageGaps({ repo: f.repo, home: f.home, baseline: again }), []);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('🔴 受保护目录里**新加的文件**算"落单"；单文件那类没有"新增"这回事', () => {
+  const f = fixture();
+  try {
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    // 往 strict 的目录里新加一个文件
+    const extra = f.write('docs/handbook/09-NEW.md', '新判据\n');
+    const gaps = coverageGaps({ repo: f.repo, home: f.home, baseline });
+    const hb = gaps.find((g) => g.path === nodePath.join(f.repo, 'docs', 'handbook'));
+    assert.ok(hb, 'handbook 下多了文件要报');
+    assert.equal(hb.mode, 'strict', '它是拦的那一档');
+    assert.equal(hb.kind, 'files');
+    assert.deepEqual(hb.missing, [extra]);
+
+    // 单文件那几条：改内容会被 hash 抓到，但**没有"新增"**这回事 ⇒ 不出现在 gaps 里
+    for (const g of gaps) {
+      assert.ok(!g.path.endsWith('AGENTS.md'), 'AGENTS.md 是单文件，不该出在"漏"里');
+    }
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('🔴 落单的是 strict ⇒ 开机**拒绝启动**；report ⇒ 只提醒', () => {
+  const f = fixture();
+  try {
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    f.write('docs/handbook/09-NEW.md', '新判据\n');   // strict 目录
+    f.write('scripts/check-new.sh', '#!/bin/bash\n'); // report 目录
+    nodeFs.writeFileSync(f.baselinePath, `${JSON.stringify(baseline)}\n`);
+    const rep = integrityReport({ repo: f.repo, home: f.home, baselinePath: f.baselinePath });
+    assert.ok(rep.problems.some((p) => p.includes('docs/handbook')), `strict 的漏要拦：${rep.problems.join('\n')}`);
+    assert.ok(rep.notes.some((n) => n.includes('scripts')), `report 的漏只提醒：${rep.notes.join('\n')}`);
+  } finally {
+    f.cleanup();
+  }
+});
+
 test('🔴 漏掉的是 strict ⇒ 开机**拒绝启动**（"写着有闸、其实没核对"比不设更坏）', () => {
   const f = fixture();
   try {
@@ -149,7 +207,7 @@ test('🔴 漏掉的是 strict ⇒ 开机**拒绝启动**（"写着有闸、其�
     }
     nodeFs.writeFileSync(f.baselinePath, `${JSON.stringify(baseline)}\n`);
     const rep = integrityReport({ repo: f.repo, home: f.home, baselinePath: f.baselinePath });
-    assert.ok(rep.problems.some((p) => p.includes('漏了这一条')), rep.problems.join('\n'));
+    assert.ok(rep.problems.some((p) => p.includes('漏了')), rep.problems.join('\n'));
     assert.ok(rep.problems.some((p) => p.includes('.dsh')), '要点名是哪一条路径');
   } finally {
     f.cleanup();

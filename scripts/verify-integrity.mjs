@@ -151,7 +151,14 @@ if (r.state === 'ok' && gaps.length === 0) {
 if (gaps.length > 0) {
   console.error(`✗ **清单漏了 ${gaps.length} 条**（声明要保护、盘上有东西、清单里却没有）：`);
   for (const g of gaps) {
-    console.error(`   [${g.mode === 'strict' ? '拦' : '报'}] ${g.path}（盘上 ${g.onDisk} 个文件）—— ${g.why}`);
+    const what = g.kind === 'path'
+      ? `整条都没进清单（盘上 ${g.onDisk} 个文件）`
+      : `有 ${g.missing.length} 个文件没进清单（这条路径下盘上 ${g.onDisk} 个）`;
+    console.error(`   [${g.mode === 'strict' ? '拦' : '报'}] ${g.path} —— ${what}`);
+    if (g.kind === 'files') {
+      for (const f of g.missing.slice(0, 5)) console.error(`          · ${f}`);
+      if (g.missing.length > 5) console.error(`          · …还有 ${g.missing.length - 5} 个`);
+    }
   }
   console.error('   ⇒ 这几条**等于没有闸**（"写着有、其实没在核对"，比不设更坏）。');
   console.error(`   ⇒ 重建：sudo ${nodeProcess.execPath} ${nodeProcess.argv[1]} --build`);

@@ -175,7 +175,7 @@ export function resolveServiceHome({ repo, fallback = null } = {}) {
  * 判据刻意不含"盘上本来就没有"的路径（例如这台机器上还没装 dsh）：
  * 那种情况下没什么可保护的，不该报。
  *
- * @returns {{path:string, mode:string, onDisk:number, why:string}[]}
+ * @returns {{path:string, mode:string, onDisk:number, missing:string[], kind:'path'|'files', why:string}[]}
  */
 export function coverageGaps({ repo, home, baseline }) {
   const entries = baseline?.entries ?? {};
@@ -187,10 +187,20 @@ export function coverageGaps({ repo, home, baseline }) {
     //      报成"清单漏了它" —— 假红比漏报好，但假红会把人训练成不看这一栏。）
     const under = filesUnder(e).filter((f) => nodeFs.existsSync(f));
     if (under.length === 0) continue; // 盘上没有 ⇒ 没什么可保护的
-    const covered = under.filter((f) => Object.prototype.hasOwnProperty.call(entries, f));
-    if (covered.length === 0) {
-      gaps.push({ path: e.path, mode: e.mode, onDisk: under.length, why: e.why });
-    }
+    // ⚠️ **落了单的也要报**（2026-09-21 第二次实测踩到）：
+    //    `verifyBaseline()` 只遍历清单里**已有**的条目 ⇒ 往 `scripts/` 里
+    //    **新加一个文件**，横幅照样写"对上了"。这里把"盘上有、清单里没有"的挑出来。
+    const missing = under.filter((f) => !Object.prototype.hasOwnProperty.call(entries, f));
+    if (missing.length === 0) continue;
+    gaps.push({
+      path: e.path,
+      mode: e.mode,
+      onDisk: under.length,
+      missing,
+      // `path` = 整条都没核对；`files` = 只是落了单的几个
+      kind: missing.length === under.length ? 'path' : 'files',
+      why: e.why,
+    });
   }
   return gaps;
 }
@@ -381,11 +391,15 @@ export function integrityReport({ repo, home, baselinePath = BASELINE_PATH }) {
   //      而实际上**根本没在核对** —— 那不是"少一道闸"，是"写着有闸却没有"，
   //      比不设更坏。report 的那几条只提醒。
   for (const g of r.gaps ?? []) {
+    const what = g.kind === 'path'
+      ? `**整条都没进清单**（盘上有 ${g.onDisk} 个文件，清单里一个条目都没有）`
+      : `**有 ${g.missing.length} 个文件没进清单**（这条路径下盘上有 ${g.onDisk} 个）`;
     const line =
-      `开机清单**漏了这一条**：${g.path}（盘上有 ${g.onDisk} 个文件，清单里一个条目都没有）` +
+      `开机清单**漏了**：${g.path} —— ${what}` +
+      (g.kind === 'files' ? `\n      没进清单的是：${g.missing.slice(0, 5).join('、')}${g.missing.length > 5 ? ' …' : ''}` : '') +
       `\n      ⇒ 这等于"**写着有闸、其实没在核对**"（${g.why}）。` +
       `\n      ⇒ 多半是用 ` +
-      '`sudo` 建清单时 home 算成了 `/root`（见 resolveServiceHome 的说明）。重建：' +
+      '`sudo` 建清单时 home 算成了 `/root`，或者建完之后**又加了文件**。重建：' +
       `${rebuildCommand({ repo })}`;
     if (g.mode === 'strict') problems.push(line);
     else notes.push(line);
