@@ -80,6 +80,25 @@ class _LoginScreenState extends State<LoginScreen> {
     });
   }
 
+  /// 按【获取验证码】：**只回"发出去没有"** —— 码本身永远不进这个界面。
+  Future<void> _sendCode() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final r = await widget.api.sendCode(_phone.text.trim());
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _error = switch (r) {
+        CodeSend.sent => loginSent,
+        CodeSend.noSms => loginSendNoSms,
+        CodeSend.badPhone => loginSendBadPhone,
+        CodeSend.failed => loginSendFailed,
+      };
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -120,6 +139,15 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
                 const SizedBox(height: 14),
+                // ★ **【获取验证码】那个按钮**（主人 2026-09-21 点名的：
+                //    "找不到获取验证码的按钮" ⇒ 人们不知道该怎么登录）。
+                //   ⚠️ 它是**次要**按钮（`OutlinedButton`）：主按钮仍然是"进去"。
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(48, 48)),
+                  onPressed: _busy ? null : _sendCode,
+                  child: Text(loginSendCode),
+                ),
+                const SizedBox(height: 10),
                 FilledButton(
                   // 触控目标 ≥44
                   style: FilledButton.styleFrom(minimumSize: const Size(48, 52)),
@@ -140,7 +168,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ],
                 const SizedBox(height: 24),
-                // ⚠️ 如实说（见文件头 ①）：这不是短信验证，是临时码
+                // ⚠️ 屏上**只有"怎么拿到码"这条路**，**那串码一个字都不写**
+                //    （主人 2026-09-21：验证码是掩码）
                 Text(loginTempCodeNote, style: theme.textTheme.bodySmall, textAlign: TextAlign.center),
               ],
             ),

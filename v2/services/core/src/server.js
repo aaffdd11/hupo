@@ -17,6 +17,8 @@ import { WebSocketServer } from 'ws';
 
 import { PUBLIC_ROUTES, clientIp, tokenFromRequest } from './auth.js';
 import { SayError } from './say.js';
+// ⚠️ 只借它**校验手机号形状**（`/api/send-code` 用）；模块本身不碰用户表
+import { normalizePhone } from './users.js';
 import { ADMIT_RATIO, readAdmission } from './admission.js';
 import { CATCHUP_RENDER, markCatchUp, planResume } from './resume.js';
 import { buildExport } from './export.js';
@@ -281,6 +283,27 @@ export function createServer({
     }
     if (path === '/api/login' && req.method === 'POST') {
       return handleLogin(req, res);
+    }
+    // ★ **要一个验证码**（主人 2026-09-21：登录那一屏要有这个按钮，
+    //   而**码本身永远不回给界面** —— 验证码是掩码，不许写在屏上）。
+    //   ⚠️ 它必须**公开**（用户还没登录）。
+    if (path === '/api/send-code' && req.method === 'POST') {
+      let body;
+      try {
+        body = await readJson(req, 4 * 1024);
+      } catch {
+        return sendJson(res, 400, { error: 'bad-json' });
+      }
+      const phone = typeof body?.phone === 'string' ? body.phone.trim() : '';
+      if (!users || !normalizePhone(phone)) return sendJson(res, 400, { error: 'bad-phone' });
+      // ⚠️ **如实说**：这台部署**还没有短信通道** ⇒ 回 503 + 一句人话。
+      //    🔴 **绝不把码回给界面**（哪怕只是"临时码"）—— 写在屏上就等于没验证码。
+      //    ⚠️ 接上真短信通道时：**必须同时加一个按手机号的限频**
+      //      （不然这个公开口就是一条免费短信的刷子）。
+      return sendJson(res, 503, {
+        error: 'no-sms',
+        text: '还没接短信，现在拿不到码。接上就能用了。',
+      });
     }
 
     // 其余 /api/* 一律要令牌；**没设口令时 fail-closed**

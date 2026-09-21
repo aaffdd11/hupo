@@ -197,6 +197,24 @@ class Api {
     }
   }
 
+  /// **要一个验证码**（登录那一屏那个按钮）。
+  ///
+  /// ⚠️ **码本身永远不回给界面**（主人 2026-09-21：验证码是掩码、不许写在屏上）——
+  ///    这里只回"发出去没有、为什么没发出去"。
+  Future<CodeSend> sendCode(String phone) async {
+    try {
+      final r = await _c
+          .post(_u('/api/send-code'), headers: _json, body: jsonEncode({'phone': phone}))
+          .timeout(const Duration(seconds: 10));
+      if (r.statusCode == 200) return CodeSend.sent;
+      if (r.statusCode == 503) return CodeSend.noSms;
+      if (r.statusCode == 400) return CodeSend.badPhone;
+      return CodeSend.failed;
+    } catch (_) {
+      return CodeSend.failed;
+    }
+  }
+
   /// **我那台到哪一步了**（契约 `38` §8.3：等待屏 / 填钥匙屏靠它）。
   ///
   /// ⚠️ **问不到就当"就绪"**（`SpaceInfo()` 的默认值）—— 网抖一下不该把人
@@ -602,3 +620,6 @@ class LoginResult {
 
 /// 送钥匙的结果。**四种失败分开**（混成一句用户会一直重试）。
 enum KeySend { ok, blank, badChars, tooLong, failed }
+
+/// 要验证码的结果。**码本身不在里面**（界面上永远拿不到它）。
+enum CodeSend { sent, noSms, badPhone, failed }

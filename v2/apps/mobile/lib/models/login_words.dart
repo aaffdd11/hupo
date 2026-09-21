@@ -17,14 +17,23 @@ const String loginPromise = '你说的事它真会去做，不只是陪聊。\n�
 const String loginPhoneLabel = '手机号';
 const String loginPhoneHint = '11 位，比如 13800000000';
 const String loginCodeLabel = '验证码';
-const String loginCodeHint = '现在临时用 123456';
+const String loginCodeHint = '六位数字';
 
 /// 按钮。
 const String loginSubmit = '打开';
 const String loginBusy = '正在开…';
 
-/// ⚠️ **如实说**：现在没有短信，那个码是临时的、谁都知道。
-const String loginTempCodeNote = '现在还没有短信，用的是临时验证码（谁都知道）。接上就换掉。';
+/// ⚠️ **那串码一个字都不许写在屏上**（主人 2026-09-21 定的）：
+///    写在屏上 = 谁看见谁就能进，而"验证码"这三个字就变成了摆设。
+///    ⇒ 屏上只留"**怎么拿到它**"那一条路：按【获取验证码】那个按钮。
+const String loginTempCodeNote = '现在还没接短信：按上面的按钮看看能不能拿到码。';
+
+/// 【获取验证码】那个按钮，与它四种结果（**分开说**，混了用户会一直按）
+const String loginSendCode = '获取验证码';
+const String loginSent = '码发过去了，看一眼短信。';
+const String loginSendNoSms = '还没接短信，现在拿不到码。接上就能用了。';
+const String loginSendBadPhone = '手机号看着不对，检查一下。';
+const String loginSendFailed = '没发出去，等会儿再按一次。';
 
 /// 四种失败四句话（笼统一句"登录失败"等于什么都没说）。
 const String loginErrCode = '验证码不对，再输一次';

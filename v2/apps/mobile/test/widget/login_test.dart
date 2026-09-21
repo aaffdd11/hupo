@@ -47,9 +47,25 @@ void main() {
     expect(find.textContaining('密码'), findsNothing, reason: '★ 连"忘了密码"那种也要拿掉');
   });
 
-  testWidgets('🔴 **临时验证码必须如实说**（现在没有短信）', (tester) async {
+  testWidgets('🔴 **那串码一个字都不许写在屏上**（主人 2026-09-21 定的：验证码是掩码）', (tester) async {
+    // ⚠️ **这条判据原来是反的**：那时"临时码写在屏上"被当成"如实"。
+    //    主人 2026-09-21 把它推翻了 —— 写在屏上 = 谁看见谁就能进，
+    //    而"验证码"这三个字就变成了摆设。
     await _pump(tester, status: 200, body: '{"token":"t"}');
-    expect(find.text(loginTempCodeNote), findsOneWidget, reason: '★ 不说 = 让用户以为这是真短信验证');
+    expect(find.textContaining('123456'), findsNothing, reason: '🔴 码不许出现在屏上');
+    expect(find.textContaining('临时码'), findsNothing, reason: '🔴 别用"临时码"这种说法告诉他在哪拿');
+    // ⚠️ 但**要留一条"怎么拿到它"的路**（不然人们不知道该怎么登录）
+    expect(find.widgetWithText(OutlinedButton, loginSendCode), findsOneWidget,
+        reason: '★ 主人点名：找不到获取验证码的按钮');
+    expect(find.text(loginTempCodeNote), findsOneWidget, reason: '★ 那一路要如实说清楚');
+  });
+
+  testWidgets('★ 按【获取验证码】⇒ 说"还没接短信"（**码不回界面**）', (tester) async {
+    await _pump(tester, status: 503, body: '{"error":"no-sms"}');
+    await tester.tap(find.widgetWithText(OutlinedButton, loginSendCode));
+    await tester.pumpAndSettle();
+    expect(find.text(loginSendNoSms), findsOneWidget);
+    expect(find.textContaining('123456'), findsNothing);
   });
 
   testWidgets('🔴 码不对（401）⇒ 说"验证码不对"，**不许**说成"还没接短信"', (tester) async {
