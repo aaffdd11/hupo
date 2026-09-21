@@ -30,7 +30,7 @@ import { integrityReport, repoRootFor } from './integrity.js';
 import { describeAdmission, readAdmission } from './admission.js';
 import { applyPrune, groupSlugFor, planPrune, scanEntries, summarize } from './prune.js';
 import { createTurnStatus, statusPath } from './turn-status.js';
-import { compareTenantBuild, readProductLayer } from './product-layer.js';
+import { ROLLOUT_SWEEP_MS, compareTenantBuild, createNagBook, planRollout, readProductLayer } from './product-layer.js';
 import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
 
 
@@ -332,7 +332,30 @@ const userOfTenant = (tenant) => {
 //   ⚠️ **读不到就是 `null`**，而且那时**谁都不叫重开** ——
 //      叫了就是让每一台去挂一个不存在的东西（那正好会把它们全弄死）。
 //   ⚠️ 这里**不自己算指纹**：算它的地方只有 `scripts/build-tenant-code.sh` 一处。
-const productLayer = readProductLayer();
+//   🔴 **不许缓存**（2026-09-21 真机实测栽的）：开机时读一次存起来，翻完 `current`
+//      它就**变成一句假话** —— 而它正好用在"要不要叫那台重开"的判断上 ⇒
+//      容器拿到新的一版、报上来，宿主却拿**旧的**当前版去比 ⇒ 又叫它重开 ⇒
+//      **来回退、永远不收敛**（实测：两台容器被反复重启）。
+//      ⇒ 规矩：**每次现读**（一次 `readlink` + 一个小文件，便宜到不用想）。
+
+// ★ **隔一会儿扫一遍"有没有哪台还在旧版上"**（契约 `docs/dev/45-TENANT-UPDATE.md` §三）。
+//   🔴 为什么非要它：比版本原来只挂在 `tunnel-ready` 上，而那条隧道是**长连接** ——
+//      一直连着就永远不再报 ⇒ **翻完 current，正在跑的那几台谁都不知道**
+//      （要等宿主重启或它自己断线）。那等于"自动更新"只在碰巧重连时成立。
+//   ⚠️ 那一帧**发重了没害处**（容器只认一次、而且只在空闲时才退），
+//      但**日志不许刷屏** ⇒ 同一台同一版只说一次（`createNagBook`）。
+const nagBook = createNagBook();
+const rolloutTimer = setInterval(() => {
+  const cur = readProductLayer()?.fingerprint ?? null;
+  for (const { tenant, line } of planRollout({ reports: channel.builds, current: cur })) {
+    if (nagBook.take(tenant, cur)) console.log(`  ⚠️ ${tenant}：${line} —— 叫它重开一次`);
+    channel.requestReload(tenant);
+  }
+  for (const [tenant, reported] of channel.builds) {
+    if (cur && reported === cur) nagBook.forget(tenant);
+  }
+}, ROLLOUT_SWEEP_MS);
+rolloutTimer.unref?.();
 
 const channel = new TenantChannel({
   dir: cfg.tenantChannelDir,
@@ -347,7 +370,8 @@ const channel = new TenantChannel({
   //   ⚠️ **读不到当前产品层 ⇒ 谁都不叫**（`unknown`）：叫了就是让它们去挂一个
   //      不存在的东西 —— 那正好会把每一台都弄死。
   onBuild: (tenant, buildId) => {
-    const cur = productLayer?.fingerprint ?? null;
+    // ⚠️ **现读**（原因见上面那条：缓存会在翻转之后变成假话）
+    const cur = readProductLayer()?.fingerprint ?? null;
     const v = compareTenantBuild({ reported: buildId, current: cur });
     if (v.verdict !== 'same') console.log(`  ${v.reload ? '⚠️' : '·'} ${tenant}：${v.line}`);
     return v;
@@ -738,11 +762,14 @@ console.log(
   // ★ **每台跑的是哪一版**（契约 `docs/dev/45-TENANT-UPDATE.md` §二）。
   //   ⚠️ 这一行必须**如实**：读不到就写读不到，不一致就写不一致 ——
   //      "一台悄悄跑着旧的、而两边都以为没事"正是这套东西要防的那件事。
-  `  产品层   ${
-    productLayer
-      ? `${productLayer.fingerprint}（${productLayer.gitRev ?? '未知提交'}${productLayer.builtAt ? ` · ${productLayer.builtAt}` : ''}）`
-      : '⚠️ 读不到（还没翻过任何一版；容器会停在镜像里那份兜底上）'
-  }${channel.builds.size > 0 ? `｜在跑的：${[...channel.builds.entries()].map(([t, b]) => `${t}=${b}`).join(' ')}` : ''}`,
+  (() => {
+    const p = readProductLayer(); // ⚠️ 现读（横幅只打一次，但代码形状要与上面那条规矩一致）
+    return `  产品层   ${
+      p
+        ? `${p.fingerprint}（${p.gitRev ?? '未知提交'}${p.builtAt ? ` · ${p.builtAt}` : ''}）`
+        : '⚠️ 读不到（还没翻过任何一版；容器会停在镜像里那份兜底上）'
+    }${channel.builds.size > 0 ? `｜在跑的：${[...channel.builds.entries()].map(([t, b2]) => `${t}=${b2}`).join(' ')}` : ''}`;
+  })(),
 );
 console.log(
   // ⚠️ **这一行是多租户接上之后必须有的**：不报它，就看不出「到底有几个人各过各的」。

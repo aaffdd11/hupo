@@ -425,6 +425,23 @@ export class TenantChannel {
   }
 
   /** 这个人的 key **刚刚**才有的 ⇒ 主动推给已经连着的容器（不用等它重连）。 */
+  /**
+   * **主动叫某一台重开**（契约 `docs/dev/45-TENANT-UPDATE.md` §三）。
+   *
+   * ⚠️ 为什么不能只靠 `tunnel-ready` 那一次比：那条隧道是**长连接**，
+   *    一直连着就不会再报 ⇒ **翻完 `current` 正在跑的那几台谁都不知道**。
+   *    ⇒ 宿主得能**现推**一帧（内容仍然**一个字段都不带**）。
+   *
+   * @returns {boolean} 推出去了没有（那台现在没连着就 `false` —— **不许假装发了**）
+   */
+  requestReload(userId) {
+    const set = this.#tunnelConns.get(userId);
+    if (!set || set.size === 0) return false;
+    for (const conn of set) this.#send(conn, { v: CHANNEL_VERSION, type: 'reload' });
+    this.#record(userId, 'reload-asked');
+    return true;
+  }
+
   pushKey(userId, key) {
     for (const conn of this.#conns.get(userId) ?? []) {
       this.#send(conn, { state: 'ready', key });

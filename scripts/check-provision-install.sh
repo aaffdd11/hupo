@@ -200,6 +200,11 @@ echo
 echo "⑥ 🔴 **改了仓库那份 ⇒ --check 必须认得出**（A9 第四半／改完了 ≠ 生效了）"
 # ══════════════════════════════════════════════════════════════════
 MUTATED="$ROOT/scripts/create-tenant-pool.sh"
+# ⚠️ **还原的判据要对着"动手之前那份"**，不许对着 git（2026-09-22 改）：
+#    原来这里用 `git diff --quiet` ⇒ **工作区本来就有没提交的改动时，它一定报"没收干净"**
+#    —— 而那是个**假警报**（我这一轮就撞上了：那一份本来就刚改过）。
+#    假警报的下场就是下一个人把这道闸关掉。⇒ 拿动手前的**内容指纹**比。
+MUTATED_SUM="$(md5sum "$MUTATED" | cut -d' ' -f1)"
 cp -f "$MUTATED" "$MUTATED.bak"
 printf '\n# 判据故意加的一行（这一行跑完会被撤掉）\n' >> "$MUTATED"
 out="$(bash "$INSTALLER" --check --root "$TEST" 2>&1)"; rc=$?
@@ -224,7 +229,13 @@ echo "⑥·补 🔴 **不许有不带引号的 heredoc**（它在注释里也会
 #    它排除了注释行，而这个反引号**就在注释行上**。
 #    ⇒ 从根上断掉这类：**这几份脚本不许有不带引号的 heredoc**，
 #      值一律走 printf 或带引号的 heredoc。
-for hf in "$ROOT/scripts/install-provision-helper.sh" "$ROOT/scripts/provision-tenant-request.sh"; do
+# ⚠️ **名单要盖全 root 侧那几份**（2026-09-22 补）：原来只有两份，而
+#    `create-tenant-pool.sh` 里那个不带引号的 heredoc **一直没人看** ——
+#    现象是它写出去的**单元里注释被挖空**（`--replace` / `EACCES` 那些字没了），
+#    而功能照样跑 ⇒ 谁都不会发现。⇒ 少列一份 = 那一份的坑**永远**不会被抓到。
+for hf in "$ROOT/scripts/install-provision-helper.sh" "$ROOT/scripts/provision-tenant-request.sh" \
+          "$ROOT/scripts/create-tenant-pool.sh" "$ROOT/scripts/create-tenant-users.sh" \
+          "$ROOT/scripts/remove-tenant.sh"; do
   n="$(grep -c '<<[A-Za-z]' "$hf" 2>/dev/null || true)"
   if [ "${n:-0}" = "0" ]; then
     ok "$(basename "$hf")：没有不带引号的 heredoc"
@@ -429,15 +440,13 @@ if [ "$(systemctl is-active hupo-provision.path 2>/dev/null)" = "active" ]; then
 else
   ok "真机上那条路**没启用**（还没装）"
 fi
-if command -v git >/dev/null 2>&1; then
-  # ⚠️ **只查被变异的那一份**（2026-09-21 判据自己抓到的）：
-  #    原来这里查的是整个 `scripts/` ⇒ 本脚本自己（新加的、还没提交的）
-  #    也会让它报"脏" ⇒ **假警报**。那种闸很快就会被下一个人绕开。
-  if git -C "$ROOT" diff --quiet -- scripts/create-tenant-pool.sh 2>/dev/null; then
-    ok "被变异的那一份**原样**（还原干净了）"
-  else
-    bad "scripts/create-tenant-pool.sh 还是脏的 —— 变异没收干净"
-  fi
+# ⚠️ **只查被变异的那一份**，而且比的是**动手之前那份的内容**（不是 git）：
+#    比 git 的话，工作区本来有未提交改动时就一定报红 ⇒ 假警报 ⇒ 闸会被绕开。
+NOW_SUM="$(md5sum "$ROOT/scripts/create-tenant-pool.sh" | cut -d' ' -f1)"
+if [ "$NOW_SUM" = "$MUTATED_SUM" ]; then
+  ok "被变异的那一份**逐字节原样**（还原干净了）"
+else
+  bad "scripts/create-tenant-pool.sh 与动手之前**不一样** —— 变异没收干净"
 fi
 
 echo

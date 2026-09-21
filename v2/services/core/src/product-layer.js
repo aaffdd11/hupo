@@ -92,3 +92,58 @@ export function compareTenantBuild({ reported, current }) {
   }
   return { verdict: 'same', reload: false, line: `这一台跑的就是当前那一版（${current}）` };
 }
+
+/**
+ * 多久扫一遍"有没有哪台还在旧版上"。
+ *
+ * 🔴 **为什么非要有这个扫描**（2026-09-21 真机才看出来的）：
+ *    "比版本"原来只挂在 **`tunnel-ready`** 上 —— 而那条隧道是**长连接**，
+ *    一直连着就不会再报一次。⇒ **翻完 `current`，正在跑的那几台谁都不知道**
+ *    （要等宿主重启、或者它自己断线重连）。那等于这条功能只在"碰巧重连"时成立。
+ *    ⇒ 宿主自己**隔一会儿比一遍**，不一致就把那一帧发过去（发重了没害处：
+ *      容器那边只认一次，而且它只在**空闲**时才真的退）。
+ */
+export const ROLLOUT_SWEEP_MS = 30_000;
+
+/**
+ * 扫一遍：哪些租户该被叫一声。**纯函数**。
+ *
+ * @param {object} o
+ * @param {Iterable<[string, string]>} o.reports  租户 → 它自报的版本
+ * @param {string|null} o.current                 当前产品层的版本
+ * @returns {Array<{tenant:string, verdict:string, line:string}>}
+ */
+export function planRollout({ reports, current }) {
+  const out = [];
+  for (const [tenant, reported] of reports ?? []) {
+    const v = compareTenantBuild({ reported, current });
+    if (v.reload) out.push({ tenant, verdict: v.verdict, line: v.line });
+  }
+  return out;
+}
+
+/**
+ * "哪台、为哪一版，已经**说过**了" —— 只管**日志**，不管发不发。
+ *
+ * ⚠️ 为什么要分开：那一帧**发重了没害处**（容器只认一次），但**日志刷屏有害处**
+ *    —— 每 30 秒报一遍同一件事，真正的新消息就被淹掉了（这个项目最忌那个）。
+ */
+export function createNagBook() {
+  const seen = new Map();
+  return {
+    /** @returns {boolean} 这一条**要不要打出来**（同一台 + 同一版只说一次） */
+    take(tenant, fp) {
+      const key = `${tenant}\u0000${fp ?? ''}`;
+      if (seen.has(key)) return false;
+      seen.set(key, true);
+      return true;
+    },
+    /** 它报上了当前这一版 ⇒ 把这台的记录清掉（下一版还要能提醒）。 */
+    forget(tenant) {
+      for (const k of [...seen.keys()]) if (k.startsWith(`${tenant}\u0000`)) seen.delete(k);
+    },
+    get size() {
+      return seen.size;
+    },
+  };
+}

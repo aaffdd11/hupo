@@ -57,6 +57,7 @@ while [ $# -gt 0 ]; do
     --list)     MODE=list ;;
     --prune)    MODE=prune ;;
     --current)  MODE=current ;;
+    --fingerprint) MODE=fingerprint ;;  # 只算**仓库现在这一份**的指纹（一个字节都不写）
     --yes)      YES=1 ;;
     --root)     CODE_ROOT="$2"; shift ;;
     -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
@@ -72,7 +73,7 @@ done
 #   ⚠️ 为什么不自己 `install -d`：`deploy` **建不了 `/srv/hupo`**（那是 root 的）。
 #      建它那一步在 `create-tenant-pool.sh --yes`（root）里 —— 那是"把机器准备好给租户容器"
 #      的同一件事，放一起才不会漏。
-if [ ! -d "$CODE_ROOT" ]; then
+if [ ! -d "$CODE_ROOT" ] && [ "$MODE" != "fingerprint" ]; then
   bad "没有 $CODE_ROOT —— 它要 root 建一次："
   echo "    sudo bash $ROOT/scripts/create-tenant-pool.sh --yes" >&2
   echo "  或（只建目录）：" >&2
@@ -164,6 +165,15 @@ current_fp() { readlink "$CODE_ROOT/current" 2>/dev/null | sed 's|.*/||'; }
 
 if [ "$MODE" = "current" ]; then
   current_fp; exit 0
+fi
+
+# ⚠️ **只算不写**：判据拿它跟"已经发布的那一版"比 —— 两者不同就说明
+#    **租户跑的是落后于仓库的代码**（那正是这一整套东西要消灭的状态）。
+if [ "$MODE" = "fingerprint" ]; then
+  MAN="$(fp_calc "${INPUTS[@]}")" || exit 3
+  "$NODE" -e 'process.stdout.write(JSON.parse(process.argv[1]).fingerprint)' "$MAN"
+  echo
+  exit 0
 fi
 
 if [ "$MODE" = "list" ]; then

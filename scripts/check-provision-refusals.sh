@@ -366,7 +366,7 @@ BT="$(printf '\140')"
 #          两道闸**合起来**才覆盖那个风险（一个管"有没有引号"，一个管"纯 shell 里有没有反引号"）。
 LINT_FILES=(
   check-provision-refusals.sh check-provision-install.sh check-provision-trigger.sh
-  check-provision-after-install.sh check-tenant-removal.sh
+  check-provision-after-install.sh check-tenant-removal.sh check-tenant-update.sh
   remove-tenant.sh install-provision-helper.sh provision-tenant-request.sh
 )
 lint=0

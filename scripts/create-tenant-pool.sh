@@ -53,13 +53,81 @@ else
   USERS=(hupo-a hupo-b)
 fi
 DO=0
-[ "${1:-}" = "--yes" ] && DO=1
+RENDER=""
+case "${1:-}" in
+  --yes) DO=1 ;;
+  --render) RENDER="${2:-}" ;;   # --render <产品层目录>：只把单元渲染到 stdout（**不碰真机器**）
+esac
 
 say()  { echo "  $1"; }
 plan() { echo "▶ $1"; }
 
+render_unit() {  # render_unit <租户名> <家目录> <通道目录> <镜像> <产品层软链（可空）>
+  # ⚠️ 只**渲染**（写到 stdout），一个字节都不碰真机器 —— 这样判据能真验这段模板。
+  local u="$1" home="$2" CHAN_DIR="$3" IMG="$4" CODE_LINK="$5"
+  local vol="$home/tenant" chan="$CHAN_DIR/$u/channel.sock"
+        cat <<'UNIT'
+[Unit]
+UNIT
+        printf 'Description=琥珀 · 租户容器（%s）\n' "$u"
+        cat <<'UNIT'
+After=default.target
+
+[Service]
+Type=simple
+# ⚠️ **等通道的套接字出现再起**：套接字不在时 podman 会把那个路径
+#    **建成一个目录**，然后容器连它连不上，而报错看不出原因。
+#    超时是防"宿主服务一直没起来"时在这里无限等（等不到就让 systemd 重试）。
+# ⚠️ **`/tmp` 的 `mode=1777` 不能省**（2026-09-21 真机抓到的）：
+#    不写它的时候盒里 `/tmp` 是 `775 root` ⇒ **uid 1000（agent）写不进去**
+#    ⇒ dsh 起手就报 `EACCES: permission denied, mkdtemp '/tmp/dsh-spill-XXXXXX'`
+#    （它要一个临时目录来放"溢出到磁盘"的东西）。现象同样极难查：界面上只是"它不理我"。
+# ⚠️ **`--replace` 不能省**（2026-09-21 实测）：systemd 重启时先把旧的 SIGTERM 掉，
+#    而 `--rm` **不保证**把那个停下来的容器清掉 ⇒ 下一次 `podman run --name` 直接报
+#    "the container name ... is already in use"（**退出码 125**），
+#    现象是"容器起不来，但上一次的日志是好的"。
+UNIT
+        printf 'ExecStartPre=/usr/bin/timeout 300 /bin/sh -c %s\n' "'until [ -S $chan ]; do sleep 1; done'"
+        printf 'ExecStart=/usr/bin/podman run --replace --rm --name hupo-tenant-%s \\\n' "$u"
+        printf '  --read-only \\\n'
+        printf '  --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \\\n'
+        printf '  --tmpfs /run/hupo:rw,nosuid,nodev,mode=0700 \\\n'
+        printf '  -v %s:/data \\\n' "$vol"
+        # ⚠️ **产品层那条挂载，只有"真发布过"才写**（见文件头那条：挂载源不存在时
+        #    `podman` 会把它建成一个**空目录**，于是 `current` 那个软链以后就别想再翻了）。
+        [ -n "$CODE_LINK" ] && printf '  -v %s:/app/code:ro \\\n' "$CODE_LINK"
+        printf '  -v %s:/run/hupo-host \\\n' "$(dirname "$chan")"
+        [ -n "$CODE_LINK" ] && printf '  --env HUPO_CODE_DIR=/app/code \\\n'
+        printf '  --security-opt=no-new-privileges \\\n'
+        printf '  --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \\\n'
+        printf '  --pids-limit=512 --memory=768m --memory-swap=768m \\\n'
+        printf '  --env HUPO_CHANNEL=/run/hupo-host/channel.sock \\\n'
+        printf '  --env HUPO_CHANNEL_WAIT_MS=60000 \\\n'
+        printf '  %s\n' "$IMG"
+        cat <<'UNIT'
+# ⚠️ **`always`，不是 `on-failure`**（2026-09-21 改 · `45-TENANT-UPDATE.md` §三）：
+#    重开去拿新的一版是**自己 `exit(0)`**（那是成功退出）——`on-failure` 会让它
+#    **停在那儿再也不起来**。而 `stop` 是显式的，systemd 不会因为 `always` 就又拉起它。
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
+UNIT
+}
+
 if [ "$DO" = "1" ] && [ "$(id -u)" != "0" ]; then
   echo "✗ --yes 要 root。请：sudo bash $0 --yes"; exit 2
+fi
+
+# ── `--render`：只渲染（给它一个**能验的形状**）────────────────
+#   ⚠️ 为什么要它：这段模板以前只能"以 root 跑一次、再去别人家里看结果" ——
+#      于是**它自己**从来没被验过（2026-09-21 就因此把一个被挖空的单元写上了机器）。
+#      渲染到 stdout 之后，判据可以直接对着它跑 `systemd-analyze verify`。
+if [ -n "$RENDER" ] || [ "${1:-}" = "--render" ]; then
+  render_unit demo /home/demo /run/hupo-channel localhost/hupo-tenant:local "${RENDER}"
+  exit 0
 fi
 
 echo "── 租户池 ──────────────────────────────────────"
@@ -105,10 +173,20 @@ else
 fi
 
 # **当前是哪一版**（软链；没发布过就是空 —— 见文件头那条：那时不写挂载）
+# 🔴 **两个变量别混**（2026-09-21 真机实测栽的）：
+#   · `CODE_LINK` = 那条**软链**本身 ⇒ **写进单元的就是它**。
+#     容器是**创建那一刻**解析软链的，而 `--replace` 每次重启都会重建容器
+#     ⇒ 翻 `current` 之后**一重开就拿到新的那一版**。
+#   · `CODE_SRC`  = 解引用之后的真目录 ⇒ 只用来**比对"在跑的那台挂的是哪一份"**和打印。
+#   ⚠️ **写错了会怎样**（我就是这么错的）：单元里写死某个指纹 ⇒ 翻 `current` 对在跑的
+#      容器**一点用都没有** ⇒ 宿主看见它永远是旧版 ⇒ 一直叫它重开、它重开还是旧版
+#      ⇒ **死循环**（实测：两台容器被反复重启到起不来）。
+CODE_LINK=""
 CODE_SRC=""
 if [ -e "$CODE_ROOT/current" ]; then
+  CODE_LINK="$CODE_ROOT/current"
   CODE_SRC="$(readlink -f "$CODE_ROOT/current" 2>/dev/null || true)"
-  say "当前产品层：$CODE_SRC"
+  say "当前产品层：$CODE_SRC（单元里挂的是软链 $CODE_LINK）"
 else
   echo "  ⚠️ 还没发布过产品层（$CODE_ROOT/current 不在）⇒ 容器先用镜像里那份兜底。"
   echo "     发布（以 $OWNER_USER 身份，不需要 root）："
@@ -250,18 +328,6 @@ for u in "${USERS[@]}"; do
   #    "某一台容器的隧道一直连不上"，**单元自己不报错**（它只是在等一个不会出现的套接字）。
   #    ⇒ 改成**每次都按模板重写**（内容一样就是幂等；不一样就说明它该更新了），
   #      并且**重写之后重启那台**（不然跑着的还是旧的）。
-  # ⚠️ **产品层那条挂载**：只有**真发布过**才写进单元（见文件头那条：
-  #    挂载源不存在时 `podman` 会把它建成一个**空目录**，于是 `current` 那个软链
-  #    以后就别想再翻了）。变量自带结尾那个 `\`，所以空的时候整行就"少一行"。
-  CODE_MOUNT=""
-  CODE_ENV=""
-  if [ -n "$CODE_SRC" ]; then
-    CODE_MOUNT="  -v $CODE_SRC:/app/code:ro \\
-"
-    CODE_ENV="  --env HUPO_CODE_DIR=/app/code \\
-"
-  fi
-
   unit_changed=0
   if [ -f "$unit" ]; then
     say "单元已有：$unit（**按模板核对**）"
@@ -271,49 +337,16 @@ for u in "${USERS[@]}"; do
   if [ "$DO" = "1" ]; then
     if [ -f "$unit" ]; then cp -f "$unit" "$unit.bak"; fi
       install -d -o "$u" -g "$u" -m 0700 "$unit_dir"
-      cat > "$unit" <<UNIT
-[Unit]
-Description=琥珀 · 租户容器（$u）
-After=default.target
+      # ── 单元文件 ──────────────────────────────────────────────
+      # 🔴 **三段拼**（2026-09-21 真机抓到的）：原来是一整段 **不带引号** 的 heredoc
+      #    （分隔符**不带引号**那种写法）—— 那样注释里的**反引号会被当命令执行**，于是注释在写出去的
+      #    文件里被**挖空**（现象是单元里一堆 "command not found"，而注释成了残句）。
+      #    ⚠️ 同一个坑这个项目记过一次（`43-AUTO-PROVISION.md` §11.1），我又踩了一次。
+      #    ⇒ 规矩：**带引号的 heredoc 里放正文（`<<'UNIT'`，里面的反引号原样保留）**，
+      #      `ExecStart` 那种"按条件多一行少一行"的东西由 **`printf` 一行行拼**。
+      #      ⚠️ `printf '… \\\n'`：`\\` 出一个反斜杠、`\n` 出一个换行 ⇒ 就是 shell 的续行。
+      render_unit "$u" "$home" "$CHAN_DIR" "$IMG" "$CODE_LINK" > "$unit"
 
-[Service]
-Type=simple
-# ⚠️ **等通道的套接字出现再起**：套接字不在时 podman 会把那个路径
-#    **建成一个目录**，然后容器连它连不上，而报错看不出原因。
-#    超时是防"宿主服务一直没起来"时在这里无限等（等不到就让 systemd 重试，
-#    重试链上有 Restart=on-failure 顶着）。
-ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'until [ -S $chan ]; do sleep 1; done'
-# ⚠️ **`/tmp` 的 `mode=1777` 不能省**（2026-09-21 真机抓到的）：
-#    不写它的时候盒里 `/tmp` 是 `775 root` ⇒ **uid 1000（agent）写不进去**
-#    ⇒ dsh 起手就报 `EACCES: permission denied, mkdtemp '/tmp/dsh-spill-XXXXXX'`
-#    （它要一个临时目录来放"溢出到磁盘"的东西）。
-#    现象同样极难查：界面上只是"它不理我"。
-# ⚠️ **`--replace` 不能省**（2026-09-21 实测）：systemd 重启时先把旧的 SIGTERM 掉，
-#    而 `--rm` **不保证**把那个停下来的容器清掉 ⇒ 下一次 `podman run --name` 直接报
-#    "the container name ... is already in use"（**退出码 125**），
-#    现象是"容器起不来，但上一次的日志是好的"。
-ExecStart=/usr/bin/podman run --replace --rm --name hupo-tenant-$u \
-  --read-only \
-  --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
-  --tmpfs /run/hupo:rw,nosuid,nodev,mode=0700 \
-  -v $vol:/data \
-$CODE_MOUNT  -v $(dirname $chan):/run/hupo-host \
-$CODE_ENV  --security-opt=no-new-privileges \
-  --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
-  --pids-limit=512 --memory=768m --memory-swap=768m \
-  --env HUPO_CHANNEL=/run/hupo-host/channel.sock \
-  --env HUPO_CHANNEL_WAIT_MS=60000 \
-  $IMG
-# ⚠️ **`always`，不是 `on-failure`**（2026-09-21 改 · `45-TENANT-UPDATE.md` §三）：
-#    重开去拿新的一版是**自己 `exit(0)`**（那是成功退出）——`on-failure` 会让它
-#    **停在那儿再也不起来**。而 `stop` 是显式的，systemd 不会因为 `always` 就又拉起它。
-Restart=always
-RestartSec=5
-TimeoutStopSec=30
-
-[Install]
-WantedBy=default.target
-UNIT
       chown "$u:$u" "$unit"
       chmod 0644 "$unit"
       if [ -f "$unit.bak" ] && ! cmp -s "$unit.bak" "$unit"; then
@@ -363,6 +396,10 @@ UNIT
       plan "重启这一台（$WHY_RESTART）"
       as_user "$u" systemctl --user daemon-reload
       as_user "$u" podman rm -f "hupo-tenant-$u" >/dev/null 2>&1
+      # ⚠️ **`reset-failed` 不能省**（2026-09-21 实测）：单元要是被反复重启打到
+      #    systemd 的启动限速（`failed`），光 `restart` 会被限速挡住 ⇒
+      #    "写了半天，容器还是没起来"，而现象看起来像"模板又写坏了"。
+      as_user "$u" systemctl --user reset-failed hupo-tenant.service >/dev/null 2>&1 || true
       as_user "$u" systemctl --user restart --no-block hupo-tenant.service
     elif as_user "$u" systemctl --user is-enabled hupo-tenant.service >/dev/null 2>&1; then
       say "单元已启用"

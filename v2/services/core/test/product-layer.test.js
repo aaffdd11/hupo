@@ -8,7 +8,13 @@ import nodeFs from 'node:fs';
 import nodeOs from 'node:os';
 import nodePath from 'node:path';
 import test from 'node:test';
-import { FALLBACK_BUILD, compareTenantBuild, readProductLayer } from '../src/product-layer.js';
+import {
+  FALLBACK_BUILD,
+  compareTenantBuild,
+  createNagBook,
+  planRollout,
+  readProductLayer,
+} from '../src/product-layer.js';
 
 const tmp = () => nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-code-'));
 
@@ -90,4 +96,29 @@ test('⚠️ 变异验证：把"同一版"那条判据改坏（永远说 stale�
   assert.equal(v.reload, true, '坏版本确实会说"要重开"');
   const good = compareTenantBuild({ reported: 'abc123abc123', current: 'abc123abc123' });
   assert.equal(good.reload, false, '而真的那一份**必须**说不用');
+});
+
+test('🔴 扫描：只挑"该叫它重开"的那几台，而且**读不到当前版本时一台都不挑**', () => {
+  const reports = new Map([
+    ['hupo-a', 'abc123abc123'], // 就是当前这一版
+    ['hupo-b', 'oldoldoldold'], // 旧的
+    ['hupo-c', 'dev'], // 兜底那份
+  ]);
+  const out = planRollout({ reports, current: 'abc123abc123' });
+  assert.deepEqual(out.map((x) => x.tenant).sort(), ['hupo-b', 'hupo-c']);
+  assert.equal(out.find((x) => x.tenant === 'hupo-c').verdict, 'fallback');
+  // ⚠️ 宿主自己读不到当前那一版 ⇒ **一台都不挑**（挑了就全弄死）
+  assert.deepEqual(planRollout({ reports, current: null }), []);
+  assert.deepEqual(planRollout({ reports: null, current: 'abc123abc123' }), []);
+});
+
+test('🔴 记账只挡**日志**：同一台 + 同一版只说一次，换一版又能说', () => {
+  const nb = createNagBook();
+  assert.equal(nb.take('hupo-a', 'v1'), true);
+  assert.equal(nb.take('hupo-a', 'v1'), false, '同一件事别每 30 秒喊一遍（真消息会被淹掉）');
+  assert.equal(nb.take('hupo-b', 'v1'), true, '另一台是另一件事');
+  assert.equal(nb.take('hupo-a', 'v2'), true, '换了版本就该再说一次');
+  // 它报上了当前这一版 ⇒ 这台的记录清掉（下一版还要能提醒）
+  nb.forget('hupo-a');
+  assert.equal(nb.take('hupo-a', 'v2'), true);
 });
