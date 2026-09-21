@@ -111,7 +111,18 @@ export function runTunnelAgent({
     conn = nodeNet.connect(socketPath);
     conn.setEncoding('utf8');
     conn.on('connect', () => {
-      send({ v: 1, type: 'tunnel-ready' });
+      // ★ **顺带报一句"我这儿到底有没有钥匙"**（2026-09-21 主人报的问题：
+      //   "为什么刷新后又要我输入 apikey"）。
+      //   根因：宿主只在**内存**里记着"送过没有"，它一重启就忘 —— 而钥匙
+      //   **真的在容器里**（`/run/hupo/creds.yaml`，tmpfs）。
+      //   ⇒ 让**容器**当这个事实的来源：它一说"我有"，宿主就不该再问用户要。
+      let hasKey = false;
+      try {
+        hasKey = nodeFs.existsSync(process.env.HUPO_KEY_FILE ?? '/run/hupo/creds.yaml');
+      } catch {
+        /* 读不到就当没有 */
+      }
+      send({ v: 1, type: 'tunnel-ready', hasKey });
       log(`  隧道通了（→ ${localTarget}）`);
     });
     conn.on('data', (chunk) => {

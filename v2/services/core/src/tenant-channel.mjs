@@ -68,6 +68,14 @@ export class TenantChannel {
   /** 隧道 id → 那一头的 Duplex */
   #tunnels = new Map();
   #nextTunnelId = 1;
+  /**
+   * **哪几台容器自己说"我这儿有钥匙"**（2026-09-21 加）。
+   *
+   * ⚠️ 为什么要它：宿主只在**内存**里记"送过没有"，一重启就忘 ——
+   *    而钥匙**真的在容器里**（tmpfs）。⇒ 容器连上来时报一句，宿主就**不该再问用户要**。
+   *    （主人报的"刷新后又要我输入 apikey"就是这么来的。）
+   */
+  #keyKnown = new Set();
 
   /**
    * @param {object} o
@@ -146,7 +154,12 @@ export class TenantChannel {
     const key = this.#keyFor(userId);
     const hasKey = typeof key === 'string' && key.length > 0;
     this.#record(userId, hasKey ? 'ready' : 'waiting');
-    this.#log(`  通道 ${userId}：容器连进来了 ⇒ ${hasKey ? '给配置' : '还没有 key（让它等）'}`);
+    // ⚠️ **这一行不许说"容器有没有 key"**（2026-09-21 修）：`#keyFor` 是**宿主自己的记忆**，
+    //    而宿主刚重启时它是**空的** —— 容器却可能还揣着钥匙（key 在容器的 tmpfs 里）。
+    //    原来这里写"⇒ 还没有 key（让它等）"，于是**日志在说假话**：
+    //    横幅说没有，一秒后 `tunnel-ready` 报了 `hasKey:true`。
+    //    key 到底有没有，**只有容器知道** ⇒ 这里只报"连上了"，真相等它自报（见 `tunnel-ready`）。
+    this.#log(`  通道 ${userId}：容器连进来了（有没有钥匙，等它自报）`);
 
     // ⚠️ **登记这条连接**：key 常常是**晚到**的（用户过一会儿才在网页上填），
     //    那时容器还连着在等 ⇒ `pushKey()` 要能直接推给它，不用等它重连。
@@ -211,6 +224,9 @@ export class TenantChannel {
         this.#log(`  ✓ ${userId} 的容器起来了`);
         return;
       case 'tunnel-ready': {
+        // ★ 容器自报"我这儿有没有钥匙" ⇒ 记下来（**它是这个事实的来源**）
+        if (msg?.hasKey === true) this.#keyKnown.add(userId);
+        else this.#keyKnown.delete(userId);
         // 容器说"我这条连接能跑隧道" ⇒ 数据面就从这儿走
         const set = this.#tunnelConns.get(userId) ?? new Set();
         set.add(conn);
@@ -220,7 +236,8 @@ export class TenantChannel {
           if (set.size === 0) this.#tunnelConns.delete(userId);
         });
         this.#record(userId, 'tunnel');
-        this.#log(`  ✓ ${userId} 的隧道通了（数据面走这条）`);
+        // ★ 这一行才是**真话**：钥匙到底有没有，由容器自报的那条消息决定（`hasKey`）。
+        this.#log(`  ✓ ${userId} 的隧道通了（数据面走这条）· 钥匙：${msg?.hasKey === true ? '有' : '还没有'}`);
         return;
       }
       case 'data': {
@@ -299,6 +316,14 @@ export class TenantChannel {
   hasTunnel(userId) {
     const set = this.#tunnelConns.get(userId);
     return Boolean(set && set.size > 0);
+  }
+
+  /**
+   * **那一台容器自己说它有没有钥匙**（不是宿主记的"送过没有"）。
+   * ⚠️ 宿主重启之后，这张表靠容器连上来时**重新报一遍** ⇒ 用户不会被重复问。
+   */
+  hasKeyFor(userId) {
+    return this.#keyKnown.has(userId);
   }
 
   /** 有几个租户的隧道通着（给横幅/排障用）。 */

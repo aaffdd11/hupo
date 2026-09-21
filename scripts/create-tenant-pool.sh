@@ -127,10 +127,12 @@ for u in "${USERS[@]}"; do
 
   # ③ 镜像进**他自己那份**存储
   #    ⚠️ rootless podman 要 `XDG_RUNTIME_DIR`，而 `sudo` 默认不给 ⇒ 显式传
+  img_changed=0
   HIS_ID="$(as_user "$u" podman image inspect "$IMG" --format '{{.Id}}' 2>/dev/null | head -1)"
   if [ -n "$HIS_ID" ] && [ "$HIS_ID" = "$SRC_ID" ]; then
     say "他自己的存储里已是最新的镜像"
   else
+    img_changed=1
     plan "以 $u 身份 podman load（每人一份，互不可见）${HIS_ID:+（他那份是旧的 ${HIS_ID:0:12}…）}"
     if [ "$DO" = "1" ]; then
       # ⚠️ **等他的 runtime 目录出现**：`linger` 刚开时 systemd 还没把这个用户
@@ -250,11 +252,25 @@ UNIT
       say "写好了"
   fi
 
+  # ⚠️ **第三种形态**（2026-09-21 第三次被这个坑住）：
+  #    `podman load` 说"已是最新"（存储里确实是最新的），而**跑着的那台还是 load 之前那个镜像的**
+  #    —— 容器是**创建那一刻的快照**，换掉存储里的镜像**不影响已经在跑的它**。
+  #    现象：改了容器里的代码、行为一点没变，而日志说"已是最新"。
+  #    ⇒ 判据只能是"**跑着的那个用的是哪个镜像 ID**"，跟"存储里最新的是哪个"是两件事。
+  RUN_ID="$(as_user "$u" podman inspect "hupo-tenant-$u" --format '{{.Image}}' 2>/dev/null | head -1)"
+  if [ -n "$RUN_ID" ] && [ -n "$SRC_ID" ] && [ "$RUN_ID" != "$SRC_ID" ]; then
+    img_changed=1
+    say "⚠️ 跑着的那台用的是**旧镜像**（${RUN_ID:0:19}…）⇒ 要重启"
+  fi
+
   # 让**他自己的** systemd 认这个单元并启用（linger 已开 ⇒ 开机就会起）
   if [ "$DO" = "1" ]; then
     as_user "$u" systemctl --user daemon-reload >/dev/null 2>&1 || true
-    if [ "$unit_changed" = "1" ]; then
-      plan "重启这一台（让新的挂载生效）"
+    if [ "$unit_changed" = "1" ] || [ "$img_changed" = "1" ]; then
+      # ⚠️ **镜像换了也要重启**（2026-09-21 第二次被这个坑住）：
+      #    `podman load` 只是把新镜像放进他的存储，**跑着的那个还是旧的**
+      #    （现象：改了容器里的代码，行为一点没变 —— 而日志说"load 好了"）。
+      plan "重启这一台（$([ "$img_changed" = 1 ] && echo 镜像换了 || echo 单元变了)）"
       as_user "$u" systemctl --user daemon-reload
       as_user "$u" podman rm -f "hupo-tenant-$u" >/dev/null 2>&1
       as_user "$u" systemctl --user restart --no-block hupo-tenant.service

@@ -315,7 +315,11 @@ const { listen, listenTrusted, close } = createServer({
     return {
       kind: 'tenant',
       state: up ? 'ready' : 'starting',
-      hasKey: tenantKeys.has(userId),
+      // ★ **两个来源取或**（2026-09-21）：宿主内存里那份（我送过）
+      //    **或** 容器自己报的（它真的拿着）—— 后者才是权威。
+      //    ⚠️ 少了后面那一半，宿主一重启就会**再问用户要一次钥匙**
+      //      （主人报的"刷新后又要我输入 apikey"）。
+      hasKey: tenantKeys.has(userId) || channel.hasKeyFor(tenant),
       // ★ **真进度**（主人 2026-09-21："创建 docker 空间要能够对用户展示进度"）：
       //   这三条**每一条都是服务端真的知道的事实**，不是编的、也没有百分比。
       steps: stepsFor(up ? 3 : 1), // ⚠️ 3 不是 2 —— 就绪时**三步都算走完**（传 2 会自相矛盾：state=ready 而第三步没打勾）
