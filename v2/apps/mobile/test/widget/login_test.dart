@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:hupo_app/models/landing_words.dart';
 import 'package:hupo_app/models/login_words.dart';
 import 'package:hupo_app/screens/login_screen.dart';
 import 'package:hupo_app/services/api.dart';
@@ -94,5 +95,39 @@ void main() {
     await tester.pumpAndSettle();
     await _fill(tester);
     expect(find.text(loginErrNetwork), findsOneWidget);
+  });
+
+  testWidgets('🔴 登录页**留着首页那个 header**，而且返回箭头能回首页', (tester) async {
+    // 主人 2026-09-22：*"登录页应该能回到首页。所以首页那个 header 也留在登录页吧。"*
+    var back = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginScreen(
+          api: Api(base: 'http://127.0.0.1:1'),
+          onLoggedIn: (String _) {},
+          onBack: () => back += 1,
+        ),
+      ),
+    );
+    await tester.pump();
+    // header 三样：标志（那块红方块里的字）+ 红小标 + 大标题
+    expect(find.text(landingBrand), findsOneWidget, reason: '标志要在（和首页同一份）');
+    expect(find.text(landingKicker), findsOneWidget, reason: '红小标要在');
+    expect(find.text(landingPromise), findsOneWidget, reason: '大标题要在');
+    // 返回箭头：点了要**通知上层回首页**
+    expect(find.byTooltip(loginBack), findsOneWidget);
+    await tester.tap(find.byTooltip(loginBack));
+    await tester.pump();
+    expect(back, 1, reason: '箭头点了要回首页');
+  });
+
+  testWidgets('⚠️ 不给 onBack ⇒ **不画那个箭头**（单看这一屏的测试不受影响）', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginScreen(api: Api(base: 'http://127.0.0.1:1'), onLoggedIn: (String _) {}),
+      ),
+    );
+    await tester.pump();
+    expect(find.byTooltip(loginBack), findsNothing);
   });
 }

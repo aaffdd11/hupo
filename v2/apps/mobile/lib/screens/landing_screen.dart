@@ -19,7 +19,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
-import '../widgets/brand_mark.dart';
+import '../widgets/page_header.dart';
 
 import '../models/landing_words.dart';
 
@@ -66,25 +66,9 @@ class LandingScreen extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
               children: [
-                const BrandMark(),
-                const SizedBox(height: 22),
-                // ── 主标题区（**入口紧跟其后**，见文件头 ①）──
-                Text(
-                  landingKicker,
-                  style: theme.textTheme.labelLarge?.copyWith(
-                    color: _accent,
-                    letterSpacing: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  landingPromise,
-                  style: theme.textTheme.headlineMedium?.copyWith(
-                    color: _ink,
-                    height: 1.3,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                // ── **header（与登录页共用一份）**（契约 `49-STYLE.md`）──
+                //   ⚠️ 它里面就是"标志 + 红小标 + 大标题"；登录页那份只多一个返回箭头。
+                const LandingHeader(),
                 const SizedBox(height: 20),
                 _ctaRow(context, theme),
                 const SizedBox(height: 14),

@@ -19,19 +19,30 @@
 
 import 'package:flutter/material.dart';
 
-import '../widgets/brand_mark.dart';
+import '../models/design.dart' as d;
+import '../widgets/page_header.dart';
 
 import '../models/login_words.dart';
 import '../services/api.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key, required this.api, required this.onLoggedIn, this.needsSetup = false});
+  const LoginScreen({
+    super.key,
+    required this.api,
+    required this.onLoggedIn,
+    this.needsSetup = false,
+    this.onBack,
+  });
 
   final Api api;
   final void Function(String token) onLoggedIn;
 
   /// 服务端说"这台机器还没设好"时要**明说**——别让人在那儿瞎试。
   final bool needsSetup;
+
+  /// **回首页**（主人 2026-09-22）。`null` ⇒ 不画那个箭头
+  /// （单看这一屏的测试可以不传）。
+  final VoidCallback? onBack;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -115,14 +126,14 @@ class _LoginScreenState extends State<LoginScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // ★ **和首页同一个标志**（契约 `49-STYLE.md`）：两屏摆在一起
-                //   要像**一个产品**。⚠️ 居中的列 ⇒ 标志也居中（`Center`）。
-                const Center(child: BrandMark()),
-                const SizedBox(height: 18),
-                Text('助手', style: theme.textTheme.headlineMedium, textAlign: TextAlign.center),
-                const SizedBox(height: 16),
-                Text(loginPromise, style: theme.textTheme.bodyLarge, textAlign: TextAlign.center),
-                const SizedBox(height: 28),
+                // ★ **首页那个 header 留在这儿**（主人 2026-09-22：*"登录页应该能回到首页。
+                //   所以首页那个 header 也留在登录页吧。"*）——**同一份实现**，
+                //   只多一个返回箭头（点它回首页）。
+                LandingHeader(onBack: widget.onBack, backTooltip: loginBack),
+                const SizedBox(height: d.gapM),
+                // ⚠️ 这一句是**登录页自己**的（大标题那句已经由 header 说了，不重复）
+                Text(loginGate, style: theme.textTheme.bodyLarge?.copyWith(color: d.muted)),
+                const SizedBox(height: d.gapL + 4),
                 TextField(
                   controller: _phone,
                   keyboardType: TextInputType.phone,

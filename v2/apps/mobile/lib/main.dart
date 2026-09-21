@@ -198,7 +198,14 @@ class _HupoAppState extends State<HupoApp> {
                   },
                 )
               : _showLogin
-                  ? LoginScreen(api: _api, needsSetup: _needsSetup, onLoggedIn: _onLoggedIn)
+                  ? LoginScreen(
+                      api: _api,
+                      needsSetup: _needsSetup,
+                      onLoggedIn: _onLoggedIn,
+                      // ★ **回首页**（主人 2026-09-22）：登录那一屏顶上留着首页的 header，
+                      //   箭头点一下就回到第一屏（不是退出登录 —— 那时还没登录）。
+                      onBack: () => setState(() => _showLogin = false),
+                    )
                   : LandingScreen(onStart: () => setState(() => _showLogin = true)),
     );
   }
