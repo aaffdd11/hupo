@@ -62,4 +62,35 @@ void main() {
     await _pump(tester);
     expect(find.byType(TextField), findsNothing, reason: '第一屏不该让人填东西');
   });
+
+  testWidgets('🔴 "跟聊天机器人不一样在哪"那块**真的画在屏幕上**（契约 51-VS-CHAT）', (tester) async {
+    await _pump(tester);
+    // ⚠️ 这一块在**首屏之外**，而且 `ListView` 是懒的（不滚就不建）
+    //    ⇒ 判据是"**一路滚下去，每一句都被画出来过**"。
+    //    （我第一版用 `scrollUntilVisible` 逐行滚 —— 它会跳过/冲过头，读数不稳。）
+    final wanted = <String>{
+      landingDiffTitle,
+      for (final (left, right) in landingDiff) ...[
+        '$landingDiffLeft：$left',
+        '$landingDiffRight：$right',
+      ],
+    };
+    final seen = <String>{};
+    for (var i = 0; i < 30 && seen.length < wanted.length; i++) {
+      for (final w in wanted) {
+        if (find.text(w).evaluate().isNotEmpty) seen.add(w);
+      }
+      await tester.drag(find.byType(ListView), const Offset(0, -200));
+      await tester.pump();
+    }
+    expect(
+      seen.length,
+      wanted.length,
+      reason: '这些句子没被画出来过：${wanted.difference(seen).toList()}',
+    );
+    // 负向对照：两边**不许写成同一句**（那样这个对照块就什么都没说）
+    for (final (left, right) in landingDiff) {
+      expect(left == right, false, reason: '左右两栏写成同一句了：$left');
+    }
+  });
 }

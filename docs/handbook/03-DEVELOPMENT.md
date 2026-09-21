@@ -31,51 +31,24 @@
 ## 一、仓库地图
 
 ```
-apps/mobile/          Flutter 客户端（L1 终端）
-services/core/        Node.js 调度器（L2）——常驻进程
-packages/protocol/    PROTOCOL.md：客户端 ⇄ 调度器的约定
-scripts/              构建 / 部署 / 推送 脚本
-docs/handbook/        本手册（唯一权威文档）
+v2/apps/mobile/       Flutter 客户端（L1 终端）——**线上的界面就是它**
+v2/services/core/     Node.js 调度器（L2）——常驻进程，听 127.0.0.1:8020
+scripts/              构建 / 部署 / 推送 / 判据 脚本
+docs/INDEX.md         **L0 路由**：要问什么读哪一份（只放指针，不放结论）
+docs/handbook/        本手册（要什么、为什么；唯一权威）
+docs/dev/             这一批怎么实现、怎么验的（证据层，随代码长）
 ```
 
-> ⚠️ **仓库里只有这一份文档集了。** 旧的架构 / 评审 / 辩论记录已删除，**在 git 历史里**
-> （取法见 `README.md` §六）。
+> 🔴 **2026-09-22 更正**：这里原来画的是**上一代的树**（`apps/mobile/`、`services/core/`、
+> `packages/protocol/`）。**那三处已经删掉了**（2026-09-21），仓库里**只有 `v2/`**。
+> 要翻旧实现的原文：`git show f93f296:<路径>`。
 >
-> ⚠️ **别把根目录的 `package.json` 当成入口**——它的 `main` 指向的是**已删除的 v1 原型**。
-> **当前服务是 `services/core/`**（它有自己的 `package.json`，`main: src/index.js`）。
+> ⚠️ **别把根目录的 `package.json` 当成入口**（它指向的 v1 原型早没了）。
+> **当前服务是 `v2/services/core/`**，入口 `src/serve.js`。
 
-**【现状】规模**（`wc -l` 实测）：
-
-| 部分 | 行数 |
-|---|---|
-| `apps/mobile/lib` | **5791** |
-| `apps/mobile/test` | **2148** |
-| `services/core/src` | **3914** |
-| `services/core/test` | **1370** |
-
-**【现状】客户端文件分布**：
-```
-main.dart                          252
-screens/  chat_screen 866 · conversation_list_screen 242 · login_screen 134
-widgets/  dev_card 416 · answer_bubble 201 · app_desktop 178 ·
-          mini_app_container 165
-apps/     weather_app 584 · mini_app 78 · about_app 70 · app_registry 57 ·
-          conversations_app 48 · dev_mode_app 22
-models/   stream_event 303 · timeline 205 · agent_status 138 · dev_step 50
-services/ mock_transport 423 · chat_controller 445 · weather 313 ·
-          websocket_transport 310 · city_catalog 83 · transport 89 ·
-          token_store 36 · dev_mode 29 · page_reload* 3 个 39 · app_version 15
-```
-
-**【现状】服务端文件分布**：
-```
-index 53 · server 385 · config 114 · auth 197 · store 117 · conversation 362 ·
-session-translate 368 · dispatcher 832 · agent-runtime 423 · debug-agent 648 ·
-personality 268 · client-build 74 · auth-cli.mjs 73
-```
-
-> 📌 **`services/transport.dart`（89 行）是抽象接口，`mock_transport.dart`（423 行）是它的实现**——
-> **四态 / 401 / 重发全都过这个接口**，所以**改接口必动这两个**。
+> 📌 **规模、文件分布、测试条数这类"现状"一律不写在这里**（纪律 1：**不写数值**）。
+> 要现状就**跑一遍**：条数看 `docs/dev/00-PROGRESS.md`，文件分布看树本身。
+> 写死在这里的那一刻，它就开始过期 —— 这份清单原来那份就是活证据。
 
 ---
 
@@ -602,14 +575,21 @@ deadlineTimer（长）后到 → :611 guard 读到**新** id ⇒ undefined !== i
 
 ### 7.4 文档、脚本与容器
 
+> 🔴 **2026-09-22 更正**：下面这张表是**计划期**（批 6）的清单，**路径与文件名多数已经变了**：
+> `packages/protocol/PROTOCOL.md` **已随目录删除**（协议现状看 §三）；
+> 开机清单**不在 `scripts/`**，在 **`/etc/hupo/integrity.json`**（`root:root 0444`）；
+> 人格在 **`v2/services/core/hupo-persona.yml`**。
+> ⇒ **把它当"当时打算改哪些"的证据，不要当今天的作业单。**
+
 | 文件 | 谁改 | 什么时候 |
 |---|---|---|
-| `packages/protocol/PROTOCOL.md` | **增补 §三 那几个字段 + 三条规则** | **动工前**（唯一有硬时点的） |
-| `AGENTS.md` | 改掉"直接动手 / 免密 sudo" | 批 6（**必须与能力收回同批**） |
-| `services/core/hupo-persona.yml` | 同上 | 批 6 |
-| `scripts/integrity-manifest.json` | 新增；**由主人 `sudo` 手动重建** | 批 6 |
-| `scripts/verify-integrity.mjs` · `apply-change.sh` · `rollback.sh` | 新增 | 批 6 |
-| **容器三件**（Dockerfile / slice / 验收脚本） | 新增 | 批 6 |
+| ~~`packages/protocol/PROTOCOL.md`~~（**已删除**） | —— | —— |
+| `AGENTS.md` | 改掉"直接动手 / 免密 sudo" | ✅ **已改**（`f12fa88`，见 `docs/dev/23-DEV-VS-DEPLOY.md`） |
+| `v2/services/core/hupo-persona.yml` | 同上 | 批 6 |
+| `/etc/hupo/integrity.json`（**不是 `scripts/integrity-manifest.json`**） | 由主人 `sudo` 重建 | ✅ **已启用**（`verify-integrity.mjs --build`） |
+| `scripts/verify-integrity.mjs` · `apply-change.sh` · `rollback.sh` | 新增 | ✅ 已有 |
+| **容器三件**（Dockerfile / slice / 验收脚本） | 新增 | ✅ 已有（`scripts/build-tenant-image.sh` 等，见 `docs/dev/34-CONTAINER.md`） |
+
 | 单用户那一代的子架构（`L1-terminal` / `L2-dispatcher` / `L3-worker`） | **已删除**——仍有效的规范已收敛进 `08-SPEC.md`；原文在 git 历史里 | —— |
 | 本手册 | 结构变了才改 | 随时 |
 

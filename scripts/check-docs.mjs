@@ -31,6 +31,8 @@ const RATCHET = [
   'docs/INDEX.md',
   'docs/dev/00-PROGRESS.md',
   'docs/dev/PROGRESS-HISTORY.md',
+  // 新写的分层文档从出生就进名单（只增不减：旧的哪天清干净了也加进来）
+  'docs/dev/51-VS-CHAT.md',
 ];
 
 /** ② L0 = 路由层：零事实、零数值、零状态 */

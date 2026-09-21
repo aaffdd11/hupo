@@ -2,17 +2,23 @@
 
 > **这份文档回答：怎么跑起来、怎么保证不出事、出事怎么收拾。**
 >
-> ⚠️ **先读这一条**：**本仓库所在的这台机器不是生产机。**
+> ⚠️ **先读这一条**：🔴 **本仓库所在的这台机器**就是**跑线上服务的那一台**。
+> （**2026-09-22 更正**：这里原来写着"本机不是生产机"，那句已经是假话，而且最坑人 ——
+> 照它做，你会**在本机到处找服务**，或者**以为线上在别处、改完不管部署**。）
 >
-> | | 本机（开发/构建） | 生产机 |
+> | | **本机**（你在的地方） | 另一台（上一代） |
 > |---|---|---|
-> | 项目路径 | `/home/deploy/proj/hupo` | `/home/deploy/projects/assistant` |
-> | 服务 | **不存在**（`concierge-core` 是 inactive 的别的机器上的名字） | systemd 单元 `concierge-core` |
-> | 用途 | 改代码、跑测试、出 APK | 真正服务用户 |
+> | 项目路径 | `/home/deploy/proj/hupo` | **不在这台**（本机没有那个 checkout） |
+> | 服务 | ✅ `scripts/restart-core.sh` 起的 `v2/services/core/src/serve.js`，听 `127.0.0.1:8020` | systemd 单元 `concierge-core`，端口 8091 |
+> | 域名 | ✅ **`https://w.stalkerai.cn`**（frp 隧道 `~/.local/frp/frpc-w.toml`） | `https://hupo.stalkerai.cn` |
+> | 用途 | **改代码 + 跑测试 + 服务用户**（三件同机） | 上一代那个部署 |
 >
-> ⇒ **仓库根目录的 `AGENTS.md` 描述的是生产机**（它说"你可以 `sudo` 免密重启自己"）。
-> **在本机上照着做会失败**，而且本机 `sudo` **要密码**。
-> 那份手册本身在批 6 要被改掉（见 §三）。
+> ⇒ **在本机就能重启线上服务**（§2.2）。本机 `sudo` **要密码**；开发期主人已授权助手用（`AGENTS.md` §8.1）。
+>
+> ⚠️ **线上服务不在 systemd 监管下**（2026-09-22 实测，并因此出过一次线上 502）：
+> `serve.js` 的 cgroup 是 `dsh-subprocess-<pid>-<hash>.scope` —— 它是**在 DSH 工具调用里起的长命子进程**。
+> ⇒ **`systemctl --user stop` 这种 scope 会把服务一起杀掉**；清之前先 `pgrep -af src/serve.js`。
+
 
 ---
 
@@ -48,7 +54,7 @@
 | 推送 | **SSH** 可用 | `git push` |
 | **本机是什么** | ⚠️ **不是一台可弃的开发机**——32 核 / 64G，**是主人的桌面机**，`~/.dsh/` 下有主人的凭据与会话历史 | `hostname`、`ls ~/.dsh` |
 
-### 1.2 生产机（**数字来自实测，但没在本机复核**）
+### 1.2 另一台（**上一代那个部署** · 数字来自实测，但没在本机复核）
 
 | 项 | 值 |
 |---|---|
@@ -91,9 +97,10 @@
 
 | 改了什么 | 怎么生效 | 要不要重启服务 |
 |---|---|---|
-| 服务端（`services/core/`） | 重启服务 | **要** |
-| agent 的人格 / 手册 | 重启服务 | **要** |
-| **客户端 / 界面（`apps/mobile/`）** | 重新构建 + 上传 | 🚨 **千万不要重启服务** |
+| 服务端（`v2/services/core/`） | 重启服务（`scripts/restart-core.sh`） | **要** |
+| agent 的人格 / 能力层 | 重启服务 | **要** |
+| **客户端 / 界面（`v2/apps/mobile/`）** | 重新构建 + 上传（`scripts/deploy-web-v2.sh`） | 🚨 **千万不要重启服务** |
+| **手册 / `AGENTS.md` / 人格**（`strict`） | **重建开机清单**，否则**下次重启拒绝启动** | 要（重建之后） |
 
 🚨 **改客户端时绝对不要重启服务。** 两个原因，都踩过：
 
@@ -105,30 +112,39 @@
 ### 2.2 服务端
 
 ```
-systemd 单元 = concierge-core
-入口        = services/core/src/index.js
-端口        = 8091（只监听本机；nginx 反代 /api/）
-会话存储    = $DSH_HOME/sessions/（键是**绝对路径的编码**）
+起法        = scripts/restart-core.sh   （**不用 systemd**；默认**保留日志**）
+入口        = v2/services/core/src/serve.js
+端口        = 127.0.0.1:8020（HUPO_PORT；只监听本机）
+对外        = https://w.stalkerai.cn —— frp 隧道（~/.local/frp/frpc-w.toml）
+日志        = v2/services/core/serve.log（跨重启接记忆靠它）
+数据        = v2/services/core/data/（**永不入库**）
+租户通道    = /run/hupo-channel/
+开机完整性  = /etc/hupo/integrity.json（strict 对不上 ⇒ serve.js **拒绝启动**）
 ```
 
-⚠️ **`DSH_HOME` 当前无处设置**——全库搜不到一个地方给它赋值，
-**生产机上到底有没有、值是多少，必须先核**（这件事挡着 §四 的 env 白名单）。
+⚠️ **`restart-core.sh` 自带只读预检**：新的一版**起不来就不停旧的**（服务留在 200，而不是整站 502）。
+⚠️ **它不在 systemd 监管下**（见本文开头那条）⇒ **别用 `systemctl --user stop` 去清 scope**。
+
 
 ### 2.3 客户端
 
 ```
-cd apps/mobile
-~/sdk/flutter/bin/flutter analyze          # 硬闸：编译
-~/sdk/flutter/bin/flutter test test/unit   # 硬闸：协议 / 状态机 / 纯逻辑
-~/sdk/flutter/bin/flutter test test/widget # 只警告，不阻断
-~/sdk/flutter/bin/flutter build apk --release
+cd v2/apps/mobile
+bash ../../scripts/check-client.sh      # **一条命令跑完三道闸**（analyze + unit + 可访问性）
 ```
 
-**产物**：`apps/mobile/build/app/outputs/flutter-apk/app-release.apk`
+⚠️ **`test/widget` 里有一份是硬闸**：`accessibility_test.dart`（五档不溢出 + 命中区 ≥44，D3.5 点名）。
+**其余那几份是提示档**（布局断言，一重构就会过期）⇒ 挂了**不必**为了它停手，
+但**别删** —— 那是"这件事到底有没有画到屏幕上"的唯一自动化证据。
 
-⚠️ **`test/widget` 挂了就照常继续**。它断言的是布局（像素坐标、控件 key），
-**界面一重构它必然过期**（现在 **49 条挂 10**）。
-正确做法：界面测试挂了 ⇒ 照常构建 ⇒ **用真机确认** ⇒ 有空再回头更新那些断言。
+```
+出网页产物 = scripts/deploy-web-v2.sh   # ⚠️ **别手打 flutter build**
+                                      #    它会给入口文件加指纹（见 docs/dev/15-CACHE.md）
+浏览器那条路 = HUPO_TOKEN=<现发的令牌> node scripts/check-web-browser.mjs --shot /tmp/shot.png
+              # V13：客户端自己算出来的东西，闸必须打在这一侧
+              # 令牌用 src/auth.js 的 Auth.issue() 现发，**不许写进任何文件**
+```
+
 
 ⚠️ **但 `flutter analyze` 与 `test/unit` 挂了必须修干净**——它们是硬闸，
 守的是协议与状态机。想清楚是真的改了协议，还是把状态机改坏了。
@@ -513,7 +529,8 @@ $DSH_HOME/.credentials.yaml    ⚠️ 含模型密钥 → 备份必须加密
 ⚠️ 不要直接重启服务——那会把**正在说话的助手**连同这一轮回答一起杀掉，
 用户会看到话说一半没了。要**延迟重启**，先把话说完。
 
-⚠️ **本机没有这个服务**，这一节只在生产机适用。
+⚠️ **本机就是那台服务机**（见本文开头）—— 这一节**在本机适用**：
+`scripts/restart-core.sh` 起的就是 `w.stalkerai.cn` 后面那个服务。
 
 ---
 
@@ -521,10 +538,12 @@ $DSH_HOME/.credentials.yaml    ⚠️ 含模型密钥 → 备份必须加密
 
 | 我要…… | 去哪 |
 |---|---|
-| 出 APK | `cd apps/mobile && ~/sdk/flutter/bin/flutter build apk --release` |
-| 跑硬闸 | `flutter analyze && flutter test test/unit` ＋ `node --test services/core/test/*.test.js` |
-| 改客户端后 | 重新构建上传 → **真机确认** → 回话。**不重启服务** |
-| 改服务端后 | 重启服务 → 确认存活 → 回话 |
+| 出网页产物 | `scripts/deploy-web-v2.sh`（**别手打 `flutter build`**——入口指纹在里面） |
+| 跑硬闸 | 服务端 `cd v2/services/core && npm test`；客户端 `bash scripts/check-client.sh` |
+| 跑文档闸 | `node scripts/check-docs.mjs`（链接 + 锚点 + 路由层不许有数值；**提交前自动跑**） |
+| 改客户端后 | 重新构建上传（`deploy-web-v2.sh`）→ 跑"浏览器那条路" → 截图看一眼。**不重启服务** |
+| 改服务端后 | `scripts/restart-core.sh` → 确认存活 → 回话 |
+| 改手册 / `AGENTS.md` / 人格后 | **重建开机清单**（`verify-integrity.mjs --build`），否则**下次重启拒绝启动**，并在 `docs/dev/00-PROGRESS.md` §九·补2 留一行痕 |
 | 回退 | `git revert` → 重启服务 |
 | 加能力 | 先登记（能力契约层），**不许在生成界面的同时现编数据源** |
 | 加协议字段 | 先看 `03-DEVELOPMENT.md` §三——**字段一旦上线就冻结** |

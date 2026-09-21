@@ -113,6 +113,33 @@ class LandingScreen extends StatelessWidget {
                     ),
                   ),
                 const SizedBox(height: 16),
+                // ── 对照块：跟"光是聊天"差在哪（契约 `docs/dev/51-VS-CHAT.md`）──
+                //   ⚠️ 两行**竖着排**（不是左右两列）：字号放到 3.1 倍时，
+                //      两列会被挤成一条细缝 —— 竖排永远不会横向溢出（D3.5）。
+                _sectionTitle(theme, landingDiffTitle),
+                const SizedBox(height: 12),
+                for (final (left, right) in landingDiff)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _cardBox(
+                      theme,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '$landingDiffLeft：$left',
+                            style: theme.textTheme.bodySmall?.copyWith(color: _muted),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '$landingDiffRight：$right',
+                            style: theme.textTheme.titleSmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 16),
                 _sectionTitle(theme, landingDownloadTitle),
                 const SizedBox(height: 12),
                 for (final (name, state, hint) in landingPlatforms)

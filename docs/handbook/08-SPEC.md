@@ -41,10 +41,14 @@
 | **R11** | 每个事件都有时间戳 |
 | **消息不许交叉** | 一条消息开始后，**不许再有别的消息正文写进更早那条**（v6 附九；**已升格为 N22 的"同一时刻最多一条未收口"**） |
 | **前端是哑的** | 客户端只按编号排序，不做判断 |
-| **协议 R1–R14** | 见 `packages/protocol/PROTOCOL.md`（**那份文件仍然权威**，不在这里重复） |
+| **协议 R1–R14** | 见 `03-DEVELOPMENT.md` §三 的接口表。🔴 **正文原件已随上一代实现删除** ⇒ 要原文：`git show f93f296:packages/protocol/PROTOCOL.md` |
 
-> ⚠️ **R1–R14 的正文在 `packages/protocol/PROTOCOL.md`**——它**不在被删的文档之列**
-> （它在 `packages/` 下，是代码的一部分）。手册 `03-DEVELOPMENT.md` §三 只列了名字。
+> 🔴 **2026-09-22 更正**：这里原来写着"R1–R14 的正文在 `packages/protocol/PROTOCOL.md`，
+> **那份文件仍然权威**、**不在被删的文档之列**"。**这句现在是假话** ——
+> `packages/` 整个目录 **2026-09-21 已经删掉**（见 `AGENTS.md` §六）。
+> ⇒ **现状**：v2 的接口以 `03-DEVELOPMENT.md` §三 为准（**字段一旦上线就冻结**，纪律 2）；
+> 上一代那份条文只在 git 历史里。
+
 
 ### 1.2 v6 代里"**继续有效**"的（**不是历史，是规范**）
 
@@ -662,7 +666,9 @@ sudo certbot renew --dry-run --cert-name hupo.stalkerai.cn
 服务端就绪后，在 `hupo-stalkerai.conf` 的 443 server 块里放开 **API 反代**
 （配置里已写好注释模板），客户端用 `WebSocketTransport` 而不是 mock。
 
-协议见 `packages/protocol/PROTOCOL.md` —— **改协议先改那份**。
+协议以 `03-DEVELOPMENT.md` §三 为准（**字段一旦上线就冻结**）。上一代那份条文
+`packages/protocol/PROTOCOL.md` **已随目录删除**（2026-09-21）⇒ 要原文：
+`git show f93f296:packages/protocol/PROTOCOL.md`。
 
 #### 运维备忘
 

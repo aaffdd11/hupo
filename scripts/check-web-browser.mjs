@@ -51,6 +51,18 @@ const URL_ = valueOf('--url', 'https://w.stalkerai.cn/');
 const WAIT_MS = Number.parseInt(valueOf('--wait', '45000'), 10);
 const SHOT = valueOf('--shot', null);
 /**
+ * **往下滚一段再截图**：`--scroll-px <像素>`（正数 = 看更下面的内容）。
+ *
+ * ── 为什么要有它 ───────────────────────────────────────────
+ * ⚠️ 2026-09-22：首页（落地页）**下半屏根本没法看一眼** —— 截图只拍视口，
+ *    而"跟聊天机器人不一样在哪"那一块在折叠线以下。判据能证明它画出来了
+ *    （`test/widget/landing_test.dart`），但**"屏幕上到底长什么样"只能看一眼**。
+ *
+ * ⚠️ 必须用 `pointerType: 'touch'` **拖**：桌面网页上**鼠标拖不会滚动**
+ *    （Flutter 的滚动要滚轮或触摸拖动）。合成一次"按下 → 连续 move → 抬起"。
+ */
+const SCROLL_PX = Number.parseInt(valueOf('--scroll-px', '0'), 10);
+/**
  * **点一下再截图**：`--click-at X,Y`（可给多次，按顺序点；坐标是**视口 CSS 像素**）。
  *
  * ── 为什么不用 CDP 的 `Input.dispatchMouseEvent` ─────────────
@@ -338,6 +350,34 @@ async function main() {
     const r = await send('Runtime.evaluate', { expression: js, returnByValue: true });
     console.log(`  🖱 点了 (${x}, ${y}) → 落在 ${r.result?.result?.value ?? '?'}`);
     await sleep(1400); // 让它把新一屏画出来
+  }
+
+  // ④.7 **往下滚一段**（可选）：折叠线以下的那一块，截图看不到 —— 只能滚过去再看
+  if (SCROLL_PX > 0) {
+    const js = `(async () => {
+      const cx = Math.round(innerWidth / 2);
+      const y0 = Math.round(innerHeight * 0.85);
+      const el = document.elementFromPoint(cx, y0) || document.body;
+      const mk = (type, y, buttons) => new PointerEvent(type, {
+        bubbles: true, cancelable: true, composed: true,
+        clientX: cx, clientY: Math.round(y), screenX: cx, screenY: Math.round(y),
+        pointerId: 7, pointerType: 'touch', isPrimary: true,
+        button: 0, buttons, width: 1, height: 1, pressure: buttons ? 0.5 : 0,
+      });
+      el.dispatchEvent(mk('pointerover', y0, 0));
+      el.dispatchEvent(mk('pointerdown', y0, 1));
+      const total = ${SCROLL_PX};
+      const steps = 14;
+      for (let i = 1; i <= steps; i += 1) {
+        el.dispatchEvent(mk('pointermove', y0 - (total * i) / steps, 1));
+        await new Promise((r) => setTimeout(r, 16));
+      }
+      el.dispatchEvent(mk('pointerup', y0 - total, 0));
+      return '滚了 ' + total + 'px（在 ' + (el.tagName || '?') + ' 上）';
+    })()`;
+    const r = await send('Runtime.evaluate', { expression: js, returnByValue: true, awaitPromise: true });
+    console.log(`  ↕ ${r.result?.result?.value ?? '?'}`);
+    await sleep(1200); // 等惯性滚完、把新内容画出来
   }
 
   // ⑤ 截图（给"人/助手看一眼"用）

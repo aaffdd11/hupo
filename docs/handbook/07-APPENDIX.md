@@ -199,56 +199,28 @@
 
 > **凡断言都带出处。** 本表由本手册维护，**数字来自实测**，不是转述。
 
-### 4.1 规模（`wc -l`）
+### 4.1 规模
 
-| 项 | 行数 |
-|---|---|
-| `apps/mobile/lib` | **5791** |
-| `apps/mobile/test` | **2148** |
-| `services/core/src` | **3914** |
-| `services/core/test` | **1370** |
+> 🔴 **2026-09-22 更正**：这里原来贴了一张 `wc -l` 的表（`apps/mobile/lib` 5791 行之类）。
+> 那**既违反纪律 1（不写数值），又已经过期**（那些路径 2026-09-21 就删了）。
+> ⇒ **删掉，不留替代数字**：要规模就现跑 `wc -l`，或者看 `docs/dev/00-PROGRESS.md`。
 
 ### 4.2 测试闸门
 
-| 闸 | 文件数 | 条数 | 结果 |
-|---|---|---|---|
-| `flutter analyze` | —— | —— | ✅ **硬闸，实测 `No issues found!`** |
-| `flutter test test/unit` | 3 | **45** | ✅ **全过** |
-| `flutter test test/widget` | 7 | **49** | ⚠️ **只警告**（**挂 10**） |
-| `node --test services/core/test/*.test.js` | 8 | **72** | ✅ **全过** |
-
-**`test/widget` 挂的 10 条在哪**（**实测**）：
-
-| 文件 | 执行条数 | 失败 |
-|---|---|---|
-| `floating_panel_test.dart` | 8 | **6** |
-| `smoke_test.dart` | **18** | **3** |
-| `panel_interaction_test.dart` | 5 | **1** |
-| `agent_panel` · `login` · `offline` · `weather_app` | 18 | 0 |
-
-> ⚠️ **`smoke_test` 的静态声明只有 12 条，实际执行 18 条**——
-> 其中一条在**一个 7 项循环里**。
-> ⇒ **数"声明数"会少算 6 条**。核这类数字要**跑一次看 `+N` 的最终值**，
-> 或者 `grep -c` 之后**再找循环**。
-
-**测试文件清单**（供核对）：
-
-```
-apps/mobile/test/unit/    reload_test · timeline_test · weather_test
-apps/mobile/test/widget/  agent_panel_test · floating_panel_test · login_test ·
-                          offline_test · panel_interaction_test ·
-                          smoke_test · weather_app_test
-services/core/test/       agent-runtime · auth · debug-agent · personality ·
-                          reconcile · subscribe · timeline-context · timeline-order
-```
-
-**复现命令**：
-
-```bash
-cd apps/mobile && ~/sdk/flutter/bin/flutter test test/unit     # 45 全过
-cd apps/mobile && ~/sdk/flutter/bin/flutter test test/widget   # 49 挂 10
-cd services/core && node --test test/*.test.js                 # 72 全过
-```
+> 🔴 **2026-09-22 更正**：这一张表原来记的是**上一代的路径与条数**
+> （`apps/mobile/`、`services/core/`、`tests 72`、`widget 挂 10`）。**那些路径已经删了**，
+> 那几个数字也早就不对了。
+>
+> ⇒ **现状不许写在这里**（纪律 1：不写数值）。要现状就**跑**：
+>
+> ```bash
+> cd v2/services/core && npm test        # 服务端硬闸（条数它自己会打出来）
+> bash scripts/check-client.sh           # 客户端三道闸（analyze + unit + 可访问性）
+> node scripts/check-docs.mjs            # 文档闸（链接 + 锚点 + 路由层不许有数值）
+> ```
+>
+> **哪一道是硬闸、哪一道只是提示**，见 `README.md` §四 纪律 3 与 `AGENTS.md` §5.1。
+> **条数与批次只住在 [`../dev/00-PROGRESS.md`](../dev/00-PROGRESS.md)。**
 
 ### 4.3 内存
 

@@ -47,6 +47,12 @@ void main() {
       landingStartHint,
       landingAndroidNotYet,
       landingDownloadTitle,
+      // ⚠️ 对照块（契约 `docs/dev/51-VS-CHAT.md`）：**新加的句子必须列在这里**，
+      //    没进这份清单的句子 = 没验过。
+      landingDiffTitle,
+      landingDiffLeft,
+      landingDiffRight,
+      for (final (a, b) in landingDiff) ...[a, b],
       landingFaqTitle,
       landingFootNote,
       for (final (a, b, c) in landingCards) ...[a, b, c],
