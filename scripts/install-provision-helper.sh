@@ -24,21 +24,47 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LIBEXEC="/usr/local/libexec/hupo"
-ETC_CONF="/etc/hupo/tenant-template.conf"
-TMPFILES="/etc/tmpfiles.d/hupo-provision.conf"
-UNIT_DIR="/etc/systemd/system"
-REQ_DIR="/run/hupo-provision"
 SERVICE_USER="${HUPO_SERVICE_USER:-deploy}"
 
 MODE="show"
-case "${1:-}" in
-  --yes) MODE="install" ;;
-  --uninstall) MODE="uninstall" ;;
-  --check) MODE="check" ;;
-  '') MODE="show" ;;
-  *) echo "✗ 不认识的参数：$1"; exit 2 ;;
-esac
+INSTALL_ROOT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --yes) MODE="install" ;;
+    --uninstall) MODE="uninstall" ;;
+    --check) MODE="check" ;;
+    --root)
+      shift
+      INSTALL_ROOT="${1:-}"
+      [ -n "$INSTALL_ROOT" ] || { echo "✗ --root 后面要跟一个目录"; exit 2; }
+      ;;
+    '') ;;
+    *) echo "✗ 不认识的参数：$1"; exit 2 ;;
+  esac
+  shift
+done
+
+# ── ⚠️ `--root <目录>`：**只给判据用**（契约 `43-AUTO-PROVISION.md` §三 A9）────
+# 它把下面每一个目标路径挪到一个**临时根**下，并且**跳过 systemd / tmpfiles**
+# （那两个命令没法"装到别处"）。
+#
+# 🔴 **为什么值得加它**：A9 那四条判据（四份 root 拥有 · 单元指向的是**拷贝**
+#    而不是仓库那份 · `--check` 认得出漂移 · 服务那个身份改不动）原来要**等主人
+#    签字装完**才验得了 —— 而它们恰恰是"整套模型会不会作废"的那几条。
+#    ⇒ 有了它，这四条能在**隔离环境**里先验掉；真装那一步仍然只差签字。
+# ⚠️ 它不是"另一种装法"，是**同一段代码换一个目的地** —— 判据打的仍是真那份代码。
+TEST_ROOT=""
+if [ -n "$INSTALL_ROOT" ]; then
+  [ -d "$INSTALL_ROOT" ] || { echo "✗ --root 指的目录不存在：$INSTALL_ROOT"; exit 2; }
+  TEST_ROOT="$(cd "$INSTALL_ROOT" && pwd)"
+fi
+prefix() { if [ -n "$TEST_ROOT" ]; then printf '%s%s' "$TEST_ROOT" "$1"; else printf '%s' "$1"; fi; }
+
+LIBEXEC="$(prefix /usr/local/libexec/hupo)"
+ETC_CONF="$(prefix /etc/hupo/tenant-template.conf)"
+TMPFILES="$(prefix /etc/tmpfiles.d/hupo-provision.conf)"
+UNIT_DIR="$(prefix /etc/systemd/system)"
+REQ_DIR="$(prefix /run/hupo-provision)"
 
 say()  { echo "  $1"; }
 plan() { echo "▶ $1"; }
@@ -92,12 +118,18 @@ echo
 if [ "$MODE" = "uninstall" ]; then
   [ "$(id -u)" = "0" ] || { echo "✗ --uninstall 要 root"; exit 2; }
   plan "停掉并禁用 .path 单元"
-  systemctl disable --now hupo-provision.path >/dev/null 2>&1 || true
+  if [ -z "$TEST_ROOT" ]; then
+    systemctl disable --now hupo-provision.path >/dev/null 2>&1 || true
+  else
+    say "（--root 模式：不碰 systemd，只删文件）"
+  fi
   plan "删掉单元 / tmpfiles / 装着的那份"
   rm -f "$UNIT_DIR/hupo-provision.path" "$UNIT_DIR/hupo-provision.service" "$TMPFILES"
   rm -rf "$LIBEXEC" "$ETC_CONF"
-  systemctl daemon-reload
-  systemctl reset-failed hupo-provision.service >/dev/null 2>&1 || true
+  if [ -z "$TEST_ROOT" ]; then
+    systemctl daemon-reload
+    systemctl reset-failed hupo-provision.service >/dev/null 2>&1 || true
+  fi
   say "撤干净了（申请目录里剩的东西**没动**：那里面可能有还没处理的申请）"
   exit 0
 fi
@@ -139,6 +171,11 @@ say "目录：$(stat -c '%a %U:%G' "$REQ_DIR")  ← 必须是 1733 root:$SERVICE
 
 # ── ③ 两个单元 ───────────────────────────────────────────────
 # ⚠️ `ExecStart` 指的是 **libexec 里那一份**（root 拥有），**不是**仓库里那份（A9）。
+# ⚠️ **先把这个目录建出来**（2026-09-21 判据抓到的）：真机上 `/etc/systemd/system`
+#    本来就在，所以以前没露馅；而在"临时根"里（`--root`）它不存在 ⇒ `cat >` 直接失败，
+#    而**脚本照样往下走**（单元没写成、后面那几步照样打印）——
+#    又是一次"看起来装好了"。⇒ 显式建目录，建不成就不往下走。
+install -d -o root -g root -m 0755 "$UNIT_DIR" || { echo "✗ 建不出单元目录：$UNIT_DIR"; exit 3; }
 plan "写 $UNIT_DIR/hupo-provision.path"
 cat > "$UNIT_DIR/hupo-provision.path" <<EOF
 [Unit]
@@ -175,11 +212,15 @@ say "单元写好了"
 
 # ── ④ 生效 ───────────────────────────────────────────────────
 plan "systemd-tmpfiles --create && daemon-reload && enable --now .path"
-systemd-tmpfiles --create "$TMPFILES" 2>&1 | sed 's/^/  /' || true
-systemctl daemon-reload
-systemctl enable --now hupo-provision.path 2>&1 | sed 's/^/  /'
-echo
-say "单元状态：$(systemctl is-active hupo-provision.path 2>&1) / $(systemctl is-enabled hupo-provision.path 2>&1)"
+if [ -z "$TEST_ROOT" ]; then
+  systemd-tmpfiles --create "$TMPFILES" 2>&1 | sed 's/^/  /' || true
+  systemctl daemon-reload
+  systemctl enable --now hupo-provision.path 2>&1 | sed 's/^/  /'
+  echo
+  say "单元状态：$(systemctl is-active hupo-provision.path 2>&1) / $(systemctl is-enabled hupo-provision.path 2>&1)"
+else
+  say "（--root 模式：**没有碰 systemd**，只把那些文件摆好了）"
+fi
 
 # ── ⑤ 自证：`--check` 那几条现在就该是绿的 ────────────────────
 echo

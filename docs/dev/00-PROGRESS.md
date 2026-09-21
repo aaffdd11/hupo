@@ -464,6 +464,7 @@ deepseek harness 才行。"* —— **他是对的**：在那之前我验的只�
 | 两个现成脚本**参数化**（不再只有写死的两台） | ✅ 做完 |
 | 特权侧助手 + 安装器 + 判据脚本 | ✅ **写完并验过"拒"的那一半**（23 条全过，且它自己一台都没建） |
 | 🔴 **装进系统**（三个单元） | ⏳ **等主人签字**：`sudo bash scripts/install-provision-helper.sh --yes` |
+| ✅ **A9 那四条**（四份 root 拥有 · 单元指向拷贝 · 服务身份读得到改不动 · `--check` 认得出漂移） | ✅ **做完了**：`scripts/check-provision-install.sh`（19 条，**隔离环境**，靠安装器的 `--root`，**不用签字**）。⚠️ 我一开始把它写成"要等装完才验得了" —— 那只是**安装器少一个测试入口**。**做过变异验证**（把单元改回指仓库那份 ⇒ 正好那两条红） |
 | ✅ **跨语言那一条**（服务侧 JS 与特权侧 shell 推出来的名字/编号逐字相同） | ✅ **做完了**：判据脚本 ⑨ **真跑两边比一比**，并做过**变异验证**（shell 那边公式 +1 ⇒ 正好那两条红）。⚠️ 前面只做到"两边读同一个模板"，那只保证**常数**一样、**不保证公式**一样 |
 | "真建一台"那几条判据（§五 的 1 / 6 / 8） | ⏳ 签字之后才验得了 —— **这一条明写着，不许当成绿的** |
 
@@ -672,6 +673,7 @@ deepseek harness 才行。"* —— **他是对的**：在那之前我验的只�
 
 | 时间 | 为什么重建 | 动了清单里哪几个文件 | 结果 |
 |---|---|---|---|
+| 2026-09-21 深夜（第四回） | A9 那四条改成**隔离环境可验**（安装器加 `--root`）+ 新判据脚本 + 手册 §5.4 写成一张表（**`strict`**） | **`docs/handbook/06-OPERATIONS.md` + `CHANGELOG.md`（strict）**；另有 `scripts/{install-provision-helper,check-provision-install}.sh`（只报不拦） | ✅ 对上了（改完立刻重建 + 重启验过：横幅「完整性 对上了」、本机/公网 200） |
 | 2026-09-21 深夜（第三回） | 🔴 **手册这一侧**：把自动开一台的安全模型写进手册（**`strict`！**）——`02-ARCHITECTURE` §五加 **N26–N28**、`08-SPEC` §四加 **4.3（A1–A9）**、`06-OPERATIONS` §五加 **5.4** 并**更正 §5.3 那句"本机做不了容器实验"（现在是假话）**、`05-DECISIONS` §一加 **M 组 T1–T8**、`04-ROADMAP` §10.1 写清"算做完了吗"、`CHANGELOG` 升 **v1.10**、`README` 去掉三处重复的"76 条" | **`docs/handbook/**` = `strict`**（改了不重建 ⇒ 服务下次重启**拒绝启动**）。⚠️ 改完**立刻**重建并重启验过：横幅「完整性 对上了」+ 本机/公网 200 | ✅ 对上了 |
 | 2026-09-21 深夜（第二回） | 盒内 agent 那三个断点 + 钥匙失败分类器 + 四条接线修复 ⇒ 重建 | 全是**只报不拦**的：`src/{agent-runtime,dispatcher,serve,session-translate,tenant-channel,tenant-shell,tenant-tunnel-agent,worlds}.js|mjs`、`scripts/{build-tenant-image,create-tenant-pool}.sh`（**`strict` 一处没动**） | ✅ 对上了 |
 | 2026-09-21 深夜 | 自动开一台（服务侧 + 客户端 + 三个新脚本 + 新模板文件）⇒ 重建 | 全是**只报不拦**的：`src/{config,serve,server,tenants,tenant-channel}.js|mjs`、`scripts/{create-tenant-pool,create-tenant-users}.sh`（**`strict` 一处没动**） | ✅ 对上了 |
