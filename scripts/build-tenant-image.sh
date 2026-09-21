@@ -215,11 +215,14 @@ try {
 const channel = process.env.HUPO_CHANNEL ?? '';
 if (channel) {
   try {
-    const { fetchKeyFromHost } = await import('./src/tenant-shell.mjs');
-    await fetchKeyFromHost({
+    const { watchForKey } = await import('./src/tenant-shell.mjs');
+    // ⚠️ **故意不 await**：它是**后台**的，界面要照常起来。
+    //    容器要一直跑着（池子那个形状），而用户可能几分钟后才填 key ——
+    //    只领一次的话那台容器就永远没有凭据，直到有人手动重启它。
+    watchForKey({
       socketPath: channel,
       keyFile: process.env.HUPO_KEY_FILE ?? '/run/hupo/creds.yaml',
-      waitMs: Number.parseInt(process.env.HUPO_CHANNEL_WAIT_MS ?? '120000', 10),
+      attemptMs: Number.parseInt(process.env.HUPO_CHANNEL_WAIT_MS ?? '60000', 10),
       log: (m) => console.log(m),
     });
   } catch (err) {

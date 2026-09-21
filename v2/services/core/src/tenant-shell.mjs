@@ -35,6 +35,56 @@ export function writeKeyFile(keyFile, key, fs = nodeFs) {
 }
 
 /**
+ * **一直在等**（后台跑，不挡服务启动）。
+ *
+ * ⚠️ 为什么要它，而不是"开机领一次、领不到就算了"：
+ *    容器要**一直跑着**（池子那个形状），而用户可能**几分钟后**才在网页上填 key。
+ *    只领一次的话，那台容器就永远不会有凭据，直到有人手动重启它。
+ * ⇒ 领到了就写文件、然后停下；没领到就过一会儿再来。
+ * ⚠️ 它是**后台**的：**不许挡住服务启动**（界面要照常起来）。
+ *
+ * @returns {{stop: () => void}}
+ */
+export function watchForKey({
+  socketPath,
+  keyFile,
+  attemptMs = 60_000,
+  idleMs = 5_000,
+  log = (m) => console.log(m),
+} = {}) {
+  let stopped = false;
+  let timer = null;
+
+  const once = async () => {
+    if (stopped) return;
+    const ok = await fetchKeyFromHost({
+      socketPath,
+      keyFile,
+      waitMs: attemptMs,
+      hardMs: attemptMs + 10_000,
+      log,
+    });
+    if (stopped) return;
+    if (ok) {
+      log('  ✓ 凭据就位 —— 不再等了');
+      return;
+    }
+    // 没领到：过一会儿再来（宿主的通道可能还没起来 / 用户还没填）
+    timer = setTimeout(once, idleMs);
+    timer.unref?.();
+  };
+
+  timer = setTimeout(once, 0);
+  timer.unref?.();
+  return {
+    stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    },
+  };
+}
+
+/**
  * 连回宿主领配置。
  *
  * @param {object} o

@@ -17,6 +17,28 @@ import { ledgerSocketPath } from './ledger-socket.js';
  * ⚠️ **解析不出来要当"没设"，不许当 0**：`0` 是 root，
  *    而"写错了反而变成 root"是这里最坏的失败方向。
  */
+/**
+ * 解析 `u1=hupo-a,u2=hupo-b` 这种表。
+ *
+ * ⚠️ **解析不出来就丢掉那一条，并且不许猜**：一张"猜出来的"映射会把甲的 key
+ *    送到乙的容器里 —— 那是这一层最坏的失败方向。
+ * ⚠️ 租户名同样要卡形状（它要进**路径**）：`^[A-Za-z0-9_-]{1,64}$`。
+ */
+export function parseTenantMap(raw) {
+  const out = new Map();
+  if (typeof raw !== 'string' || raw.trim() === '') return out;
+  for (const pair of raw.split(',')) {
+    const i = pair.indexOf('=');
+    if (i <= 0) continue;
+    const userId = pair.slice(0, i).trim();
+    const tenant = pair.slice(i + 1).trim();
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId)) continue;
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(tenant)) continue;
+    out.set(userId, tenant);
+  }
+  return out;
+}
+
 function parseIdOrNull(raw) {
   if (raw === undefined || raw === null || raw === '') return null;
   const n = Number(raw);
@@ -158,6 +180,21 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      * ⚠️ 默认 `null` = **不改**（宿主上模型直连，行为逐字不变）。
      */
     modelPatchPath: env.HUPO_MODEL_PATCH || null,
+
+    /**
+     * **`userId → 租户名`的映射**（多租户 ②-4b）。
+     *
+     * 形如 `HUPO_TENANT_MAP="u1=hupo-a,u2=hupo-b"`。
+     *
+     * 🔴 **为什么必须是显式的一张表、不许从手机号推**（权限席点名）：
+     *    OS 用户名一旦能从手机号算出来，就等于把"谁是谁"交给了一个**可预测**的式子
+     *    ⇒ 猜手机号 = 猜目录名。而且号会换、用户会删。
+     * ⚠️ **`owner` 不在这张表里**：主人那份就在宿主上跑，**没有容器**。
+     */
+    tenantMap: parseTenantMap(env.HUPO_TENANT_MAP),
+
+    /** 通道套接字放哪个目录（每个租户一个）。`''` = 不开这条通道。 */
+    tenantChannelDir: env.HUPO_CHANNEL_DIR ?? '/run/hupo-channel',
 
     /** 空闲多久可以淘汰。手册说 30 分钟**不够**，但改它要配合准入，先沿用。 */
     agentIdleEvictMs: Number.parseInt(env.HUPO_AGENT_IDLE_MS ?? String(30 * 60 * 1000), 10),

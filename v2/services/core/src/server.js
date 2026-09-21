@@ -213,6 +213,12 @@ export function createServer({
   users = null,
   /** 临时验证码。**空串 = 关**（默认就是关）。 */
   devCode = '',
+  /**
+   * **用户填了自己的模型凭据**（多租户 ②-4b）。`null` = 这台部署没开这条路（路由 404）。
+   *
+   * ⚠️ 约定：`setModelKey(userId, key)`，返回值里**不含 key**；调用方**不许**把它写日志。
+   */
+  setModelKey = null,
 }) {
   /**
    * 🔴 **这一个函数是"我是谁"与服务对象之间唯一的接缝。**
@@ -284,6 +290,27 @@ export function createServer({
       // ⚠️ 回收站里那些**不算进来**，但**条数要如实报**（契约 §三）——
       //    `trash.list()` 是唯一知道"谁被删过"的地方，所以这道闸打在这儿。
       // ⚠️ 没开回收站的部署也照样导得出（只是没有"被删掉的那几条"要报）。
+      // ── 用户填自己的模型凭据（多租户 ②-4b）──────────────────────────
+      // ⚠️ **身份只从令牌来**（`claim.sub`）：A 填的 key 只能进 A 那台容器。
+      // ⚠️ 回执里**不带 key**，也**不校验它长得像不像 key**（我们不是它的裁判，
+      //    真伪由上游说了算）；只卡"非空、且是能被 HTTP 头带走的字符串"。
+      if (path === '/api/model-key' && req.method === 'POST') {
+        if (!setModelKey) return sendJson(res, 404, { error: 'not-found' });
+        let body;
+        try {
+          body = await readJson(req, 4 * 1024);
+        } catch {
+          return sendJson(res, 400, { error: 'bad-json' });
+        }
+        const key = typeof body?.key === 'string' ? body.key.trim() : '';
+        if (key.length === 0) return sendJson(res, 400, { error: 'blank-key' });
+        // 能被 HTTP 头带走的字符（和 dsh 那条 `assertUsableApiKey` 同一条规矩）
+        if (/[^\x20-\x7e]/.test(key)) return sendJson(res, 400, { error: 'bad-key-chars' });
+        const r = setModelKey(claim.sub, key);
+        if (!r?.ok) return sendJson(res, 409, { error: r?.why ?? 'cannot-set' });
+        return sendJson(res, 200, { ok: true });
+      }
+
       if (path === '/api/export' && req.method === 'GET') {
         const bin = W.trash ? W.trash.list() : [];
         return sendJson(res, 200, buildExport(W.store.readAll(W.timeline.id), {

@@ -138,6 +138,18 @@ setsid nohup env \
   HUPO_DATA="$DIR/data" \
   HUPO_PORT="$PORT" \
   HUPO_WEB="$DIR/web" \
+# ★ **机器本地的环境**（可选，**不进仓库**）：`data/tenants.env`。
+#   多租户那张 `userId → 租户名` 的表住在那儿 —— 它是**这台机器的状态**
+#   （谁在哪台容器里），不是代码。⚠️ 显式一张表、**不许从手机号推**（权限席点名）。
+# ⚠️ 没有这个文件也照常起（这台部署没开多租户）。
+if [ -f data/tenants.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./data/tenants.env
+  set +a
+  echo "   （读到了 data/tenants.env）"
+fi
+
   HUPO_BUILD_ID="$BUILD" \
   node src/serve.js > serve.log 2>&1 < /dev/null &
 echo $! > serve.pid

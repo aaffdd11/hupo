@@ -16,6 +16,7 @@ import nodePath from 'node:path';
 import { AgentRuntime } from './agent-runtime.js';
 import { Auth } from './auth.js';
 import { Users, maskPhone } from './users.js';
+import { TenantChannel } from './tenant-channel.mjs';
 import { Worlds } from './worlds.js';
 import { OWNER_ID } from './tenants.js';
 import { CRASH_WINDOW_MS } from './boot-marker.js';
@@ -190,6 +191,55 @@ const turnStatus = createTurnStatus({
 });
 turnStatus.start();
 
+// ════════════════════════════════════════════════════════════
+// ★ **租户通道**（多租户 ②-4b）：把"这个人自己的 key"送进**他的**容器。
+//
+// ⚠️ key **只在内存里**（`tenantKeys`）：不落盘、不进日志 —— 中心的角色是**管道**，
+//    不是仓库（`37-MULTITENANT.md` §12.1）。服务重启 ⇒ 用户得重填一次，
+//    这是**刻意的**（"中心不留用户的 key"）。
+// ════════════════════════════════════════════════════════════
+const tenantKeys = new Map(); // userId → key（**只在内存**）
+const tenantOf = (userId) => cfg.tenantMap.get(userId) ?? null;
+const userOfTenant = (tenant) => {
+  for (const [uid, t] of cfg.tenantMap) if (t === tenant) return uid;
+  return null;
+};
+
+const channel = new TenantChannel({
+  dir: cfg.tenantChannelDir,
+  // ⚠️ 收到的 `tenant` 是**套接字名**；key 按 **userId** 存 ⇒ 这里要翻一次
+  keyFor: (tenant) => {
+    const uid = userOfTenant(tenant);
+    return uid ? (tenantKeys.get(uid) ?? null) : null;
+  },
+  log: (m) => console.log(m),
+});
+let channelTenants = 0;
+const channelTenantNames = [...new Set(cfg.tenantMap.values())];
+if (cfg.tenantChannelDir && channelTenantNames.length > 0) {
+  try {
+    for (const t of channelTenantNames) {
+      channel.listenFor(t);
+      channelTenants += 1;
+    }
+  } catch (err) {
+    console.warn(`  ⚠️ 租户通道没全开起来：${err?.message ?? err}（那几台容器会一直等配置）`);
+  }
+}
+
+/**
+ * **用户填了自己的 key** ⇒ 只做两件事：记在内存里、推给他那台容器。
+ * ⚠️ 返回值里**不含 key**；日志里也不含。
+ */
+function setModelKey(userId, key) {
+  const tenant = tenantOf(userId);
+  if (!tenant) return { ok: false, why: 'no-tenant' };
+  tenantKeys.set(userId, key);
+  channel.pushKey(tenant, key);
+  console.log(`  🔑 ${userId} 的模型凭据已收下（送给他那台容器；**不落盘**）`);
+  return { ok: true };
+}
+
 const { listen, close } = createServer({
   // ★ **多租户那一侧**：每个请求按令牌里的 `sub` 取那个人的世界。
   //   ⚠️ 上面那五个单例**不再传**了 —— 传了就等于"所有人共用一份"。
@@ -197,6 +247,7 @@ const { listen, close } = createServer({
   auth, webRoot, buildId: cfg.buildId,
   users,
   devCode: cfg.devCode,
+  setModelKey,
   log: (m) => console.log(m),
 });
 
@@ -355,6 +406,11 @@ console.log(
       : ''),
 );
 console.log(
+  // ⚠️ 通道那一行也要**如实**：它报的是"我给几个租户开着口"，
+  //    而不是"有几台容器真的在跑"（那两个数不是一回事）。
+  `  租户通道 ${channelTenants > 0 ? `${channelTenants} 个租户在听（${cfg.tenantChannelDir}）` : '⚠️ 没开（HUPO_TENANT_MAP 空 / 目录没配）'}`,
+);
+console.log(
   // ⚠️ **这一行是多租户接上之后必须有的**：不报它，就看不出「到底有几个人各过各的」。
   //    ⚠️ 它是**建了几份世界**，**不是「在线人数」** —— 这两个数不是一回事。
   `  世界     ${worlds.size} 份（owner + 登记过的用户，各过各的；不是在线人数）`,
@@ -380,6 +436,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     // ⚠️ 账本那些口要关掉**并把套接字文件删掉**：留着它，下次
     //    `listen()` 会撞上 `EADDRINUSE`，而那句话看起来像"端口被占"。
     worlds.closeSockets();
+    channel.close();
     // ★ 每个人各留一个"这次是好好走的"标记 ⇒ 下次开机才知道上一次是不是被硬杀的
     worlds.markCleanExitAll();
     process.exit(0);

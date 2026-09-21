@@ -17,7 +17,8 @@ import nodeOs from 'node:os';
 import nodePath from 'node:path';
 
 import { CHANNEL_VERSION, TenantChannel, channelPathFor } from '../src/tenant-channel.mjs';
-import { fetchKeyFromHost, writeKeyFile } from '../src/tenant-shell.mjs';
+import { parseTenantMap } from '../src/config.js';
+import { fetchKeyFromHost, watchForKey, writeKeyFile } from '../src/tenant-shell.mjs';
 
 const REAL_KEY = 'host-must-hand-this-over-KEY';
 const openClose = new Set();
@@ -51,6 +52,19 @@ function host({ key = null } = {}) {
   openClose.add(() => ch.close());
   return { ch, dir, lines, state };
 }
+
+// ── ⓪ `userId → 租户名` 那张表 ────────────────────────────
+
+test('🔴 `HUPO_TENANT_MAP` 解析：**坏的那条丢掉，绝不猜**（猜错=甲的 key 进乙的容器）', () => {
+  assert.deepEqual([...parseTenantMap('u1=hupo-a,u2=hupo-b')], [['u1', 'hupo-a'], ['u2', 'hupo-b']]);
+  assert.deepEqual([...parseTenantMap('u1=hupo-a,坏的')], [['u1', 'hupo-a']], '坏条目丢掉');
+  assert.deepEqual([...parseTenantMap('bad')], [], '没有等号 ⇒ 一条都不要');
+  assert.deepEqual([...parseTenantMap('u1=a b')], [], '租户名要进路径 ⇒ 形状必须卡住');
+  assert.deepEqual([...parseTenantMap('=hupo-a')], [], '空 userId 不要');
+  assert.deepEqual([...parseTenantMap('u1=')], [], '空租户名不要');
+  assert.deepEqual([...parseTenantMap(undefined)], []);
+  assert.deepEqual([...parseTenantMap('')], []);
+});
 
 // ── ① 一个租户一个套接字（路径就是身份）─────────────────────
 
@@ -288,6 +302,36 @@ test('🔴 对面**一句话都不说** ⇒ 总时限到点也要收场（第二
   const dt = Date.now() - t0;
   assert.equal(got, false);
   assert.ok(dt < 3000, `🔴 用了 ${dt}ms —— 总时限没兜住`);
+});
+
+test('★ 后台"一直在等"：**先起来**，key 晚到时自己把文件补上（不挡服务启动）', async () => {
+  const h = host({ key: null });
+  h.ch.listenFor('u1');
+  const keyFile = nodePath.join(h.dir, 'creds.yaml');
+  const lines = [];
+
+  // ⚠️ `watchForKey` **不 await** —— 它是后台的，服务该照常起来
+  const w = watchForKey({
+    socketPath: channelPathFor(h.dir, 'u1'),
+    keyFile,
+    attemptMs: 300,
+    idleMs: 80,
+    log: (m) => lines.push(m),
+  });
+  openClose.add(() => w.stop());
+
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(nodeFs.existsSync(keyFile), false, '这会儿还没 key（但它已经在后台等着）');
+
+  h.state.key = REAL_KEY;
+  // 它下一次尝试（或宿主推）就该拿到
+  for (let i = 0; i < 40 && !nodeFs.existsSync(keyFile); i += 1) {
+    h.ch.pushKey('u1', REAL_KEY);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.equal(nodeFs.existsSync(keyFile), true, '★ 晚到的 key 自己补上了');
+  assert.match(nodeFs.readFileSync(keyFile, 'utf8'), new RegExp(REAL_KEY));
+  w.stop();
 });
 
 test('★ 套接字不在（没挂进来）⇒ 返回 false，**不抛**（宿主上就是这个形态）', async () => {
