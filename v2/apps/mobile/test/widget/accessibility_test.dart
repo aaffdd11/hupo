@@ -26,6 +26,8 @@ import 'package:http/testing.dart';
 import 'package:hupo_app/models/export_words.dart';
 import 'package:hupo_app/models/message_state.dart';
 import 'package:hupo_app/models/process_levels.dart';
+import 'package:hupo_app/models/space.dart';
+import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/timeline.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
@@ -76,15 +78,35 @@ List<Object> _drain(WidgetTester tester) {
   return out;
 }
 
-/// **像用户那样**打开关于页：从主界面点顶栏那个 i。
+/// **像用户那样**打开关于页：主界面 → 顶栏「配置」→ 里面的「关于」。
 ///
 /// ⚠️ 直接把 `AboutScreen` 当 `home` 泵出来的话，它**没有返回键**
 ///    （没有可弹回去的路由）⇒ 命中区扫描会"一个能点的都没扫到"，
 ///    然后被那条负向对照拦下来。**那条负向对照是对的** —— 它说的就是
 ///    "扫描是空转的"。⇒ 用真入口进。
+///
+/// ⚠️ 2026-09-22 改：**「关于」从顶栏搬进了「配置」**（主人要在页面上唤起配置；
+///    顶栏再加一个图标就是 7 个 —— 手机上那一条会挤成一团）。
+///    ⇒ 这一条闸也跟着走**真入口**，一步都不少。
 Future<void> _openAbout(WidgetTester tester, double scale) async {
-  await _pump(tester, ChatScreen(controller: _controller(), onLoggedOut: () {}), scale);
-  await tester.tap(find.byTooltip('关于'));
+  await _openConfig(tester, scale);
+  await tester.tap(find.text('关于'));
+  await tester.pumpAndSettle();
+}
+
+/// **像用户那样**打开「配置」：主界面顶栏那个齿轮。
+Future<void> _openConfig(WidgetTester tester, double scale) async {
+  await _pump(
+    tester,
+    ChatScreen(
+      controller: _controller(),
+      onLoggedOut: () {},
+      space: const SpaceInfo(kind: 'tenant', state: 'ready', hasKey: false),
+      onSendKey: (_) async => KeySend.ok,
+    ),
+    scale,
+  );
+  await tester.tap(find.byTooltip(configEntry));
   await tester.pumpAndSettle();
 }
 
@@ -381,6 +403,12 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '过程那一块在 ${s}x 溢出了');
       });
 
+      testWidgets('配置页（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 新加的界面**必须也过这道闸** —— 不然"五档不溢出"会随时间失效。
+        await _openConfig(tester, s);
+        expect(_drain(tester), isEmpty, reason: '配置页在 ${s}x 溢出了');
+      });
+
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
         // ⚠️ 新加的界面**必须也过这道闸** —— 不然"五档不溢出"会随时间失效。
         await _openAbout(tester, s);
@@ -555,6 +583,11 @@ void main() {
       testWidgets('登录页 @ ${s}x', (tester) async {
         await _pump(tester, _login(), s);
         await sweep(tester, '登录页 @${s}x');
+      });
+
+      testWidgets('配置页（从真入口进）@ ${s}x', (tester) async {
+        await _openConfig(tester, s);
+        await sweep(tester, '配置页 @${s}x');
       });
 
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {

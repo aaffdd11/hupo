@@ -32,6 +32,7 @@ class SpaceInfo {
     this.kind = 'local',
     this.state = 'ready',
     this.hasKey = false,
+    this.keyBad = false,
     this.steps = const [],
   });
 
@@ -50,6 +51,13 @@ class SpaceInfo {
 
   /// 他那台上有没有填过钥匙。
   final bool hasKey;
+
+  /// 🔴 **他填过、但上游说那一串不灵**（服务端说的 · 契约 `48-SETTINGS-KEY.md`）。
+  ///
+  /// ⚠️ 没有它的时候，"没填过"和"填过但被判无效"在界面上**长得一模一样**
+  ///    （都只是 `hasKey == false`）⇒ 配置那一屏只能对他说"还没有填" ——
+  ///    那是**在说假话**（他明明填过）。
+  final bool keyBad;
 
   bool get isTenant => kind == 'tenant';
   bool get ready => state == 'ready';
@@ -81,6 +89,8 @@ class SpaceInfo {
       //    认不出的值**不许**当就绪（那会把人送进一个还没准备好的世界）。
       state: (state is String && state.isNotEmpty) ? state : 'ready',
       hasKey: hasKey == true,
+      // ⚠️ 宽容解析：只有**真的 true** 才算（缺字段 / 老服务端 ⇒ false）
+      keyBad: raw['keyBad'] == true,
       steps: parseSteps(raw['steps']),
     );
   }
@@ -89,6 +99,7 @@ class SpaceInfo {
         'kind': kind,
         'state': state,
         'hasKey': hasKey,
+        'keyBad': keyBad,
         'steps': steps.map((e) => e.toJson()).toList(),
       };
 }

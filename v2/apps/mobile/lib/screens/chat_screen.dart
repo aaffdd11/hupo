@@ -19,6 +19,8 @@ import 'package:flutter/material.dart';
 import '../models/conn_state.dart';
 import '../models/export_words.dart';
 import '../models/scroll_follow.dart';
+import '../models/space.dart';
+import '../models/space_words.dart';
 import '../models/timeline.dart';
 import '../models/trash_words.dart';
 import '../services/api.dart';
@@ -30,8 +32,8 @@ import '../widgets/notice.dart';
 import '../widgets/process_level_menu.dart';
 import '../widgets/process_view.dart';
 import '../widgets/trash_plan_sheet.dart';
-import 'about_screen.dart';
 import 'export_screen.dart';
+import 'settings_screen.dart';
 import 'trash_screen.dart';
 
 /// "下面那一整块"的名字（状态条 + 内容 + 输入框）。
@@ -42,10 +44,31 @@ import 'trash_screen.dart';
 const Key chatBodyKey = Key('chat-body');
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.controller, required this.onLoggedOut});
+  const ChatScreen({
+    super.key,
+    required this.controller,
+    required this.onLoggedOut,
+    this.space = const SpaceInfo(),
+    this.onSendKey,
+    this.onCancelMe,
+    this.onKeyChanged,
+  });
 
   final ChatController controller;
   final VoidCallback onLoggedOut;
+
+  /// **"我那台到哪一步了"**（服务端说的）—— 「配置」那一屏要拿它如实说现状。
+  final SpaceInfo space;
+
+  /// 把钥匙交上去（和第一次那一屏**同一个入口**）。`null` ⇒ 顶栏不显示「配置」
+  /// （单看这一屏的测试可以不传）。
+  final Future<KeySend> Function(String key)? onSendKey;
+
+  /// 取消注册（照样只有一次实现，见 `KeyForm`）。
+  final Future<CancelOutcome> Function()? onCancelMe;
+
+  /// 换成功之后叫一声（上层去重问状态）。
+  final VoidCallback? onKeyChanged;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -146,15 +169,29 @@ class _ChatScreenState extends State<ChatScreen> {
             onPressed: () => _pickLevel(c),
             icon: const Icon(Icons.tune),
           ),
-          // ⚠️ **关于**放在这儿不是装饰：H1 点名要避免的形态是
-          //    "字放大了，但还是打不了字" ⇒ 得有一处**如实告诉他这台设备上行不行**。
-          IconButton(
-            tooltip: '关于',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const AboutScreen()),
+          // ⚠️ **配置**（主人 2026-09-22："用户可以在页面唤起配置。配置上可以输入 apikey"）。
+          //    ⚠️ 它**不是**装饰：钥匙原来是"填过就再也回不去"的（欠账 #34），
+          //      这一处就是那个缺口 —— 换一把、或者看看自己到底填过没有。
+          //    ⚠️ **「关于」搬进它里面了**：顶栏原来 5 个图标，再加一个就是 7 个，
+          //      手机上那一条会挤成一团（五档字号那道硬闸本来就在盯这个）；
+          //      而"关于"本来就是配置那一类东西。
+          if (widget.onSendKey != null)
+            IconButton(
+              tooltip: configEntry,
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => SettingsScreen(
+                    hasKey: widget.space.hasKey,
+                    keyBad: widget.space.keyBad,
+                    onSubmit: widget.onSendKey!,
+                    onCancel: widget.onCancelMe,
+                    onCancelled: widget.onLoggedOut,
+                    onKeyChanged: widget.onKeyChanged,
+                  ),
+                ),
+              ),
+              icon: const Icon(Icons.settings_outlined),
             ),
-            icon: const Icon(Icons.info_outline),
-          ),
           IconButton(
             tooltip: '退出',
             onPressed: () async {

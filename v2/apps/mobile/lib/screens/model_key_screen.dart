@@ -1,22 +1,21 @@
 // **"还差最后一步：填你自己那串钥匙"**（契约 `docs/dev/38-ISOLATION-SPLIT.md` §8.3）。
 //
-// ── 四条规矩 ──────────────────────────────────────────────
-//   1. **说清这是什么、去哪找**（`keyBody` / `keyWhere`）—— 用户不会拼音、不读术语；
-//   2. **说清它去哪**（`keyPrivacy`：只送到你自己那一台，不留在我们这边）——
-//      这一句是**如实**，不是营销话术；
-//   3. **失败要分开说**（空白 / 有空格换行 / 太长 / 没送过去）—— 混成一句用户会一直重试；
-//   4. 🔴 **填进去不回落**：输入框用 `obscure` 挡一下**旁边的人**，
-//      但**不清空**（清空会让他以为没填上，然后再粘一遍）。
+// ── 它现在只负责"摆位" ────────────────────────────────────
+//   表单本身（输入框 / 粘贴 / 四种失败话 / 取消注册）搬去了 `widgets/key_form.dart`，
+//   因为**同一块东西有两个去处**（契约 `docs/dev/48-SETTINGS-KEY.md`）：
+//   ① **这一屏**：第一次进来时，流程推着你填；
+//   ② 聊天页上那个**「配置」**（`SettingsScreen`）：随时能唤起它换一串。
+//   ⇒ 一份实现两处用（各写一份 = 一定会漂）。
 //
 // ⚠️ 界面上**没有** `模型` / `工具` / `客户端` 这些词（词表硬闸会拦，见 `forbidden_words.dart`）。
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../models/space_words.dart';
 import '../services/api.dart';
+import '../widgets/key_form.dart';
 
-class ModelKeyScreen extends StatefulWidget {
+class ModelKeyScreen extends StatelessWidget {
   const ModelKeyScreen({
     super.key,
     required this.onSubmit,
@@ -29,114 +28,10 @@ class ModelKeyScreen extends StatefulWidget {
 
   /// 🔴 **取消注册**（主人 2026-09-22）。`null` ⇒ 不显示那个入口
   /// （单看这一屏的测试可以不传）。
-  /// ⚠️ 它**不可逆**，所以这一屏**先弹确认框把"删掉什么"列清楚**再调它。
   final Future<CancelOutcome> Function()? onCancel;
 
   /// 收掉之后回登录页（令牌已经被服务端撤了）。
   final VoidCallback? onCancelled;
-
-  @override
-  State<ModelKeyScreen> createState() => _ModelKeyScreenState();
-}
-
-class _ModelKeyScreenState extends State<ModelKeyScreen> {
-  final _c = TextEditingController();
-  bool _busy = false;
-  String? _err;
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  /// 从剪贴板读一把填进去。
-  /// ⚠️ 读不到**不算错**（用户可能没授权、或者剪贴板是空的）—— 说清还能怎么办就行。
-  Future<void> _paste() async {
-    String? text;
-    try {
-      final d = await Clipboard.getData(Clipboard.kTextPlain);
-      text = d?.text;
-    } catch (_) {
-      text = null;
-    }
-    if (!mounted) return;
-    if (text == null || text.trim().isEmpty) {
-      setState(() => _err = keyPasteFailed);
-      return;
-    }
-    // ⚠️ **只 trim 首尾**：钥匙中间的空格/换行要留着，让服务端那条
-    //    "有空格换行"的检查去说他 —— 在这儿替他改，是我们在猜他要粘什么。
-    _c.text = text.trim();
-    setState(() => _err = null);
-  }
-
-  /// 🔴 **取消注册**：先**列清单**、再问一次，然后才真调。
-  ///
-  /// ⚠️ 顺序是死的：**先说清删什么**（手册 X3 ②），**再动手**。
-  ///    反过来的话，用户是"点了才知道会删" —— 那不可逆。
-  Future<void> _cancel() async {
-    final go = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text(keyCancelTitle),
-        // 这一句就是"删前列清单"
-        content: const Text(keyCancelWhat),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text(keyCancelNo),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text(keyCancelYes),
-          ),
-        ],
-      ),
-    );
-    if (go != true || !mounted) return;
-    setState(() {
-      _busy = true;
-      _err = null;
-    });
-    final r = await widget.onCancel!();
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      // ⚠️ **几种结果分开说**（`CancelOutcome` 就是把它们分开的那个类型）
-      _err = switch (r) {
-        CancelOutcome.ok => keyCancelOk,
-        CancelOutcome.noHelper => keyCancelNoHelper,
-        CancelOutcome.protectedOne => keyCancelProtected,
-        CancelOutcome.local => keyCancelLocal,
-        CancelOutcome.noTenant => keyCancelNone,
-        CancelOutcome.failed => keyCancelFailed,
-      };
-    });
-    if (r == CancelOutcome.ok) {
-      // 令牌已经被服务端撤了 ⇒ 回登录页
-      widget.onCancelled?.call();
-    }
-  }
-
-  Future<void> _submit() async {
-    setState(() {
-      _busy = true;
-      _err = null;
-    });
-    final r = await widget.onSubmit(_c.text);
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-      _err = switch (r) {
-        KeySend.ok => null,
-        KeySend.blank => keyBlank,
-        KeySend.badChars => keyBadChars,
-        KeySend.tooLong => keyTooLong,
-        KeySend.failed => keyFailed,
-      };
-    });
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -156,54 +51,7 @@ class _ModelKeyScreenState extends State<ModelKeyScreen> {
                 const SizedBox(height: 4),
                 Text(keyWhere, style: t.textTheme.bodySmall, textAlign: TextAlign.center),
                 const SizedBox(height: 16),
-                TextField(
-                  controller: _c,
-                  // ⚠️ **挡旁边的人，但不清空**（见文件头第 4 条）
-                  obscureText: true,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  decoration: InputDecoration(
-                    labelText: keyLabel,
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                // 🔴 **粘贴**（2026-09-21 主人报"我无法黏贴"之后加的）。
-                //    ⚠️ 手机上没有这个按钮就**真的粘不进来**：空框长按不弹菜单
-                //      （Flutter 的选择菜单要有可选中的文字才弹）。见 `keyPaste` 那段。
-                OutlinedButton(
-                  style: OutlinedButton.styleFrom(minimumSize: const Size(48, 48)),
-                  onPressed: _busy ? null : _paste,
-                  child: Text(keyPaste),
-                ),
-                if (_err != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    _err!,
-                    style: t.textTheme.bodySmall?.copyWith(color: t.colorScheme.error),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-                const SizedBox(height: 16),
-                FilledButton(
-                  onPressed: _busy ? null : _submit,
-                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                  child: Text(_busy ? '…' : keySubmit),
-                ),
-                const SizedBox(height: 12),
-                Text(keyPrivacy, style: t.textTheme.bodySmall, textAlign: TextAlign.center),
-                // 🔴 **取消注册**（主人 2026-09-22："隐蔽一点"）。
-                //    ⚠️ "隐蔽"= **入口不抢眼**（小字 + 次要色 + 放在主流程**下面**），
-                //      **不是**"不告诉他就删" —— 点下去先弹一个把话列清楚的确认框。
-                if (widget.onCancel != null && widget.onCancelled != null)
-                  TextButton(
-                    style: TextButton.styleFrom(
-                      minimumSize: const Size(48, 44),
-                      foregroundColor: t.colorScheme.onSurfaceVariant,
-                    ),
-                    onPressed: _busy ? null : _cancel,
-                    child: Text(keyCancelEntry, style: t.textTheme.bodySmall),
-                  ),
+                KeyForm(onSubmit: onSubmit, onCancel: onCancel, onCancelled: onCancelled),
               ],
             ),
           ),

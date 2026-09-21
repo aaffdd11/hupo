@@ -33,6 +33,7 @@ import { createTurnStatus, statusPath } from './turn-status.js';
 import { ROLLOUT_SWEEP_MS, compareTenantBuild, createNagBook, planRollout, readProductLayer } from './product-layer.js';
 import { DEFAULT_DROP_DIR, createKeyDrop, resolveDropName } from './key-drop.js';
 import { keyFileFor } from './key-path.mjs';
+import { keyStateOf } from './key-state.js';
 import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
 
 
@@ -586,6 +587,7 @@ const { listen, listenTrusted, close } = createServer({
         state: kind === 'full' ? 'full' : 'queued',
         why: kind === 'full' ? (tpl.ok ? 'capacity' : 'no-template') : 'unknown-id',
         hasKey: false,
+        keyBad: false,
         steps: stepsFor(0),
       };
     }
@@ -599,11 +601,17 @@ const { listen, listenTrusted, close } = createServer({
       return {
         kind: 'tenant',
         state: 'ready',
-        // ★ **两个来源取或**（2026-09-21）：宿主内存里那份（我送过）
-        //    **或** 容器自己报的（它真的拿着）—— 后者才是权威。
-        //    ⚠️ 少了后面那一半，宿主一重启就会**再问用户要一次钥匙**
-        //      （主人报的"刷新后又要我输入 apikey"）。
-        hasKey: !badKeys.has(userId) && (tenantKeys.has(userId) || channel.hasKeyFor(tenant)),
+        // ★ **两个来源取"或"，而且"没有"要说清是哪一种**。
+        //   规则住在 `key-state.js`（纯函数，`test/unit` 里钉着三种状态）：
+        //     · 宿主内存里那份（我送过）**或** 容器自己报的（它真的拿着，权威）；
+        //     · 上游说过"不灵" ⇒ `hasKey:false` **且** `keyBad:true`
+        //       （客户端据此才说得清"你换一串就好" vs "你还没填过"）。
+        //   ⚠️ 加字段是安全的（协议纪律：**加不破**，老客户端忽略它）。
+        ...keyStateOf({
+          hasKeyPushed: tenantKeys.has(userId),
+          hasKeyReported: channel.hasKeyFor(tenant),
+          rejected: badKeys.has(userId),
+        }),
         // ⚠️ 3 不是 2 —— 就绪时**三步都算走完**（传 2 会自相矛盾：state=ready 而第三步没打勾）
         steps: stepsFor(3),
       };

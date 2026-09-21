@@ -184,7 +184,19 @@ class _HupoAppState extends State<HupoApp> {
                       onCancelled: _onLoggedOut,
                     )
                   : _controller != null
-              ? ChatScreen(controller: _controller!, onLoggedOut: _onLoggedOut)
+              ? ChatScreen(
+                  controller: _controller!,
+                  onLoggedOut: _onLoggedOut,
+                  // ★ **「配置」那一屏要的**（主人 2026-09-22："用户可以在页面唤起配置"）：
+                  //   现状（有没有钥匙 / 是不是被判无效了）+ 交钥匙那条路 + 换完之后重问一次。
+                  space: _space ?? const SpaceInfo(),
+                  onSendKey: _sendKey,
+                  onCancelMe: _cancelMe,
+                  onKeyChanged: () async {
+                    final t = await _tokens.read();
+                    if (t != null) await _askSpace(t);
+                  },
+                )
               : _showLogin
                   ? LoginScreen(api: _api, needsSetup: _needsSetup, onLoggedIn: _onLoggedIn)
                   : LandingScreen(onStart: () => setState(() => _showLogin = true)),

@@ -119,3 +119,49 @@ const String keyBlank = '还没填。';
 const String keyBadChars = '这串字里有空格或者换行，检查一下再填。';
 const String keyTooLong = '这串字太长了，看看是不是多粘了一段。';
 const String keyFailed = '没送过去。是我这边的问题，等会儿再试一次。';
+
+// ── 「配置」那一屏（契约 `docs/dev/48-SETTINGS-KEY.md`）────────────────
+//
+// 主人 2026-09-22：*"用户可以在页面唤起配置。配置上可以输入 apikey"*。
+// ⇒ 钥匙原来**只有**第一次那条流程能填（而且被判无效之后还得手动刷新才回得去），
+//   现在**随时**能从页面上唤起这一屏。
+//
+// ⚠️ **"关于"也搬进来了**：顶栏原来 5 个图标，再加一个就是 7 个 ——
+//    手机上那一条会挤成一团（而且五档字号那道硬闸本来就在盯这个）。
+//    「关于」本来就是配置那一类东西（"这台设备上行不行"），放这儿更合结构。
+
+/// 顶栏那个入口（图标按钮的 tooltip）。
+const String configEntry = '配置';
+
+/// 那一屏的标题。
+const String configTitle = '配置';
+
+/// 钥匙那一段的小标题。
+const String configKeySection = '你那串钥匙';
+
+/// **现在是什么状态**（三种，必须分得开 —— 见 `keyStateLine`）。
+const String keyStateHas = '现在用的是一串已经填好的钥匙。';
+const String keyStateNone = '还没有填。填上它，琥珀才能开口说话。';
+/// ⚠️ 这一句以前**说不出来**：服务端只回 `hasKey:false`，"没填过"和"被判无效"
+///    在界面上长得一模一样 ⇒ 只能对他说"还没有填"。那是**在说假话**。
+const String keyStateBad = '你填的那串它说用不了。在这儿换一串就好。';
+
+/// 已经有一串时，输入框上面那句话（说清"填了会换掉"）。
+const String configKeyHint = '填一串新的，就会把现在这串换掉。';
+/// 换成功之后那句。
+const String configKeyChanged = '换好了。';
+
+/// 换一串时提交按钮上的话（第一次填时是 `keySubmit`）。
+const String keySubmitChange = '换好了';
+
+/// **现在是什么状态**那句话。**纯函数**（`test/unit` 里钉三种）。
+///
+/// ⚠️ 三种状态**必须分开**：
+///   ① 有（`hasKey`）② 填过但被判无效（`keyBad`）③ 还没填过。
+///   ② 和 ③ 混成一句，用户就会去重填一把**他其实已经填过的**钥匙，
+///   或者更糟：以为"这台就是不通"。
+String keyStateLine({required bool hasKey, required bool keyBad}) {
+  if (hasKey) return keyStateHas;
+  if (keyBad) return keyStateBad;
+  return keyStateNone;
+}

@@ -6,6 +6,10 @@
 // ⚠️ 令牌**只走 `Authorization` 头**，绝不进 URL。
 //    服务端也会忽略 URL 里的令牌（两边都守同一条规矩）。
 
+import 'package:hupo_app/models/key_outcome.dart';
+
+export 'package:hupo_app/models/key_outcome.dart';
+
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -643,15 +647,9 @@ class LoginResult {
   bool get ok => token != null;
 }
 
-/// 送钥匙的结果。**四种失败分开**（混成一句用户会一直重试）。
-enum KeySend { ok, blank, badChars, tooLong, failed }
-
 /// 要验证码的结果。**码本身不在里面**（界面上永远拿不到它）。
 enum CodeSend { sent, noSms, badPhone, failed }
 
-/// **注销**的结果（`POST /api/cancel`）。
-///
-/// ⚠️ 分这么细是因为**每一种该说的话不一样**：`noHelper` 是"我们这边还没接上"、
-///    `protectedOne` 是"你这一台得找人来收"、`failed` 是"没送上去"。
-///    混成一句"失败"他会一直重试（这个项目里已经栽过好几次）。
-enum CancelOutcome { ok, noHelper, protectedOne, local, noTenant, failed }
+// 送钥匙、取消注册那两个结果 —— **搬去 `models/key_outcome.dart` 了**
+// （楼层闸：`widgets` 只许看 `models`，而填钥匙那块表单要用它们）。
+// 下面 re-export ⇒ 老的 import 一行都不用改。

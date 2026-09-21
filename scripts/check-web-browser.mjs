@@ -50,6 +50,14 @@ const valueOf = (f, dflt) => {
 const URL_ = valueOf('--url', 'https://w.stalkerai.cn/');
 const WAIT_MS = Number.parseInt(valueOf('--wait', '45000'), 10);
 const SHOT = valueOf('--shot', null);
+// ⚠️ **没有"点一下再截图"这个口**（2026-09-22 试过，两条路都不通）：
+//    Flutter web 把字画在 canvas 上 ⇒ 按坐标点，试了 `Input.dispatchMouseEvent`
+//    与 `Input.dispatchTouchEvent`（连聚焦模拟 `Emulation.setFocusEmulationEnabled`
+//    也加了）—— **页面逐字节不变**，说明输入根本没送到它那儿。
+//    ⇒ 不留一个"假装能用"的参数。要看某一屏，走
+//      `test/widget/*`（真点、真断言）+ 这份脚本的 `--shot`（看入口在不在屏幕上）。
+const WIDTH = Number.parseInt(valueOf('--width', '1280'), 10);
+const HEIGHT = Number.parseInt(valueOf('--height', '757'), 10);
 const TOKEN = nodeProcess.env.HUPO_TOKEN ?? null;
 
 /** 浏览器在哪。优先环境变量，其次我们自己的缓存目录。 */
@@ -123,7 +131,8 @@ async function main() {
       '--no-sandbox',
       '--disable-gpu',
       '--disable-dev-shm-usage',
-      '--window-size=1280,900',
+      `--window-size=${WIDTH},${HEIGHT}`,
+      '--hide-scrollbars',
       'about:blank',
     ],
     { stdio: 'ignore' },

@@ -170,4 +170,34 @@ void main() {
       expect(hasForbidden('正在给你开一个只属于自己的空间'), false);
     });
   });
+
+  test('🔴 "没有钥匙"要分得开：没填过 vs 填过但被判无效（`keyBad`）', () {
+    // ⚠️ 服务端原来只回 `hasKey:false` ⇒ 这两种在界面上**一模一样**，
+    //    于是配置那一屏只能对"填过但被拒"的人说"还没有填"（**假话**）。
+    final none = SpaceInfo.fromJson({'kind': 'tenant', 'state': 'ready', 'hasKey': false});
+    final bad = SpaceInfo.fromJson({
+      'kind': 'tenant',
+      'state': 'ready',
+      'hasKey': false,
+      'keyBad': true,
+    });
+    expect(none.keyBad, isFalse);
+    expect(bad.keyBad, isTrue);
+    expect(bad.hasKey, isFalse, reason: '被判无效的那把不算"有"');
+    // ⚠️ 宽容：缺字段 / 类型不对 / 老服务端 ⇒ 一律 false（不许猜成"被判无效"）
+    expect(SpaceInfo.fromJson({'kind': 'tenant', 'keyBad': 'true'}).keyBad, isFalse);
+    expect(SpaceInfo.fromJson(null).keyBad, isFalse);
+  });
+
+  test('两句话本身：三种状态说的不是同一件事', () {
+    expect(keyStateLine(hasKey: true, keyBad: false), keyStateHas);
+    expect(keyStateLine(hasKey: false, keyBad: true), keyStateBad);
+    expect(keyStateLine(hasKey: false, keyBad: false), keyStateNone);
+    // ⚠️ 被判无效时**不许**说"还没有填"（他填过）
+    expect(keyStateLine(hasKey: false, keyBad: true) == keyStateNone, isFalse);
+    // ⚠️ 也不许冒出内部词
+    for (final s in [keyStateHas, keyStateNone, keyStateBad, configEntry, configTitle]) {
+      expect(hasForbidden(s), isFalse, reason: s);
+    }
+  });
 }
