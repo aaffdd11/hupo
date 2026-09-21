@@ -21,6 +21,18 @@ const Map<String, String> spaceStepWords = {
 
 /// 排队那一步（池子里没有空位了）—— ⚠️ **如实说**，别让他以为马上就好。
 const String waitingQueued = '前面还有人，得等一下：我们这边地方有限。';
+
+/// **已经等了多久**（主人 2026-09-21："我需要一个动态的"）。
+///
+/// ⚠️ 这是一个**真的在走的秒数**（量的是真实过去的时间），**不是进度** ——
+///    "等了 12 秒"是我们**真的知道**的事；"做了 60%"是我们**不知道**的事。
+///    ⇒ 有它，用户看得出"没卡住"；而**一个百分号都不掺**。
+String waitingElapsedWords(int seconds) {
+  final s = seconds < 0 ? 0 : seconds;
+  if (s < 60) return '已经等了 $s 秒';
+  final m = s ~/ 60;
+  return '已经等了 $m 分 ${s % 60} 秒';
+}
 const String waitingBody = '这一步通常很快。要是等久了，按下面那个按钮再看看。';
 const String waitingRetry = '再看看';
 const String waitingStillLong = '还在开，比平常久了一点。没坏，再等一会儿就行。';

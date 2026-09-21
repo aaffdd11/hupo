@@ -10,12 +10,14 @@
 // ⚠️ 布局：`SingleChildScrollView` + 不写死尺寸 ——
 //    可访问性硬闸有五档字号（最大 3.1x），写死了那一档就溢出。
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/space.dart';
 import '../models/space_words.dart';
 
-class WaitingScreen extends StatelessWidget {
+class WaitingScreen extends StatefulWidget {
   const WaitingScreen({
     super.key,
     required this.onRetry,
@@ -24,7 +26,16 @@ class WaitingScreen extends StatelessWidget {
     this.retryFailed = false,
     this.steps = const [],
     this.queued = false,
+    this.onRefresh,
   });
+
+  /// ★ **它自己会刷新**（主人 2026-09-21："我需要一个动态的"）：
+  ///    上层每 `refreshEvery` 重新问一次"到哪一步了"，**不用用户按按钮**。
+  ///    ⚠️ `null` = 不自动刷（测试里用）。
+  final Future<void> Function()? onRefresh;
+
+  /// 多久问一次。⚠️ 它**只是"多久问一次"**，不是进度。
+  static const Duration refreshEvery = Duration(seconds: 2);
 
   /// **开空间那三步**（真进度）。空 ⇒ 只显示那句话（老服务端 / 认不出来）。
   final List<SpaceStep> steps;
@@ -45,12 +56,42 @@ class WaitingScreen extends StatelessWidget {
   final bool retryFailed;
 
   @override
+  State<WaitingScreen> createState() => _WaitingScreenState();
+}
+
+class _WaitingScreenState extends State<WaitingScreen> {
+  Timer? _poll;
+  Timer? _tick;
+  int _elapsed = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // ★ **真的在走的秒数**（量真实时间 ⇒ 诚实；不是进度）
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _elapsed += 1);
+    });
+    // ★ **它自己问**：不用用户按"再看看"
+    final r = widget.onRefresh;
+    if (r != null) {
+      _poll = Timer.periodic(WaitingScreen.refreshEvery, (_) => r());
+    }
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
     // ⚠️ 三句话**分开**：混用会让用户以为"它一直在稳步推进"，而事实可能是"根本没问上"
-    final String note = retryFailed
+    final String note = widget.retryFailed
         ? waitingRetryFail
-        : (askedTooLong ? waitingStillLong : waitingBody);
+        : (widget.askedTooLong ? waitingStillLong : waitingBody);
 
     return Scaffold(
       body: SafeArea(
@@ -65,29 +106,40 @@ class WaitingScreen extends StatelessWidget {
                 const SizedBox(height: 12),
                 // ★ **真进度**（主人 2026-09-21）：把服务端**真的知道的那三步**画出来。
                 //   ⚠️ 只有"做完了没有" —— **没有百分比、没有进度条**（不许假进度）。
-                if (queued)
+                if (widget.queued)
                   Text(waitingQueued, style: t.textTheme.bodyMedium, textAlign: TextAlign.center)
-                else if (steps.isNotEmpty)
+                else if (widget.steps.isNotEmpty)
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (var i = 0; i < steps.length; i++)
+                      for (var i = 0; i < widget.steps.length; i++)
                         _StepRow(
-                          label: spaceStepWords[steps[i].step] ?? steps[i].step,
-                          done: steps[i].done,
+                          label: spaceStepWords[widget.steps[i].step] ?? widget.steps[i].step,
+                          done: widget.steps[i].done,
                           // 第一个还没做完的 = **正在做的那一步**
-                          current: !steps[i].done && steps.take(i).every((e) => e.done),
+                          current: !widget.steps[i].done && widget.steps.take(i).every((e) => e.done),
+                          // ★ **在动**（主人要的"动态"）：当前那一步旁边转圈。
+                          //   ⚠️ 转的是"**在做事**"，**不是**"做了百分之几"。
+                          spinning: !widget.steps[i].done &&
+                              widget.steps.take(i).every((e) => e.done),
                         ),
                     ],
                   ),
                 const SizedBox(height: 12),
                 Text(note, style: t.textTheme.bodyMedium, textAlign: TextAlign.center),
+                const SizedBox(height: 4),
+                // ★ **一个真的在走的秒数**（量真实时间 ⇒ 诚实；**不是百分比**）
+                Text(
+                  waitingElapsedWords(_elapsed),
+                  style: t.textTheme.bodySmall,
+                  textAlign: TextAlign.center,
+                ),
                 const SizedBox(height: 24),
                 // ⚠️ 命中区 ≥44：`minimumSize` 而不是写死宽高
                 FilledButton(
-                  onPressed: busy ? null : onRetry,
+                  onPressed: widget.busy ? null : widget.onRetry,
                   style: FilledButton.styleFrom(minimumSize: const Size(120, 48)),
-                  child: Text(busy ? '…' : waitingRetry),
+                  child: Text(widget.busy ? '…' : waitingRetry),
                 ),
               ],
             ),
@@ -101,10 +153,19 @@ class WaitingScreen extends StatelessWidget {
 /// 清单里的一行：✓ 做完了 / … 正在做 / · 还没轮到。
 /// ⚠️ 三个符号就够 —— **没有百分比**（不许假进度）。
 class _StepRow extends StatelessWidget {
-  const _StepRow({required this.label, required this.done, required this.current});
+  const _StepRow({
+    required this.label,
+    required this.done,
+    required this.current,
+    this.spinning = false,
+  });
   final String label;
   final bool done;
   final bool current;
+
+  /// 那一步**正在做**（旁边转个圈）。
+  /// ⚠️ 它**不是进度**：转圈只说"在做事"，**不说"做了多少"**。
+  final bool spinning;
 
   @override
   Widget build(BuildContext context) {
@@ -120,7 +181,17 @@ class _StepRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(width: 24, child: Text(mark, style: style)),
+          SizedBox(
+            width: 24,
+            child: spinning
+                // ⚠️ 小转圈：**不可点**（不影响命中区 ≥44 那条闸）
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Text(mark, style: style),
+          ),
           Expanded(child: Text(label, style: style)),
         ],
       ),

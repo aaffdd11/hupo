@@ -105,6 +105,24 @@ void main() {
     });
   });
 
+  group('"已经等了多久"（真在走的时间）', () {
+    test('★ 逐档对表：秒 / 分', () {
+      expect(waitingElapsedWords(0), '已经等了 0 秒');
+      expect(waitingElapsedWords(7), '已经等了 7 秒');
+      expect(waitingElapsedWords(59), '已经等了 59 秒');
+      expect(waitingElapsedWords(60), '已经等了 1 分 0 秒');
+      expect(waitingElapsedWords(125), '已经等了 2 分 5 秒');
+      // 负向对照：负数（理论上不会）不许说出"等了 -1 秒"这种话
+      expect(waitingElapsedWords(-3), '已经等了 0 秒');
+    });
+
+    test('🔴 它是**时间**不是**进度**：一个百分号都没有', () {
+      for (final n in [0, 1, 30, 59, 60, 3600]) {
+        expect(waitingElapsedWords(n).contains('%'), false);
+      }
+    });
+  });
+
   group('那两屏的文案', () {
     // ⚠️ `final` 不是 `const`：下面要展开一个 Map（`spaceStepWords.values`），const 做不到
     final all = <String>[
@@ -125,6 +143,11 @@ void main() {
       keyFailed,
       waitingQueued,
       ...spaceStepWords.values,
+      // 秒数那几句（真在走的时间，不是进度）
+      waitingElapsedWords(0),
+      waitingElapsedWords(59),
+      waitingElapsedWords(60),
+      waitingElapsedWords(125),
     ];
 
     test('🔴 **不许假进度**：一个百分号都没有', () {

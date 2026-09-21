@@ -147,6 +147,12 @@ class _HupoAppState extends State<HupoApp> {
                   // ★ **真进度**：服务端真的知道的那三步（没有百分比）
                   steps: (_space ?? const SpaceInfo()).steps,
                   queued: (_space ?? const SpaceInfo()).queued,
+                  // ★ **它自己会问**（主人要的"动态"）：不用用户按"再看看"。
+                  //   ⚠️ 问的是**真状态**（`/api/space`），不是编出来的进度。
+                  onRefresh: () async {
+                    final t = await _tokens.read();
+                    if (t != null) await _askSpace(t);
+                  },
                   onRetry: () async {
                     final t = await _tokens.read();
                     if (t != null) await _askSpace(t);
