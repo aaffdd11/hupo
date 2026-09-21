@@ -671,6 +671,7 @@ deepseek harness 才行。"* —— **他是对的**：在那之前我验的只�
 
 | 时间 | 为什么重建 | 动了清单里哪几个文件 | 结果 |
 |---|---|---|---|
+| 2026-09-21 深夜（第三回） | 🔴 **手册这一侧**：把自动开一台的安全模型写进手册（**`strict`！**）——`02-ARCHITECTURE` §五加 **N26–N28**、`08-SPEC` §四加 **4.3（A1–A9）**、`06-OPERATIONS` §五加 **5.4** 并**更正 §5.3 那句"本机做不了容器实验"（现在是假话）**、`05-DECISIONS` §一加 **M 组 T1–T8**、`04-ROADMAP` §10.1 写清"算做完了吗"、`CHANGELOG` 升 **v1.10**、`README` 去掉三处重复的"76 条" | **`docs/handbook/**` = `strict`**（改了不重建 ⇒ 服务下次重启**拒绝启动**）。⚠️ 改完**立刻**重建并重启验过：横幅「完整性 对上了」+ 本机/公网 200 | ✅ 对上了 |
 | 2026-09-21 深夜（第二回） | 盒内 agent 那三个断点 + 钥匙失败分类器 + 四条接线修复 ⇒ 重建 | 全是**只报不拦**的：`src/{agent-runtime,dispatcher,serve,session-translate,tenant-channel,tenant-shell,tenant-tunnel-agent,worlds}.js|mjs`、`scripts/{build-tenant-image,create-tenant-pool}.sh`（**`strict` 一处没动**） | ✅ 对上了 |
 | 2026-09-21 深夜 | 自动开一台（服务侧 + 客户端 + 三个新脚本 + 新模板文件）⇒ 重建 | 全是**只报不拦**的：`src/{config,serve,server,tenants,tenant-channel}.js|mjs`、`scripts/{create-tenant-pool,create-tenant-users}.sh`（**`strict` 一处没动**） | ✅ 对上了 |
 | 2026-09-21 夜 | 修主人报的 *"刷新后又要我输入 apikey"*：钥匙在不在**改由容器自报**；顺手修掉池子脚本"镜像换了不重启已在跑的容器" | 全是**只报不拦**的 4 处：`src/tenant-channel.mjs`、`src/tenant-tunnel-agent.mjs`、`src/serve.js`、`scripts/create-tenant-pool.sh`（**`strict` 一处没动** ⇒ 服务本来也起得来，重建只是为了不留噪音） | ✅ 对上了（按 `/home/deploy` 算，一条不漏） |
