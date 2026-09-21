@@ -20,6 +20,7 @@ import { SayService } from './say.js';
 import { Trash } from './trash.js';
 import { Store } from './store.js';
 import { Ledger, LEDGER_TIMELINE_ID } from './ledger.js';
+import { Users } from './users.js';
 import { LedgerSocket } from './ledger-socket.js';
 import { reconcileOnBoot } from './reconcile.js';
 import { CRASH_WINDOW_MS, markCleanExit, recordStart } from './boot-marker.js';
@@ -147,6 +148,9 @@ if (boot.uncleanLastRun && reconciled.told === 0) {
 }
 
 const auth = new Auth({ dataDir: cfg.dataDir });
+// ★ **用户表**（多租户第一步 · 契约 `docs/dev/37-MULTITENANT.md` §三）：
+//   手机号 → 用户。落在 `data/users.json`（0600、gitignore 里）。
+const users = new Users({ dataDir: cfg.dataDir });
 const say = new SayService({ timeline, store, timelineId: 'main' });
 // 回收站（批 3 第二件）。⚠️ **必须 sync**：不 sync 的话重启之后回收站是空的，
 // 而屏幕上那些话还藏着 —— 用户会以为永远拿不回来了（契约 `docs/dev/28-DELETE.md`）。
@@ -214,6 +218,8 @@ turnStatus.start();
 
 const { listen, close } = createServer({
   timeline, store, auth, say, dispatcher, trash, webRoot, buildId: cfg.buildId,
+  users,
+  devCode: cfg.devCode,
   log: (m) => console.log(m),
 });
 
@@ -354,6 +360,14 @@ console.log(
     `；本地通道 ${nodeFs.existsSync(cfg.ledgerSocketPath) ? '通了' : '⚠️ 没起来'}`,
 );
 console.log(`  能力层   ${cfg.capabilitiesPath}（${nodeFs.existsSync(cfg.capabilitiesPath) ? '已挂上' : '⚠️ 文件不在'}）`);
+console.log(
+  // ⚠️ **这一行必须大声**：临时码开着 = **谁都能用任意手机号进去**（手机号就是账号）。
+  //    这个项目最忌的就是"看起来有闸、其实没有"——所以它不许静默开着。
+  cfg.devCode
+    ? `  ⚠️ 临时验证码 **开着**（HUPO_DEV_CODE）⇒ **任何手机号 + 它都能进**。这不是上线形态。`
+    : '  手机号登录 没开（要临时验证码就设 HUPO_DEV_CODE；⚠️ 设了谁都能进）',
+);
+console.log(`  用户     ${users.size} 个（手机号只落在 data/users.json，不进仓库不进日志）`);
 console.log('──────────────────────────────────────────────');
 
 // 优雅退出：先停止接新连接，再关。

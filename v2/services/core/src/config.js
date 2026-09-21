@@ -77,6 +77,16 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      */
     ledgerSocketPath: env.HUPO_LEDGER_SOCKET ?? ledgerSocketPath(dataDir),
 
+    /**
+     * **临时验证码**（开发期口子 · 契约 `docs/dev/37-MULTITENANT.md` §六）。
+     *
+     * ⚠️ **默认空 = 关**：不显式设它就**任何码都登不进**。
+     * ⚠️ 设了它就等于"**谁都能用任意手机号进去**"（手机号就是账号）⇒
+     *    服务端**每次开机都要大声报它开着**（见 `serve.js` 的横幅）。
+     * ⚠️ 真短信接上之后，这一段**删掉**，不是"留着备用"。
+     */
+    devCode: env.HUPO_DEV_CODE ?? '',
+
     /** MCP 服务器那支脚本（绝对路径：spawn 时经环境变量递给 dsh）。 */
     ledgerServerPath: env.HUPO_LEDGER_SERVER ?? nodePath.resolve(cwd, 'src/mcp-ledger-server.mjs'),
 

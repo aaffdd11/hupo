@@ -197,6 +197,10 @@ export function createServer({
   log = () => {},
   /** 准入闸。默认读这台机器的 cgroup；测试注入一个"一定拒"的就行。 */
   admit = readAdmission,
+  /** 用户表（手机号 → 用户）。`null` = 这台部署还没开手机号登录。 */
+  users = null,
+  /** 临时验证码。**空串 = 关**（默认就是关）。 */
+  devCode = '',
 }) {
   const server = http.createServer((req, res) => {
     handleRequest(req, res).catch((err) => {
@@ -347,6 +351,35 @@ export function createServer({
     } catch {
       return sendJson(res, 400, { error: 'bad-json' });
     }
+    // ★ **手机号 + 验证码**（多租户的第一个入口 · 契约 §三/§六）。
+    //   ⚠️ 与口令那条**并存**：老客户端还在这条路上，不许一脚踢开。
+    const phone = typeof body?.phone === 'string' ? body.phone.trim() : '';
+    if (phone !== '') {
+      if (!devCode) {
+        // 没开临时码、也还没接短信 ⇒ **如实说没这条路**（不是"码错了"）
+        return sendJson(res, 503, { error: 'no-sms', text: '还没接短信，先别用手机号登录。' });
+      }
+      const code = typeof body?.code === 'string' ? body.code.trim() : '';
+      if (code !== devCode) {
+        const locked = auth.recordLoginFailure(ip);
+        return sendJson(res, 401, { error: 'bad-code', locked });
+      }
+      let who;
+      try {
+        who = users.ensure(phone); // 第一次见到的号 ⇒ **当场建一个用户**
+      } catch {
+        return sendJson(res, 400, { error: 'bad-phone' });
+      }
+      auth.recordLoginSuccess(ip);
+      try {
+        const { token, expiresAt } = auth.issue({ sub: who.id });
+        return sendJson(res, 200, { token, expiresAt, isNew: who.created });
+      } catch (err) {
+        // ⚠️ 这台机器还没设过口令 ⇒ `issue()` 会拒绝（fail-closed）。**如实说**。
+        return sendJson(res, 503, { error: 'not-setup', text: String(err?.message ?? err) });
+      }
+    }
+
     const ok = auth.verifyPassword(body?.password);
     if (!ok) {
       const locked = auth.recordLoginFailure(ip);
