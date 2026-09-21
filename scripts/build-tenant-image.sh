@@ -75,22 +75,15 @@ cp "$CORE/hupo-persona.yml" "$R/app/hupo-persona.yml"
 [ -f "$CORE/src/mcp-ledger-server.mjs" ] && cp "$CORE/src/mcp-ledger-server.mjs" "$R/app/src/mcp-ledger-server.mjs"
 
 # ── ②·代理：让模型那条路走盒内的 root 小代理（多租户 ②-3）──
-# ⚠️ 这一份是**静态**的：端口写死 8787，和 `model-proxy.mjs` 的默认值一致。
-#    为什么不做成模板：它**没有任何按人不同的东西** —— 每个租户一台容器，
-#    端口各自独立（容器有自己的网络命名空间）⇒ 一份就够。
-cat > "$R/app/hupo-model-proxy.yml" <<'MODELPATCH'
-# 让模型那条路走**盒内的 root 小代理**（多租户 ②-3 · `src/model-proxy.mjs`）。
-#
-# 为什么这样写：决策 ① 要求"**agent 读不到自己的 key**"，可 dsh 调模型必须有 key。
-# ⇒ 把"持有"与"使用"分开：明文只在 `/run/hupo/creds.yaml`（tmpfs · root 0600），
-#    由 root 小代理持有；agent 那一侧只有一个**占位符**（名字刻意**避开**
-#    `_API_KEY` / `_TOKEN` / `_SECRET` / `DEEPSEEK` —— 否则会踩 V4b 的 env 扫描）。
-- id: llm-deepseek
-  config:
-    baseURL: http://127.0.0.1:8787
-    apiKeyEnv: HUPO_MODEL_TICKET
-MODELPATCH
-echo "  模型代理 patch: /app/hupo-model-proxy.yml"
+# ⚠️ **它现在是仓库里一个真文件**（2026-09-21 改）：
+#    原来是这一段 heredoc **生成**出来的 —— 而"生成出来的东西"**进不了产品层的指纹、
+#    也进不了评审**。⇒ 搬进 `v2/services/core/hupo-model-proxy.yml`，
+#    由**产品层**带着走（`docs/dev/45-TENANT-UPDATE.md`）。
+#    这里仍然拷一份：那是**兜底**（新入口优先认产品层，认不到才用镜像里这份）。
+MODEL_PATCH="$CORE/hupo-model-proxy.yml"
+[ -f "$MODEL_PATCH" ] || { echo "✗ 找不到 $MODEL_PATCH"; exit 2; }
+cp "$MODEL_PATCH" "$R/app/hupo-model-proxy.yml"
+echo "  模型代理 patch: /app/hupo-model-proxy.yml（兜底那份）"
 echo "  服务: $(find "$R/app/src" -name '*.js' | wc -l) 个 js + ws"
 
 # ── ②·dsh：**agent 本体**（多租户 ②-1）──
@@ -151,6 +144,56 @@ fi
 #    ⇒ 用一个 30 行的 node 入口（node 本来就在镜像里）。
 cat > "$R/app/entry.mjs" <<'ENTRY'
 import nodeFs from 'node:fs';
+import nodePath from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+// ════════════════════════════════════════════════════════════
+// ★ **产品层**（契约 `docs/dev/45-TENANT-UPDATE.md`）
+//
+//   真正要跑的那套东西（调度器 `src/` + 人格 + 能力 + 代理 patch）**不在镜像里**，
+//   而是宿主上一个目录**只读**挂进来的（`-v …:/app/code:ro`）。
+//   ⇒ 改进产品 = 宿主上写文件 + 这一台重开一次。
+//      **不用重造镜像、不用 `podman load`、不用重建容器、不需要 root。**
+//
+//   ⚠️ **认不到就回落到镜像里那一份**（`/app`）：这是**过渡期的兜底**——
+//      `podman load` 换掉的是存储里的 tag，而**跑着的那台**还是创建那一刻的镜像；
+//      万一某台在"单元还没挂上"的窗口里重启，有兜底它照样起得来。
+//      回落到兜底时 `manifest.json` 不在 ⇒ 版本会是 `dev` ⇒ **宿主会看见并如实说**
+//      （不许静默：一台悄悄跑着旧的，是这套东西最该防的那种状态）。
+// ════════════════════════════════════════════════════════════
+function pickCodeDir() {
+  const want = process.env.HUPO_CODE_DIR ?? '';
+  if (!want) return { dir: '/app', why: '宿主没给 HUPO_CODE_DIR' };
+  if (!nodeFs.existsSync(nodePath.join(want, 'src', 'serve.js'))) {
+    return { dir: '/app', why: `产品层里没有 ${want}/src/serve.js` };
+  }
+  return { dir: want, why: '' };
+}
+const picked = pickCodeDir();
+const CODE = picked.dir;
+process.env.HUPO_CODE_DIR = CODE;
+const inCode = (rel) => nodePath.join(CODE, rel);
+const loadCode = (rel) => import(pathToFileURL(inCode(rel)).href);
+
+// 🔴 **指纹**：容器要能如实说"我跑的是哪一版"。
+//    它**只**来自产品层的 `manifest.json` —— 算指纹的地方**只有一处**
+//    （`scripts/build-tenant-code.sh`）；这里**不许**自己再算一遍（两处 = 一定会漂）。
+let BUILD = 'dev';
+try {
+  const m = JSON.parse(nodeFs.readFileSync(inCode('manifest.json'), 'utf8'));
+  if (typeof m?.fingerprint === 'string' && m.fingerprint) BUILD = m.fingerprint;
+} catch {
+  /* 兜底那份没有 manifest ⇒ 就是 dev，**如实** */
+}
+// ⚠️ **必须在 `serve.js` 之前设**：`config.js` 是在**被 import 的那一刻**读 env 的。
+process.env.HUPO_BUILD_ID = BUILD;
+// ⚠️ 这几份的默认值都是 `cwd/xxx`，而 cwd 是 `/app` ⇒ 不指过来就会挂到**兜底**那份上。
+//    `??=`：宿主/单元要是显式给了，就听它的（不许悄悄覆盖别人的显式选择）。
+process.env.HUPO_PERSONA ??= inCode('hupo-persona.yml');
+process.env.HUPO_CAPABILITIES ??= inCode('hupo-capabilities.yml');
+process.env.HUPO_LEDGER_SERVER ??= inCode('src/mcp-ledger-server.mjs');
+process.env.HUPO_MODEL_PATCH ??= inCode('hupo-model-proxy.yml');
+console.log(`  产品层：${CODE}${picked.why ? `（回落到镜像里那份：${picked.why}）` : ''} · 版本 ${BUILD}`);
 
 // 卷里的目录：镜像建不了（会被挂载盖住），只能开机建。
 // ⚠️ 布局照 `02-ARCHITECTURE.md` §2.1：`main` 与 `workspaces/` **必须平行**
@@ -226,7 +269,7 @@ try {
 const channel = process.env.HUPO_CHANNEL ?? '';
 if (channel) {
   try {
-    const { watchForKey } = await import('./src/tenant-shell.mjs');
+    const { watchForKey } = await loadCode('src/tenant-shell.mjs');
     // ⚠️ **故意不 await**：它是**后台**的，界面要照常起来。
     //    容器要一直跑着（池子那个形状），而用户可能几分钟后才填 key ——
     //    只领一次的话那台容器就永远没有凭据，直到有人手动重启它。
@@ -242,14 +285,14 @@ if (channel) {
 }
 
 try {
-  const { startModelProxy } = await import('./src/model-proxy.mjs');
+  const { startModelProxy } = await loadCode('src/model-proxy.mjs');
   await startModelProxy({ log: (m) => console.log(m) }).listen();
 } catch (err) {
   console.error(`  ⚠️ 模型代理没起来：${err?.message ?? err} —— 模型那条路会不通（界面照常）`);
 }
 
 // 起真正的服务（**同一个进程**，不多一层 shell）
-await import('./src/serve.js');
+await loadCode('src/serve.js');
 
 // ★ **数据面那条隧道**（②-4b 后半）：宿主把用户的请求经通道送进来，
 //   这里把它们接到**本机那个刚起来的服务**上。
@@ -259,8 +302,28 @@ await import('./src/serve.js');
 //      而那种状态**必须说得出来**（这一行就是那句话）。
 if (channel) {
   try {
-    const { runTunnelAgent } = await import('./src/tenant-tunnel-agent.mjs');
-    runTunnelAgent({ socketPath: channel, log: (m) => console.log(m) });
+    const { runTunnelAgent } = await loadCode('src/tenant-tunnel-agent.mjs');
+    // ★ **"宿主说有新的一版，重开一下吧"**（契约 `docs/dev/45-TENANT-UPDATE.md` §三）。
+    //   ⚠️ 退不退由**这边**定：先把手上那一轮说完（读 `/data/status.json`，那个服务自己写的）。
+    //   ⚠️ `onReady` = 跟宿主报过到了 ⇒ **从那以后才认那句话**。
+    //      不这么写就是**开机死循环**：宿主手上可能还挂着上一轮的"要它重开"，
+    //      一开机就退、退完又报、报完又叫 …… 永远起不来。
+    //   ⚠️ 拿不到重开那支模块**不许**把隧道带走（大不了就是这一台不自动更新，
+    //      而宿主会一直如实说"它还是旧版"）。
+    let onReload = null;
+    let onReady = null;
+    try {
+      const { createReloader } = await loadCode('src/tenant-reload.mjs');
+      const reloader = createReloader({
+        statusFile: nodePath.join(process.env.HUPO_DATA ?? '/data', 'status.json'),
+        log: (m) => console.log(m),
+      });
+      onReload = () => reloader.please();
+      onReady = () => reloader.arm();
+    } catch (err) {
+      console.error(`  ⚠️ 自动更新那一步没装上：${err?.message ?? err}（这一台不会被叫着重开）`);
+    }
+    runTunnelAgent({ socketPath: channel, log: (m) => console.log(m), onReload, onReady });
   } catch (err) {
     console.error(`  ⚠️ 数据面那条隧道没起来：${err?.message ?? err}（本机照常，外面进不来）`);
   }
@@ -375,7 +438,6 @@ ctr="$("$BUILDAH" from scratch)"
   --env HUPO_AGENT_UID=1000 \
   --env HUPO_AGENT_GID=1000 \
   --env DSH_HOME=/data/dsh \
-  --env HUPO_MODEL_PATCH=/app/hupo-model-proxy.yml \
   --env HUPO_MODEL_TICKET=hupo-local-model-proxy \
   --env HUPO_KEY_FILE=/run/hupo/creds.yaml \
   --env HUPO_TRUSTED_SOCKET=/run/hupo/local-api.sock \

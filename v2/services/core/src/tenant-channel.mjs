@@ -78,6 +78,15 @@ export class TenantChannel {
    *    （主人报的"刷新后又要我输入 apikey"就是这么来的。）
    */
   #keyKnown = new Set();
+  /**
+   * **每台容器自报的版本指纹**（2026-09-21 加 · 契约 `docs/dev/45-TENANT-UPDATE.md` §二）。
+   *
+   * ⚠️ 为什么要有它：容器原来**不知道自己跑的是哪一版** ⇒ 一台可以在旧代码上
+   *    静默跑几个月，而两边都以为没事。这个 Map 就是"当前事实"的落脚处。
+   */
+  #builds = new Map();
+  /** 宿主侧那个回调（见构造参数 `onBuild`）。 */
+  #onBuild = null;
 
   /**
    * @param {object} o
@@ -85,13 +94,19 @@ export class TenantChannel {
    * @param {(userId:string)=>(string|null)} o.keyFor  **这个人的 key**；`null` = 还没有
    * @param {(m:string)=>void} [o.log]
    */
-  constructor({ dir, keyFor, log = () => {}, onKeyBad = null }) {
+  constructor({ dir, keyFor, log = () => {}, onKeyBad = null, onBuild = null }) {
     if (!dir) throw new Error('TenantChannel 需要 dir');
     if (typeof keyFor !== 'function') throw new Error('TenantChannel 需要 keyFor(userId)');
     this.#dir = dir;
     this.#keyFor = keyFor;
     this.#log = log;
     this.#onKeyBad = onKeyBad;
+    this.#onBuild = onBuild;
+  }
+
+  /** 每台自报的版本（`userId → 指纹`）。**算出来的，不是记出来的**。 */
+  get builds() {
+    return new Map(this.#builds);
   }
 
   get dir() {
@@ -283,6 +298,31 @@ export class TenantChannel {
         this.#record(userId, 'tunnel');
         // ★ 这一行才是**真话**：钥匙到底有没有，由容器自报的那条消息决定（`hasKey`）。
         this.#log(`  ✓ ${userId} 的隧道通了（数据面走这条）· 钥匙：${msg?.hasKey === true ? '有' : '还没有'}`);
+
+        // ★ **版本指纹**（契约 `docs/dev/45-TENANT-UPDATE.md` §二/§三）：
+        //   自报的那一版对不对，由宿主这边比 —— 比完**该说话就说话**，
+        //   不一致就**告诉它重开**（退不退由它自己定：先把手上那轮说完）。
+        //   ⚠️ 决定权在 `serve.js`（`onBuild` 是它给的纯函数比较）；
+        //      这里只负责"发那一帧、并把话记下来"。
+        const bid = typeof msg?.buildId === 'string' ? msg.buildId : '';
+        this.#builds.set(userId, bid || 'dev');
+        if (this.#onBuild) {
+          let verdict = null;
+          try {
+            verdict = this.#onBuild(userId, bid || 'dev');
+          } catch (err) {
+            this.#log(`  ⚠️ 比版本那一步出错：${err?.message ?? err}`);
+          }
+          if (verdict?.line) {
+            const head = verdict.reload ? '⚠️' : '·';
+            this.#log(`  ${head} ${userId}：${verdict.line}`);
+          }
+          if (verdict?.reload === true) {
+            // ⚠️ 那一帧**只有类型、没有内容**（见 `tenant-tunnel-agent.mjs` 里那段）。
+            this.#send(conn, { v: CHANNEL_VERSION, type: 'reload' });
+            this.#record(userId, 'reload-asked', { build: bid || 'dev' });
+          }
+        }
         return;
       }
       case 'data': {

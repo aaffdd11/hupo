@@ -12,6 +12,17 @@
 # ⇒ 这里走 ②：**主人跑一次**，之后**服务一行特权都不需要**
 #   （容器由租户**自己的** systemd 用户管理器看着，`Restart=on-failure`）。
 #
+# ── 产品层那条只读挂载（2026-09-21 加 · `docs/dev/45-TENANT-UPDATE.md`）──
+#   容器跑的那套东西（调度器 + 人格 + 能力 + 代理 patch）**不在镜像里**，
+#   而是宿主上一个目录**只读**挂进去的（`/srv/hupo/tenant-code/current` → `/app/code`）。
+#   ⇒ 改进产品 = 写文件 + 让容器重开一次，**不用重造镜像、不用 load、不用重建容器**。
+#   ⚠️ **`/srv/hupo` 要 root 建一次**（`/srv` 是 root 的）——建它就在这个脚本里，
+#      因为"把机器准备好给租户容器"是同一件事，分两处一定会漏一处。
+#   ⚠️ **还没发布过产品层时，这条挂载不写进单元**：
+#      `podman` 会把**不存在的挂载源建成一个空目录**（套接字那个坑的同族，
+#      `43-AUTO-PROVISION.md` §8.1 记过）⇒ 之后 `current` 那个软链就别想再翻了。
+#      那时那一台照旧用镜像里那份**兜底**（版本会自报 `dev`，宿主会如实说）。
+#
 # ── 这一步动的是**机器状态**，不是代码（所以单独一个脚本）──────
 #   ① 卷：`/home/<租户>/tenant` —— 0700、属主是他自己
 #   ② `linger`：没有它，租户的 rootless podman 在他没登录时会**整个消失**
@@ -29,6 +40,8 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMG="${HUPO_TENANT_IMAGE:-localhost/hupo-tenant:local}"
+# 产品层目录（`--env HUPO_CODE_ROOT` 可覆盖；测试用 `HUPO_CODE_ROOT`）
+CODE_ROOT="${HUPO_CODE_ROOT:-/srv/hupo/tenant-code}"
 # ── 要管哪几台 ──────────────────────────────────────────────
 # ⚠️ 默认还是那两台（**已建好在跑的**，逐字不变）；`HUPO_TENANT_USERS` 是给
 #    "自动开一台"那条路用的（root 侧助手一次只建一个）。
@@ -77,6 +90,30 @@ as_user() {  # as_user <user> <cmd...>（自动 cd /tmp 并给对 XDG_RUNTIME_DI
 }
 owner_run() { as_user "$OWNER_USER" "$@"; }
 echo "  造镜像的人：$OWNER_USER（podman 一律以他/租户的身份跑，**不以 root**）"
+
+# ── 产品层目录（**只有 root 建得了**：`/srv` 是 root 的）────────
+#   ⚠️ 幂等：已经有了就只看一眼属主/权限（那一条也判，因为**属主错了就等于发布不了**）。
+echo
+echo "── 产品层目录 ─────────────────────────────────"
+if [ -d "$CODE_ROOT" ]; then
+  say "已有：$CODE_ROOT（$(stat -c '%a %U:%G' "$CODE_ROOT")）"
+  [ "$(stat -c '%U' "$CODE_ROOT")" = "$OWNER_USER" ] \
+    || echo "  ⚠️ 它不是 $OWNER_USER 的 ⇒ $OWNER_USER **发布不了**产品层（要 $OWNER_USER 才写得进去）"
+else
+  plan "建 $CODE_ROOT（0755 $OWNER_USER:$OWNER_USER）"
+  [ "$DO" = "1" ] && install -d -o "$OWNER_USER" -g "$OWNER_USER" -m 0755 "$CODE_ROOT"
+fi
+
+# **当前是哪一版**（软链；没发布过就是空 —— 见文件头那条：那时不写挂载）
+CODE_SRC=""
+if [ -e "$CODE_ROOT/current" ]; then
+  CODE_SRC="$(readlink -f "$CODE_ROOT/current" 2>/dev/null || true)"
+  say "当前产品层：$CODE_SRC"
+else
+  echo "  ⚠️ 还没发布过产品层（$CODE_ROOT/current 不在）⇒ 容器先用镜像里那份兜底。"
+  echo "     发布（以 $OWNER_USER 身份，不需要 root）："
+  echo "       bash scripts/build-tenant-code.sh && bash scripts/build-tenant-code.sh --verify && bash scripts/build-tenant-code.sh --publish"
+fi
 
 TAR="/var/tmp/hupo-tenant-image.tar"
 
@@ -140,6 +177,7 @@ for u in "${USERS[@]}"; do
   # ③ 镜像进**他自己那份**存储
   #    ⚠️ rootless podman 要 `XDG_RUNTIME_DIR`，而 `sudo` 默认不给 ⇒ 显式传
   img_changed=0
+  code_changed=0
   HIS_ID="$(as_user "$u" podman image inspect "$IMG" --format '{{.Id}}' 2>/dev/null | head -1)"
   if [ -n "$HIS_ID" ] && [ "$HIS_ID" = "$SRC_ID" ]; then
     say "他自己的存储里已是最新的镜像"
@@ -212,6 +250,18 @@ for u in "${USERS[@]}"; do
   #    "某一台容器的隧道一直连不上"，**单元自己不报错**（它只是在等一个不会出现的套接字）。
   #    ⇒ 改成**每次都按模板重写**（内容一样就是幂等；不一样就说明它该更新了），
   #      并且**重写之后重启那台**（不然跑着的还是旧的）。
+  # ⚠️ **产品层那条挂载**：只有**真发布过**才写进单元（见文件头那条：
+  #    挂载源不存在时 `podman` 会把它建成一个**空目录**，于是 `current` 那个软链
+  #    以后就别想再翻了）。变量自带结尾那个 `\`，所以空的时候整行就"少一行"。
+  CODE_MOUNT=""
+  CODE_ENV=""
+  if [ -n "$CODE_SRC" ]; then
+    CODE_MOUNT="  -v $CODE_SRC:/app/code:ro \\
+"
+    CODE_ENV="  --env HUPO_CODE_DIR=/app/code \\
+"
+  fi
+
   unit_changed=0
   if [ -f "$unit" ]; then
     say "单元已有：$unit（**按模板核对**）"
@@ -247,14 +297,17 @@ ExecStart=/usr/bin/podman run --replace --rm --name hupo-tenant-$u \
   --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
   --tmpfs /run/hupo:rw,nosuid,nodev,mode=0700 \
   -v $vol:/data \
-  -v $(dirname $chan):/run/hupo-host \
-  --security-opt=no-new-privileges \
+$CODE_MOUNT  -v $(dirname $chan):/run/hupo-host \
+$CODE_ENV  --security-opt=no-new-privileges \
   --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
   --pids-limit=512 --memory=768m --memory-swap=768m \
   --env HUPO_CHANNEL=/run/hupo-host/channel.sock \
   --env HUPO_CHANNEL_WAIT_MS=60000 \
   $IMG
-Restart=on-failure
+# ⚠️ **`always`，不是 `on-failure`**（2026-09-21 改 · `45-TENANT-UPDATE.md` §三）：
+#    重开去拿新的一版是**自己 `exit(0)`**（那是成功退出）——`on-failure` 会让它
+#    **停在那儿再也不起来**。而 `stop` 是显式的，systemd 不会因为 `always` 就又拉起它。
+Restart=always
 RestartSec=5
 TimeoutStopSec=30
 
@@ -282,14 +335,32 @@ UNIT
     say "⚠️ 跑着的那台用的是**旧镜像**（${RUN_ID:0:19}…）⇒ 要重启"
   fi
 
+  # ⚠️ **同一个坑的第三种形态**（2026-09-21 · `45-TENANT-UPDATE.md`）：产品层也一样 ——
+  #    翻 `current` **不影响已经在跑的那台**（挂载源是**创建那一刻**定下来的）。
+  #    ⇒ 判据只能是"**它挂的是哪一份**"，跟"当前是哪一份"是两件事。
+  #    ⚠️ 宿主那边也会**自己发现**这件事（容器自报版本 ⇒ 不一致就叫它重开），
+  #      所以这一条不是唯一的防线 —— 但它是"跑完这个脚本就一定是新的"那一条。
+  RUN_CODE="$(as_user "$u" podman inspect "hupo-tenant-$u" \
+    --format '{{range .Mounts}}{{if eq .Destination "/app/code"}}{{.Source}}{{end}}{{end}}' 2>/dev/null | head -1)"
+  if [ -n "$CODE_SRC" ]; then
+    if [ "$RUN_CODE" != "$CODE_SRC" ]; then
+      code_changed=1
+      say "⚠️ 跑着的那台挂的是**另一版产品层**（${RUN_CODE:-没挂} ⇒ 当前 $CODE_SRC）⇒ 要重启"
+    fi
+  elif [ -n "$RUN_CODE" ]; then
+    say "· 它挂着产品层（$RUN_CODE），但宿主这边现在读不到 current —— **不动它**"
+  fi
+
   # 让**他自己的** systemd 认这个单元并启用（linger 已开 ⇒ 开机就会起）
   if [ "$DO" = "1" ]; then
     as_user "$u" systemctl --user daemon-reload >/dev/null 2>&1 || true
-    if [ "$unit_changed" = "1" ] || [ "$img_changed" = "1" ]; then
+    if [ "$unit_changed" = "1" ] || [ "$img_changed" = "1" ] || [ "$code_changed" = "1" ]; then
       # ⚠️ **镜像换了也要重启**（2026-09-21 第二次被这个坑住）：
       #    `podman load` 只是把新镜像放进他的存储，**跑着的那个还是旧的**
       #    （现象：改了容器里的代码，行为一点没变 —— 而日志说"load 好了"）。
-      plan "重启这一台（$([ "$img_changed" = 1 ] && echo 镜像换了 || echo 单元变了)）"
+      WHY_RESTART="$([ "$img_changed" = 1 ] && echo 镜像换了 || echo 单元变了)"
+      [ "$code_changed" = 1 ] && WHY_RESTART="$([ "$img_changed" = 1 ] && echo '镜像换了 + 产品层换了' || echo 产品层换了)"
+      plan "重启这一台（$WHY_RESTART）"
       as_user "$u" systemctl --user daemon-reload
       as_user "$u" podman rm -f "hupo-tenant-$u" >/dev/null 2>&1
       as_user "$u" systemctl --user restart --no-block hupo-tenant.service

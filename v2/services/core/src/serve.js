@@ -30,6 +30,7 @@ import { integrityReport, repoRootFor } from './integrity.js';
 import { describeAdmission, readAdmission } from './admission.js';
 import { applyPrune, groupSlugFor, planPrune, scanEntries, summarize } from './prune.js';
 import { createTurnStatus, statusPath } from './turn-status.js';
+import { compareTenantBuild, readProductLayer } from './product-layer.js';
 import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
 
 
@@ -327,12 +328,29 @@ const userOfTenant = (tenant) => {
   return null;
 };
 
+// ★ **当前产品层是哪一版**（契约 `docs/dev/45-TENANT-UPDATE.md`）。
+//   ⚠️ **读不到就是 `null`**，而且那时**谁都不叫重开** ——
+//      叫了就是让每一台去挂一个不存在的东西（那正好会把它们全弄死）。
+//   ⚠️ 这里**不自己算指纹**：算它的地方只有 `scripts/build-tenant-code.sh` 一处。
+const productLayer = readProductLayer();
+
 const channel = new TenantChannel({
   dir: cfg.tenantChannelDir,
   // ⚠️ 收到的 `tenant` 是**套接字名**；key 按 **userId** 存 ⇒ 这里要翻一次
   keyFor: (tenant) => {
     const uid = userOfTenant(tenant);
     return uid ? (tenantKeys.get(uid) ?? null) : null;
+  },
+  // ★ **容器自报的版本指纹**（契约 `docs/dev/45-TENANT-UPDATE.md`）：
+  //   比完**该说话就说话**（`compareTenantBuild` 是纯函数，`test/unit` 里真验），
+  //   不一致就**叫它重开**（那一帧不带内容；退不退由它自己定）。
+  //   ⚠️ **读不到当前产品层 ⇒ 谁都不叫**（`unknown`）：叫了就是让它们去挂一个
+  //      不存在的东西 —— 那正好会把每一台都弄死。
+  onBuild: (tenant, buildId) => {
+    const cur = productLayer?.fingerprint ?? null;
+    const v = compareTenantBuild({ reported: buildId, current: cur });
+    if (v.verdict !== 'same') console.log(`  ${v.reload ? '⚠️' : '·'} ${tenant}：${v.line}`);
+    return v;
   },
   // ★ **容器说"那把钥匙不灵了"**（`44-CONTAINER-MODEL-KEY.md` §六）：
   //   把宿主这本账也收拾干净 —— 不然用户那一屏会一直说"有钥匙"，回不去重填。
@@ -715,6 +733,16 @@ console.log(
   // ⚠️ 这个数是**通道自己算的**（`listeningCount`），不是记出来的：
   //    租户现在会在**运行时**多出来（按需开一台）⇒ 记出来的那个数一定会漂。
   `  租户通道 ${channel.listeningCount > 0 ? `${channel.listeningCount} 个租户在听（${cfg.tenantChannelDir}）` : '⚠️ 没开（HUPO_TENANT_MAP 空 / 目录没配）'}`,
+);
+console.log(
+  // ★ **每台跑的是哪一版**（契约 `docs/dev/45-TENANT-UPDATE.md` §二）。
+  //   ⚠️ 这一行必须**如实**：读不到就写读不到，不一致就写不一致 ——
+  //      "一台悄悄跑着旧的、而两边都以为没事"正是这套东西要防的那件事。
+  `  产品层   ${
+    productLayer
+      ? `${productLayer.fingerprint}（${productLayer.gitRev ?? '未知提交'}${productLayer.builtAt ? ` · ${productLayer.builtAt}` : ''}）`
+      : '⚠️ 读不到（还没翻过任何一版；容器会停在镜像里那份兜底上）'
+  }${channel.builds.size > 0 ? `｜在跑的：${[...channel.builds.entries()].map(([t, b]) => `${t}=${b}`).join(' ')}` : ''}`,
 );
 console.log(
   // ⚠️ **这一行是多租户接上之后必须有的**：不报它，就看不出「到底有几个人各过各的」。

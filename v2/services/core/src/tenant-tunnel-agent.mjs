@@ -34,6 +34,8 @@ const CHUNK = 32 * 1024;
  * @param {string} o.socketPath
  * @param {string} [o.localTarget]
  * @param {(m:string)=>void} [o.log]
+ * @param {()=>void} [o.onReload] 宿主说"有新的一版"（契约 `45-TENANT-UPDATE.md` §三）
+ * @param {()=>void} [o.onReady]  报过到了（这一下之后才认"重开"那句话）
  */
 /**
  * 🔴 **给"盒子里的服务"一个能跟宿主说句话的口子**（2026-09-21 加）。
@@ -88,6 +90,8 @@ export function runTunnelAgent({
   localTarget = process.env.HUPO_LOCAL_TARGET ?? DEFAULT_LOCAL_TARGET,
   log = (m) => console.log(m),
   reconnectMs = 3000,
+  onReload = null,
+  onReady = null,
 } = {}) {
   // ⚠️ 目标可以是 **UDS 路径**（`/run/hupo/local-api.sock` · 选项甲）或者 `host:port`。
   //    前者只连本机那条 **`0600`、只有 root 开得开**的口 —— 身份由内核保证。
@@ -168,6 +172,20 @@ export function runTunnelAgent({
       } catch {
         /* 已经没了 */
       }
+      return;
+    }
+    // ★ **"有新的一版，重开一下吧"**（契约 `docs/dev/45-TENANT-UPDATE.md` §三）。
+    //   ⚠️ 这一帧**不带任何内容**：它不是一个远程执行口。宿主本来就已经决定
+    //      容器跑什么代码（**镜像就是 `deploy` 造的**）⇒ "叫它重开"没有新增能力；
+    //      而"带载荷的重开"会新增 —— 所以载荷一个字段都不给。
+    //   ⚠️ 退不退由 `createReloader` 决定（手上还有话就先说完）；这里只**转达**。
+    if (msg?.type === 'reload') {
+      log('  · 宿主说有新的一版（重开的时机由这边定：先把手上那轮说完）');
+      try {
+        onReload?.();
+      } catch (err) {
+        log(`  ⚠️ 重开那一步没做成：${err?.message ?? err}`);
+      }
     }
   };
 
@@ -187,8 +205,17 @@ export function runTunnelAgent({
       } catch {
         /* 读不到就当没有 */
       }
-      send({ v: 1, type: 'tunnel-ready', hasKey });
-      log(`  隧道通了（→ ${localTarget}）`);
+      // ★ 自报**版本指纹**（2026-09-21 加 · 契约 `docs/dev/45-TENANT-UPDATE.md` §二）：
+      //   宿主据此知道"这一台跑的是哪一版"，也是它决定叫不叫你重开的依据。
+      //   ⚠️ 兜底那份（镜像里的）没有 `manifest.json` ⇒ 它就是 `dev`，**如实报**。
+      const buildId = process.env.HUPO_BUILD_ID ?? 'dev';
+      send({ v: 1, type: 'tunnel-ready', hasKey, buildId });
+      log(`  隧道通了（→ ${localTarget}）· 版本 ${buildId}`);
+      try {
+        onReady?.(); // 报到过了 ⇒ 从现在起认"重开"那句话
+      } catch {
+        /* 报到的钩子出问题，不该把隧道带走 */
+      }
     });
     conn.on('data', (chunk) => {
       buf += chunk;

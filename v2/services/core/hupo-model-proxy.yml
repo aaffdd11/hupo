@@ -1,0 +1,14 @@
+# 让模型那条路走**盒内的 root 小代理**（多租户 ②-3 · `src/model-proxy.mjs`）。
+#
+# 为什么这样写：决策 ① 要求"**agent 读不到自己的 key**"，可 dsh 调模型必须有 key。
+# ⇒ 把"持有"与"使用"分开：明文只在 `/run/hupo/creds.yaml`（tmpfs · root 0600），
+#    由 root 小代理持有；agent 那一侧只有一个**占位符**（名字刻意**避开**
+#    `_API_KEY` / `_TOKEN` / `_SECRET` / `DEEPSEEK` —— 否则会踩 V4b 的 env 扫描）。
+#
+# ⚠️ **它没有任何按人不同的东西** ⇒ 属于**产品层**（`docs/dev/45-TENANT-UPDATE.md`）。
+#    2026-09-21 之前它是 `build-tenant-image.sh` 里的一段 heredoc（**生成出来的**）——
+#    生成出来的东西**没进指纹、也没进评审**，所以搬成一个真的仓库文件。
+- id: llm-deepseek
+  config:
+    baseURL: http://127.0.0.1:8787
+    apiKeyEnv: HUPO_MODEL_TICKET
