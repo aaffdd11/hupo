@@ -140,13 +140,20 @@ import nodeFs from 'node:fs';
 //    ⚠️ 主目录 root **不是 home**（§2.2 规则 1）：home 当 root ⇒
 //       agent 读得到自己的 key、写得进 `.bashrc` = 持久化代码执行。
 const data = process.env.HUPO_DATA ?? '/data';
-const owned = [`${data}/main`, `${data}/workspaces`, `${data}/hupo`];
+// 🔴 **换手**（②-2）：镜像里设了 `HUPO_AGENT_UID/GID=1000` ⇒ 服务（root）
+//    spawn agent 时**把身份降到 1000**。理由：userns 的容器 root 带着
+//    `CAP_DAC_OVERRIDE` ⇒ **agent 是 root 时任何权限位都拦不住它读 key**（决策 ①）。
+//    ⚠️ 所以下面这几格**必须归 1000**，否则换手之后 agent 连自己的东西都写不了。
+//    ⚠️ `/data/dsh` 是 **agent 的 `DSH_HOME`**（镜像里 `DSH_HOME=/data/dsh`）：
+//       它也得归 agent —— 而且它只能由**入口**建（`/data` 是 root `0711`，
+//       uid 1000 自己建不出这一格）。
+const owned = [`${data}/main`, `${data}/workspaces`, `${data}/hupo`, `${data}/dsh`];
 for (const d of [data, ...owned]) {
   try { nodeFs.mkdirSync(d, { recursive: true, mode: 0o700 }); }
   catch (e) { if (e.code !== 'EEXIST') throw e; }
 }
 // 属主照权限席给的：`/data` 是 root `0711`（能穿过去、列不出别人），
-// 里面那三样归 **agent(1000) `0700`** —— 服务(root)读得到，别的租户读不到。
+// 里面那几样归 **agent(1000) `0700`** —— 服务(root)读得到，别的租户读不到。
 //
 // 🔴 **`chmod` 必须在 `chown` 之前**：反过来的话，文件已经属于 1000 了，
 //    root 再 chmod 就需要 `FOWNER`；而运行时**只带 4 条能力**（没有 FOWNER）。
@@ -222,6 +229,9 @@ ctr="$("$BUILDAH" from scratch)"
   --env HUPO_WEB=/nonexistent \
   --env HUPO_AGENT_CWD=/data/main \
   --env HUPO_DSH_BIN=/bin/dsh \
+  --env HUPO_AGENT_UID=1000 \
+  --env HUPO_AGENT_GID=1000 \
+  --env DSH_HOME=/data/dsh \
   --cmd '["/bin/node","/app/entry.mjs"]' \
   "$ctr" >/dev/null || { echo "✗ buildah config 失败 —— 镜像会缺 Cmd/Env，不许往下走"; exit 3; }
 "$BUILDAH" commit "$ctr" "$IMG" >/dev/null

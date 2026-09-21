@@ -317,6 +317,14 @@ export class DshAgent extends EventEmitter {
     const child = this.#spawnFn(cfg.dshBin, args, {
       cwd: cfg.agentCwd,
       stdio: ['pipe', 'pipe', 'pipe'],
+      // ★ **换手**（多租户 ②-2 · `39-PERMISSIONS.md` §5.2/§7.1）：
+      //   容器里的服务是 root，而 root 带着 `CAP_DAC_OVERRIDE`
+      //   ⇒ **agent 是 root 时任何权限位都拦不住它读 key**（决策 ① 说的就是这件事）。
+      //   ⚠️ `null` = 不换手（**宿主上就该不换**：服务跑在 `deploy` 下，没有特权也不该有）。
+      //   ⚠️ 换不过去时 `spawn` 会 **EPERM**（异步 error）⇒ 走上面那条 `child.on('error')`
+      //      ⇒ 那条路会**大声失败**，不会静默退回 root。**这正是要的。**
+      ...(cfg.agentUid !== null && cfg.agentUid !== undefined ? { uid: cfg.agentUid } : {}),
+      ...(cfg.agentGid !== null && cfg.agentGid !== undefined ? { gid: cfg.agentGid } : {}),
       env: childEnv({
         home: cfg.dshHome,
         // ★ 能力层那三个变量（`hupo-capabilities.yml` 用 `!!js process.env.…` 读它们）。

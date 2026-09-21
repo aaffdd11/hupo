@@ -11,6 +11,19 @@ import nodePath from 'node:path';
 import { RECAP_DEFAULTS } from './recap.js';
 import { ledgerSocketPath } from './ledger-socket.js';
 
+/**
+ * 读一个 uid/gid；**没设、空串、或者不是非负整数 ⇒ `null`**（= 不换手）。
+ *
+ * ⚠️ **解析不出来要当"没设"，不许当 0**：`0` 是 root，
+ *    而"写错了反而变成 root"是这里最坏的失败方向。
+ */
+function parseIdOrNull(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) return null;
+  return n;
+}
+
 export function loadConfig(env = process.env, cwd = process.cwd()) {
   const dataDir = env.HUPO_DATA ?? nodePath.resolve(cwd, 'data');
 
@@ -120,6 +133,22 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      *      （准入看内存，见 §15.2）。
      */
     agentMaxProcesses: Number.parseInt(env.HUPO_AGENT_MAX_PROCESSES ?? '4', 10),
+
+    /**
+     * **agent 的手以哪个 uid/gid 跑**（多租户 ②-2「换手」· `39-PERMISSIONS.md` §5.2）。
+     *
+     * ⚠️ **默认 `null` = 不换手**（跟着服务自己那个身份跑）。两条理由：
+     *   1. **宿主上必须不换**：本机服务跑在 `deploy` 下，他的 agent 就该是 `deploy`
+     *      —— 换手需要特权，而宿主上服务**没有**特权（也不该有）；
+     *   2. **容器里必须换**（镜像里设 `HUPO_AGENT_UID=1000`）：
+     *      盒内的服务是 root，而 root 带着 `CAP_DAC_OVERRIDE`
+     *      ⇒ **agent 是 root 时任何权限位都拦不住它读 key**（决策 ①）。
+     *
+     * ⚠️ 换不过去要**大声失败**，不许静默退回 root：静默退回 = 边界不在、
+     *    而一切看起来正常（这正是本项目最忌的那种失败）。
+     */
+    agentUid: parseIdOrNull(env.HUPO_AGENT_UID),
+    agentGid: parseIdOrNull(env.HUPO_AGENT_GID),
 
     /** 空闲多久可以淘汰。手册说 30 分钟**不够**，但改它要配合准入，先沿用。 */
     agentIdleEvictMs: Number.parseInt(env.HUPO_AGENT_IDLE_MS ?? String(30 * 60 * 1000), 10),
@@ -233,4 +262,26 @@ export function preflight(cfg) {
     notes.push('⚠️ 单轮硬收口被关掉了（turnDeadlineMs=0）——agent 卡住就不会有收尾。**生产上不该这样。**');
   }
   return { problems, notes };
+}
+
+/**
+ * 横幅里那一行"**agent 的手是谁**"（多租户 ②-2）。
+ *
+ * ⚠️ 为什么必须**报出来**：换手失败/没配的时候，一切看起来都正常 ——
+ *    而"agent 是不是 root"恰恰决定了决策 ① 的那条边界在不在。
+ *    这个项目最忌的就是"看起来有闸、其实没有"，所以它不许静默。
+ *
+ * ⚠️ 纯函数（给 `test/unit` 钉）。
+ */
+export function describeAgentIdentity(cfg) {
+  const uid = cfg?.agentUid ?? null;
+  const gid = cfg?.agentGid ?? null;
+  if (uid === null && gid === null) {
+    return '跟服务同一个身份（**没换手**：宿主上就该这样；容器里必须有 HUPO_AGENT_UID）';
+  }
+  if (uid === 0) {
+    return '⚠️ **root** —— 决策 ① 的边界**不在**了（root 带着 CAP_DAC_OVERRIDE，任何权限位都拦不住它）';
+  }
+  const g = gid === null ? '（gid 没设，跟着 uid 走）' : String(gid);
+  return `uid ${uid} / gid ${g}（盒子里的"手"；服务自己是 root）`;
 }

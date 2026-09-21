@@ -21,7 +21,7 @@ import { OWNER_ID } from './tenants.js';
 import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
 import { createServer } from './server.js';
-import { loadConfig, preflight } from './config.js';
+import { describeAgentIdentity, loadConfig, preflight } from './config.js';
 import { integrityReport } from './integrity.js';
 import { describeAdmission, readAdmission } from './admission.js';
 import { applyPrune, groupSlugFor, planPrune, scanEntries, summarize } from './prune.js';
@@ -288,6 +288,9 @@ console.log(
   }`,
 );
 console.log(`  agent    ${cfg.dshBin} --profile ${cfg.agentProfile}（最多 ${cfg.agentMaxProcesses} 个）`);
+// ⚠️ 这一行必须**如实报**"手是谁"：换手没配/换不过去的时候一切看起来都正常，
+//    而它恰好决定决策 ① 那条边界在不在（`39-PERMISSIONS.md` §7.1）。
+console.log(`  agent 身份 ${describeAgentIdentity(cfg)}`);
 // ⚠️ 下面这几行**报的是「主人那一份」**（横幅是本机排障视图，不是给用户看的）。
 //    多租户之后每个人的 DSH_HOME / 工作目录都不同 —— 不标明就会被读成「所有人的」。
 console.log(`  工作目录 ${cfg.agentCwd}（主人那一份；别人各在自己那一格里）`);
