@@ -64,6 +64,15 @@ export class Auth {
   #secret;
   #passwordHash;
   #revoked = new Set();
+  /**
+   * **按用户撤全部令牌**（`sub` → 撤销时刻 ms）。
+   *
+   * 为什么要有它：`#revoked` 是**按 `jti`**撤的，只能撤"我知道的那一个令牌"——
+   * 而注销时要撤的是"**这个人签过的所有令牌**"（别处还登着的那些我不知道 `jti`）。
+   * 判法：`iat < 撤销时刻` 的令牌一律不认；撤销**之后**重新登进来的（`iat` 更大）照常认。
+   * ⚠️ `iat` 是**毫秒**（见 `issue()` 的注释），所以同一秒里也不会误伤新令牌。
+   */
+  #revokedUsers = new Map();
   #failures = new Map(); // ip → { count, until }
   #audit = [];
   #mtime = 0;
@@ -91,6 +100,7 @@ export class Auth {
     this.#lastCheck = 0;
     this.#secret = state.secret;
     this.#revoked = new Set(state.revoked ?? []);
+    this.#revokedUsers = new Map(Object.entries(state.revokedUsers ?? {}));
     this.#passwordHash = passwordHash !== undefined ? passwordHash : (state.passwordHash ?? null);
     this.#failures = new Map(Object.entries(state.failures ?? {}));
   }
@@ -130,6 +140,11 @@ export class Auth {
       secret: state.secret,
       passwordHash: state.passwordHash ?? null,
       revoked: runtime.revoked ?? [],
+      // 🔴 **这一行漏了就白写了**（2026-09-21 由 `revoke-user.test.js` 抓出来）：
+      //    `#persistRuntime()` 会把 `revokedUsers` **写进**运行时那份，
+      //    而这里不读回来的话 ⇒ **重启之后按用户撤的那张表是空的**
+      //    ⇒ 被注销的人**又活了**（那正是这条债要防的事）。
+      revokedUsers: runtime.revokedUsers ?? {},
       failures: runtime.failures ?? {},
     };
   }
@@ -159,7 +174,12 @@ export class Auth {
     this.#fs.writeFileSync(
       this.#runtimePath(),
       JSON.stringify(
-        { revoked: [...revoked], failures: Object.fromEntries(this.#failures) },
+        {
+          revoked: [...revoked],
+          // ⚠️ 按用户撤的那张表**也要落盘**：不落的话，重启 = 被注销的人**又活了**
+          revokedUsers: Object.fromEntries(this.#revokedUsers),
+          failures: Object.fromEntries(this.#failures),
+        },
         null,
         2,
       ),
@@ -215,7 +235,19 @@ export class Auth {
     this.#mtime = m;
     const state = this.#load();
     this.#secret = state.secret;
-    this.#revoked = new Set(state.revoked ?? []);
+    // 🔴 **合并，不许覆盖**（2026-09-21 由 `revoke-user.test.js` 抓出来的**既有 bug**）：
+    //    这一条路读的是**持久那份**（`auth.json`），而撤销是写在**运行时那份**
+    //    （`auth-runtime.json`）里的 ⇒ 原来"整个覆盖"会把运行时的撤销**抹掉**。
+    //    现象：**改了密码（触发这次重载）之后，之前撤掉的令牌又活了** ——
+    //    而那正是注销要防的事（"假删除"）。
+    this.#revoked = new Set([...(state.revoked ?? []), ...this.#revoked]);
+    const merged = new Map(Object.entries(state.revokedUsers ?? {}));
+    for (const [sub, at] of this.#revokedUsers) {
+      const had = merged.get(sub);
+      // ⚠️ 同一个人撤过两次 ⇒ 取**晚**的那次（晚的那次管得更宽）
+      merged.set(sub, typeof had === 'number' ? Math.max(had, at) : at);
+    }
+    this.#revokedUsers = merged;
     this.#passwordHash = state.passwordHash ?? null;
     this.#failures = new Map(Object.entries(state.failures ?? {}));
   }
@@ -313,7 +345,12 @@ export class Auth {
   issue({ sub = 'owner', iat = null, jti = null } = {}) {
     if (this.needsSetup) throw new Error('还没设口令，不许发令牌');
     const now = this.#now();
-    const issuedAt = Number.isFinite(iat) ? iat : now;
+    let issuedAt = Number.isFinite(iat) ? iat : now;
+    // ★ **撤过的人重新签发时，把 `iat` 顶到撤销时刻之后**（见 `verify()` 里那段）：
+    //   否则"撤销"和"重新登入"落在同一毫秒时，新令牌会**一起被撤掉**
+    //   （现象：注销完立刻重登，进不去）。
+    const cut = this.#revokedUsers.get(String(sub));
+    if (typeof cut === 'number' && issuedAt <= cut) issuedAt = cut + 1;
     // ⚠️ 滑动窗要从**现在**算，不能从 `iat` 算：
     //    从 `iat` 算的话，"续期"续出来的 `exp` 和原来**一模一样**（等于没续）。
     //    封顶那一项仍然从 `iat` 算 —— 那就是**绝对上限**。
@@ -360,7 +397,35 @@ export class Auth {
     }
     if (typeof payload.exp !== 'number' || payload.exp <= this.#now()) return null;
     if (this.#revoked.has(payload.jti)) return null;
+    // ★ **按用户撤的全部**：这个人在"撤销时刻"**之前**签的令牌一律不认。
+    //   ⚠️ 用 `<` 不用 `<=`：撤销之后重新登进来的那个令牌 `iat` 更大，**它要能用**
+    //     （注销完不许把人永久锁在门外）。
+    // ⚠️ **`<=` 不是 `<`**（2026-09-21 由测试逼出来的）：`iat` 是**毫秒**，
+    //    而"签发"和"撤销"完全可能落在**同一毫秒**里（测试里就是这样，
+    //    真人快速重登也一样）⇒ 用 `<` 会漏掉那一个。
+    //    ⇒ 语义定成：**撤销时刻 `T` 及其之前签的，全不认**。
+    //      而"撤完重新登进来"靠 `issue()` 把 `iat` 顶到 `T + 1` 保证（见那儿）。
+    const cut = this.#revokedUsers.get(payload.sub);
+    if (typeof cut === 'number' && typeof payload.iat === 'number' && payload.iat <= cut) return null;
     return payload;
+  }
+
+  /**
+   * **把这个人签过的令牌全部撤掉**（注销 / 换设备 / "别处还登着"）。
+   *
+   * ⚠️ 判据在 `verify()` 里（按 `iat`），**不许**改成"记一串 jti" ——
+   *    那样只能撤我们知道的那几个，而债就是"别处的那些我不知道"。
+   */
+  revokeUser(sub, { now = null } = {}) {
+    if (!sub) return false;
+    this.#revokedUsers.set(String(sub), Number.isFinite(now) ? now : this.#now());
+    this.#persistRuntime();
+    return true;
+  }
+
+  /** 这个人被按用户撤过吗（排障用；**不含任何秘密**）。 */
+  revokedUserAt(sub) {
+    return this.#revokedUsers.get(String(sub)) ?? null;
   }
 
   revoke(token) {

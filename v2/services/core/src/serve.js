@@ -52,20 +52,6 @@ const adm = readAdmission();
 //    盘上是两层的（`sessions/<项目>-<slug>--/<记录>/`），不分组地清会连
 //    **别的项目**和**这个 GUI 自己的可 resume 记录**一起删（AGENTS §六.5）。
 // ⚠️ 而且它**不许阻断启动**：清记录是维护动作，出任何事都只记一句（照开机对账那条规矩）。
-let pruned = null;
-try {
-  const groupDir = nodePath.join(cfg.dshHome, 'sessions', groupSlugFor(cfg.agentCwd));
-  if (nodeFs.existsSync(groupDir)) {
-    const plan = planPrune({ entries: scanEntries({ root: groupDir }) });
-    if (plan.remove.length > 0) {
-      const done = applyPrune(plan.remove, { root: groupDir });
-      pruned = summarize(plan, { applied: true, done });
-    }
-  }
-} catch (err) {
-  console.warn(`  ⚠️ 顺手清旧记录没做成（不影响服务）：${err?.message ?? err}`);
-}
-
 const ig = integrityReport({
   repo: nodePath.resolve(import.meta.dirname, '../../..'),
   home: nodeOs.homedir(),
@@ -128,6 +114,27 @@ worlds = new Worlds({
 const warmed = worlds.warmUp([OWNER_ID, ...users.ids()]);
 // 主人那一份：横幅、进程级兜底、开机那几句话都报**他这一份**
 // （横幅是本机的排障视图，不是给用户看的；用户各自看自己的界面）。
+// ⚠️ **按人各清各的**（`38` §二·补.2 记的第二个窄口）：
+//    以前只清**主人那一份**（`cfg.dshHome`），而每个租户都有他自己的 `DSH_HOME`
+//    ⇒ 他们的 `sessions/` **只涨不降**。
+//    ⚠️ 只动"这个人自己的工作目录对应的那一组"（分组见 `prune.js`）——
+//      不分组地清会连**别的项目**和这个 GUI 自己可 resume 的记录一起删。
+const pruned = [];
+for (const w of worlds.all()) {
+  try {
+    const groupDir = nodePath.join(w.cfg.dshHome, 'sessions', groupSlugFor(w.cfg.agentCwd));
+    if (!nodeFs.existsSync(groupDir)) continue;
+    const plan = planPrune({ entries: scanEntries({ root: groupDir }) });
+    if (plan.remove.length > 0) {
+      const done = applyPrune(plan.remove, { root: groupDir });
+      pruned.push({ userId: w.userId, text: summarize(plan, { applied: true, done }) });
+    }
+  } catch (err) {
+    // ⚠️ 一个人清不动不许影响别人，也不许阻断启动
+    console.warn(`  ⚠️ ${w.userId} 的旧记录没清成（不影响服务）：${err?.message ?? err}`);
+  }
+}
+
 const ownerWorld = worlds.worldFor(OWNER_ID);
 const { timeline, notice, ledger } = ownerWorld;
 const boot = ownerWorld.boot;
@@ -175,7 +182,33 @@ if (boot.uncleanLastRun && reconciled.told === 0) {
 // ⚠️ **已知的窄口**（记在 `38` §二·补）：进程级崩溃是**宿主级**事件，
 //    而这条兜底只能往**一份**时间线上写 ⇒ 这里写的是**主人那一份**。
 //    别的用户不会被这条叫醒。要不要按人各装一条，等有人真的多起来再定。
-installProcessGuard({ timeline, notice });
+// ⚠️ **进程级崩溃是"宿主级"事件**（谁都会被波及）⇒ 通知要**发给每一个人**，
+//    而不是只发主人那一份（`38` §二·补.2 里记的窄口就是这个）。
+//    ⚠️ 一个人发不出去不许影响别人（各自 `try` 一次）。
+installProcessGuard({
+  timeline: {
+    emitTransient: (e) => {
+      for (const w of worlds.all()) {
+        try {
+          w.timeline.emitTransient(e);
+        } catch {
+          /* 这一份发不出去，别的照发 */
+        }
+      }
+    },
+  },
+  notice: {
+    noticeUrgent: (o) => {
+      for (const w of worlds.all()) {
+        try {
+          w.notice.noticeUrgent(o);
+        } catch {
+          /* 同上 */
+        }
+      }
+    },
+  },
+});
 
 const webRoot = nodeFs.existsSync(nodePath.join(cfg.webRoot, 'index.html')) ? cfg.webRoot : null;
 
@@ -361,7 +394,7 @@ console.log(`  构建     ${cfg.buildId}`);
 // ⚠️ 这一行必须**如实**：清单还没建的时候，这道闸是**没有**的。
 //    报成"OK"就是"看起来有闸、其实没有"——比不设更坏。
 console.log(`  准入     ${describeAdmission(adm)}`);
-if (pruned) console.log(`  顺手清   ${pruned}`);
+for (const p of pruned) console.log(`  顺手清   ${p.userId}：${p.text}`);
 console.log(
   `  完整性   ${
     ig.state === 'ok'

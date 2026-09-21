@@ -346,6 +346,15 @@ export function createServer({
       // ⚠️ 回收站里那些**不算进来**，但**条数要如实报**（契约 §三）——
       //    `trash.list()` 是唯一知道"谁被删过"的地方，所以这道闸打在这儿。
       // ⚠️ 没开回收站的部署也照样导得出（只是没有"被删掉的那几条"要报）。
+      // ── 把这个人签过的令牌**全部**撤掉（"别处还登着" / 注销那一步）──────
+      // ⚠️ 身份只从令牌来；撤的是**这个 `sub`**（不是请求里给的任何东西）。
+      // ⚠️ 回执里**不说**撤了几个（我们本来也不知道）。
+      if (path === '/api/revoke-all' && req.method === 'POST') {
+        if (trusted) return sendJson(res, 404, { error: 'not-found' });
+        auth.revokeUser(claim.sub);
+        return sendJson(res, 200, { ok: true });
+      }
+
       // ── "我的空间到哪一步了"（契约 `38` §8.3：等待屏靠它）──────────────
       // ⚠️ **只读**、**不带 key**、**不分配任何隧道**（探测不许有副作用）。
       if (path === '/api/space' && req.method === 'GET') {
