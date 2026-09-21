@@ -206,6 +206,27 @@ if (ds.uid !== 0 || (ds.mode & 0o777) !== 0o711) {
 try {
   nodeFs.mkdirSync('/run/hupo', { recursive: true, mode: 0o700 });
 } catch { /* 挂载点上建不了是正常的（podman 已经建好了） */ }
+// ★ **领配置**（多租户 ②-4）：连回宿主那条通道，把这一台的模型凭据领回来，
+//   写进 `/run/hupo/creds.yaml`（tmpfs · root 0600）。
+//   ⚠️ **这是主人说的那五步的第 ②③④ 步**：容器起来是个空壳 ⇒ 等着 ⇒ 配置到了才往下走。
+//   ⚠️ 领不到**不许**把服务挡住：界面照常起来，只是模型那条路会**如实**说不通
+//      （`model-proxy` 没 key 时回 503 而不是去打扰上游）。
+//   ⚠️ 宿主上没有 `HUPO_CHANNEL` ⇒ 这一整段不执行（宿主行为逐字不变）。
+const channel = process.env.HUPO_CHANNEL ?? '';
+if (channel) {
+  try {
+    const { fetchKeyFromHost } = await import('./src/tenant-shell.mjs');
+    await fetchKeyFromHost({
+      socketPath: channel,
+      keyFile: process.env.HUPO_KEY_FILE ?? '/run/hupo/creds.yaml',
+      waitMs: Number.parseInt(process.env.HUPO_CHANNEL_WAIT_MS ?? '120000', 10),
+      log: (m) => console.log(m),
+    });
+  } catch (err) {
+    console.error(`  ⚠️ 领配置那一步没做成：${err?.message ?? err}（界面照常，模型那条路会说不通）`);
+  }
+}
+
 try {
   const { startModelProxy } = await import('./src/model-proxy.mjs');
   await startModelProxy({ log: (m) => console.log(m) }).listen();
