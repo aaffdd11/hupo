@@ -123,8 +123,8 @@ test('🔴 还没做的那几件 ⇒ 明说"还没做"（不许假装成功）',
   const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-op-'));
   tmpDirs.push(dir);
   const apps = new Apps({ dir });
-  // 乙-3 起 publish/unpublish/install/discover 都做了 ⇒ 只剩这三件
-  for (const op of ['uninstall', 'grant', 'revoke']) {
+  // 乙-4 起 uninstall 也做了 ⇒ 只剩授权那两件（`ask` 那条路还没定）
+  for (const op of ['grant', 'revoke']) {
     const r = handleAppsOp(apps, { op });
     assert.equal(r.ok, false, `${op} 现在做不了，必须说做不了`);
     assert.match(r.error, /还没做/, `${op} 要说清"还没做"`);
@@ -144,15 +144,16 @@ test('坏输入只让那一条失败（校验不过 ⇒ ok:false，而且盘上�
 
 // ── 真链路 ──────────────────────────────────────────────────
 
-test('握手给的是**标准 MCP**：initialize → tools/list 六件工具', async () => {
+test('握手给的是**标准 MCP**：initialize → tools/list 七件工具', async () => {
   const s = setup();
   const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
   try {
     await handshake(c);
     const list = await c.call('tools/list', {});
     const names = list.result.tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ['app_create', 'app_discover', 'app_install', 'app_list', 'app_publish', 'app_unpublish'],
-      '乙-3 起是这六件（卸载与授权那两件要等权限那一批）');
+    assert.deepEqual(names,
+      ['app_create', 'app_discover', 'app_install', 'app_list', 'app_publish', 'app_uninstall', 'app_unpublish'],
+      '乙-4 起是这七件（授权那两件要等"问一句"那条路定下来）');
     for (const t of list.result.tools) {
       assert.equal(t.inputSchema.type, 'object');
       assert.ok(t.description.length > 10, '每条都要说清什么时候调');
@@ -367,4 +368,21 @@ test('装上 / 发布 都要留一行审计（可倒查）', () => {
   // ⚠️ 审计里**不许有原始身份**（只有哈希）
   const blob = JSON.stringify(lines);
   assert.equal(blob.includes('"u1"'), false, '共享库这边只许出现作者哈希');
+});
+
+test('乙-4：卸载 ⇒ 清单里没了、但盘上还在（软删，能拿回来）', async () => {
+  const s = setup();
+  const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
+  try {
+    await handshake(c);
+    await c.call('tools/call', { name: 'app_create', arguments: APP });
+    const gone = await c.call('tools/call', { name: 'app_uninstall', arguments: { id: 'dice' } });
+    assert.equal(gone.result.isError, false, JSON.stringify(gone.result));
+    assert.match(gone.result.content[0].text, /收起来/);
+    assert.deepEqual(s.apps.list(), [], '清单里该没了');
+    assert.equal(nodeFs.existsSync(nodePath.join(s.dir, 'hupo', 'apps', '.removed')), true, '★ 软删：挪进 .removed');
+  } finally {
+    c.child.kill();
+    await s.sock.close();
+  }
 });

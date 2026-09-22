@@ -106,6 +106,15 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                                   '${discoverByAuthor(a.author)} · ${discoverVersion(a.version)}',
                                   style: t.textTheme.bodySmall?.copyWith(color: d.muted),
                                 ),
+                                // 🔴 **它要什么，装上之前就看得见**（如实告知）
+                                if (a.permissions.contains('ask'))
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 4),
+                                    child: Text(
+                                      discoverNeedsAsk,
+                                      style: t.textTheme.bodySmall?.copyWith(color: d.accent),
+                                    ),
+                                  ),
                               ],
                             ),
                           ),

@@ -97,11 +97,17 @@ export function handleAppsOp(apps, req, ctx = {}) {
         if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
         return { ok: true, apps: ctx.published.discover(), me: authorHashOf(ctx.sub ?? '') };
       }
+      case 'uninstall': {
+        // ★ **卸载**（乙-4）：软删（挪进 `.removed/`）—— 这个项目的规矩是"删错了能拿回来"。
+        apps.remove(req.id);
+        return { ok: true, id: req.id, removed: true };
+      }
       // ── 还没做的（**明说**，不许假装成功）──────────────────
-      case 'uninstall':
+      // ⚠️ 授予/撤权**故意先不挂**：`ask` 那条"用他自己的钥匙"的路还没定
+      //    （见 `59` §九），挂上去就是给他一个"按了也没用"的开关。
       case 'grant':
       case 'revoke':
-        return { ok: false, error: `这件事还没做：${op}（它要等"权限"那一批）` };
+        return { ok: false, error: `这件事还没做：${op}（要等"问一句"那条路定下来）` };
       default:
         return { ok: false, error: `认不出这条请求：${op}` };
     }

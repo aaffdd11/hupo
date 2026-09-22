@@ -54,13 +54,23 @@ export const ICONS = Object.freeze([
 ]);
 
 /**
- * **权限白名单**。
+ * **权限白名单**（乙-4 开门：`ask`）。
  *
- * ⚠️ 乙-1 **只允许空数组**：`ask`（用**看的人**的钥匙问一句话）是乙-4 才开的。
- * ⇒ 现在任何非空权限都**拒收** —— 这样"制品拿不到任何能力"这条在乙-1 是**结构上成立**的，
- *   而不是"我们记得没给它"。
+ * `ask` = 允许它请求「用**看的人**的钥匙问一句话」。
+ * ⚠️ **声明 ≠ 能用**：制品必须在清单里声明，**而且看的人明确授予**，两样都齐了才算（见 `grants`）。
+ * ⚠️ **钥匙永远不进制品**：制品只拿得到"问一句"这个动作，拿不到钥匙本身，也拿不到别人的钥匙。
  */
-export const PERMISSIONS = Object.freeze([]);
+export const PERMISSIONS = Object.freeze(['ask']);
+
+/**
+ * **一次问话的配额**（数字只住这里）。
+ *
+ * ⚠️ 为什么必须有它：`ask` 花的是**看的人自己的钱** ——
+ *    一个别人写的页面可以一直问，那是**他的钱袋在漏**。
+ * ⇒ 两道：每天每 app 一个总次数 + 两次之间一个最小间隔。
+ */
+export const ASK_PER_DAY = 40;
+export const ASK_MIN_INTERVAL_MS = 3000;
 
 /** 内容类型（按扩展名）。**认不出来一律 `application/octet-stream`**（宁可下载也不猜）。 */
 const CONTENT_TYPES = Object.freeze({
@@ -391,6 +401,62 @@ export class Apps {
       throw new AppsError('这个文件的内容对不上它的 hash（被人动过了）');
     }
     return { content: buf, contentType: contentTypeOf(rel) };
+  }
+
+  /**
+   * **他授予了哪些权限**（乙-4）。**没授予过 ⇒ 空数组**（fail-closed）。
+   *
+   * ⚠️ 存在**他自己那一格**里（`<id>/grant.json`）：授予是**他**的决定，
+   *    不是作者写进清单就能生效的东西。
+   */
+  grants(id) {
+    checkAppId(id);
+    try {
+      const j = JSON.parse(this.fs.readFileSync(nodePath.join(this.appDir(id), 'grant.json'), 'utf8'));
+      const out = [];
+      for (const p of j?.permissions ?? []) {
+        if (PERMISSIONS.includes(p)) out.push(p);
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  /** **授予 / 撤销**（只认白名单里的名字；不是白名单的一律丢掉）。 */
+  setGrants(id, permissions) {
+    checkAppId(id);
+    if (this.current(id) === null) throw new AppsError('这个小程序不在你这儿');
+    const keep = [];
+    for (const p of permissions ?? []) {
+      if (!PERMISSIONS.includes(p)) throw new AppsError(`这个权限不认识：${String(p).slice(0, 20)}`);
+      if (!keep.includes(p)) keep.push(p);
+    }
+    writeAtomic(
+      this.fs,
+      nodePath.join(this.appDir(id), 'grant.json'),
+      `${JSON.stringify({ permissions: keep, at: this.now() })}\n`,
+      0o644,
+    );
+    this.#audit({ what: 'grant', id, permissions: keep });
+    return keep;
+  }
+
+  /**
+   * **卸载**：从桌面上撤掉。
+   *
+   * ⚠️ **软删**（挪进 `<root>/.removed/`），不是真删 ——
+   *    这个项目的规矩是"删错了能拿回来"（回收站那条）。真删要人自己说。
+   * ⚠️ 挪走之后 `list()` 里就没有它了（`.` 开头的不算 app）。
+   */
+  remove(id) {
+    checkAppId(id);
+    if (this.current(id) === null) throw new AppsError('这个小程序不在你这儿');
+    const to = nodePath.join(this.root, '.removed', `${id}-${this.now()}`);
+    this.fs.mkdirSync(nodePath.dirname(to), { recursive: true, mode: 0o755 });
+    this.fs.renameSync(this.appDir(id), to);
+    this.#audit({ what: 'remove', id });
+    return to;
   }
 
   /**

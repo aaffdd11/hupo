@@ -120,14 +120,18 @@ test('🔴 hash 对不上 ⇒ 读就抛（不是"尽力画"）', () => {
   assert.throws(() => apps.read('dice', 1, 'index.html'), /对不上/);
 });
 
-test('限额：文件太多 / 单文件太大 / 权限非空 ⇒ 拒', () => {
+test('限额：文件太多 / 单文件太大 / 未知权限 ⇒ 拒', () => {
   const apps = new Apps({ dir: tmp() });
   const many = {};
   for (let i = 0; i <= MAX_FILES; i += 1) many[`f${i}.txt`] = 'x';
   assert.throws(() => apps.create({ ...OK, files: { ...many, 'index.html': 'x' } }), /文件太多/);
   const big = { 'index.html': 'x'.repeat(MAX_FILE_BYTES + 1) };
   assert.throws(() => apps.create({ ...OK, files: big }), /太大/);
-  assert.throws(() => apps.create({ ...OK, permissions: ['ask'] }), /还不给/);
+  // ⚠️ 乙-4 起 `ask` 是**允许声明**的（声明 ≠ 能用：还要看的人授予），
+  //    但**不认识的名字**照样拒 —— 而且拒了之后盘上不许留东西。
+  const withAsk = apps.create({ ...OK, id: 'withask', permissions: ['ask'] });
+  assert.deepEqual(withAsk.permissions, ['ask']);
+  assert.throws(() => apps.create({ ...OK, id: 'bad', permissions: ['root'] }), /不认识|还不给/);
 });
 
 test('图标与 id 都走白名单；入口必须在文件里', () => {
@@ -316,4 +320,27 @@ test('制品口：405 / 404 / HEAD', async () => {
   assert.equal(h.body.length, 0, 'HEAD 不该有 body');
   assert.match(String(h.headers['content-length']), /^[1-9]/);
   await close();
+});
+
+test('乙-4：授予要落盘、只认白名单、撤了就空；卸载是**软删**（能拿回来）', () => {
+  const dir = tmp();
+  const apps = new Apps({ dir, sub: 'u1' });
+  apps.create({ ...OK, permissions: ['ask'] });
+  assert.deepEqual(apps.grants('dice'), [], '没授予过 ⇒ 空（fail-closed）');
+  assert.deepEqual(apps.setGrants('dice', ['ask']), ['ask']);
+  assert.deepEqual(apps.grants('dice'), ['ask'], '授予要落盘（重启之后还在）');
+  assert.throws(() => apps.setGrants('dice', ['root']), /不认识/);
+  assert.deepEqual(apps.setGrants('dice', []), [], '撤了就空');
+  assert.deepEqual(apps.grants('dice'), []);
+  assert.throws(() => apps.setGrants('nope', ['ask']), /不在你这儿/);
+
+  // 卸载：清单里没了，但盘上还在（软删）
+  apps.remove('dice');
+  assert.deepEqual(apps.list().map((a) => a.id), []);
+  const kept = nodeFs.readdirSync(nodePath.join(dir, 'hupo', 'apps', '.removed'));
+  assert.equal(kept.length, 1, '★ 挪进 .removed（不是真删）');
+  // 审计里要留一行
+  const audit = nodeFs.readFileSync(nodePath.join(dir, 'hupo', 'apps', 'audit.jsonl'), 'utf8');
+  assert.match(audit, /"what":"remove"/);
+  assert.match(audit, /"what":"grant"/);
 });

@@ -131,6 +131,7 @@ void _discoverTests() {
             jsonEncode({
               'apps': [
                 {'id': 'dice', 'title': '掷骰子', 'icon': 'dice', 'version': 2, 'author': '用户 3f2a', 'permissions': <String>[]},
+                {'id': 'wenda', 'title': '问答小抄', 'icon': 'book', 'version': 1, 'author': '用户 9b1c', 'permissions': ['ask']},
               ],
             }),
             200,
@@ -150,6 +151,9 @@ void _discoverTests() {
     expect(find.text('掷骰子'), findsOneWidget, reason: '别人的小程序该列出来');
     expect(find.textContaining('用户 3f2a'), findsOneWidget, reason: '谁发的要看得见');
     expect(find.text(discoverHowTo), findsOneWidget, reason: '★ 必须明说"装的动作在对话里"（不然他会在这儿找按钮）');
+    // 🔴 **如实告知**：要"用你的钥匙"的那一条，装上之前就看得见
+    expect(find.text(discoverNeedsAsk), findsOneWidget, reason: '★ "它会用你自己的钥匙问话"必须写在这儿');
+    expect(find.text('问答小抄'), findsOneWidget, reason: '要权限的那条也要列出来');
   });
 
   testWidgets('空「发现」⇒ 如实说"现在还没有"（不是白屏）', (tester) async {

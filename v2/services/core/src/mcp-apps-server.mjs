@@ -157,6 +157,19 @@ const TOOLS = [
     },
   },
   {
+    name: 'app_uninstall',
+    description:
+      '把**他自己桌面上**的某个小程序撤掉。'
+      + '⚠️ 只有他明确说"删了它""不要了"才调。'
+      + '⚪ 撤掉是**收起来**（不是真没了），所以可以跟他说"以后想要我再给你放回来"。',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: '要撤掉的那个短名' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'app_list',
     description:
       '看主人**自己**有哪些小程序（名字 / 图标 / 版本）。他问"我有哪些小程序""那个叫什么"时调它，'
@@ -219,6 +232,14 @@ async function callTool(name, args) {
     const r = await ask({ op: 'install', id });
     if (r.ok) return textResult(`装好了：**${r.title}** 现在在他的桌面上，点开就能用。`);
     return textResult(`没装成：${r.error}`, true);
+  }
+
+  if (name === 'app_uninstall') {
+    const id = typeof args?.id === 'string' ? args.id.trim().toLowerCase() : '';
+    if (!id) return textResult('没说清是哪一个，什么都没动。', true);
+    const r = await ask({ op: 'uninstall', id });
+    if (r.ok) return textResult('撤下来了（是收起来，不是真删）。');
+    return textResult(`没撤成：${r.error}`, true);
   }
 
   if (name === 'app_list') {

@@ -32,3 +32,7 @@ String discoverVersion(int version) => '第 $version 版';
 
 /// 空态（**实话**：现在真的还没有别人发出来）。
 const String discoverEmpty = '现在还没有别人发出来的小程序。';
+
+/// 🔴 **如实告知**：这一条要"用你自己的钥匙问话"。
+/// ⚠️ 装上之前就要看得见（这是"别人写的程序能花你的钱"那件事的**知情**部分）。
+const String discoverNeedsAsk = '会用你自己的钥匙问话';
