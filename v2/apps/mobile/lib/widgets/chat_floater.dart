@@ -185,6 +185,10 @@ class ChatFloaterState extends State<ChatFloater> {
   /// 外面叫它收起（点桌面空白时用）。
   void collapse() => _setTier(FloaterTier.collapsed, auto: false);
 
+  /// **展开到上次那一档**（§6.3："点收起态底部条 ⇒ 展开到上次档位"）。
+  /// ⚠️ 「展开」按钮和**点输入框**走的是**同一条路** —— 两处各写一套迟早会分叉。
+  void expand() => _setTier(_lastOpen, auto: false);
+
   /// 现在哪一档（闸用）。
   FloaterTier get tier => _tier;
 

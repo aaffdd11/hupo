@@ -91,6 +91,27 @@ void main() {
     expect(s.color.r, closeTo(d.ink.r, 0.01));
   });
 
+  testWidgets('🔴 点收起态那个「说点什么」⇒ **窗口自动打开**（而且字不丢）', (tester) async {
+    // 主人 2026-09-22：*"点击说点什么，聊天窗口会自动打开。"*
+    // （手册 §6.3 那条"点收起态底部条 ⇒ 展开到上次档位"就是这个）
+    await _pump(tester);
+    expect(find.byTooltip(chatCollapse), findsNothing, reason: '一开始是收起的');
+
+    // 先打两个字，再点框 —— 两件事都要成立：窗口开了，**字还在**
+    await tester.enterText(find.byType(TextField), '在吗');
+    await tester.pump();
+    await tester.tap(find.byType(TextField));
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '★ 点输入框 ⇒ 窗口该打开');
+    expect(find.byKey(chatBodyKey), findsOneWidget, reason: '打开之后时间线那一块该在');
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      '在吗',
+      reason: '★ 打开这一下不许把你打的字弄丢（两态是同一个输入条实例）',
+    );
+  });
+
   testWidgets('🔴 在**收起态**打了一半，点「展开」⇒ 字不丢（输入条是同一个实例）', (tester) async {
     // ⚠️ 这条钉的是**实现上的一个关键选择**：输入条从 `_sheetBody` 里**拆出来单独传给浮窗**，
     //    上下两态共用**同一个** `Composer`。要是两处各建一个，"打了一半再展开"会换一个 `State`，

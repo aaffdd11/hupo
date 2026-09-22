@@ -29,6 +29,7 @@ class Composer extends StatefulWidget {
     this.draft,
     this.onDraftChanged,
     this.onDraftCleared,
+    this.onFocused,
   });
 
   final void Function(String text) onSend;
@@ -43,6 +44,11 @@ class Composer extends StatefulWidget {
 
   /// 这份草稿不用了（上层清掉）。
   final VoidCallback? onDraftCleared;
+
+  /// **用户点了打字框**（主人 2026-09-22：*"点击说点什么，聊天窗口会自动打开。"*）。
+  /// ⚠️ 收起态那条里也有这个框 ⇒ 点它要先**把窗口打开**，不然他是在一条
+  /// 只有一行的缝里打字（而上面那一大块明明在）。
+  final VoidCallback? onFocused;
 
   @override
   State<Composer> createState() => _ComposerState();
@@ -144,6 +150,9 @@ class _ComposerState extends State<Composer> {
                   minLines: 1,
                   maxLines: 6,
                   textInputAction: TextInputAction.send,
+                  // ★ **点了打字框 ⇒ 告诉上层"把窗口打开"**（主人 2026-09-22：
+                  //   *"点击说点什么，聊天窗口会自动打开。"*）
+                  onTap: widget.onFocused,
                   onChanged: _onChanged,
                   onSubmitted: (_) => _submit(),
                   decoration: InputDecoration(

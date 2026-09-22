@@ -366,6 +366,10 @@ class _ChatScreenState extends State<ChatScreen> {
           draft: c.composeDraft,
           onDraftChanged: c.saveComposeDraft,
           onDraftCleared: c.clearComposeDraft,
+          // ★ **点了打字框 ⇒ 把窗口打开**（主人 2026-09-22：*"点击说点什么，聊天窗口会自动打开。"*）
+          //   ⚠️ 收起态那条里也有这个框。展开**不会丢字**：两态用的是**同一个 Composer 实例**，
+          //      Flutter 认得出它、把它**挪过去**（不是重建）—— 有判据钉着。
+          onFocused: () => _floaterKey.currentState?.expand(),
           // 🔴 **用户按下发送 ⇒ 最大化**（§6.2"发就拉满"）。
           //    ⚠️ 反过来不成立：**状态变化不许动窗口**（D4.8：新增助手消息的高度变化 = 0px）。
           //    ★ 现在**收起态也能发**（那儿也有输入框）⇒ 发出去就拉满，这一步比以前更有用。
