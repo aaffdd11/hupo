@@ -51,7 +51,17 @@ Widget buildMiniAppView({
         //    拿 origin 判等于谁都放进来。只有"这一条 iframe 自己"发来的才算。
         html.window.onMessage.listen((e) async {
           final win = f.contentWindow;
-          if (win == null || !identical(e.source, win)) return;
+          if (win == null) return;
+          // 🔴 **认"不透明原点"**，不是认 `source`：
+          //    · 沙箱页面（`sandbox="allow-scripts"` 且**不给** allow-same-origin）
+          //      的 origin 恰好是字符串 `"null"` —— 这是外面伪装不出来的；
+          //    · 而 Dart 那边 `identical(e.source, f.contentWindow)` **不可靠**
+          //      （跨语言包装对象不保证同一实例）—— 2026-09-22 实测：用它判，
+          //      页面发过来的消息**一条都进不来**（服务端那时一次都没被调用）。
+          // ⚠️ 再加两条保险：页面的 CSP 是 `default-src 'none'`（**它嵌不了自己的 iframe**
+          //    来冒充），而且同一时刻壳里只开着一个页面。
+          final origin = e.origin;
+          if (origin != 'null' && origin != '') return;
           final data = e.data;
           if (data is! Map || data['kind'] != 'ask') return; // 🔴 只认这一种
           final prompt = data['prompt'];

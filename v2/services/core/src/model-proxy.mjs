@@ -36,6 +36,39 @@ import { keyFileFor } from './key-path.mjs';
 /** 默认端口。⚠️ 与 `hupo-model-proxy.yml` 里那个 `baseURL` **必须一致**。 */
 export const DEFAULT_PROXY_PORT = 8787;
 
+/**
+ * **从 DSH 自己那份凭据里取钥匙**（主人在本机跑的那种；契约 `59` §八）。
+ *
+ * 形状（实测，2026-09-22）：
+ * ```yaml
+ * refs:
+ *   DEEPSEEK_API_KEY: sk-…
+ * ```
+ * ⚠️ **纯函数**（给 `test/unit` 钉）：认不出来就返回 `null`（后面会**如实 503**，
+ *    不许拿半个东西去试上游）。
+ * ⚠️ 只认 `refs:` 那一节下的那一行；别的行**一个都不碰**（那份文件里还有别的东西）。
+ */
+export function parseDshRefs(text, name = 'DEEPSEEK_API_KEY') {
+  const lines = String(text ?? '').split(/\r?\n/u);
+  let inRefs = false;
+  for (const line of lines) {
+    if (/^refs:\s*$/u.test(line)) {
+      inRefs = true;
+      continue;
+    }
+    if (inRefs) {
+      // 出了这一节（又出现了顶格的键）就停
+      if (/^\S/u.test(line)) break;
+      const m = new RegExp(`^\\s+${name}:\\s*(\\S+)\\s*$`, 'u').exec(line);
+      if (m) {
+        const v = m[1].replace(/^['"]|['"]$/gu, '').trim();
+        return v === '' ? null : v;
+      }
+    }
+  }
+  return null;
+}
+
 /** key 住在哪（tmpfs · root 0600 · 由 ②-4 注入）。 */
 // ⚠️ **钥匙住哪**只有一处说了算（`key-path.mjs`）：卷里那个（重建容器不丢）。
 export const DEFAULT_KEY_FILE = '/data/creds.yaml';
@@ -80,9 +113,10 @@ export function parseKey(text) {
 }
 
 /** 读 key 文件；读不到 / 读出来是空的 ⇒ `null`（**不抛**，让调用方回 503）。 */
-export function readKeyFile(file, fs = nodeFs) {
+export function readKeyFile(file, fs = nodeFs, format = 'hupo') {
   try {
-    const k = parseKey(fs.readFileSync(file, 'utf8'));
+    const text = fs.readFileSync(file, 'utf8');
+    const k = format === 'dsh-refs' ? parseDshRefs(text) : parseKey(text);
     return k && k.length > 0 ? k : null;
   } catch {
     return null;
@@ -102,6 +136,8 @@ export function readKeyFile(file, fs = nodeFs) {
  */
 export function startModelProxy({
   keyFile = keyFileFor(),
+  // ⚠️ `'dsh-refs'` = 主人本机那种（DSH 自己的凭据）；默认是产品自己那份 `creds.yaml`
+  keyFormat = 'hupo',
   upstream = process.env.HUPO_UPSTREAM ?? DEFAULT_UPSTREAM,
   port = Number.parseInt(process.env.HUPO_PROXY_PORT ?? String(DEFAULT_PROXY_PORT), 10),
   host = '127.0.0.1',
@@ -112,7 +148,7 @@ export function startModelProxy({
 
   const server = nodeHttp.createServer(async (req, res) => {
     // ⚠️ key **每一次请求现读**：这样"还没注入"和"刚注入"都不用重启代理。
-    const key = readKeyFile(keyFile);
+    const key = readKeyFile(keyFile, nodeFs, keyFormat);
     if (!key) {
       // ④ 如实说：不是"模型鉴权失败"，是"我们这边还没有 key"
       res.writeHead(503, { 'content-type': 'application/json' });

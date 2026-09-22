@@ -539,6 +539,33 @@ function ensureTenant(userId) {
   return queue.request(userId);
 }
 
+// ★ **主人那一份的"问一句"**（乙-4c · 契约 `docs/dev/59-USER-APPS.md` §八）。
+//
+//   主人没有匣子 ⇒ 他这一份的钥匙在 **DSH 自己那份凭据**里
+//   （`<DSH_HOME>/.credentials.yaml` 的 `refs.DEEPSEEK_API_KEY`，实测出来的形状）。
+//   ⇒ 在本机起一个**同样的小代理**：钥匙进内存，**不打印、不落盘、不回显**；
+//     小程序问一句时由它换成真 key（和匣子里那条路一模一样）。
+//
+//   ⚠️ **只在宿主上起**：匣子里那一份由 `entry.mjs` 起过了，两边都起会撞端口。
+//   ⚠️ 起不来**不许把服务带走**（但要说出来 —— 静默降级是本仓库反复栽的形状）。
+if (process.env.HUPO_ROLE !== 'tenant') {
+  try {
+    const dshCreds = nodePath.join(cfg.dshHome, '.credentials.yaml');
+    if (nodeFs.existsSync(dshCreds)) {
+      const { startModelProxy } = await import('./model-proxy.mjs');
+      await startModelProxy({
+        keyFile: dshCreds,
+        keyFormat: 'dsh-refs',
+        log: (m) => console.log(m),
+      }).listen();
+    } else {
+      console.log('  （没找到主人那份凭据 ⇒ 小程序"问一句"这条路过不去）');
+    }
+  } catch (err) {
+    console.warn(`  ⚠️ 本机那个小代理没起来：${err?.message ?? err}（小程序"问一句"会说不通）`);
+  }
+}
+
 // ★ **制品那第二个原点**（乙-1 · 契约 `docs/dev/59-USER-APPS.md` §五）。
 //   🔴 手册 N1：执行第三方代码的东西**绝不与持有令牌的原点同源** ⇒ 它听**另一个端口**。
 //   ⚠️ 分成两个进程更干净（共享不到任何东西），但那要再维护一条常驻进程

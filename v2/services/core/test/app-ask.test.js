@@ -19,6 +19,7 @@ import nodePath from 'node:path';
 import test, { after } from 'node:test';
 
 import { Apps, ASK_MIN_INTERVAL_MS, ASK_PER_DAY } from '../src/apps.js';
+import { parseDshRefs } from '../src/model-proxy.mjs';
 import { Auth } from '../src/auth.js';
 
 const open = new Set();
@@ -257,4 +258,19 @@ test('🔴 租户那条路：闸在中心过（不过就**不转发**），过�
   // 配额在中心这边记的（匣子那边判不了）
   const state = JSON.parse(nodeFs.readFileSync(nodePath.join(dir, 'hupo', 'apps', 'wenda', 'ask.json'), 'utf8'));
   assert.equal(state.n, 1);
+});
+
+// ── 主人那份凭据的形状（乙-4c）──────────────────────────────
+
+test('🔴 认得出 DSH 那份凭据里的钥匙；认不出就 `null`（拿半个去试上游更坏）', () => {
+  const okText = 'version: 3\nrecords:\n  a:\n    b: c\nrefs:\n  DEEPSEEK_API_KEY: sk-abc123\n';
+  assert.equal(parseDshRefs(okText), 'sk-abc123');
+  // 负向：没有 refs / 空值 / 别的名字 / 压根不是 YAML ⇒ 一律 null
+  assert.equal(parseDshRefs('version: 3\n'), null);
+  assert.equal(parseDshRefs('refs:\n  DEEPSEEK_API_KEY:\n'), null);
+  assert.equal(parseDshRefs('refs:\n  OTHER_KEY: sk-x\n'), null);
+  assert.equal(parseDshRefs('这不是 YAML'), null);
+  assert.equal(parseDshRefs(''), null);
+  // ⚠️ 出了 `refs:` 那一节就不许再往里找（别把别的节里的同名字段当钥匙）
+  assert.equal(parseDshRefs('refs:\n  OTHER: 1\nother:\n  DEEPSEEK_API_KEY: sk-x\n'), null);
 });
