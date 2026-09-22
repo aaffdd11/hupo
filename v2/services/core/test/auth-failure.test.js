@@ -116,6 +116,10 @@ test('负向对照：别的失败 ⇒ 还是原来那句（这次改动没有波
   assert.equal(sayOnce({ kind: 'max-tokens' }), INTERRUPTED_LINE);
   // 而"说了半句、然后被截断"那一种才用 `TRUNCATED_LINE`
   assert.ok(TRUNCATED_LINE.length > 0);
+  // 🔴 2026-09-22 主人真机栽过：只说"我没说完"，用户**既没拿到东西也不知道该说什么**
+  //    ⇒ 这句话必须带一条**照着做就有用**的下一步。
+  assert.match(TRUNCATED_LINE, /接着说/, '🔴 必须告诉他回哪句话能接着讲（只说"没说完"= 把他晾在那儿）');
+  assert.ok(!/文件/.test(TRUNCATED_LINE), '⚠️ 不许往"文件"上引 —— 他没有打开那台机器上文件的路');
   assert.equal(sayOnce({ kind: 'completed' }), EMPTY_LINE);
 });
 
