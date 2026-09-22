@@ -18,6 +18,7 @@ import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
+import 'package:hupo_app/widgets/mini_app_host.dart';
 import 'package:hupo_app/widgets/composer.dart';
 
 ChatController _controller() =>
@@ -91,6 +92,21 @@ void main() {
     await tester.tap(find.text(settingsLogout));
     await tester.pumpAndSettle();
     expect(loggedOut, 1, reason: '★ 点了退出登录就该退出去（一个点了没反应的入口 = 坏了）');
+  });
+
+  testWidgets('🔴 小程序打开后是**全屏**的 —— 只有聊天还在底下那一条', (tester) async {
+    // 主人 2026-09-22：*"桌面小程序打开后，是全屏显示的，只不过聊天窗口还在底下那里。"*
+    await _pump(tester);
+    await _openSettings(tester);
+
+    final screen = tester.getRect(find.byType(MaterialApp));
+    final host = tester.getRect(find.byType(MiniAppHost));
+    final app = tester.getRect(find.byType(SettingsScreen));
+    expect(host.size, screen.size, reason: '★ 小程序该是全屏（实测 ${host.size} vs ${screen.size}）——不是带边距的小窗');
+    expect(app.width, screen.width, reason: '内容也该全宽');
+    // 而**聊天还在底下那一条**（Z1：它永远在最上面）
+    expect(find.byType(ChatFloater), findsOneWidget);
+    expect(find.text('展开'), findsOneWidget, reason: '聊天收起那条该还在底下浮着');
   });
 
   testWidgets('🔴 收起那条**压不住**小程序里可点的东西：内容底部内缩（§6.4 规则 1）', (tester) async {

@@ -88,52 +88,58 @@ class _MiniAppHostState extends State<MiniAppHost> {
               child: AnimatedOpacity(
                 opacity: covered ? 0.55 : 1,
                 duration: d.motionPage,
-                child: Padding(
-                  // 四边留边距（它是一扇"窗"，不是铺满的一页）
-                  padding: EdgeInsets.fromLTRB(
-                    d.gapM,
-                    d.gapM,
-                    d.gapM,
-                    d.gapM + widget.bottomInset,
-                  ),
-                  child: Material(
-                    color: d.paper,
-                    // ⚠️ 被盖住时圆角加大（手册 §6.4 规则 2）
-                    borderRadius: BorderRadius.circular(covered ? 16 : d.radiusCard),
-                    clipBehavior: Clip.antiAlias,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(border: Border.all(color: d.line)),
-                      child: Column(
-                        children: [
-                          // ── **容器给的**顶栏（app 自己不许画）──
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: d.gapS, vertical: 2),
-                            child: Row(
-                              children: [
-                                IconButton(
-                                  tooltip: miniAppBack,
-                                  onPressed: () {
-                                    final nav = _nav.currentState;
-                                    if (nav != null && nav.canPop()) {
-                                      nav.pop();
-                                    } else {
-                                      widget.onClose();
-                                    }
-                                  },
-                                  icon: const Icon(Icons.arrow_back),
-                                ),
-                                Expanded(
-                                  child: Text(
-                                    widget.title,
-                                    style: t.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                child: Material(
+                  color: d.paper,
+                  // 🔴 **全屏**（主人 2026-09-22：*"桌面小程序打开后，是全屏显示的，
+                  //    只不过聊天窗口还在底下那里。"*）⇒ **不要外边距、不要常驻圆角**：
+                  //    它是一"页"，不是一扇"窗"。
+                  // ⚠️ 只有**被聊天盖住**时才有圆角（§6.4 规则 2："要看得出来被盖住"）。
+                  borderRadius: BorderRadius.circular(covered ? 16 : 0),
+                  clipBehavior: Clip.antiAlias,
+                  child: DecoratedBox(
+                    decoration: const BoxDecoration(),
+                    child: Column(
+                      children: [
+                        // ── **容器给的**顶栏（app 自己不许画）──
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: d.gapS,
+                            vertical: 2,
+                          ),
+                          child: Row(
+                            children: [
+                              IconButton(
+                                tooltip: miniAppBack,
+                                onPressed: () {
+                                  final nav = _nav.currentState;
+                                  if (nav != null && nav.canPop()) {
+                                    nav.pop();
+                                  } else {
+                                    widget.onClose();
+                                  }
+                                },
+                                icon: const Icon(Icons.arrow_back),
+                              ),
+                              Expanded(
+                                child: Text(
+                                  widget.title,
+                                  style: t.textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                          Divider(height: 1, color: d.line),
-                          // ── app 自己的内容：跑在**容器自己的 Navigator** 里 ──
-                          Expanded(
+                        ),
+                        Divider(height: 1, color: d.line),
+                        // ── app 自己的内容：跑在**容器自己的 Navigator** 里 ──
+                        //   ⚠️ **底部内缩挂在内容上**（不是挂在窗口上）：全屏之后
+                        //      聊天那条仍然压在底下，不缩的话**最后一行永远点不到**（§6.4 规则 1）。
+                        Expanded(
+                          child: Padding(
+                            padding: EdgeInsets.only(
+                              bottom: widget.bottomInset,
+                            ),
                             child: Navigator(
                               key: _nav,
                               onGenerateRoute: (_) => MaterialPageRoute<void>(
@@ -141,8 +147,8 @@ class _MiniAppHostState extends State<MiniAppHost> {
                               ),
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
