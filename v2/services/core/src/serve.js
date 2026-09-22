@@ -24,7 +24,7 @@ import { ProvisionQueue } from './provision.js';
 import { dropTunnel, notifyHost } from './tenant-tunnel-agent.mjs';
 import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
-import { createAppServer, loadSignKey } from './app-serve.js';
+import { appsBaseOf, createAppServer, loadSignKey } from './app-serve.js';
 import { createServer } from './server.js';
 import { describeAgentIdentity, loadConfig, preflight } from './config.js';
 import { integrityReport, repoRootFor } from './integrity.js';
@@ -575,7 +575,8 @@ if (process.env.HUPO_ROLE !== 'tenant') {
 const appsSignKey = loadSignKey(cfg.appsSignKeyPath);
 // ⚠️ **对外那个地址优先**（生产上制品口是另一个域名）；没配才退回本机那个。
 //    🔴 这条一定要能配，否则"上线"就得改代码 —— 而"改代码才上线"正是要避免的形状。
-const appsBase = cfg.appsPublicBase ?? `http://${cfg.appsHost}:${cfg.appsPort}`;
+//    （规则本身在 `appsBaseOf()` 里，有判据钉着。）
+const appsBase = appsBaseOf(cfg);
 const appsOrigin = createAppServer({
   resolveApps: (sub) => worlds.worldFor(sub)?.apps ?? null,
   key: appsSignKey,

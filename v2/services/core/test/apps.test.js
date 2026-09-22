@@ -21,7 +21,7 @@ import {
   Apps, AppsError, ICONS, MAX_FILES, MAX_FILE_BYTES, checkRelPath, rootHashOf,
 } from '../src/apps.js';
 import {
-  SIGNED_TTL_MS, createAppServer, entryUrl, parseArtifactPath, signEntry, verifyEntry,
+  SIGNED_TTL_MS, appsBaseOf, createAppServer, entryUrl, parseArtifactPath, signEntry, verifyEntry,
 } from '../src/app-serve.js';
 
 const tmpDirs = [];
@@ -343,4 +343,24 @@ test('乙-4：授予要落盘、只认白名单、撤了就空；卸载是**软�
   const audit = nodeFs.readFileSync(nodePath.join(dir, 'hupo', 'apps', 'audit.jsonl'), 'utf8');
   assert.match(audit, /"what":"remove"/);
   assert.match(audit, /"what":"grant"/);
+});
+
+test('🔴 上线只改配置：对外地址优先，没配才退回本机那个（尾斜杠要去掉）', () => {
+  // 本机（默认）
+  assert.equal(appsBaseOf({ appsHost: '127.0.0.1', appsPort: 8021 }), 'http://127.0.0.1:8021');
+  // 配了对外域名 ⇒ 用它（迁移那天就改这一处）
+  assert.equal(
+    appsBaseOf({ appsPublicBase: 'https://apps.example', appsHost: '127.0.0.1', appsPort: 8021 }),
+    'https://apps.example',
+  );
+  // 尾斜杠 / 空串 / 只有空格 ⇒ 都不许拼出 `//a/...` 那种地址
+  assert.equal(appsBaseOf({ appsPublicBase: 'https://apps.example/' }), 'https://apps.example');
+  assert.equal(appsBaseOf({ appsPublicBase: '   ' , appsPort: 9 }), 'http://127.0.0.1:9');
+  assert.equal(appsBaseOf({ appsPublicBase: null, appsPort: 9 }), 'http://127.0.0.1:9');
+  // 拼出来的入口 URL 必须真的以它为前缀（这条是"上线只改配置"的最后一段）
+  const u = entryUrl({
+    base: appsBaseOf({ appsPublicBase: 'https://apps.example' }),
+    key: KEY, sub: 'u1', id: 'dice', version: 1, entry: 'index.html', now: 1,
+  });
+  assert.match(u, /^https:\/\/apps\.example\/a\/dice\/1\/index\.html\?/);
 });

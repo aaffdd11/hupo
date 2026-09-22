@@ -82,6 +82,20 @@ export function verifyEntry({ key, sig, sub, id, version, exp, now = Date.now() 
   return nodeCrypto.timingSafeEqual(a, b);
 }
 
+/**
+ * **入口 URL 的基地址**（乙-5）：**对外那个优先**，没配才退回本机那个。
+ *
+ * 🔴 抽成纯函数是刻意的：它是"**上线只改配置**"那句话的落点 ——
+ *    写死在 `serve.js` 里的话，那句话就只能靠读代码相信（判据钉不住）。
+ *
+ * @param {{appsPublicBase?:string|null, appsHost?:string, appsPort?:number}} cfg
+ */
+export function appsBaseOf(cfg = {}) {
+  const pub = typeof cfg.appsPublicBase === 'string' ? cfg.appsPublicBase.trim() : '';
+  if (pub) return pub.replace(/\/+$/u, ''); // 尾斜杠去掉（拼的时候会再加）
+  return `http://${cfg.appsHost ?? '127.0.0.1'}:${cfg.appsPort ?? 8021}`;
+}
+
 /** 拼一条入口 URL。`base` 形如 `http://127.0.0.1:8021`（**不带尾斜杠**）。 */
 export function entryUrl({ base, key, sub, id, version, entry, now = Date.now(), ttlMs = SIGNED_TTL_MS }) {
   const exp = now + ttlMs;
