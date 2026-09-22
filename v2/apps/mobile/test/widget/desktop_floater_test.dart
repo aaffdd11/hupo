@@ -77,8 +77,13 @@ void main() {
 
   testWidgets('🔴 浮窗有阴影（不是靠描边假装浮着）', (tester) async {
     await _pump(tester, tier: FloaterTier.full);
+    // ⚠️ **只扫浮窗里面那一棵**（2026-09-22 栽过）：桌面图标也有阴影了，
+    //    全树扫会先扫到**图标**那个（blur 12）⇒ 判据当场红，而浮窗其实没问题。
+    //    ⇒ 这就是"判据要钉在**这件事独有**的东西上"的第三次。
     final shadows = <BoxShadow>[];
-    for (final e in find.byType(DecoratedBox).evaluate()) {
+    for (final e in find
+        .descendant(of: find.byType(ChatFloater), matching: find.byType(DecoratedBox))
+        .evaluate()) {
       final dec = (e.widget as DecoratedBox).decoration;
       if (dec is BoxDecoration) shadows.addAll(dec.boxShadow ?? const []);
     }

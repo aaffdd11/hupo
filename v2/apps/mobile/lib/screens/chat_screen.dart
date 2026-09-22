@@ -21,6 +21,7 @@ import '../models/design.dart' as d;
 import '../models/export_words.dart';
 import '../models/scroll_follow.dart';
 import '../models/space.dart';
+import '../models/math_words.dart';
 import '../models/space_words.dart';
 import '../models/timeline.dart';
 import '../models/trash_words.dart';
@@ -37,6 +38,7 @@ import '../widgets/process_level_menu.dart';
 import '../widgets/process_view.dart';
 import '../widgets/trash_plan_sheet.dart';
 import 'export_screen.dart';
+import 'math_quiz_screen.dart';
 import 'settings_screen.dart';
 import 'trash_screen.dart';
 
@@ -92,8 +94,12 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 浮窗那一层的把手（外面要叫它"拉满"/"收起"）。
   final _floaterKey = GlobalKey<ChatFloaterState>();
 
-  /// 桌面上那个小程序开着吗（现在只有「设置」一个）。
-  bool _appOpen = false;
+  /// **现在开着哪个小程序**（`null` = 没开）。
+  ///
+  /// ⚠️ 原来是个布尔（只装得下「设置」一个）。主人 2026-09-22 要加「奥数题」⇒ 改成名字。
+  /// ⚠️ **同时只开一个**：关掉再开另一个。真要做"多个同时开着"（`IndexedStack` + 各自状态），
+  ///    等真的需要时再说 —— 现在没有那个需求，先不做（`04-ROADMAP.md` §十一：做一半比不做更坏）。
+  String? _openApp;
 
   /// **它是从哪儿打开的**（图标在屏幕上的矩形）—— 小程序从那儿"扩开"到全屏。
   Rect? _appFrom;
@@ -152,8 +158,11 @@ class _ChatScreenState extends State<ChatScreen> {
       case FollowAction.jump:
         _scroll.jumpTo(pos.maxScrollExtent);
       case FollowAction.animate:
-        _scroll.animateTo(pos.maxScrollExtent,
-            duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
+        _scroll.animateTo(
+          pos.maxScrollExtent,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
     }
   }
 
@@ -193,14 +202,14 @@ class _ChatScreenState extends State<ChatScreen> {
                     label: settingsAppLabel,
                     icon: Icons.settings_outlined,
                     // 打开小程序 ⇒ **聊天自动收起**（§6.4 规则 5：把屏幕让给小程序）
-                    onOpen: (from) {
-                      _floaterKey.currentState?.collapse();
-                      setState(() {
-                        _appFrom = from;
-                        _appOpen = true;
-                      });
-                    },
+                    onOpen: (from) => _openMiniApp(from, 'settings'),
                   ),
+                // ★ 第二个小程序（主人 2026-09-22 点名的"奥数题库" ⇒ 见 `57-MATH.md`）
+                DesktopApp(
+                  label: mathAppLabel,
+                  icon: Icons.calculate_outlined,
+                  onOpen: (from) => _openMiniApp(from, 'math'),
+                ),
               ],
               onTapBlank: () => _floaterKey.currentState?.collapse(),
             ),
@@ -208,24 +217,29 @@ class _ChatScreenState extends State<ChatScreen> {
           // ①.5 小程序容器（**在桌面之上、聊天之下** —— Z1 说聊天永远最上）
           Positioned.fill(
             child: MiniAppHost(
-              open: _appOpen,
+              open: _openApp != null,
               fromRect: _appFrom,
-              title: configTitle,
-              onClose: () => setState(() => _appOpen = false),
+              title: _openApp == 'math' ? mathTitle : configTitle,
+              onClose: () => setState(() => _openApp = null),
               covered: _floaterExpanded,
               onCoveredTap: () => _floaterKey.currentState?.collapse(),
               // 收起那条压住多少 ⇒ 内容底部内缩（规则 1：不是简单覆盖，否则最后一行永远点不到）
-              bottomInset: _floaterExpanded ? 0 : FloaterMetrics.margin + _floaterH,
-              child: SettingsScreen(
-                hasKey: widget.space.hasKey,
-                keyBad: widget.space.keyBad,
-                localOnly: !widget.space.isTenant,
-                onSubmit: widget.onSendKey ?? ((_) async => KeySend.failed),
-                onCancel: widget.onCancelMe,
-                onCancelled: widget.onLoggedOut,
-                onKeyChanged: widget.onKeyChanged,
-                onLogout: _logout(c),
-              ),
+              bottomInset: _floaterExpanded
+                  ? 0
+                  : FloaterMetrics.margin + _floaterH,
+              child: _openApp == 'math'
+                  ? const MathQuizScreen()
+                  : SettingsScreen(
+                      hasKey: widget.space.hasKey,
+                      keyBad: widget.space.keyBad,
+                      localOnly: !widget.space.isTenant,
+                      onSubmit:
+                          widget.onSendKey ?? ((_) async => KeySend.failed),
+                      onCancel: widget.onCancelMe,
+                      onCancelled: widget.onLoggedOut,
+                      onKeyChanged: widget.onKeyChanged,
+                      onLogout: _logout(c),
+                    ),
             ),
           ),
           // ② 聊天浮窗（贴底、四边 30、永远在最上 —— Z1/Z3/Z4）
@@ -245,7 +259,9 @@ class _ChatScreenState extends State<ChatScreen> {
               // 上层拿这两个数去算"小程序被盖住没有 / 内容要内缩多少"（§6.4 规则 1/2/3）
               onTier: (t) {
                 final expanded = t != FloaterTier.collapsed;
-                if (expanded != _floaterExpanded) setState(() => _floaterExpanded = expanded);
+                if (expanded != _floaterExpanded) {
+                  setState(() => _floaterExpanded = expanded);
+                }
               },
               onHeight: (h) {
                 // ⚠️ 只在**真的变了**的时候 setState（它每帧都会报一次，不然会抖）
@@ -286,11 +302,20 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// **打开一个小程序**：先把聊天收起（§6.4 规则 5），再记下"从哪儿开的"（那个图标的矩形）。
+  void _openMiniApp(Rect? from, String which) {
+    _floaterKey.currentState?.collapse();
+    setState(() {
+      _appFrom = from;
+      _openApp = which;
+    });
+  }
+
   /// **退出登录**（主人 2026-09-22：它属于设置，不属于聊天 —— 抓手行不该管这个）。
   VoidCallback? _logout(ChatController c) => () async {
-        await c.logout();
-        widget.onLoggedOut();
-      };
+    await c.logout();
+    widget.onLoggedOut();
+  };
 
   /// 抓手行右边那一串动作（原来挂在 `AppBar.actions` 上）。
   ///
@@ -298,36 +323,38 @@ class _ChatScreenState extends State<ChatScreen> {
   ///    它会把"浮着"这件事拆掉（页面顶上一条实心栏 = 不是一个浮窗）。
   ///    ⇒ 搬进抓手行；宽度不够时靠**横滚**（`ChatFloater` 那边），**不靠藏**。
   List<Widget> _actions(ChatController c) => <Widget>[
-          // ⚠️ **回收站**（契约 §二 第 2 条：放顶栏）。删掉的东西先进这儿，
-          //    30 天内能拿回来 —— 顶栏这一处就是"我删的东西去哪了"的答案。
-          IconButton(
-            tooltip: trashTooltip,
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => TrashScreen(controller: c, onLoggedOut: widget.onLoggedOut),
-              ),
-            ),
-            icon: const Icon(Icons.delete_outline),
-          ),
-          // ⚠️ **导出**（契约 `30-EXPORT.md` §四：和删除入口**对称** ——
-          //    能删掉，就能拿走）。位置**等主人看过再定，不属于契约**，
-          //    所以这一批只保证"有一个能进去的入口"。
-          IconButton(
-            tooltip: exportTooltip,
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => ExportScreen(controller: c, onLoggedOut: widget.onLoggedOut),
-              ),
-            ),
-            icon: const Icon(Icons.copy_all_outlined),
-          ),
-          // ⚠️ **过程四档的入口**（契约 §五：位置等主人看过再定，
-          //    所以这一批只做"能切"）。换档要重连（`level` 是连接级的）。
-          IconButton(
-            tooltip: '它说多少过程',
-            onPressed: () => _pickLevel(c),
-            icon: const Icon(Icons.tune),
-          ),
+    // ⚠️ **回收站**（契约 §二 第 2 条：放顶栏）。删掉的东西先进这儿，
+    //    30 天内能拿回来 —— 顶栏这一处就是"我删的东西去哪了"的答案。
+    IconButton(
+      tooltip: trashTooltip,
+      onPressed: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              TrashScreen(controller: c, onLoggedOut: widget.onLoggedOut),
+        ),
+      ),
+      icon: const Icon(Icons.delete_outline),
+    ),
+    // ⚠️ **导出**（契约 `30-EXPORT.md` §四：和删除入口**对称** ——
+    //    能删掉，就能拿走）。位置**等主人看过再定，不属于契约**，
+    //    所以这一批只保证"有一个能进去的入口"。
+    IconButton(
+      tooltip: exportTooltip,
+      onPressed: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              ExportScreen(controller: c, onLoggedOut: widget.onLoggedOut),
+        ),
+      ),
+      icon: const Icon(Icons.copy_all_outlined),
+    ),
+    // ⚠️ **过程四档的入口**（契约 §五：位置等主人看过再定，
+    //    所以这一批只做"能切"）。换档要重连（`level` 是连接级的）。
+    IconButton(
+      tooltip: '它说多少过程',
+      onPressed: () => _pickLevel(c),
+      icon: const Icon(Icons.tune),
+    ),
   ];
 
   /// **聊天区**（状态条 + 时间线）。⚠️ **不含输入条** —— 输入条由 `_composer` 单独给，
@@ -435,21 +462,21 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _render(TimelineItem item, ChatController c) => switch (item) {
-        UserUtterance() => UserBubble(
-            utterance: item,
-            onResend: () => c.resend(item.messageId),
-            onLongPress: () => _onBubbleLongPress(c, item),
-          ),
-        AssistantMessage() => _answer(item, c),
-        TimelineMarker() => MarkerLine(marker: item),
-        // ★ **系统通知那一条**（契约 `29-NOTICE.md` 约束 2）：进列表、跟着滚、
-        //   占一个位置。有 `undo` 时在这儿也渲染撤销（约束 3）——
-        //   ⚠️ 按下去走的是**同一条路**（`_undoNotice` → `c.undoNotice()`）。
-        TimelineNotice() => NoticeLine(
-            notice: item.notice,
-            onUndo: item.undo == null ? null : () => _undoNotice(item),
-          ),
-      };
+    UserUtterance() => UserBubble(
+      utterance: item,
+      onResend: () => c.resend(item.messageId),
+      onLongPress: () => _onBubbleLongPress(c, item),
+    ),
+    AssistantMessage() => _answer(item, c),
+    TimelineMarker() => MarkerLine(marker: item),
+    // ★ **系统通知那一条**（契约 `29-NOTICE.md` 约束 2）：进列表、跟着滚、
+    //   占一个位置。有 `undo` 时在这儿也渲染撤销（约束 3）——
+    //   ⚠️ 按下去走的是**同一条路**（`_undoNotice` → `c.undoNotice()`）。
+    TimelineNotice() => NoticeLine(
+      notice: item.notice,
+      onUndo: item.undo == null ? null : () => _undoNotice(item),
+    ),
+  };
 
   /// 按"撤销"（**浮窗里那个与时间线里那个共用这一条**，约束 3）。
   ///
@@ -574,7 +601,9 @@ class _StatusStrip extends StatelessWidget {
     if (text == null) return const SizedBox.shrink();
     return Container(
       width: double.infinity,
-      color: isError ? theme.colorScheme.errorContainer : theme.colorScheme.surfaceContainerHighest,
+      color: isError
+          ? theme.colorScheme.errorContainer
+          : theme.colorScheme.surfaceContainerHighest,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Text(text, style: theme.textTheme.bodySmall),
     );

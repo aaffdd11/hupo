@@ -34,6 +34,8 @@ import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/screens/landing_screen.dart';
 import 'package:hupo_app/screens/login_screen.dart';
+import 'package:hupo_app/models/math_words.dart';
+import 'package:hupo_app/screens/math_quiz_screen.dart';
 import 'package:hupo_app/screens/model_key_screen.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/screens/waiting_screen.dart';
@@ -78,6 +80,18 @@ List<Object> _drain(WidgetTester tester) {
     out.add(e);
   }
   return out;
+}
+
+/// **像用户那样**打开「奥数题」小程序（桌面上的图标 ⇒ 主人 2026-09-22 新加的第二个小程序）。
+///
+/// ⚠️ 和配置页同一条理由：**新加的界面必须也过五档不溢出那道硬闸**，
+///    不然"五档不溢出"会随时间失效（`04-ROADMAP.md` 批 1 的原话）。
+Future<void> _openMath(WidgetTester tester, double scale) async {
+  // 默认收起档进场 = 真实路径（浮窗不挡桌面图标）
+  await _pump(tester, ChatScreen(controller: _controller(), onLoggedOut: () {}), scale);
+  await tester.tap(find.text(mathAppLabel));
+  await tester.pumpAndSettle();
+  expect(find.byType(MathQuizScreen), findsOneWidget, reason: '★ 没进奥数题那一屏 ⇒ 判据扫错了屏幕');
 }
 
 /// **像用户那样**打开关于页：主界面 → 顶栏「配置」→ 里面的「关于」。
@@ -439,6 +453,11 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '配置页在 ${s}x 溢出了');
       });
 
+      testWidgets('奥数题（从真入口进）@ ${s}x', (tester) async {
+        await _openMath(tester, s);
+        expect(_drain(tester), isEmpty, reason: '奥数题在 ${s}x 溢出了');
+      });
+
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
         // ⚠️ 新加的界面**必须也过这道闸** —— 不然"五档不溢出"会随时间失效。
         await _openAbout(tester, s);
@@ -618,6 +637,11 @@ void main() {
       testWidgets('配置页（从真入口进）@ ${s}x', (tester) async {
         await _openConfig(tester, s);
         await sweep(tester, '配置页 @${s}x');
+      });
+
+      testWidgets('奥数题（从真入口进）@ ${s}x', (tester) async {
+        await _openMath(tester, s);
+        await sweep(tester, '奥数题 @${s}x');
       });
 
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
