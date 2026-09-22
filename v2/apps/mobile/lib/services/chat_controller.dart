@@ -81,6 +81,10 @@ class ChatController extends ChangeNotifier {
   ///    见 `draft_store.dart` 顶上那张边界表。
   final DraftStore drafts;
 
+  /// **"我的小程序"变了多少次**（乙-3）：`app/installed` 到了就 +1，
+  /// 界面看到它变了就重拉一次 `/api/apps`（**桌面自己长出来**）。
+  int appsRevision = 0;
+
   /// **打字框里那串还没发出去的字**（第三本账 —— 见 `compose_store.dart` 顶上那张表）。
   /// ⚠️ 它**不属于时间线**：一个字都没发出去，所以它不进 `items`、不带四态、没有"重发"。
   final ComposeStore compose;
@@ -390,6 +394,16 @@ class ChatController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    // ★ **装上了一个小程序**（乙-3）：不去动时间线，只**举手** ——
+    //   界面收到就重拉一次清单，桌面**自己长出来**（不用刷新页面）。
+    //   ⚠️ 它是**瞬时事件**（服务端那边 `emitTransient`）：不占号、不写盘，
+    //     所以它不会混进历史里被重放（重放会让桌面莫名其妙地闪一下）。
+    if (event['type'] == 'app/installed') {
+      appsRevision += 1;
+      notifyListeners();
+      return;
+    }
+
     // ★ 服务端开口了：从这一刻起，"它正在做"才是我们**知道**的事
     timeline.markFresh();
 

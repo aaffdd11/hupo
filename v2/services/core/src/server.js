@@ -453,6 +453,24 @@ export function createServer({
 
       // ── "我的空间到哪一步了"（契约 `38` §8.3：等待屏靠它）──────────────
       // ⚠️ **只读**、**不带 key**、**不分配任何隧道**（探测不许有副作用）。
+      // ── 「发现」：大家发出来的小程序（乙-3）──────────────────
+      // 🔴 **只读**：这一屏没有任何"装 / 发 / 改"的动作（那些都在对话里做）。
+      if (path === '/api/discover' && req.method === 'GET') {
+        const w = worldFor(claim.sub);
+        if (!w?.published) return sendJson(res, 404, { error: '这台部署还没开小程序' });
+        let list = [];
+        try {
+          list = w.published.discover();
+        } catch (err) {
+          log(`共享库读不出来：${err?.message ?? err}`);
+          return sendJson(res, 500, { error: '共享库读不出来' });
+        }
+        // ⚠️ 对外**不给 authorHash**（客户端不需要它，少给一样少一样）
+        return sendJson(res, 200, {
+          apps: list.map(({ authorHash, ...rest }) => rest),
+        });
+      }
+
       // ── 我的小程序清单（乙-1）──────────────────────────────
       // 🔴 **按 `claim.sub` 取那个人自己的那一格**（同 timeline 那条规矩）：
       //    身份只能从令牌来，**不许从 URL / body / 头里读**。

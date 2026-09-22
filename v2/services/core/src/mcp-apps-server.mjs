@@ -111,6 +111,52 @@ const TOOLS = [
     },
   },
   {
+    name: 'app_publish',
+    description:
+      '把**他自己**做的一个小程序放出去，让别人也能在「发现」里看到、装上。'
+      + '⚠️ **只有他这一轮明确说"发出去""让别人也能用"才调** —— 这是把**他的东西**变成所有人可见，'
+      + '是他按的按钮，不是你按的。调之前**用一句话说清这意味着什么**（别人看得到、也能装）。'
+      + '⚠️ 短名是**全局唯一**的：被别人占了就换一个（这里会告诉你）。',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: '要发出去的那个小程序的短名' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'app_unpublish',
+    description:
+      '把**他自己发出去的**那个从「发现」里撤下来（只有他发的能撤）。'
+      + '⚠️ 已经装过的人手上那份**还在**（这里不会去动别人的东西）—— 把这一点如实告诉他。',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: '要撤下来的那个短名' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'app_discover',
+    description:
+      '看**别人发出来**的小程序有哪些（名字 / 谁发的 / 第几版）。'
+      + '他问"有什么好玩的""别人都发了什么"时调它，然后把清单用一段人话回给他。',
+    inputSchema: { type: 'object', properties: {}, required: [], additionalProperties: false },
+  },
+  {
+    name: 'app_install',
+    description:
+      '把「发现」里别人发的某一个小程序**装到他的桌面上**（会是只有他这一份的副本）。'
+      + '⚠️ 只有他明确说"装上""我也要这个"才调。'
+      + '装完**告诉他它叫什么、是谁发的**（这一点他知道比较好）。',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: '要装的那个短名' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'app_list',
     description:
       '看主人**自己**有哪些小程序（名字 / 图标 / 版本）。他问"我有哪些小程序""那个叫什么"时调它，'
@@ -140,6 +186,39 @@ async function callTool(name, args) {
       );
     }
     return textResult(`这次没做成：${r.error}`, true);
+  }
+
+  if (name === 'app_publish') {
+    const id = typeof args?.id === 'string' ? args.id.trim().toLowerCase() : '';
+    if (!id) return textResult('没说清是哪一个，什么都没动。', true);
+    const r = await ask({ op: 'publish', id });
+    if (r.ok) return textResult(`发出去了：**${r.title}**（第 ${r.version} 版）现在别人也能在「发现」里看到。`);
+    return textResult(`没发成：${r.error}`, true);
+  }
+
+  if (name === 'app_unpublish') {
+    const id = typeof args?.id === 'string' ? args.id.trim().toLowerCase() : '';
+    if (!id) return textResult('没说清是哪一个，什么都没动。', true);
+    const r = await ask({ op: 'unpublish', id });
+    if (r.ok) return textResult('撤下来了。已经装过的人手上那份还在。');
+    return textResult(`没撤成：${r.error}`, true);
+  }
+
+  if (name === 'app_discover') {
+    const r = await ask({ op: 'discover' });
+    if (!r.ok) return textResult(`这一侧没答上来：${r.error}`, true);
+    const fromOthers = (Array.isArray(r.apps) ? r.apps : []).filter((a) => a.authorHash !== r.me);
+    if (fromOthers.length === 0) return textResult('现在还没有别人发出来的小程序。');
+    const lines = fromOthers.map((a) => `· ${a.title}（${a.id}，第 ${a.version} 版，${a.author} 发的）`);
+    return textResult(`别人发出来的有这些：\n${lines.join('\n')}`);
+  }
+
+  if (name === 'app_install') {
+    const id = typeof args?.id === 'string' ? args.id.trim().toLowerCase() : '';
+    if (!id) return textResult('没说清是哪一个，什么都没装。', true);
+    const r = await ask({ op: 'install', id });
+    if (r.ok) return textResult(`装好了：**${r.title}** 现在在他的桌面上，点开就能用。`);
+    return textResult(`没装成：${r.error}`, true);
   }
 
   if (name === 'app_list') {

@@ -27,6 +27,7 @@ import nodePath from 'node:path';
 
 import { Apps } from './apps.js';
 import { AppsSocket, appsSocketPath } from './apps-socket.js';
+import { Published, authorHashOf } from './published.js';
 import { Dispatcher } from './dispatcher.js';
 import { Ledger, LEDGER_TIMELINE_ID } from './ledger.js';
 import { LedgerSocket, ledgerSocketPath } from './ledger-socket.js';
@@ -51,7 +52,7 @@ export function agentKeyFor(userId) {
 /** 每个人的世界长什么样（给文档与测试一个准确的形状）。 */
 export const WORLD_SHAPE = Object.freeze([
   'userId', 'dir', 'cfg', 'agentKey', 'scopeId',
-  'store', 'timeline', 'notice', 'say', 'trash', 'ledger', 'ledgerSocket', 'apps', 'appsSocket', 'dispatcher', 'boot',
+  'store', 'timeline', 'notice', 'say', 'trash', 'ledger', 'ledgerSocket', 'apps', 'appsSocket', 'published', 'dispatcher', 'boot',
 ]);
 
 export class Worlds {
@@ -70,6 +71,8 @@ export class Worlds {
   #byAgentKey = new Map();
   #now;
   #makeTrash;
+  /** 共享的小程序库（乙-3）。**一个部署一份**（不是按人一份）。 */
+  #published;
 
   /**
    * @param {object} o
@@ -100,6 +103,8 @@ export class Worlds {
     this.#log = log;
     this.#warn = warn;
     this.#wantTrash = trash;
+    // ★ 共享的小程序库（乙-3）：**一个部署一份**（所有人共享那一个目录）
+    this.#published = new Published({ dir: this.#cfg.dataDir });
     this.#now = now;
     // ⚠️ **这一行原来漏了**（2026-09-21）：参数加了、往下传的那一行也加了，
     //    就是**没存下来** ⇒ `#onAuthFailure` 永远是 `null` ⇒ 整条链子静默断掉。
@@ -231,6 +236,21 @@ export class Worlds {
       apps,
       socketPath: paths.appsSocketPath,
       log: (m) => this.#warn(m),
+      // ★ 发布/下架/装上要看共享库，还要知道"这是谁"（**身份只从这儿来**）
+      ctx: {
+        published: this.#published,
+        sub: t.userId,
+        // ⚠️ 对外显示的名字**按哈希生成**：手机号那种东西**绝不进共享库**
+        authorName: `用户 ${authorHashOf(t.userId).slice(0, 4)}`,
+        // ★ 装上了 ⇒ 往**他自己**的流里推一条（客户端收到就重拉清单，桌面自己长出来）
+        onInstalled: (info) => {
+          try {
+            timeline.emitTransient({ type: 'app/installed', appId: info.id, title: info.title });
+          } catch (err) {
+            this.#warn(`  ⚠️ ${t.userId} 的"装上了"没喊出去：${err?.message ?? err}`);
+          }
+        },
+      },
     }).listen();
 
     const cfg = {
@@ -291,6 +311,7 @@ export class Worlds {
       ledgerSocket,
       apps,
       appsSocket,
+      published: this.#published,
       dispatcher,
       boot: { ...boot, reconciled },
     };

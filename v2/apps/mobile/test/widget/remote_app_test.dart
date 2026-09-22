@@ -110,9 +110,89 @@ void main() {
     expect(find.text('没有入口那个'), findsNothing);
   });
 
-  testWidgets('清单拉不到（500 / 空）⇒ 只剩内置那两个，聊天照常', (tester) async {
+  testWidgets('清单拉不到（500 / 空）⇒ 只剩内置那几个，聊天照常', (tester) async {
     await _pump(tester, _apiWith(const [], status: 500));
     expect(find.text(settingsAppLabel), findsOneWidget);
     expect(find.text('说点什么'), findsOneWidget, reason: '聊天不许因为清单拉不到就坏掉');
+  });
+
+  _discoverTests();
+}
+
+// ── 乙-3：「发现」那一屏 + 桌面自己长出来 ─────────────────────
+
+void _discoverTests() {
+  testWidgets('🔴 「发现」是**只读**的：列出别人的小程序，而且**明说装的动作在对话里**', (tester) async {
+    final api = Api(
+      base: '',
+      client: MockClient((req) async {
+        if (req.url.path == '/api/discover') {
+          return http.Response(
+            jsonEncode({
+              'apps': [
+                {'id': 'dice', 'title': '掷骰子', 'icon': 'dice', 'version': 2, 'author': '用户 3f2a', 'permissions': <String>[]},
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (req.url.path == '/api/apps') {
+          return http.Response(jsonEncode({'apps': <Object>[]}), 200, headers: {'content-type': 'application/json'});
+        }
+        return http.Response('', 404);
+      }),
+    );
+    await _pump(tester, api);
+    await tester.tap(find.text(discoverAppLabel));
+    await tester.pumpAndSettle();
+
+    expect(find.text('掷骰子'), findsOneWidget, reason: '别人的小程序该列出来');
+    expect(find.textContaining('用户 3f2a'), findsOneWidget, reason: '谁发的要看得见');
+    expect(find.text(discoverHowTo), findsOneWidget, reason: '★ 必须明说"装的动作在对话里"（不然他会在这儿找按钮）');
+  });
+
+  testWidgets('空「发现」⇒ 如实说"现在还没有"（不是白屏）', (tester) async {
+    await _pump(tester, _apiWith(const []));
+    await tester.tap(find.text(discoverAppLabel));
+    await tester.pumpAndSettle();
+    expect(find.text(discoverEmpty), findsOneWidget);
+  });
+
+  testWidgets('★ 服务端说"装上了一个" ⇒ 桌面**自己长出来**（不用刷新页面）', (tester) async {
+    var served = 0;
+    final api = Api(
+      base: '',
+      client: MockClient((req) async {
+        if (req.url.path == '/api/apps') {
+          served += 1;
+          // 第一次空、第二次有 —— 模拟"装上之后重拉"
+          final apps = served == 1 ? <Object>[] : [_entry(id: 'fromfriend', title: '别人做的')];
+          return http.Response(jsonEncode({'apps': apps}), 200, headers: {'content-type': 'application/json'});
+        }
+        return http.Response('', 404);
+      }),
+    );
+    final c = ChatController(api: api, tokens: TokenStore(), token: '测试令牌');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          controller: c,
+          onLoggedOut: () {},
+          space: const SpaceInfo(kind: 'tenant', state: 'ready', hasKey: true),
+          onSendKey: (_) async => KeySend.ok,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('别人做的'), findsNothing, reason: '一开始他桌上没有');
+
+    // 服务端推一条 app/installed ⇒ 界面该去重拉
+    c.ingest({'type': 'app/installed', 'appId': 'fromfriend', 'title': '别人做的'});
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pumpAndSettle();
+    expect(find.text('别人做的'), findsOneWidget, reason: '★ 桌面该自己长出来');
   });
 }

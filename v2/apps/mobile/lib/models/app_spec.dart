@@ -14,6 +14,9 @@
 const String builtInSettingsId = 'settings';
 const String builtInMathId = 'math';
 
+/// 「发现」那一屏（乙-3）：它和设置/奥数题一样是**内置的**（不在 `/api/apps` 的清单里）。
+const String builtInDiscoverId = 'discover';
+
 /// 清单里的一条（**这是"他自己造的小程序"，与他自己的数据同一份**）。
 class MiniApp {
   const MiniApp({
@@ -85,5 +88,55 @@ class MiniApp {
   ///
   /// ⚠️ 这里是 **id**（`'settings'` / `'math'`），**不是界面上那两个字**（那是 `space_words.dart`）。
   ///    两处混用的话，`_openApp` 那个开关迟早对不上（这次就是这么被自己的判据抓到的）。
-  static bool isBuiltIn(String id) => id == builtInSettingsId || id == builtInMathId;
+  static bool isBuiltIn(String id) =>
+      id == builtInSettingsId || id == builtInMathId || id == builtInDiscoverId;
+}
+
+/// 「发现」里的一条（**别人发出来的**）。⚠️ 只读：装 / 发 / 改都在对话里做。
+class DiscoverApp {
+  const DiscoverApp({
+    required this.id,
+    required this.title,
+    required this.icon,
+    required this.version,
+    required this.author,
+    this.permissions = const [],
+  });
+
+  final String id;
+  final String title;
+
+  /// 图标**名**（映射在 `widgets/mini_app_icons.dart`，与"我的小程序"同一条规矩）。
+  final String icon;
+  final int version;
+
+  /// 谁发的（**昵称**，服务端那边按哈希生成；手机号那种东西不上这儿）。
+  final String author;
+  final List<String> permissions;
+
+  /// 不合法就返回 `null`（fail-closed：宁可少列一条，不可列一条点不开的）。
+  static DiscoverApp? parse(Object? raw) {
+    if (raw is! Map) return null;
+    final id = raw['id'];
+    final title = raw['title'];
+    final author = raw['author'];
+    if (id is! String || id.isEmpty) return null;
+    if (title is! String || title.trim().isEmpty) return null;
+    if (author is! String || author.trim().isEmpty) return null;
+    final perms = <String>[];
+    final rawPerms = raw['permissions'];
+    if (rawPerms is List) {
+      for (final p in rawPerms) {
+        if (p is String && p.isNotEmpty) perms.add(p);
+      }
+    }
+    return DiscoverApp(
+      id: id,
+      title: title,
+      icon: '${raw['icon']}',
+      version: int.tryParse('${raw['version']}') ?? 0,
+      author: author,
+      permissions: perms,
+    );
+  }
 }

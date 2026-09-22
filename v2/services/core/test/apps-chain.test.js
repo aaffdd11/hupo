@@ -22,6 +22,7 @@ import nodePath from 'node:path';
 
 import { Apps } from '../src/apps.js';
 import { AppsSocket, appsSocketPath, handleAppsOp } from '../src/apps-socket.js';
+import { Published } from '../src/published.js';
 
 const HERE = nodePath.dirname(new URL(import.meta.url).pathname);
 const MCP_SERVER = nodePath.resolve(HERE, '..', 'src', 'mcp-apps-server.mjs');
@@ -34,13 +35,23 @@ after(() => {
 });
 
 /** 起一套：真制品库 + 真套接字。 */
-function setup() {
+function setup({ withPublished = true, installed = [] } = {}) {
   const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-chain-'));
   tmpDirs.push(dir);
   const apps = new Apps({ dir, sub: 'u1' });
+  const published = withPublished ? new Published({ dir }) : null;
   const path = appsSocketPath(dir);
-  const sock = new AppsSocket({ apps, socketPath: path }).listen();
-  return { dir, apps, sock, socketPath: path };
+  const sock = new AppsSocket({
+    apps,
+    socketPath: path,
+    ctx: {
+      published,
+      sub: 'u1',
+      authorName: '用户 1111',
+      onInstalled: (info) => installed.push(info),
+    },
+  }).listen();
+  return { dir, apps, published, sock, socketPath: path, installed };
 }
 
 /** 把 MCP 进程拉起来，并给它一个 `call()`（与账本那条同一形状）。 */
@@ -94,6 +105,7 @@ const APP = {
   id: 'dice',
   title: '掷骰子',
   icon: 'dice',
+  entry: 'index.html',
   files: { 'index.html': '<!doctype html><button id="r">掷</button><script>document.getElementById("r")</script>' },
 };
 
@@ -111,7 +123,8 @@ test('🔴 还没做的那几件 ⇒ 明说"还没做"（不许假装成功）',
   const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-op-'));
   tmpDirs.push(dir);
   const apps = new Apps({ dir });
-  for (const op of ['publish', 'unpublish', 'install', 'uninstall', 'grant', 'revoke']) {
+  // 乙-3 起 publish/unpublish/install/discover 都做了 ⇒ 只剩这三件
+  for (const op of ['uninstall', 'grant', 'revoke']) {
     const r = handleAppsOp(apps, { op });
     assert.equal(r.ok, false, `${op} 现在做不了，必须说做不了`);
     assert.match(r.error, /还没做/, `${op} 要说清"还没做"`);
@@ -131,14 +144,15 @@ test('坏输入只让那一条失败（校验不过 ⇒ ok:false，而且盘上�
 
 // ── 真链路 ──────────────────────────────────────────────────
 
-test('握手给的是**标准 MCP**：initialize → tools/list 两条工具（这一批只有两条）', async () => {
+test('握手给的是**标准 MCP**：initialize → tools/list 六件工具', async () => {
   const s = setup();
   const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
   try {
     await handshake(c);
     const list = await c.call('tools/list', {});
     const names = list.result.tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ['app_create', 'app_list'], '这一批只做这两件（其余要等发现/权限那两批）');
+    assert.deepEqual(names, ['app_create', 'app_discover', 'app_install', 'app_list', 'app_publish', 'app_unpublish'],
+      '乙-3 起是这六件（卸载与授权那两件要等权限那一批）');
     for (const t of list.result.tools) {
       assert.equal(t.inputSchema.type, 'object');
       assert.ok(t.description.length > 10, '每条都要说清什么时候调');
@@ -236,4 +250,121 @@ test('本地通道权限 0600 · 坏行只让那一条失败 · stdout 只有 JS
     c.child.kill();
     await s.sock.close();
   }
+});
+
+// ── 乙-3：发布 / 下架 / 装上 / 发现 ─────────────────────────
+
+test('🔴 发布 ⇒ 进「发现」；**他自己私有的那条不在发现里**（负向对照）', async () => {
+  const s = setup();
+  const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
+  try {
+    await handshake(c);
+    await c.call('tools/call', { name: 'app_create', arguments: APP });
+    await c.call('tools/call', { name: 'app_create', arguments: { ...APP, id: 'secret', title: '私密的' } });
+
+    // 发布之前：发现里一条都没有
+    const before = await c.call('tools/call', { name: 'app_discover', arguments: {} });
+    assert.match(before.result.content[0].text, /还没有别人发出来/);
+
+    const pub = await c.call('tools/call', { name: 'app_publish', arguments: { id: 'dice' } });
+    assert.equal(pub.result.isError, false, JSON.stringify(pub.result));
+    assert.match(pub.result.content[0].text, /发出去了/);
+
+    // 共享库里真的有一份（而且是复制过去的）
+    assert.equal(nodeFs.existsSync(nodePath.join(s.dir, 'published-apps', 'dice', 'versions', '1', 'index.html')), true);
+    assert.equal(s.published.discover().map((a) => a.id).join(','), 'dice');
+    // 🔴 负向：私有那条**不在**共享库里
+    assert.equal(nodeFs.existsSync(nodePath.join(s.dir, 'published-apps', 'secret')), false);
+    // 而且发现里带的是**作者昵称**，不是手机号/身份
+    const d = s.published.discover()[0];
+    assert.equal(d.author, '用户 1111');
+  } finally {
+    c.child.kill();
+    await s.sock.close();
+  }
+});
+
+test('🔴 重名 ⇒ 明确拒绝（别人的名字不许顶掉）', () => {
+  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-pub-'));
+  tmpDirs.push(dir);
+  const author = new Apps({ dir: nodePath.join(dir, 'a'), sub: 'u1' });
+  author.create({ ...APP });
+  const pub = new Published({ dir });
+  pub.publish(author, { id: 'dice', authorSub: 'u1', authorName: '甲' });
+  // 另一个人手里也有同名的一个 ⇒ 他发不出去
+  const other = new Apps({ dir: nodePath.join(dir, 'b'), sub: 'u2' });
+  other.create({ ...APP, title: '我的骰子' });
+  assert.throws(() => pub.publish(other, { id: 'dice', authorSub: 'u2', authorName: '乙' }), /被别人用了/);
+});
+
+test('🔴 装上 ⇒ 复制进他自己的那一份（作者下架之后**他这份还在**）', async () => {
+  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-inst-'));
+  tmpDirs.push(dir);
+  // 甲：做出来 + 发出去
+  const authorDir = nodePath.join(dir, 'author');
+  const author = new Apps({ dir: authorDir, sub: 'u1' });
+  author.create({ ...APP });
+  const pub = new Published({ dir });
+  pub.publish(author, { id: 'dice', authorSub: 'u1', authorName: '甲' });
+
+  // 乙：装（真链路：MCP 工具 → 套接字 → 复制进乙的制品库）
+  const installed = [];
+  const s = setup({ withPublished: false, installed });
+  // ⚠️ 这里要的是"同一个共享库、不同的人"：手工把 ctx 接成乙 + 那个共享库
+  const s2 = (() => {
+    const dirB = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-viewer-'));
+    tmpDirs.push(dirB);
+    const appsB = new Apps({ dir: dirB, sub: 'u2' });
+    const path = appsSocketPath(dirB);
+    const sock = new AppsSocket({
+      apps: appsB,
+      socketPath: path,
+      ctx: { published: pub, sub: 'u2', authorName: '用户 2222', onInstalled: (i) => installed.push(i) },
+    }).listen();
+    return { dir: dirB, apps: appsB, sock, socketPath: path };
+  })();
+  const c = mcpClient({ HUPO_APPS_SOCKET: s2.socketPath });
+  try {
+    await handshake(c);
+    const r = await c.call('tools/call', { name: 'app_install', arguments: { id: 'dice' } });
+    assert.equal(r.result.isError, false, JSON.stringify(r.result));
+    // 乙的那一格里真有这个 app（**只有他这一份**）
+    assert.equal(s2.apps.list().map((a) => a.id).join(','), 'dice');
+    assert.equal(nodeFs.existsSync(nodePath.join(s2.dir, 'hupo', 'apps', 'dice', 'versions', '1', 'index.html')), true);
+    // ★ "装上了"要喊一声（客户端靠它刷新桌面）
+    assert.deepEqual(installed.map((i) => i.id), ['dice']);
+    // 甲那一格里也有（没被动过）
+    assert.equal(author.list().map((a) => a.id).join(','), 'dice');
+
+    // 🔴 甲下架 ⇒ 发现里没了，**但乙手上那份还在**
+    pub.unpublish('dice', 'u1');
+    assert.deepEqual(pub.discover(), []);
+    assert.equal(s2.apps.list().map((a) => a.id).join(','), 'dice', '★ 下架不许动别人装好的那份');
+    // 下架之后再装 ⇒ 明确拒
+    const again = await c.call('tools/call', { name: 'app_install', arguments: { id: 'dice' } });
+    assert.equal(again.result.isError, true);
+    assert.match(again.result.content[0].text, /下架/);
+  } finally {
+    c.child.kill();
+    await s.sock.close();
+    await s2.sock.close();
+  }
+});
+
+test('装上 / 发布 都要留一行审计（可倒查）', () => {
+  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-audit-'));
+  tmpDirs.push(dir);
+  const author = new Apps({ dir: nodePath.join(dir, 'a'), sub: 'u1' });
+  author.create({ ...APP });
+  const pub = new Published({ dir });
+  pub.publish(author, { id: 'dice', authorSub: 'u1', authorName: '甲' });
+  const viewer = new Apps({ dir: nodePath.join(dir, 'b'), sub: 'u2' });
+  pub.installInto(viewer, 'dice');
+  pub.unpublish('dice', 'u1');
+  const lines = nodeFs.readFileSync(nodePath.join(pub.root, 'audit.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(lines.map((l) => l.what), ['publish', 'install', 'unpublish']);
+  assert.equal(typeof lines[0].rootHash, 'string');
+  // ⚠️ 审计里**不许有原始身份**（只有哈希）
+  const blob = JSON.stringify(lines);
+  assert.equal(blob.includes('"u1"'), false, '共享库这边只许出现作者哈希');
 });

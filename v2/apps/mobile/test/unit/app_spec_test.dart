@@ -76,4 +76,32 @@ void main() {
     expect(MiniApp.isBuiltIn('settings'), true);
     expect(MiniApp.isBuiltIn('dice'), false);
   });
+  _discoverModelTests();
+}
+
+// ── 乙-3：「发现」里那一条 ──────────────────────────────────
+
+void _discoverModelTests() {
+  Map<String, Object?> okApp() => {
+        'id': 'dice',
+        'title': '掷骰子',
+        'icon': 'dice',
+        'version': 2,
+        'author': '用户 3f2a',
+        'permissions': <String>[],
+      };
+
+  test('发现里的一条：正常解析 / 缺东西就丢', () {
+    final a = DiscoverApp.parse(okApp());
+    expect(a, isNotNull);
+    expect(a!.author, '用户 3f2a');
+    expect(a.version, 2);
+    expect(a.icon, 'dice', reason: '模型层只存图标名');
+    expect(DiscoverApp.parse(okApp()..['author'] = ''), isNull, reason: '不知道谁发的就别列');
+    expect(DiscoverApp.parse(okApp()..['title'] = '  '), isNull);
+    expect(DiscoverApp.parse(okApp()..['id'] = ''), isNull);
+    expect(DiscoverApp.parse('不是一条'), isNull);
+  });
+
+
 }

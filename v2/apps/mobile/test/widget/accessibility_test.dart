@@ -34,7 +34,9 @@ import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/screens/landing_screen.dart';
 import 'package:hupo_app/screens/login_screen.dart';
+import 'package:hupo_app/models/app_words.dart';
 import 'package:hupo_app/models/math_words.dart';
+import 'package:hupo_app/screens/discover_screen.dart';
 import 'package:hupo_app/screens/math_quiz_screen.dart';
 import 'package:hupo_app/screens/model_key_screen.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
@@ -80,6 +82,16 @@ List<Object> _drain(WidgetTester tester) {
     out.add(e);
   }
   return out;
+}
+
+/// **像用户那样**打开「发现」（乙-3：桌面上的内置图标 ⇒ 别人发出来的小程序那一屏）。
+///
+/// ⚠️ 和配置页同一条理由：**新加的界面必须也过五档不溢出那道硬闸**。
+Future<void> _openDiscover(WidgetTester tester, double scale) async {
+  await _pump(tester, ChatScreen(controller: _controller(), onLoggedOut: () {}), scale);
+  await tester.tap(find.text(discoverAppLabel));
+  await tester.pumpAndSettle();
+  expect(find.byType(DiscoverScreen), findsOneWidget, reason: '★ 没进发现那一屏 ⇒ 判据扫错了屏幕');
 }
 
 /// **像用户那样**打开「奥数题」小程序（桌面上的图标 ⇒ 主人 2026-09-22 新加的第二个小程序）。
@@ -458,6 +470,11 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '奥数题在 ${s}x 溢出了');
       });
 
+      testWidgets('发现（从真入口进）@ ${s}x', (tester) async {
+        await _openDiscover(tester, s);
+        expect(_drain(tester), isEmpty, reason: '发现在 ${s}x 溢出了');
+      });
+
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
         // ⚠️ 新加的界面**必须也过这道闸** —— 不然"五档不溢出"会随时间失效。
         await _openAbout(tester, s);
@@ -642,6 +659,11 @@ void main() {
       testWidgets('奥数题（从真入口进）@ ${s}x', (tester) async {
         await _openMath(tester, s);
         await sweep(tester, '奥数题 @${s}x');
+      });
+
+      testWidgets('发现（从真入口进）@ ${s}x', (tester) async {
+        await _openDiscover(tester, s);
+        await sweep(tester, '发现 @${s}x');
       });
 
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {

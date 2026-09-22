@@ -24,6 +24,7 @@ import '../models/export_words.dart';
 import '../models/scroll_follow.dart';
 import '../models/space.dart';
 import '../models/app_spec.dart';
+import '../models/app_words.dart';
 import '../models/math_words.dart';
 import '../models/space_words.dart';
 import '../models/timeline.dart';
@@ -42,6 +43,7 @@ import '../widgets/notice.dart';
 import '../widgets/process_level_menu.dart';
 import '../widgets/process_view.dart';
 import '../widgets/trash_plan_sheet.dart';
+import 'discover_screen.dart';
 import 'export_screen.dart';
 import 'math_quiz_screen.dart';
 import 'settings_screen.dart';
@@ -164,7 +166,13 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onChanged() {
     if (!mounted) return;
     setState(() {});
-    // 新东西进来时滚到底；**用户正在往上翻时不打断他**
+    // ★ **服务端说"装上了一个小程序"** ⇒ 重拉一次清单（桌面**自己长出来**，不用刷新页面）
+    final rev = widget.controller.appsRevision;
+    if (rev != _appsRevision) {
+      _appsRevision = rev;
+      unawaited(_loadMyApps());
+    }
+    // 新东西进来时重绘 + 滚到底；**用户正在往上翻时不打断他**
     WidgetsBinding.instance.addPostFrameCallback((_) => _followBottom());
   }
 
@@ -235,6 +243,12 @@ class _ChatScreenState extends State<ChatScreen> {
                   icon: Icons.calculate_outlined,
                   onOpen: (from) => _openMiniApp(from, builtInMathId),
                 ),
+                // ★ **发现**（乙-3）：别人发出来的（**只读那一屏**；装/发都在对话里）
+                DesktopApp(
+                  label: discoverAppLabel,
+                  icon: Icons.travel_explore_outlined,
+                  onOpen: (from) => _openMiniApp(from, builtInDiscoverId),
+                ),
                 // ★ **我的小程序**（乙-1）：他自己/助手造的那一批 ——
                 //   图标与名字都来自 `/api/apps`，点开跑在**另一个原点**的沙箱里（N1）。
                 for (final a in _myApps)
@@ -265,8 +279,13 @@ class _ChatScreenState extends State<ChatScreen> {
                       entryUrl: _mineOpen()!.entryUrl,
                       title: _mineOpen()!.title,
                     )
-                  : _openApp == builtInMathId
-                      ? const MathQuizScreen()
+                  : _openApp == builtInDiscoverId
+                      ? DiscoverScreen(
+                          load: _loadDiscover,
+                          refreshToken: _appsRevision,
+                        )
+                      : _openApp == builtInMathId
+                          ? const MathQuizScreen()
                       : SettingsScreen(
                       hasKey: widget.space.hasKey,
                       keyBad: widget.space.keyBad,
@@ -347,8 +366,19 @@ class _ChatScreenState extends State<ChatScreen> {
   String _mineTitle(ChatController c) {
     final mine = _openMine();
     if (mine != null) return mine.title;
+    if (_openApp == builtInDiscoverId) return discoverTitle;
     return _openApp == builtInMathId ? mathTitle : configTitle;
   }
+
+  /// **发现**那一屏的取数（乙-3）。**问不到就是空清单**（那一屏会如实说"还没有"）。
+  Future<List<DiscoverApp>> _loadDiscover() async {
+    final token = widget.controller.token;
+    if (token == null) return const [];
+    return widget.controller.api.discover(token);
+  }
+
+  /// **上一次看到的"我的小程序"版本号**（乙-3：服务端说"装上了"就重拉）。
+  int _appsRevision = 0;
 
   /// 拉一次"我的小程序"（乙-1）。**失败了就当空的**（不弹错 —— 它不是用户主动要的东西）。
   Future<void> _loadMyApps() async {

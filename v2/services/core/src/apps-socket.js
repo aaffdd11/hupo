@@ -18,6 +18,7 @@ import nodeNet from 'node:net';
 import nodePath from 'node:path';
 
 import { AppsError } from './apps.js';
+import { PublishedError, authorHashOf } from './published.js';
 
 /** 小程序那条口放哪。**跟着那个人的目录走**（`<他那一格>/apps.sock`）。 */
 export function appsSocketPath(dir) {
@@ -36,9 +37,14 @@ const MAX_LINE_BYTES = 512 * 1024;
  *
  * @param {import('./apps.js').Apps} apps
  * @param {object} req
+ * @param {object} [ctx]  共享库与"这是谁"（发布/装上要它们）
+ *   · `published`  共享库（`Published`）
+ *   · `sub`        这是谁（**身份只从这里来**，绝不从请求里读）
+ *   · `authorName` 他对外显示的名字（默认按哈希生成，**绝不显示手机号**）
+ *   · `onInstalled(info)` 装上了 ⇒ 让他的桌面自己刷新（外面往流里推一条）
  * @returns {object} 永远 `{ok:true,…}` 或 `{ok:false,error,…}`（**绝不抛**）
  */
-export function handleAppsOp(apps, req) {
+export function handleAppsOp(apps, req, ctx = {}) {
   const op = req?.op;
   if (typeof op !== 'string') return { ok: false, error: '没说要做什么' };
   try {
@@ -61,18 +67,46 @@ export function handleAppsOp(apps, req) {
         return { ok: true, apps: apps.list() };
       case 'rollback':
         return { ok: true, version: apps.rollback(req.id, req.version) };
-      case 'publish':
-      case 'unpublish':
-      case 'install':
+      // ── 发布 / 下架 / 装上 / 看共享库（乙-3）────────────────
+      case 'publish': {
+        if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
+        const r = ctx.published.publish(apps, {
+          id: req.id,
+          authorSub: ctx.sub,
+          authorName: ctx.authorName,
+        });
+        return { ok: true, id: r.id, version: r.version, title: r.title };
+      }
+      case 'unpublish': {
+        if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
+        const r = ctx.published.unpublish(req.id, ctx.sub);
+        return { ok: true, id: r.id, published: false };
+      }
+      case 'install': {
+        if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
+        const r = ctx.published.installInto(apps, req.id);
+        // ★ 装上了 ⇒ **让他的桌面自己刷新**（流里推一条；客户端收到就重拉清单）
+        try {
+          ctx.onInstalled?.({ id: r.id, title: r.title });
+        } catch {
+          /* 推送失败不许让"装上"这件事失败（他下次开机也会拉到） */
+        }
+        return { ok: true, id: r.id, version: r.version, title: r.title };
+      }
+      case 'discover': {
+        if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
+        return { ok: true, apps: ctx.published.discover(), me: authorHashOf(ctx.sub ?? '') };
+      }
+      // ── 还没做的（**明说**，不许假装成功）──────────────────
       case 'uninstall':
       case 'grant':
       case 'revoke':
-        return { ok: false, error: `这件事还没做：${op}（它要等"发现/权限"那两批）` };
+        return { ok: false, error: `这件事还没做：${op}（它要等"权限"那一批）` };
       default:
         return { ok: false, error: `认不出这条请求：${op}` };
     }
   } catch (err) {
-    if (err instanceof AppsError) return { ok: false, error: err.message };
+    if (err instanceof AppsError || err instanceof PublishedError) return { ok: false, error: err.message };
     return { ok: false, error: `没做成：${err?.message ?? err}` };
   }
 }
@@ -84,6 +118,7 @@ export class AppsSocket {
   #log;
   #server = null;
   #ready = null;
+  #ctx;
 
   /**
    * @param {object} o
@@ -91,12 +126,13 @@ export class AppsSocket {
    * @param {string} o.socketPath
    * @param {(m:string)=>void} [o.log]
    */
-  constructor({ apps, socketPath, log = () => {} }) {
+  constructor({ apps, socketPath, log = () => {}, ctx = {} }) {
     if (!apps) throw new AppsError('apps 必填');
     if (!socketPath) throw new AppsError('socketPath 必填');
     this.#apps = apps;
     this.#path = socketPath;
     this.#log = log;
+    this.#ctx = ctx;
   }
 
   get path() {
@@ -182,7 +218,7 @@ export class AppsSocket {
           continue;
         }
         // ⚠️ **一条坏输入只让那一条失败**（`handleAppsOp` 自己保证不抛）
-        conn.write(`${JSON.stringify(handleAppsOp(this.#apps, req))}\n`);
+        conn.write(`${JSON.stringify(handleAppsOp(this.#apps, req, this.#ctx))}\n`);
       }
     });
     conn.on('error', (err) => this.#log(`[apps] 连接出错：${err?.message ?? err}`));

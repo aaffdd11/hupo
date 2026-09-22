@@ -263,6 +263,29 @@ class Api {
     }
   }
 
+  /// **「发现」清单**（乙-3）：大家发出来的小程序。**只读**。
+  /// ⚠️ 问不到就是空清单（不抛）—— 那一屏会如实说"现在还没有"。
+  Future<List<DiscoverApp>> discover(String token) async {
+    try {
+      final r = await _c
+          .get(_u('/api/discover'), headers: {'authorization': 'Bearer $token'})
+          .timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) return const [];
+      final j = jsonDecode(r.body);
+      if (j is! Map) return const [];
+      final raw = j['apps'];
+      if (raw is! List) return const [];
+      final out = <DiscoverApp>[];
+      for (final one in raw) {
+        final app = DiscoverApp.parse(one);
+        if (app != null) out.add(app);
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
   /// **把我自己那串钥匙送过去**（只送到他自己那一台）。
   ///
   /// ⚠️ 返回的是**四种失败分开的**结果（空白 / 字符不对 / 太长 / 没送过去）——
