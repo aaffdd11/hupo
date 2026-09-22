@@ -406,12 +406,32 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// **打开一个小程序**：先把聊天收起（§6.4 规则 5），再记下"从哪儿开的"（那个图标的矩形）。
-  void _openMiniApp(Rect? from, String which) {
+  ///
+  /// ⚠️ **入口 URL 只有十分钟有效**（服务端现签、绑人绑版本）⇒ 页面开着不动、过一会儿再点图标，
+  ///    那条 URL 就已经过期了，点开是空的。⇒ 快过期/已过期就先**重拉一次清单**再开。
+  Future<void> _openMiniApp(Rect? from, String which) async {
     _floaterKey.currentState?.collapse();
+    if (which.startsWith(_minePrefix) && _mineStale(which)) {
+      await _loadMyApps(); // 拿新的签名 URL（失败就当没拿到：下面照样开，至多是那句空）
+    }
+    if (!mounted) return;
     setState(() {
       _appFrom = from;
       _openApp = which;
     });
+  }
+
+  /// 这一条的入口 URL 是不是**快过期或已经过期**了（留 60 秒余量）。
+  bool _mineStale(String which) {
+    final want = which.substring(_minePrefix.length);
+    for (final a in _myApps) {
+      if (a.id == want) {
+        if (a.expiresAt <= 0) return false; // 没给到期时间 ⇒ 没得判，照开
+        final left = a.expiresAt - DateTime.now().millisecondsSinceEpoch;
+        return left < 60 * 1000;
+      }
+    }
+    return false;
   }
 
   /// **退出登录**（主人 2026-09-22：它属于设置，不属于聊天 —— 抓手行不该管这个）。

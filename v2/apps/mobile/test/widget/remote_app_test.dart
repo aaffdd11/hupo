@@ -117,6 +117,7 @@ void main() {
   });
 
   _discoverTests();
+  _expiryTests();
 }
 
 // ── 乙-3：「发现」那一屏 + 桌面自己长出来 ─────────────────────
@@ -198,5 +199,60 @@ void _discoverTests() {
     await tester.pump(const Duration(milliseconds: 50));
     await tester.pumpAndSettle();
     expect(find.text('别人做的'), findsOneWidget, reason: '★ 桌面该自己长出来');
+  });
+}
+
+// ── 入口 URL 十分钟就过期 ⇒ 快过期时先重拉再开 ────────────────
+
+void _expiryTests() {
+  testWidgets('🔴 入口 URL 快过期 ⇒ 打开之前先重拉一次（不然点开是空的）', (tester) async {
+    var served = 0;
+    final api = Api(
+      base: '',
+      client: MockClient((req) async {
+        if (req.url.path == '/api/apps') {
+          served += 1;
+          final soon = DateTime.now().millisecondsSinceEpoch + 5 * 1000; // 5 秒后过期
+          return http.Response(
+            jsonEncode({
+              'apps': [
+                _entry(id: 'dice', title: '掷骰子')
+                  ..['entryUrl'] = 'http://127.0.0.1:8021/a/dice/1/index.html?u=u1&e=1&s=第$served次'
+                  ..['expiresAt'] = soon,
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('', 404);
+      }),
+    );
+    await _pump(tester, api);
+    expect(served, 1, reason: '开机拉过一次');
+
+    await tester.tap(find.text('掷骰子'));
+    await tester.pumpAndSettle();
+    expect(served, 2, reason: '★ 快过期 ⇒ 打开之前该再拉一次（拿新的签名 URL）');
+    expect(find.text('掷骰子'), findsWidgets, reason: '而且照样要打开');
+  });
+
+  testWidgets('对照：URL 还早得很 ⇒ **不**多拉一次（别每次点都打接口）', (tester) async {
+    var served = 0;
+    final api = Api(
+      base: '',
+      client: MockClient((req) async {
+        if (req.url.path == '/api/apps') {
+          served += 1;
+          return http.Response(jsonEncode({'apps': [_entry()]}), 200,
+              headers: {'content-type': 'application/json'});
+        }
+        return http.Response('', 404);
+      }),
+    );
+    await _pump(tester, api);
+    await tester.tap(find.text('掷骰子'));
+    await tester.pumpAndSettle();
+    expect(served, 1, reason: '还早着呢，不该多打一次接口');
   });
 }
