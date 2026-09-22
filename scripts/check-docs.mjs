@@ -36,6 +36,7 @@ const RATCHET = [
   'docs/dev/52-DESKTOP.md',
   'docs/dev/53-MOTION.md',
   'docs/dev/54-COMPOSE-DRAFT.md',
+  'docs/dev/55-VOICE-DEMO.md',
 ];
 
 /** ② L0 = 路由层：零事实、零数值、零状态 */

@@ -210,3 +210,23 @@ const String composeDraftDiscard = '不用了';
 /// 展开态抓手行上那个「收起」（主人 2026-09-22：*"展开后要有收回的按钮"*）。
 /// ⚠️ 它**钉在横滚之外**（那条动作横滚会把按钮滚出视野 —— 那就等于没有出口）。
 const String chatCollapse = '收起';
+
+/// ── 语音那一边（主人 2026-09-22：*"对话框要学习微信。要能切语音，能切听筒。
+/// 语音和听筒都要实时转文字。"* → 追问后他说 **"先做假的"**）──────────────
+///
+/// 🔴 **纪律：假的必须一眼看得出是假的。**
+/// 这个项目栽过三次"页面在说假话"（`07-APPENDIX.md` 事故一），
+/// `D5.13` 甚至专门规定**不录音时禁用"听"字**。
+/// ⇒ 所以这一版：**形状全是真的**（话筒/键盘、按住说话、听筒/扬声器、实时文字区），
+///   **数据明标「演示」**，而且**绝不假装开麦**，也**绝不把演示的字当成他说的话**。
+const String voiceToKeyboard = '键盘';
+const String voiceToMic = '语音';
+const String voiceHoldToTalk = '按住 说话';
+const String voiceReleaseToSend = '松手 发送';
+const String voiceDemoChip = '演示';
+/// 语音模式顶上那句**实话**（不装"正在听"）。
+const String voiceNotWired = '演示：还没有真的开麦，这些字是假的。';
+/// 听筒那一边的实话。
+const String voiceEarpieceNotWired = '演示：读出来也还没做，先看形状。';
+const String voiceEarpieceOn = '听筒';
+const String voiceEarpieceOff = '扬声器';

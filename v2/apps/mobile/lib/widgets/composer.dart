@@ -12,6 +12,8 @@
 // 另一条：**打字框永远不许锁**（D5.14）。
 // 09 是"网好时打字、出电梯才发"——把他锁住等于毁掉唯一顺畅的用法。
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -58,11 +60,67 @@ class _ComposerState extends State<Composer> {
   final _controller = TextEditingController();
   final _focus = FocusNode();
 
+  /// **现在是语音那一档吗**（微信那个话筒/键盘切换）。
+  bool _voice = false;
+
+  /// 手指按着"按住 说话"。
+  bool _holding = false;
+
+  /// **听筒**那一档（微信那个听筒/扬声器切换）。
+  bool _earpiece = false;
+
+  /// 演示走到的字数（"实时转文字"的**形状**）。
+  ///
+  /// 🔴 **这一整块是假的，所以处处标着「演示」**：
+  ///    没有开麦、没有识别、也不把演示的字当成他说的话（松手只是把它放回打字框，
+  ///    让他自己决定发不发）。⇒ 页面上**一眼看得出这是假的**。
+  int _demoChars = 0;
+  static const _demoLine = '这是一句演示，还没有真的开麦。';
+  static const _demoTick = Duration(milliseconds: 90);
+  Timer? _demoTimer;
+
   @override
   void dispose() {
+    _demoTimer?.cancel();
     _controller.dispose();
     _focus.dispose();
     super.dispose();
+  }
+
+  /// 按住 ⇒ "实时"往外吐字（**演示**）；松手 ⇒ 停下。
+  void _startDemo() {
+    _demoTimer?.cancel();
+    setState(() {
+      _holding = true;
+      _demoChars = 0;
+    });
+    _demoTimer = Timer.periodic(_demoTick, (t) {
+      if (!mounted) return;
+      setState(() => _demoChars += 1);
+      if (_demoChars >= _demoLine.length) t.cancel();
+    });
+  }
+
+  /// 松手：把演示那句话**放回打字框**（⚠️ **不自动发送** —— 手册 D5.4 点名不许）。
+  void _endDemo() {
+    _demoTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _holding = false;
+      _voice = false; // 回到键盘那一档，让他能改能发
+    });
+    if (_demoChars > 0) {
+      final text = _demoLine.substring(
+        0,
+        _demoChars > _demoLine.length ? _demoLine.length : _demoChars,
+      );
+      _controller.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+      widget.onDraftChanged?.call(text);
+      _focus.requestFocus();
+    }
   }
 
   /// 从剪贴板读一段，**接在光标处**（不是替换 —— 聊天里他可能已经打了一半）。
@@ -125,6 +183,10 @@ class _ComposerState extends State<Composer> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // ── **演示提示条**（主人："先做假的"）──────────────────
+          //  🔴 两个作用缺一不可：① 让主人看得到"实时转文字"的形状；
+          //     ② **让任何人一眼看出这是假的** —— 这个项目栽过三次"页面在说假话"。
+          if (_voice || _earpiece) _demoStrip(theme),
           // ── **上面那条草稿**（主人 2026-09-22）──────────────────
           //   规则：**框是空的、而且本机存着一份草稿**时才出现。
           //   ⚠️ 一旦他开始打字（框里有字），这条就收起来 —— 不然同一句话画两遍。
@@ -137,36 +199,62 @@ class _ComposerState extends State<Composer> {
               //      （它自己的选择菜单要有可选中的文字才弹）⇒ 手机没物理键盘就粘不进来。
               //    ⇒ 一个按钮按下去就是「用户手势」，能合法读剪贴板。
               //    ⚠️ 命中区 ≥44（`IconButton` 默认 48）。
+              // ★ 微信那个**话筒 / 键盘**（主人："要能切语音"）
               IconButton(
-                tooltip: composerPaste,
-                icon: const Icon(Icons.content_paste),
-                onPressed: _paste,
+                tooltip: _voice ? voiceToKeyboard : voiceToMic,
+                onPressed: () {
+                  _demoTimer?.cancel();
+                  setState(() {
+                    _voice = !_voice;
+                    _holding = false;
+                  });
+                },
+                icon: Icon(
+                  _voice ? Icons.keyboard_alt_outlined : Icons.mic_none,
+                ),
               ),
-              Expanded(
-                child: TextField(
-                  controller: _controller,
-                  focusNode: _focus,
-                  enabled: true, // ★ 永远不锁（D5.14）
-                  minLines: 1,
-                  maxLines: 6,
-                  textInputAction: TextInputAction.send,
-                  // ★ **点了打字框 ⇒ 告诉上层"把窗口打开"**（主人 2026-09-22：
-                  //   *"点击说点什么，聊天窗口会自动打开。"*）
-                  onTap: widget.onFocused,
-                  onChanged: _onChanged,
-                  onSubmitted: (_) => _submit(),
-                  decoration: InputDecoration(
-                    hintText: widget.hint ?? '说点什么',
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 14,
+              if (!_voice)
+                IconButton(
+                  tooltip: composerPaste,
+                  icon: const Icon(Icons.content_paste),
+                  onPressed: _paste,
+                ),
+              if (_voice)
+                Expanded(child: _holdToTalk(theme))
+              else
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    focusNode: _focus,
+                    enabled: true, // ★ 永远不锁（D5.14）
+                    minLines: 1,
+                    maxLines: 6,
+                    textInputAction: TextInputAction.send,
+                    // ★ **点了打字框 ⇒ 告诉上层"把窗口打开"**（主人 2026-09-22：
+                    //   *"点击说点什么，聊天窗口会自动打开。"*）
+                    onTap: widget.onFocused,
+                    onChanged: _onChanged,
+                    onSubmitted: (_) => _submit(),
+                    decoration: InputDecoration(
+                      hintText: widget.hint ?? '说点什么',
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 14,
+                      ),
                     ),
                   ),
                 ),
+              // ★ 微信那个**听筒 / 扬声器**（主人："要能切听筒"）
+              IconButton(
+                tooltip: _earpiece ? voiceEarpieceOn : voiceEarpieceOff,
+                onPressed: () => setState(() => _earpiece = !_earpiece),
+                icon: Icon(
+                  _earpiece ? Icons.hearing : Icons.volume_up_outlined,
+                ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 4),
               // ★ 只有这一块跟着输入变——输入框本身不会被重建
               ValueListenableBuilder<TextEditingValue>(
                 valueListenable: _controller,
@@ -246,4 +334,90 @@ class _ComposerState extends State<Composer> {
       ),
     ),
   );
+
+  /// **按住 说话**那一块（微信那个大按钮）。
+  /// ⚠️ 用 `Listener` 不用 `GestureDetector`（`accessibility_test.dart` 有源码级禁令）。
+  Widget _holdToTalk(ThemeData theme) => Listener(
+    behavior: HitTestBehavior.opaque,
+    onPointerDown: (_) => _startDemo(),
+    onPointerUp: (_) => _endDemo(),
+    onPointerCancel: (_) => _endDemo(),
+    child: Container(
+      constraints: const BoxConstraints(minHeight: 44),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: _holding ? d.accentTint : d.card,
+        borderRadius: BorderRadius.circular(d.radiusField),
+        border: Border.all(color: _holding ? d.accent : d.line),
+      ),
+      child: Text(
+        _holding ? voiceReleaseToSend : voiceHoldToTalk,
+        style: theme.textTheme.bodyLarge?.copyWith(
+          color: _holding ? d.accent : d.ink,
+        ),
+      ),
+    ),
+  );
+
+  /// **演示提示条**：左边一个「演示」小标，右边一句实话 + "实时"吐出来的字。
+  Widget _demoStrip(ThemeData theme) {
+    final shown = _demoChars <= 0
+        ? ''
+        : _demoLine.substring(
+            0,
+            _demoChars > _demoLine.length ? _demoLine.length : _demoChars,
+          );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        decoration: BoxDecoration(
+          color: d.card,
+          borderRadius: BorderRadius.circular(d.radiusField),
+          border: Border.all(color: d.line),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                // ⚠️ **这个「演示」小标不许去掉**：去掉它，这一条就从"演示"变成"假话"
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: d.accentTint,
+                    borderRadius: BorderRadius.circular(d.radiusChip),
+                  ),
+                  child: Text(
+                    voiceDemoChip,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: d.accent,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _voice ? voiceNotWired : voiceEarpieceNotWired,
+                    style: theme.textTheme.bodySmall?.copyWith(color: d.muted),
+                  ),
+                ),
+              ],
+            ),
+            if (shown.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                shown,
+                style: theme.textTheme.bodyMedium?.copyWith(color: d.ink),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
