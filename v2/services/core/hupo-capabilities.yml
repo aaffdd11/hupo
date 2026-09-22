@@ -38,3 +38,20 @@
         failOnStartupError: true
         # 本机域套接字，快得很；默认那 60 秒是给网络那头的服务器留的。
         toolCallTimeoutMs: 15000
+    # ── 小程序那两条（乙-2 · 契约 `docs/dev/59-USER-APPS.md` §二）──────────
+    # ⚠️ **写入永远只有一处**：这个进程**不写盘**，只把请求经域套接字递给服务端。
+    # ⚠️ 这一批只挂**两件**（造 / 看）。发布、装上、授权那几件要等"发现/权限"两批 ——
+    #    **现在挂上去就是让它去承诺一件做不到的事**（那正是这个仓库最忌的假话）。
+    - id: mcp-apps
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: apps
+        transport: stdio
+        command: !!js process.env.HUPO_NODE_BIN
+        args:
+          - !!js process.env.HUPO_APPS_SERVER
+        env:
+          HUPO_APPS_SOCKET: !!js process.env.HUPO_APPS_SOCKET
+        # 起不来**不许静默降级**（同账本那条的理由）
+        failOnStartupError: true
+        toolCallTimeoutMs: 15000

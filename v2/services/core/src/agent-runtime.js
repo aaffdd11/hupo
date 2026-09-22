@@ -340,6 +340,9 @@ export class DshAgent extends EventEmitter {
           //    那比"没设"更难查（能力层会拿到一个字面量 "undefined" 的路径）。
           ...(cfg.ledgerServerPath ? { HUPO_LEDGER_SERVER: cfg.ledgerServerPath } : {}),
           ...(cfg.ledgerSocketPath ? { HUPO_LEDGER_SOCKET: cfg.ledgerSocketPath } : {}),
+          // ★ 小程序那几条工具（乙-2）：脚本路径 + 那条域套接字。**都不是秘密**。
+          ...(cfg.appsServerPath ? { HUPO_APPS_SERVER: cfg.appsServerPath } : {}),
+          ...(cfg.appsSocketPath ? { HUPO_APPS_SOCKET: cfg.appsSocketPath } : {}),
         },
       }),
     });

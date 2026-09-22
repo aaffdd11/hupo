@@ -26,6 +26,7 @@ import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
 import { Apps } from './apps.js';
+import { AppsSocket, appsSocketPath } from './apps-socket.js';
 import { Dispatcher } from './dispatcher.js';
 import { Ledger, LEDGER_TIMELINE_ID } from './ledger.js';
 import { LedgerSocket, ledgerSocketPath } from './ledger-socket.js';
@@ -50,7 +51,7 @@ export function agentKeyFor(userId) {
 /** 每个人的世界长什么样（给文档与测试一个准确的形状）。 */
 export const WORLD_SHAPE = Object.freeze([
   'userId', 'dir', 'cfg', 'agentKey', 'scopeId',
-  'store', 'timeline', 'notice', 'say', 'trash', 'ledger', 'ledgerSocket', 'apps', 'dispatcher', 'boot',
+  'store', 'timeline', 'notice', 'say', 'trash', 'ledger', 'ledgerSocket', 'apps', 'appsSocket', 'dispatcher', 'boot',
 ]);
 
 export class Worlds {
@@ -143,6 +144,9 @@ export class Worlds {
         dshHome: this.#cfg.dshHome,
         agentCwd: this.#cfg.agentCwd,
         ledgerSocketPath: this.#cfg.ledgerSocketPath,
+        // ⚠️ 缺了就从他那一格派生：cfg 有可能是别人手搭的（测试就是），
+        //    而"这条口没配"的表现是**整台服务起不来** —— 不值得为它冒那个险。
+        appsSocketPath: this.#cfg.appsSocketPath ?? appsSocketPath(dir),
         own: false,
       };
     }
@@ -151,6 +155,7 @@ export class Worlds {
       dshHome: nodePath.join(dir, 'dsh'),
       agentCwd: nodePath.join(dir, 'main'),
       ledgerSocketPath: ledgerSocketPath(dir),
+      appsSocketPath: appsSocketPath(dir),
       own: true,
     };
   }
@@ -220,12 +225,21 @@ export class Worlds {
     //   落在**他自己那一格**下面（`<dir>/hupo/apps/`）—— 这就是"只有他自己可见"的落点。
     //   ⚠️ 它**不认识令牌**；它是"谁的世界"由这里定，路由那边按 `claim.sub` 取。
     const apps = new Apps({ dir: t.dir, sub: t.userId });
+    // ★ **模型那几条工具走的通道**（乙-2）：写入只有上面那一个 `Apps` 实例能做，
+    //   工具进程只把请求递过来（照账本那条的规矩：**工具进程不写盘**）。
+    const appsSocket = new AppsSocket({
+      apps,
+      socketPath: paths.appsSocketPath,
+      log: (m) => this.#warn(m),
+    }).listen();
 
     const cfg = {
       ...this.#cfg,
       dshHome: paths.dshHome,
       agentCwd: paths.agentCwd,
       ledgerSocketPath: paths.ledgerSocketPath,
+      appsSocketPath: paths.appsSocketPath,
+      appsServerPath: this.#cfg.appsServerPath,
     };
 
     const dispatcher = new Dispatcher({
@@ -276,6 +290,7 @@ export class Worlds {
       ledger,
       ledgerSocket,
       apps,
+      appsSocket,
       dispatcher,
       boot: { ...boot, reconciled },
     };
@@ -369,6 +384,8 @@ export class Worlds {
     for (const w of this.#worlds.values()) {
       try {
         w.ledgerSocket?.close();
+        // ⚠️ **新开的那条口也要跟着关**：漏了它，进程（和测试）就永远不退出。
+        w.appsSocket?.close();
       } catch (err) {
         this.#warn(`  ⚠️ ${w.userId} 的本地通道没关干净：${err?.message ?? err}`);
       }

@@ -71,6 +71,11 @@ const env = {
   HUPO_NODE_BIN: process.execPath,
   HUPO_LEDGER_SERVER: recorder, // ★ 换成录音桩：它被拉起来这件事要**看得见**
   HUPO_LEDGER_SOCKET: nodePath.join(tmp, 'ledger.sock'),
+  // ★ 小程序那两条（乙-2 · `59-USER-APPS.md`）：**也要一起给** ——
+  //   少一个变量，`!!js` 求值出来就是 `undefined`，dsh 会判 `invalid config`
+  //   然后整棵树加载失败（慢闸当场抓到过）。
+  HUPO_APPS_SERVER: recorder,
+  HUPO_APPS_SOCKET: nodePath.join(tmp, 'apps.sock'),
   HUPO_PROBE_LOG: logFile,
 };
 
@@ -150,6 +155,9 @@ console.log('③ 用真服务器再起一次：它会不会把 dsh 弄挂');
   const { Timeline } = await import('../src/timeline.js');
   const { Ledger } = await import('../src/ledger.js');
   const { LedgerSocket, ledgerSocketPath } = await import('../src/ledger-socket.js');
+  // ★ 小程序那一条也要有**真的**通道（乙-2）：不然模型真调它时会连不上
+  const { Apps } = await import('../src/apps.js');
+  const { AppsSocket, appsSocketPath } = await import('../src/apps-socket.js');
 
   const dataDir = nodePath.join(tmp, 'realdata');
   nodeFs.mkdirSync(dataDir, { recursive: true });
@@ -160,7 +168,19 @@ console.log('③ 用真服务器再起一次：它会不会把 dsh 弄挂');
   const sock = new LedgerSocket({ ledger, socketPath: sockPath }).listen();
   await sock.ready();
 
-  const realEnv = { ...env, HUPO_LEDGER_SERVER: SERVER, HUPO_LEDGER_SOCKET: sockPath };
+  const APPS_SERVER = nodePath.join(CORE, 'src', 'mcp-apps-server.mjs');
+  const apps = new Apps({ dir: dataDir, sub: 'check' });
+  const appsSockPath = appsSocketPath(dataDir);
+  const appsSock = new AppsSocket({ apps, socketPath: appsSockPath }).listen();
+  await appsSock.ready();
+
+  const realEnv = {
+    ...env,
+    HUPO_LEDGER_SERVER: SERVER,
+    HUPO_LEDGER_SOCKET: sockPath,
+    HUPO_APPS_SERVER: APPS_SERVER,
+    HUPO_APPS_SOCKET: appsSockPath,
+  };
   delete realEnv.HUPO_PROBE_LOG;
   const args3 = ['--profile', 'sdk', '--patch', nodePath.join(CORE, 'hupo-persona.yml'), '--patch', PATCH];
   const c3 = nodeChildProcess.spawn('dsh', args3, {

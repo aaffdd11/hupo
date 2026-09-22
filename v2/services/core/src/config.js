@@ -9,6 +9,7 @@ import nodeOs from 'node:os';
 import nodePath from 'node:path';
 
 import { RECAP_DEFAULTS } from './recap.js';
+import { appsSocketPath } from './apps-socket.js';
 import { ledgerSocketPath } from './ledger-socket.js';
 
 /**
@@ -132,6 +133,10 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     appsFrameAncestors: env.HUPO_APPS_FRAME_ANCESTORS ?? `http://${env.HUPO_HOST ?? '127.0.0.1'}:${Number.parseInt(env.HUPO_PORT ?? '8020', 10)}`,
     // 签名密钥（**不进日志**）。没有就现生成一个 0600 的（见 `app-serve.js` 的 `loadSignKey`）。
     appsSignKeyPath: env.HUPO_APPS_SIGN_KEY_PATH ?? nodePath.join(dataDir, 'apps-signing.key'),
+    // 那条写入通道（`<他那一格>/apps.sock`；主人的那格就是 dataDir）。
+    appsSocketPath: env.HUPO_APPS_SOCKET ?? appsSocketPath(dataDir),
+    // 给 dsh 拉起的那条 MCP 工具进程（能力层用 `!!js` 从环境取，**不写死路径**）。
+    appsServerPath: env.HUPO_APPS_SERVER ?? nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname), 'mcp-apps-server.mjs'),
 
     /**
      * **临时验证码**（开发期口子 · 契约 `docs/dev/37-MULTITENANT.md` §六）。

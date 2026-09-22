@@ -54,6 +54,18 @@ test('🔴 值从环境来：路径**不写死在仓库里**（生产机是另�
   assert.ok(!/(^|\s)\/(home|Users|opt|srv)\//m.test(p), '仓库文件里不许出现本机绝对路径');
 });
 
+test('🔴 两条 MCP 都在，而且**每一件都真的能做**（做不了的这一批不挂）', () => {
+  const p = payload();
+  assert.match(p, /serverName:\s*apps/, '小程序那两条也要挂上：serverName 决定模型看到的名字');
+  for (const v of ['HUPO_APPS_SERVER', 'HUPO_APPS_SOCKET']) {
+    assert.ok(p.includes(v), `少了 ${v}：路径写死之后换台机器就起不来`);
+  }
+  // ⚠️ **负向**：这一批还没做的那些动作，**不许**出现在工具说明里 ——
+  //    挂了做不了的工具 = 让它去承诺一件做不到的事（本仓库最忌的假话）。
+  assert.ok(!/app_publish|app_install|app_grant|app_uninstall|app_unpublish/.test(p),
+    '发布/装上/授权那几件还没做，现在不许挂上去');
+});
+
 test('🔴 这份文件里**没有任何秘密**（准入靠套接字权限，不靠令牌）', () => {
   const p = payload();
   for (const w of ['TOKEN', 'PASSWORD', 'SECRET', 'API_KEY', 'credential']) {
@@ -74,6 +86,10 @@ test('config 的默认值指向真实存在的文件（人格那一份同款待�
   assert.ok(nodeFs.existsSync(cfg.capabilitiesPath));
   assert.ok(nodeFs.existsSync(cfg.ledgerServerPath));
   assert.equal(cfg.ledgerSocketPath, nodePath.join(cfg.dataDir, 'ledger.sock'));
+  // ★ 小程序那一套（乙-2）：脚本在不在、套接字路径对不对
+  assert.equal(cfg.appsServerPath, nodePath.join(CORE, 'src', 'mcp-apps-server.mjs'));
+  assert.ok(nodeFs.existsSync(cfg.appsServerPath), '那条 MCP 脚本要在');
+  assert.equal(cfg.appsSocketPath, nodePath.join(cfg.dataDir, 'apps.sock'));
   assert.deepEqual(preflight(cfg).problems, [], '默认配置下不该有问题');
 });
 
