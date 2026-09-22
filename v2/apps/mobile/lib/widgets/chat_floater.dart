@@ -30,6 +30,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import '../models/space_words.dart';
 
 /// 三档（手册 §6.2）。
 enum FloaterTier {
@@ -139,7 +140,9 @@ class ChatFloaterState extends State<ChatFloater> {
   void initState() {
     super.initState();
     _tier = widget.initialTier;
-    _lastOpen = widget.initialTier == FloaterTier.collapsed ? FloaterTier.full : widget.initialTier;
+    _lastOpen = widget.initialTier == FloaterTier.collapsed
+        ? FloaterTier.full
+        : widget.initialTier;
     // 初始档位也报一次（不然上层以为"还没展开"而屏幕上已经展开了）
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) widget.onTier?.call(_tier);
@@ -183,16 +186,26 @@ class ChatFloaterState extends State<ChatFloater> {
 
   /// 某一档的高度。**收起档返回 `null`** ⇒ 交给内容自己算（D3.5）。
   double? _heightFor(double max) {
-    if (_dragging != null) return _dragging!.clamp(FloaterMetrics.dragFloor, max);
+    if (_dragging != null) {
+      return _dragging!.clamp(FloaterMetrics.dragFloor, max);
+    }
     return switch (_tier) {
       FloaterTier.collapsed => null,
-      FloaterTier.half => (max * FloaterMetrics.halfRatio).clamp(FloaterMetrics.dragFloor, max),
+      FloaterTier.half => (max * FloaterMetrics.halfRatio).clamp(
+        FloaterMetrics.dragFloor,
+        max,
+      ),
       FloaterTier.full => max,
     };
   }
 
   /// 松手之后吸附到哪一档（甩优先，其次看离哪一档近）。
-  FloaterTier _snapTo(double h, double max, {required bool flungDown, required bool flungUp}) {
+  FloaterTier _snapTo(
+    double h,
+    double max, {
+    required bool flungDown,
+    required bool flungUp,
+  }) {
     if (flungDown) return FloaterTier.collapsed;
     if (flungUp) return FloaterTier.full;
     final candidates = <(FloaterTier, double)>[
@@ -218,8 +231,13 @@ class ChatFloaterState extends State<ChatFloater> {
     if (!_movedInGesture) return;
     final now = _nowMs();
     final dy = e.delta.dy;
-    _dragging = ((_dragging ?? _dragStartH) - dy).clamp(FloaterMetrics.dragFloor, widget.maxHeight);
-    if (now > _lastMoveMs) _dragVelocity = -dy / ((now - _lastMoveMs) / 1000); // 往上拖 = 变高 = 正速度
+    _dragging = ((_dragging ?? _dragStartH) - dy).clamp(
+      FloaterMetrics.dragFloor,
+      widget.maxHeight,
+    );
+    if (now > _lastMoveMs) {
+      _dragVelocity = -dy / ((now - _lastMoveMs) / 1000); // 往上拖 = 变高 = 正速度
+    }
     _lastMoveMs = now;
     setState(() {}); // ⚠️ 跟手：拖拽期间**动画 0ms**（§6.7 约束 2）
   }
@@ -242,10 +260,23 @@ class ChatFloaterState extends State<ChatFloater> {
     final durMs = now - _dragStartMs;
     final moved = (h - _dragStartH).abs();
     // ⚠️ D3.7：**速度 + 位移 + 时长三个都要满足**才算"甩"
-    final flung = durMs <= FloaterMetrics.flingMaxMs && moved >= FloaterMetrics.flingDistance;
-    final flungUp = flung && _dragVelocity > FloaterMetrics.flingVelocity && h > _dragStartH;
-    final flungDown = flung && _dragVelocity < -FloaterMetrics.flingVelocity && h < _dragStartH;
-    final to = _snapTo(h, widget.maxHeight, flungDown: flungDown, flungUp: flungUp);
+    final flung =
+        durMs <= FloaterMetrics.flingMaxMs &&
+        moved >= FloaterMetrics.flingDistance;
+    final flungUp =
+        flung &&
+        _dragVelocity > FloaterMetrics.flingVelocity &&
+        h > _dragStartH;
+    final flungDown =
+        flung &&
+        _dragVelocity < -FloaterMetrics.flingVelocity &&
+        h < _dragStartH;
+    final to = _snapTo(
+      h,
+      widget.maxHeight,
+      flungDown: flungDown,
+      flungUp: flungUp,
+    );
     _dragging = null;
     _setTier(to, auto: false); // 用户刚松手 ⇒ 不听防抖
   }
@@ -303,57 +334,73 @@ class ChatFloaterState extends State<ChatFloater> {
                       onPointerMove: _onMove,
                       onPointerUp: _onUp,
                       child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: d.gapS, vertical: 2),
-                      child: Row(
-                        children: [
-                          if (!collapsed) ...[
-                            const SizedBox(width: d.gapS),
-                            Container(
-                              width: 28,
-                              height: 4,
-                              decoration: BoxDecoration(
-                                color: d.line,
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                            ),
-                          ],
-                          const SizedBox(width: d.gapS),
-                          Text(
-                            widget.title,
-                            style: t.textTheme.titleSmall?.copyWith(color: d.ink, fontWeight: FontWeight.w600),
-                          ),
-                          const Spacer(),
-                          // 🔴 **收起态必须有"带字的展开入口"**（D3.8：不是 40px 无字箭头），
-                          //    命中区 ≥44（D3.6）—— 上一版就是被这条判据当场抓住的。
-                          if (collapsed)
-                            TextButton(
-                              style: TextButton.styleFrom(minimumSize: const Size(88, 44)),
-                              onPressed: () => _setTier(_lastOpen, auto: false),
-                              child: const Text('展开'),
-                            )
-                          else
-                            // ⚠️ 那一串动作要能**横向滚**：窄屏 + 大字号下它**一定**放不下；
-                            //    折行会让这一行变高 ⇒ 把时间线挤没。一行 + 横滚：高度不变、一个都不藏。
-                            Flexible(
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                reverse: true,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    ...widget.trailing,
-                                    IconButton(
-                                      tooltip: '收起',
-                                      onPressed: () => _setTier(FloaterTier.collapsed, auto: false),
-                                      icon: const Icon(Icons.keyboard_arrow_down),
-                                    ),
-                                  ],
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: d.gapS,
+                          vertical: 2,
+                        ),
+                        child: Row(
+                          children: [
+                            if (!collapsed) ...[
+                              const SizedBox(width: d.gapS),
+                              Container(
+                                width: 28,
+                                height: 4,
+                                decoration: BoxDecoration(
+                                  color: d.line,
+                                  borderRadius: BorderRadius.circular(2),
                                 ),
                               ),
+                            ],
+                            const SizedBox(width: d.gapS),
+                            Text(
+                              widget.title,
+                              style: t.textTheme.titleSmall?.copyWith(
+                                color: d.ink,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
-                        ],
+                            const Spacer(),
+                            // 🔴 **收起态必须有"带字的展开入口"**（D3.8：不是 40px 无字箭头），
+                            //    命中区 ≥44（D3.6）—— 上一版就是被这条判据当场抓住的。
+                            if (collapsed)
+                              TextButton(
+                                style: TextButton.styleFrom(
+                                  minimumSize: const Size(88, 44),
+                                ),
+                                onPressed: () =>
+                                    _setTier(_lastOpen, auto: false),
+                                child: const Text('展开'),
+                              )
+                            else ...[
+                              // ⚠️ 那一串动作要能**横向滚**：窄屏 + 大字号下它**一定**放不下；
+                              //    折行会让这一行变高 ⇒ 把时间线挤没。一行 + 横滚：高度不变、一个都不藏。
+                              Flexible(
+                                child: SingleChildScrollView(
+                                  scrollDirection: Axis.horizontal,
+                                  reverse: true,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: widget.trailing,
+                                  ),
+                                ),
+                              ),
+                              // 🔴 **「收起」钉在横滚之外**（主人 2026-09-22：*"展开后要有收回的按钮"*）：
+                              //    它原来在那条**横向滚动**里 ⇒ 窄屏 + 大字号下会被滚出视野，
+                              //    而"想收起来"的时候找不到按钮 = 一个点不到的出口。
+                              //    ⚠️ **只在展开态画它**：收起态本来就已经收起来了
+                              //      （第一版把它放在 if/else 之外 ⇒ 收起那条上也挂着一个"收起"，是错的）。
+                              IconButton(
+                                tooltip: chatCollapse,
+                                onPressed: () => _setTier(
+                                  FloaterTier.collapsed,
+                                  auto: false,
+                                ),
+                                icon: const Icon(Icons.keyboard_arrow_down),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
-                    ),
                     ),
                     // 收起态**不画内容**：免得它被压成一条时还在偷偷布局（那正是上一版溢出的来源）
                     if (!collapsed) ...[

@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hupo_app/models/space.dart';
+import 'package:hupo_app/models/design.dart' as d;
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
@@ -64,6 +65,22 @@ void main() {
     expect(find.text('展开'), findsOneWidget);
   });
 
+  testWidgets('🔴 展开态的「收起」在（而**收起态不该有它** —— 它已经收起来了）', (tester) async {
+    // 主人 2026-09-22：*"展开后要有收回的按钮"*。
+    // ⚠️ 第一版把这个按钮放在 if/else **之外** ⇒ 收起态那条上也挂着一个"收起"（错的）。
+    await _pump(tester); // 默认收起
+    expect(find.byTooltip(chatCollapse), findsNothing, reason: '收起态不该再挂一个"收起"');
+    expect(find.text('展开'), findsOneWidget);
+
+    await tester.tap(find.text('展开'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '★ 展开后必须找得到"收起"');
+    // 而且它**不在那条横滚里**（窄屏 + 大字号下也不会被滚出视野）
+    await tester.tap(find.byTooltip(chatCollapse));
+    await tester.pumpAndSettle();
+    expect(find.text('展开'), findsOneWidget, reason: '点了收起该回到收起态');
+  });
+
   testWidgets('🔴 点「设置」⇒ 设置那一屏开了，而且**聊天自动收起**（§6.4 规则 5）', (tester) async {
     // 从**半开**进场：这时桌面顶上那块看得见、点得到（最大化会把桌面盖住）
     await _pump(tester, tier: FloaterTier.half);
@@ -107,6 +124,41 @@ void main() {
     // 而**聊天还在底下那一条**（Z1：它永远在最上面）
     expect(find.byType(ChatFloater), findsOneWidget);
     expect(find.text('展开'), findsOneWidget, reason: '聊天收起那条该还在底下浮着');
+  });
+
+  testWidgets('🔴 点开小程序**从图标那儿扩开**（不是硬切出现）', (tester) async {
+    // 主人 2026-09-22：*"小程序点开要有效果，就是从哪里打开，就从哪里扩开到全屏的效果。"*
+    await _pump(tester);
+    // ⚠️ 参照物是**图标那个格子**（不是它下面那行字）
+    final icon = tester.getRect(
+      find.ancestor(of: find.text(settingsAppLabel), matching: find.byType(InkWell)).first,
+    );
+
+    await tester.tap(find.text(settingsAppLabel));
+    await tester.pump(); // 动画第 0 帧
+
+    // ★ 判据：**这一刻它还不是全屏**，而且**起点就在那个图标附近**
+    //   （硬切的话这一帧就已经铺满屏幕了）
+    // ⚠️ 量的是**被露出来的那块矩形**（`MiniAppHost` 自己是铺满的 `Stack`，它不动）
+    Rect reveal() => tester.getRect(
+          find.descendant(of: find.byType(MiniAppHost), matching: find.byType(ClipRRect)).first,
+        );
+    final justOpened = reveal();
+    final screen = tester.getRect(find.byType(MaterialApp));
+    expect(justOpened.width < screen.width, true,
+        reason: '刚点开时不该已经全屏（实测宽 ${justOpened.width} vs 屏幕 ${screen.width}）—— 那就是硬切');
+    expect((justOpened.topLeft - icon.topLeft).distance < 40, true,
+        reason: '★ 起点该在**那个图标**附近（实测 ${justOpened.topLeft} vs 图标 ${icon.topLeft}）');
+
+    // 中途：比刚才大了、还没到全屏
+    await tester.pump(Duration(milliseconds: d.motionPage.inMilliseconds ~/ 2));
+    final mid = reveal();
+    expect(mid.width > justOpened.width, true, reason: '该在长大');
+    expect(mid.width < screen.width, true, reason: '中途还没铺满');
+
+    // 收尾：全屏
+    await tester.pumpAndSettle();
+    expect(reveal().size, screen.size);
   });
 
   testWidgets('🔴 收起那条**压不住**小程序里可点的东西：内容底部内缩（§6.4 规则 1）', (tester) async {

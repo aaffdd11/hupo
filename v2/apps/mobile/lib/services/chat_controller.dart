@@ -18,6 +18,7 @@ import '../models/timeline.dart';
 import '../models/trash.dart';
 import '../models/trash_words.dart';
 import 'api.dart';
+import 'compose_store.dart';
 import 'draft_store.dart';
 import 'process_level_store.dart';
 import 'stream.dart';
@@ -32,11 +33,13 @@ class ChatController extends ChangeNotifier {
     String? token,
     TimelineStore? local,
     DraftStore? drafts,
+    ComposeStore? compose,
     ProcessLevelStore? levels,
     this.onUnauthorized,
   })  : _token = token,
         local = local ?? TimelineStore(),
         drafts = drafts ?? DraftStore(),
+        compose = compose ?? ComposeStore(),
         levels = levels ?? ProcessLevelStore() {
     // ⚠️ 构造时就带令牌的场合（`main.dart` 冷启动那条路）也要先绑好命名空间，
     //    否则第一次 `_restoreLocal()` 读的还是默认那一份（= 上一个人的）。
@@ -55,6 +58,7 @@ class ChatController extends ChangeNotifier {
     final ns = cacheNamespaceOf(token);
     local.namespace = ns;
     drafts.namespace = ns;
+    compose.namespace = ns;
   }
 
   final Api api;
@@ -76,6 +80,13 @@ class ChatController extends ChangeNotifier {
   ///    这边是**没有号**的本地发言。一句被认领（`confirmed`）就从这边消失。
   ///    见 `draft_store.dart` 顶上那张边界表。
   final DraftStore drafts;
+
+  /// **打字框里那串还没发出去的字**（第三本账 —— 见 `compose_store.dart` 顶上那张表）。
+  /// ⚠️ 它**不属于时间线**：一个字都没发出去，所以它不进 `items`、不带四态、没有"重发"。
+  final ComposeStore compose;
+
+  /// 现在存着的那份打字草稿（`null` = 没有）。界面拿它画"上面那条草稿"。
+  String? composeDraft;
 
   /// 过程四档存在哪（契约 §三）。**按设备存、按账号不存**。
   final ProcessLevelStore levels;
@@ -274,6 +285,10 @@ class ChatController extends ChangeNotifier {
   /// 放回去之后它们仍走**同一条渲染路径**（`UserBubble`）⇒ 屏幕上还是
   /// 「没发出去」+「重发」那条路（N11：可重试），而不是凭空变成"已收到"。
   Future<void> _restoreDrafts() async {
+    // ★ 打字框里那份草稿（第三本账）：**只读进内存**，不往时间线上放
+    //   （它一个字都没发出去 —— 放上去就是"画一条假历史"）。
+    composeDraft = await compose.load();
+
     for (final d in await drafts.load()) {
       timeline.addLocalUtterance(d.text, d.messageId);
       // 回到它原来的态（`sent` 读回来是 `failed`，理由见 [storableState]）
@@ -310,6 +325,9 @@ class ChatController extends ChangeNotifier {
     //    也**不许看见上一个人打了一半的话**（欠账 18）
     _invalidateLocal();
     timeline.reset();
+    // ⚠️ 打字框那份草稿**跟着账号走**：换个人登录不许看见上一个人打了一半的话
+    composeDraft = null;
+    await compose.clear();
     await tokens.clear();
     _conn = ConnState.idle;
     notifyListeners();
@@ -443,6 +461,25 @@ class ChatController extends ChangeNotifier {
     _noticeTimer?.cancel();
     _notice = n;
     _noticeTimer = Timer(noticeLinger, _dismissNotice);
+  }
+
+  /// **打字框里的字变了**（界面每敲一下就喊一声）。
+  ///
+  /// ⚠️ 存的是"**打了一半**"这件事本身：一个字都没发出去。
+  ///    与 `_saveDrafts()`（已发未认领那本账）**井水不犯河水**。
+  void saveComposeDraft(String text) {
+    final t = text.trim().isEmpty ? null : text;
+    if (t == composeDraft) return;
+    composeDraft = t;
+    compose.save(text); // 不 await：存不上也不能让打字卡住
+  }
+
+  /// **把这份草稿丢掉**（用户说"不用了"，或者他发出去了）。
+  void clearComposeDraft() {
+    if (composeDraft == null) return;
+    composeDraft = null;
+    compose.clear();
+    notifyListeners();
   }
 
   /// 浮窗撤掉（用户按了撤销 / 知道了 / 它自己到点了 / 退出登录）。

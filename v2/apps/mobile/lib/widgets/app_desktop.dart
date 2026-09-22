@@ -39,7 +39,10 @@ class DesktopApp {
 
   final String label;
   final IconData icon;
-  final VoidCallback onOpen;
+
+  /// **打开**。参数 = **这个图标在屏幕上的位置**（"从哪里打开，就从哪里扩开"）。
+  /// ⚠️ 由图标自己量、自己报 —— 上层不用去猜它在哪儿（猜的话换个排布就错了）。
+  final ValueChanged<Rect?> onOpen;
 
   /// 未读小点（`02-ARCHITECTURE.md`：**动作可静默，事实不能静默**）。
   /// `0` = 不画。⚠️ 现在还没有人给它赋值 —— 等真有"未读"这件事时再接。
@@ -135,7 +138,14 @@ class _DesktopIcon extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: app.onOpen,
+          onTap: () {
+            // ★ **"从哪里打开"**：把图标此刻在屏幕上的矩形报上去
+            final box = context.findRenderObject() as RenderBox?;
+            final rect = (box != null && box.hasSize)
+                ? box.localToGlobal(Offset.zero) & box.size
+                : null;
+            app.onOpen(rect);
+          },
           borderRadius: BorderRadius.circular(d.radiusCard),
           child: Column(
             mainAxisSize: MainAxisSize.min,

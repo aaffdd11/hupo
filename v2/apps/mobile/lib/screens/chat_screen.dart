@@ -95,6 +95,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 桌面上那个小程序开着吗（现在只有「设置」一个）。
   bool _appOpen = false;
 
+  /// **它是从哪儿打开的**（图标在屏幕上的矩形）—— 小程序从那儿"扩开"到全屏。
+  Rect? _appFrom;
+
   /// 聊天**展开着**吗（展开 = 桌面小程序被盖住 —— 手册 §6.4 规则 2/3）。
   /// ⚠️ 由浮窗自己报（它换档时调 `onTier`），不是这里猜的。
   bool _floaterExpanded = false;
@@ -190,9 +193,12 @@ class _ChatScreenState extends State<ChatScreen> {
                     label: settingsAppLabel,
                     icon: Icons.settings_outlined,
                     // 打开小程序 ⇒ **聊天自动收起**（§6.4 规则 5：把屏幕让给小程序）
-                    onOpen: () {
+                    onOpen: (from) {
                       _floaterKey.currentState?.collapse();
-                      setState(() => _appOpen = true);
+                      setState(() {
+                        _appFrom = from;
+                        _appOpen = true;
+                      });
                     },
                   ),
               ],
@@ -203,6 +209,7 @@ class _ChatScreenState extends State<ChatScreen> {
           Positioned.fill(
             child: MiniAppHost(
               open: _appOpen,
+              fromRect: _appFrom,
               title: configTitle,
               onClose: () => setState(() => _appOpen = false),
               covered: _floaterExpanded,
@@ -341,10 +348,17 @@ class _ChatScreenState extends State<ChatScreen> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 760),
             child: Composer(
+              // ★ **打字框草稿**（主人 2026-09-22）：*"要有一个空的输入框，但如果用户输入过，
+              //   没发送，则显示在上面作为草稿。草稿也是要记住的。"*
+              //   ⚠️ 它和"已发未认领那句话"（`draft_store.dart`）**不是同一本账**。
+              draft: c.composeDraft,
+              onDraftChanged: c.saveComposeDraft,
+              onDraftCleared: c.clearComposeDraft,
               // 🔴 **用户按下发送 ⇒ 最大化**（§6.2"发就拉满"）。
               //    ⚠️ 反过来不成立：**状态变化不许动窗口**（D4.8：新增助手消息的高度变化 = 0px）。
               onSend: (text) {
                 _floaterKey.currentState?.maximize();
+                c.clearComposeDraft(); // 发出去了 ⇒ 上面那条草稿该消失
                 c.send(text);
               },
             ),

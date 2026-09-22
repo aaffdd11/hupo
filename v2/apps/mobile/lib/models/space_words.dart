@@ -54,6 +54,7 @@ String waitingElapsedWords(int seconds) {
   final m = s ~/ 60;
   return '已经等了 $m 分 ${s % 60} 秒';
 }
+
 const String waitingBody = '这一步通常很快。要是等久了，按下面那个按钮再看看。';
 
 /// **正在现开一台**（申请已被受理、那一台还没建出来）。
@@ -97,8 +98,7 @@ const String keyCancelEntry = '不想填了，取消注册';
 
 /// 确认框：标题 + **删掉什么**（这一行就是"删前列清单"）+ 两个按钮。
 const String keyCancelTitle = '取消注册？';
-const String keyCancelWhat =
-    '你那一台盒子、里面的对话、还有记账的东西——都会没，位置也就腾出来了。这一步没法撤销。';
+const String keyCancelWhat = '你那一台盒子、里面的对话、还有记账的东西——都会没，位置也就腾出来了。这一步没法撤销。';
 const String keyCancelNo = '先算了';
 const String keyCancelYes = '确定取消';
 
@@ -162,12 +162,14 @@ const String configKeySection = '你那串钥匙';
 /// **现在是什么状态**（三种，必须分得开 —— 见 `keyStateLine`）。
 const String keyStateHas = '现在用的是一串已经填好的钥匙。';
 const String keyStateNone = '还没有填。填上它，琥珀才能开口说话。';
+
 /// ⚠️ 这一句以前**说不出来**：服务端只回 `hasKey:false`，"没填过"和"被判无效"
 ///    在界面上长得一模一样 ⇒ 只能对他说"还没有填"。那是**在说假话**。
 const String keyStateBad = '你填的那串它说用不了。在这儿换一串就好。';
 
 /// 已经有一串时，输入框上面那句话（说清"填了会换掉"）。
 const String configKeyHint = '填一串新的，就会把现在这串换掉。';
+
 /// 换成功之后那句。
 const String configKeyChanged = '换好了。';
 
@@ -195,3 +197,16 @@ String keyStateLine({required bool hasKey, required bool keyBad}) {
   if (keyBad) return keyStateBad;
   return keyStateNone;
 }
+
+/// ── 打字框里那份草稿（主人 2026-09-22）────────────────────────
+/// *"就是要有一个空的输入框，但如果用户输入过，没发送，则显示在上面作为草稿。草稿也是要记住的。"*
+///
+/// ⚠️ 它和"已发未认领那句话"（`draft_store.dart`）**不是一回事**：
+///    这个字**一个字都没发出去**，所以它不占时间线、没有"重发"。
+const String composeDraftTitle = '你打了一半';
+const String composeDraftBack = '接着写';
+const String composeDraftDiscard = '不用了';
+
+/// 展开态抓手行上那个「收起」（主人 2026-09-22：*"展开后要有收回的按钮"*）。
+/// ⚠️ 它**钉在横滚之外**（那条动作横滚会把按钮滚出视野 —— 那就等于没有出口）。
+const String chatCollapse = '收起';

@@ -39,6 +39,7 @@ class MiniAppHost extends StatefulWidget {
     required this.onCoveredTap,
     required this.bottomInset,
     required this.child,
+    this.fromRect,
   });
 
   /// 现在有 app 开着吗。
@@ -62,102 +63,161 @@ class MiniAppHost extends StatefulWidget {
   /// app 自己的内容（跑在容器自己的 `Navigator` 里）。
   final Widget child;
 
+  /// **它是从哪儿打开的**（那个图标在屏幕上的矩形）。
+  /// 🔴 主人 2026-09-22：*"小程序点开要有效果，就是从哪里打开，就从哪里扩开到全屏的效果。"*
+  /// `null` = 没给 ⇒ 从屏幕中心"长出来"（总比硬切好）。
+  final Rect? fromRect;
+
   @override
   State<MiniAppHost> createState() => _MiniAppHostState();
 }
 
-class _MiniAppHostState extends State<MiniAppHost> {
+class _MiniAppHostState extends State<MiniAppHost>
+    with SingleTickerProviderStateMixin {
   final _nav = GlobalKey<NavigatorState>();
+
+  /// **"扩开/收回"那一下**。0 = 还只有图标那么大；1 = 全屏。
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: d.motionPage,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.open) _c.value = 1;
+  }
+
+  @override
+  void didUpdateWidget(covariant MiniAppHost old) {
+    super.didUpdateWidget(old);
+    // 开 ⇒ 从图标那儿**扩开**；关 ⇒ **收回**到图标那儿
+    if (widget.open && !old.open) _c.forward(from: 0);
+    if (!widget.open && old.open) _c.reverse();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    // 没开 ⇒ 什么都不画（**不是**画一个空壳：空壳是"看着像有、其实是空的"）
-    if (!widget.open) return const SizedBox.shrink();
+    // 没开、而且已经收回去了 ⇒ 什么都不画
+    // （**不是**"一关就消失"：关的时候要能看见它收回图标那一下）
+    if (!widget.open && _c.isDismissed) return const SizedBox.shrink();
     final t = Theme.of(context);
     final covered = widget.covered;
+    final screen = Offset.zero & MediaQuery.sizeOf(context);
+    // 没给起点就从屏幕中心长出来（半个屏幕大的一块）
+    final from =
+        widget.fromRect ??
+        Rect.fromCenter(
+          center: screen.center,
+          width: screen.width * 0.35,
+          height: screen.height * 0.3,
+        );
+
+    Widget content() => Material(
+      color: d.paper,
+      // ⚠️ 只有**被聊天盖住**时才有圆角（§6.4 规则 2："要看得出来被盖住"）
+      borderRadius: BorderRadius.circular(covered ? 16 : 0),
+      clipBehavior: Clip.antiAlias,
+      child: DecoratedBox(
+        decoration: const BoxDecoration(),
+        child: Column(
+          children: [
+            // ── **容器给的**顶栏（app 自己不许画）──
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: d.gapS,
+                vertical: 2,
+              ),
+              child: Row(
+                children: [
+                  IconButton(
+                    tooltip: miniAppBack,
+                    onPressed: () {
+                      final nav = _nav.currentState;
+                      if (nav != null && nav.canPop()) {
+                        nav.pop();
+                      } else {
+                        widget.onClose();
+                      }
+                    },
+                    icon: const Icon(Icons.arrow_back),
+                  ),
+                  Expanded(
+                    child: Text(
+                      widget.title,
+                      style: t.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Divider(height: 1, color: d.line),
+            // ── app 自己的内容：跑在**容器自己的 Navigator** 里 ──
+            //   ⚠️ **底部内缩挂在内容上**：全屏之后聊天那条仍压在底下，
+            //      不缩的话**最后一行永远点不到**（§6.4 规则 1）。
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(bottom: widget.bottomInset),
+                child: Navigator(
+                  key: _nav,
+                  onGenerateRoute: (_) =>
+                      MaterialPageRoute<void>(builder: (_) => widget.child),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
     return Stack(
       children: [
-        Positioned.fill(
-          // ⚠️ 被盖住时**不接输入**（规则 3），但它**照样在跑**（规则 4）
-          child: IgnorePointer(
-            ignoring: covered,
-            child: AnimatedScale(
-              scale: covered ? 0.98 : 1,
-              duration: d.motionPage,
-              curve: Curves.easeOutCubic,
-              child: AnimatedOpacity(
-                opacity: covered ? 0.55 : 1,
-                duration: d.motionPage,
-                child: Material(
-                  color: d.paper,
-                  // 🔴 **全屏**（主人 2026-09-22：*"桌面小程序打开后，是全屏显示的，
-                  //    只不过聊天窗口还在底下那里。"*）⇒ **不要外边距、不要常驻圆角**：
-                  //    它是一"页"，不是一扇"窗"。
-                  // ⚠️ 只有**被聊天盖住**时才有圆角（§6.4 规则 2："要看得出来被盖住"）。
-                  borderRadius: BorderRadius.circular(covered ? 16 : 0),
-                  clipBehavior: Clip.antiAlias,
-                  child: DecoratedBox(
-                    decoration: const BoxDecoration(),
-                    child: Column(
-                      children: [
-                        // ── **容器给的**顶栏（app 自己不许画）──
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: d.gapS,
-                            vertical: 2,
-                          ),
-                          child: Row(
-                            children: [
-                              IconButton(
-                                tooltip: miniAppBack,
-                                onPressed: () {
-                                  final nav = _nav.currentState;
-                                  if (nav != null && nav.canPop()) {
-                                    nav.pop();
-                                  } else {
-                                    widget.onClose();
-                                  }
-                                },
-                                icon: const Icon(Icons.arrow_back),
-                              ),
-                              Expanded(
-                                child: Text(
-                                  widget.title,
-                                  style: t.textTheme.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Divider(height: 1, color: d.line),
-                        // ── app 自己的内容：跑在**容器自己的 Navigator** 里 ──
-                        //   ⚠️ **底部内缩挂在内容上**（不是挂在窗口上）：全屏之后
-                        //      聊天那条仍然压在底下，不缩的话**最后一行永远点不到**（§6.4 规则 1）。
-                        Expanded(
-                          child: Padding(
-                            padding: EdgeInsets.only(
-                              bottom: widget.bottomInset,
-                            ),
-                            child: Navigator(
-                              key: _nav,
-                              onGenerateRoute: (_) => MaterialPageRoute<void>(
-                                builder: (_) => widget.child,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
+        AnimatedBuilder(
+          animation: _c,
+          builder: (ctx, _) {
+            final v = Curves.easeOutCubic.transform(_c.value);
+            final rect = Rect.lerp(from, screen, v) ?? screen;
+            return Positioned.fromRect(
+              rect: rect,
+              child: ClipRRect(
+                // 小的时候有点圆角（像一张卡），长到全屏就是直角
+                borderRadius: BorderRadius.circular((1 - v) * d.radiusCard),
+                child: IgnorePointer(
+                  ignoring: covered,
+                  child: AnimatedOpacity(
+                    opacity: covered ? 0.55 : 1,
+                    duration: d.motionPage,
+                    child: AnimatedScale(
+                      scale: covered ? 0.98 : 1,
+                      duration: d.motionPage,
+                      curve: Curves.easeOutCubic,
+                      // ⚠️ 内容**按全屏排版**，只是被上面那块矩形"露出来"
+                      //    ⇒ 看起来就是"从那个图标扩开的"（而不是一个小窗被放大）
+                      child: OverflowBox(
+                        alignment: Alignment.topLeft,
+                        minWidth: screen.width,
+                        maxWidth: screen.width,
+                        minHeight: screen.height,
+                        maxHeight: screen.height,
+                        child: content(),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         ),
         // 被盖住时：**点可见的那一块 = 收起聊天**，而且这一下**不许传给下面的 app**
-        if (covered)
+        if (covered && _c.isCompleted)
           Positioned.fill(
             child: Listener(
               behavior: HitTestBehavior.opaque,

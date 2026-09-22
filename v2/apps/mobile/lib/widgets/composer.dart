@@ -15,16 +15,34 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../models/design.dart' as d;
 import '../models/space_words.dart';
 
 class Composer extends StatefulWidget {
   /// ⚠️ **刻意没有 `enabled` 参数**——手册 D5.14 说"打字框永远不许锁"。
   ///    留一个开关，就等于留一个"哪天有人顺手把它关掉"的机会。
   ///    网不好、断线、在重连——**都不该让人打不了字**。
-  const Composer({super.key, required this.onSend, this.hint});
+  const Composer({
+    super.key,
+    required this.onSend,
+    this.hint,
+    this.draft,
+    this.onDraftChanged,
+    this.onDraftCleared,
+  });
 
   final void Function(String text) onSend;
   final String? hint;
+
+  /// **本机存着的那份草稿**（"打了一半、还没发出去"的字；上层从控制器读）。
+  /// ⚠️ 它**不是**"已发未认领那句话"（那是 `draft_store.dart` 那本账）。
+  final String? draft;
+
+  /// 框里的字变了（上层存盘 —— 主人：*"草稿也是要记住的"*）。
+  final ValueChanged<String>? onDraftChanged;
+
+  /// 这份草稿不用了（上层清掉）。
+  final VoidCallback? onDraftCleared;
 
   @override
   State<Composer> createState() => _ComposerState();
@@ -62,6 +80,24 @@ class _ComposerState extends State<Composer> {
     _focus.requestFocus();
   }
 
+  /// 框里的字变了 ⇒ 交给上层存下来（**一边打一边存**，刷新回来还在）。
+  void _onChanged(String text) {
+    widget.onDraftChanged?.call(text);
+    setState(() {}); // 草稿条要跟着"框是不是空的"变
+  }
+
+  /// **把上面那条草稿放回框里**（"接着写"）。
+  void _resume() {
+    final d = widget.draft;
+    if (d == null) return;
+    _controller.value = TextEditingValue(
+      text: d,
+      selection: TextSelection.collapsed(offset: d.length),
+    );
+    _focus.requestFocus();
+    setState(() {});
+  }
+
   void _submit() {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
@@ -74,63 +110,130 @@ class _ComposerState extends State<Composer> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // 框里有字 ⇒ 不画草稿条（同一句话不许画两遍）
+    final showDraft =
+        (widget.draft?.isNotEmpty ?? false) && _controller.text.isEmpty;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // 🔴 **粘贴**（2026-09-21 主人报「我无法黏贴」之后加的）。
-          //    ⚠️ 同一个病：Flutter 把字画在 canvas 上，**空输入框长按不弹菜单**
-          //      （它自己的选择菜单要有可选中的文字才弹）⇒ 手机没物理键盘就粘不进来。
-          //    ⇒ 一个按钮按下去就是「用户手势」，能合法读剪贴板。
-          //    ⚠️ 命中区 ≥44（`IconButton` 默认 48）。
-          IconButton(
-            tooltip: composerPaste,
-            icon: const Icon(Icons.content_paste),
-            onPressed: _paste,
-          ),
-          Expanded(
-            child: TextField(
-              controller: _controller,
-              focusNode: _focus,
-              enabled: true, // ★ 永远不锁（D5.14）
-              minLines: 1,
-              maxLines: 6,
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => _submit(),
-              decoration: InputDecoration(
-                hintText: widget.hint ?? '说点什么',
-                border: const OutlineInputBorder(),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          // ── **上面那条草稿**（主人 2026-09-22）──────────────────
+          //   规则：**框是空的、而且本机存着一份草稿**时才出现。
+          //   ⚠️ 一旦他开始打字（框里有字），这条就收起来 —— 不然同一句话画两遍。
+          if (showDraft) _draftStrip(theme),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              // 🔴 **粘贴**（2026-09-21 主人报「我无法黏贴」之后加的）。
+              //    ⚠️ 同一个病：Flutter 把字画在 canvas 上，**空输入框长按不弹菜单**
+              //      （它自己的选择菜单要有可选中的文字才弹）⇒ 手机没物理键盘就粘不进来。
+              //    ⇒ 一个按钮按下去就是「用户手势」，能合法读剪贴板。
+              //    ⚠️ 命中区 ≥44（`IconButton` 默认 48）。
+              IconButton(
+                tooltip: composerPaste,
+                icon: const Icon(Icons.content_paste),
+                onPressed: _paste,
               ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          // ★ 只有这一块跟着输入变——输入框本身不会被重建
-          ValueListenableBuilder<TextEditingValue>(
-            valueListenable: _controller,
-            builder: (context, value, _) {
-              final canSend = value.text.trim().isNotEmpty;
-              return Semantics(
-                button: true,
-                label: canSend ? '发送' : '还没有话要说',
-                child: IconButton.filled(
-                  // 触控目标 ≥44
-                  constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-                  onPressed: canSend ? _submit : null,
-                  icon: const Icon(Icons.arrow_upward),
-                  tooltip: '发送',
-                  style: IconButton.styleFrom(
-                    minimumSize: const Size(48, 48),
-                    backgroundColor: canSend ? theme.colorScheme.primary : null,
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  focusNode: _focus,
+                  enabled: true, // ★ 永远不锁（D5.14）
+                  minLines: 1,
+                  maxLines: 6,
+                  textInputAction: TextInputAction.send,
+                  onChanged: _onChanged,
+                  onSubmitted: (_) => _submit(),
+                  decoration: InputDecoration(
+                    hintText: widget.hint ?? '说点什么',
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 14,
+                    ),
                   ),
                 ),
-              );
-            },
+              ),
+              const SizedBox(width: 8),
+              // ★ 只有这一块跟着输入变——输入框本身不会被重建
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _controller,
+                builder: (context, value, _) {
+                  final canSend = value.text.trim().isNotEmpty;
+                  return Semantics(
+                    button: true,
+                    label: canSend ? '发送' : '还没有话要说',
+                    child: IconButton.filled(
+                      // 触控目标 ≥44
+                      constraints: const BoxConstraints(
+                        minWidth: 48,
+                        minHeight: 48,
+                      ),
+                      onPressed: canSend ? _submit : null,
+                      icon: const Icon(Icons.arrow_upward),
+                      tooltip: '发送',
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(48, 48),
+                        backgroundColor: canSend
+                            ? theme.colorScheme.primary
+                            : null,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
           ),
         ],
       ),
     );
   }
+
+  /// 草稿条：**说清这是你打了一半的字**，并给两条出路（接着写 / 不用了）。
+  Widget _draftStrip(ThemeData theme) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+      decoration: BoxDecoration(
+        color: d.card,
+        borderRadius: BorderRadius.circular(d.radiusField),
+        border: Border.all(color: d.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            composeDraftTitle,
+            style: theme.textTheme.labelLarge?.copyWith(color: d.accent),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            widget.draft!,
+            style: theme.textTheme.bodyMedium?.copyWith(color: d.ink),
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              TextButton(
+                // 命中区 ≥44（D3.6）：`TextButton` 默认给的是 36 —— 显式撑起来
+                style: TextButton.styleFrom(minimumSize: const Size(88, 44)),
+                onPressed: _resume,
+                child: const Text(composeDraftBack),
+              ),
+              TextButton(
+                style: TextButton.styleFrom(minimumSize: const Size(88, 44)),
+                onPressed: widget.onDraftCleared,
+                child: const Text(composeDraftDiscard),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
 }
