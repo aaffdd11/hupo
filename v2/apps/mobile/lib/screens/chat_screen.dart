@@ -17,6 +17,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/conn_state.dart';
+import '../models/design.dart' as d;
 import '../models/export_words.dart';
 import '../models/scroll_follow.dart';
 import '../models/space.dart';
@@ -25,8 +26,10 @@ import '../models/timeline.dart';
 import '../models/trash_words.dart';
 import '../services/api.dart';
 import '../services/chat_controller.dart';
+import '../widgets/app_desktop.dart';
 import '../widgets/bubble_menu.dart';
 import '../widgets/bubbles.dart';
+import '../widgets/chat_floater.dart';
 import '../widgets/composer.dart';
 import '../widgets/notice.dart';
 import '../widgets/process_level_menu.dart';
@@ -52,6 +55,7 @@ class ChatScreen extends StatefulWidget {
     this.onSendKey,
     this.onCancelMe,
     this.onKeyChanged,
+    this.initialTier = FloaterTier.collapsed,
   });
 
   final ChatController controller;
@@ -60,7 +64,7 @@ class ChatScreen extends StatefulWidget {
   /// **"我那台到哪一步了"**（服务端说的）—— 「配置」那一屏要拿它如实说现状。
   final SpaceInfo space;
 
-  /// 把钥匙交上去（和第一次那一屏**同一个入口**）。`null` ⇒ 顶栏不显示「配置」
+  /// 把钥匙交上去（和第一次那一屏**同一个入口**）。`null` ⇒ 抓手行不显示「配置」
   /// （单看这一屏的测试可以不传）。
   final Future<KeySend> Function(String key)? onSendKey;
 
@@ -70,12 +74,22 @@ class ChatScreen extends StatefulWidget {
   /// 换成功之后叫一声（上层去重问状态）。
   final VoidCallback? onKeyChanged;
 
+  /// 一进来浮窗是哪一档。
+  ///
+  /// ⚠️ **默认收起**（主人 2026-09-22 定：一进来看得见桌面，点那条带字的「展开」才开聊）。
+  /// ⚠️ 要**展开态**的测试/调用方**显式传 `FloaterTier.full|half`** ——
+  ///    别去改默认值来"哄断言"：默认值这件事本身就是主人定的产品行为。
+  final FloaterTier initialTier;
+
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
   final _scroll = ScrollController();
+
+  /// 浮窗那一层的把手（外面要叫它"拉满"/"收起"）。
+  final _floaterKey = GlobalKey<ChatFloaterState>();
 
   /// 用户**自己往上翻过**没有。
   ///
@@ -135,10 +149,86 @@ class _ChatScreenState extends State<ChatScreen> {
     //    约束 1 的判据是 **D4.8：高度变化 = 0px** —— 塞进 `Column` 就当场破掉
     //    （下面整块内容会被那条通知往下推）。有闸钉着：
     //    `test/widget/notice_overlay_test.dart` 量的是**下面内容前后同一个矩形**。
+    // ⚠️ **桌面是底部一条，浮窗在它上面浮着、四边各留 30**
+    //    （主人 2026-09-22 定的形状 B；契约 `52-DESKTOP.md`、手册 §六 Z4）。
+    //    从上到下：① 浮窗（在剩下的地方里贴着底）② 桌面那一条。
+    //    ⚠️ 这里**不用 `Positioned`**：`Positioned` 必须直接坐在 `Stack` 里，
+    //      而"桌面在下面"这件事用 `Column` 表达更直接（也就没有那个 ParentDataWidget 坑）。
     final sheet = Scaffold(
-      appBar: AppBar(
-        title: const Text('助手'),
-        actions: [
+      backgroundColor: d.paper,
+      body: Column(
+        // ⚠️ **`stretch` 不能少**：默认是 `center`，桌面那一条会被缩成"内容那么宽"（实测 100px + 居中），
+        //    而它应该是**横跨整宽的底部一条**（契约 `52-DESKTOP.md` §一）。
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: Padding(
+              // 四边 30（Z3/Z4）。⚠️ 这个数住在 `FloaterMetrics`（= 手册阈值总表），别处不许再写一遍。
+              padding: const EdgeInsets.all(FloaterMetrics.margin),
+              child: LayoutBuilder(
+                builder: (ctx, cons) => Align(
+                  alignment: Alignment.bottomCenter,
+                  child: ChatFloater(
+                    key: _floaterKey,
+                    maxHeight: cons.maxHeight,
+                    title: '助手',
+                    initialTier: widget.initialTier,
+                    trailing: _actions(c),
+                    child: _sheetBody(c),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // 桌面：**点空白 ⇒ 收起聊天**；桌上那个「会话」图标 ⇒ 打开它（聊天本身就是那个 app）
+          AppDesktop(
+            apps: [
+              DesktopApp(
+                label: '会话',
+                icon: Icons.chat_bubble_outline,
+                onOpen: () => _floaterKey.currentState?.maximize(),
+              ),
+            ],
+            onTapBlank: () => _floaterKey.currentState?.collapse(),
+          ),
+        ],
+      ),
+    );
+    final n = c.notice;
+    // ⚠️ `Positioned(top/left/right)` **不给 bottom** ⇒ 浮窗只占它自己那么大，
+    //    而且**不参与 `Stack` 的尺寸计算**（`Stack` 的尺寸由非 positioned 的
+    //    那个孩子决定）。这就是"浮在上面、不挤动下面"的**结构**保证——
+    //    不是靠"看起来像浮着"。
+    return PopScope(
+      // ⚠️ 退出这一屏就把浮窗撤了：它是"现在喊你一声"，
+      //    而下一屏上没有它（不然那个钟到点时会去动一棵已经没了的树）。
+      onPopInvokedWithResult: (didPop, _) => c.dismissNotice(),
+      child: Stack(
+        children: [
+          sheet,
+          if (n != null)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: NoticeOverlay(
+                notice: n,
+                // ⚠️ 浮窗那个**不带 `from`**：它读浮窗手上那一条
+                onUndo: () => _undoNotice(),
+                onDismiss: c.dismissNotice,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 抓手行右边那一串动作（原来挂在 `AppBar.actions` 上）。
+  ///
+  /// ⚠️ **位置变了，理由要记住**：桌面出来之后顶栏那一条没有地方站了 ——
+  ///    它会把"浮着"这件事拆掉（页面顶上一条实心栏 = 不是一个浮窗）。
+  ///    ⇒ 搬进抓手行；宽度不够时靠**横滚**（`ChatFloater` 那边），**不靠藏**。
+  List<Widget> _actions(ChatController c) => <Widget>[
           // ⚠️ **回收站**（契约 §二 第 2 条：放顶栏）。删掉的东西先进这儿，
           //    30 天内能拿回来 —— 顶栏这一处就是"我删的东西去哪了"的答案。
           IconButton(
@@ -202,39 +292,7 @@ class _ChatScreenState extends State<ChatScreen> {
             },
             icon: const Icon(Icons.logout),
           ),
-        ],
-      ),
-      body: _sheetBody(c),
-    );
-
-    final n = c.notice;
-    // ⚠️ `Positioned(top/left/right)` **不给 bottom** ⇒ 浮窗只占它自己那么大，
-    //    而且**不参与 `Stack` 的尺寸计算**（`Stack` 的尺寸由非 positioned 的
-    //    那个孩子决定）。这就是"浮在上面、不挤动下面"的**结构**保证——
-    //    不是靠"看起来像浮着"。
-    return PopScope(
-      // ⚠️ 退出这一屏就把浮窗撤了：它是"现在喊你一声"，
-      //    而下一屏上没有它（不然那个钟到点时会去动一棵已经没了的树）。
-      onPopInvokedWithResult: (didPop, _) => c.dismissNotice(),
-      child: Stack(
-        children: [
-          sheet,
-          if (n != null)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: NoticeOverlay(
-                notice: n,
-                // ⚠️ 浮窗那个**不带 `from`**：它读浮窗手上那一条
-                onUndo: () => _undoNotice(),
-                onDismiss: c.dismissNotice,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
+  ];
 
   Widget _sheetBody(ChatController c) {
     return Column(
@@ -254,7 +312,14 @@ class _ChatScreenState extends State<ChatScreen> {
         Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 760),
-            child: Composer(onSend: c.send),
+            child: Composer(
+              // 🔴 **用户按下发送 ⇒ 最大化**（§6.2"发就拉满"）。
+              //    ⚠️ 反过来不成立：**状态变化不许动窗口**（D4.8：新增助手消息的高度变化 = 0px）。
+              onSend: (text) {
+                _floaterKey.currentState?.maximize();
+                c.send(text);
+              },
+            ),
           ),
         ),
         SizedBox(height: MediaQuery.viewInsetsOf(context).bottom),
@@ -460,27 +525,40 @@ class _StatusStrip extends StatelessWidget {
 }
 
 /// 空屏。手册 D1/D3：**不许写"你好，我能帮你做什么"**（人格硬规则禁止留客式追问）。
+///
+/// 🔴 **2026-09-22：它原来不可滚，被浮窗那一刀当场判红。**
+/// 桌面出来之后，浮窗能用的高度变少了（屏高 − 四边 30 − 桌面那一条），
+/// 3.1 倍字号下这一块只分到 **104px**，而它自己要 **272px**
+/// ⇒ `RenderFlex overflowed by 168 pixels`（五档不溢出那道硬闸抓的）。
+/// 修法不是"把字写小"，而是**让它在没地方时能滚**（有地方时仍然居中）：
+/// 容器跟字算，地方不够就滚 —— 这跟 `ListView` 那条时间线是同一个姿势。
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.all(32),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text('说点什么', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 12),
-          Text(
-            // 说清"能干什么"，不是"我是什么"
-            '记一笔账、问一件事、让它去查个东西。\n'
-            '它会把做过的事说给你听。',
-            style: theme.textTheme.bodyMedium,
-            textAlign: TextAlign.center,
+    return LayoutBuilder(
+      builder: (ctx, cons) => SingleChildScrollView(
+        padding: const EdgeInsets.all(32),
+        child: ConstrainedBox(
+          // 有地方 ⇒ 撑满并居中；没地方 ⇒ 内容说了算，滚
+          constraints: BoxConstraints(minHeight: cons.maxHeight - 64),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text('说点什么', style: theme.textTheme.titleMedium),
+              const SizedBox(height: 12),
+              Text(
+                // 说清"能干什么"，不是"我是什么"
+                '记一笔账、问一件事、让它去查个东西。\n'
+                '它会把做过的事说给你听。',
+                style: theme.textTheme.bodyMedium,
+                textAlign: TextAlign.center,
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

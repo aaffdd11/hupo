@@ -31,6 +31,7 @@ import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/timeline.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
+import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/screens/landing_screen.dart';
 import 'package:hupo_app/screens/login_screen.dart';
 import 'package:hupo_app/screens/model_key_screen.dart';
@@ -108,7 +109,7 @@ Future<void> _openAbout(WidgetTester tester, double scale) async {
 Future<void> _openConfig(WidgetTester tester, double scale) async {
   await _pump(
     tester,
-    ChatScreen(
+    ChatScreen(initialTier: FloaterTier.full, 
       controller: _controller(),
       onLoggedOut: () {},
       space: const SpaceInfo(kind: 'tenant', state: 'ready', hasKey: false),
@@ -125,7 +126,7 @@ Future<void> _openConfig(WidgetTester tester, double scale) async {
 /// ⚠️ 和关于页同一条理由：新加的界面**必须也过五档不溢出那道硬闸**，
 ///    不然"五档不溢出"会随时间失效。
 Future<void> _openProcessMenu(WidgetTester tester, double scale) async {
-  await _pump(tester, ChatScreen(controller: _controller(), onLoggedOut: () {}), scale);
+  await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _controller(), onLoggedOut: () {}), scale);
   await tester.tap(find.byTooltip('它说多少过程'));
   await tester.pumpAndSettle();
 }
@@ -241,7 +242,7 @@ ChatController _turnController() {
 
 /// **像用户那样**打开回收站页：从主界面点顶栏那个入口。
 Future<void> _openTrash(WidgetTester tester, double scale) async {
-  await _pump(tester, ChatScreen(controller: _trashController(), onLoggedOut: () {}), scale);
+  await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _trashController(), onLoggedOut: () {}), scale);
   await tester.tap(find.byTooltip(trashTooltip));
   await tester.pumpAndSettle();
 }
@@ -268,14 +269,14 @@ ChatController _exportController() {
 /// ⚠️ 契约 §五⑥ 点名要**从真入口进** —— 直接把 `ExportScreen` 当 `home` 泵出来，
 ///    它没有返回键，命中区扫描会"一个能点的都没扫到"，量的也不是用户真看到的那棵树。
 Future<void> _openExport(WidgetTester tester, double scale) async {
-  await _pump(tester, ChatScreen(controller: _exportController(), onLoggedOut: () {}), scale);
+  await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _exportController(), onLoggedOut: () {}), scale);
   await tester.tap(find.byTooltip(exportTooltip));
   await tester.pumpAndSettle();
 }
 
 /// **像用户那样**长按一条回答，弹出删除菜单。
 Future<void> _openBubbleMenu(WidgetTester tester, double scale) async {
-  await _pump(tester, ChatScreen(controller: _turnController(), onLoggedOut: () {}), scale);
+  await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _turnController(), onLoggedOut: () {}), scale);
   await tester.longPress(find.text('这周 7 小时。'));
   await tester.pumpAndSettle();
 }
@@ -300,7 +301,7 @@ Future<void> _openPlan(WidgetTester tester, double scale) async {
 Future<void> _openNoticeIn(WidgetTester tester, ChatController c, double scale) async {
   // ⚠️ **先挂起来、再让通知到**：浮窗和主界面是 `Stack` 的两层，
   //    通知到时 `setState` 会把这一帧重画出来。
-  await _pump(tester, ChatScreen(controller: c, onLoggedOut: () {}), scale);
+  await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), scale);
   c.ingest(_noticeEvent());
   await tester.pump();
   // 负向对照：**浮窗真的画出来了**才算数（没画出来的话下面那道扫描
@@ -324,7 +325,7 @@ Future<void> _closeNotice(WidgetTester tester, ChatController c) async {
 /// **像用户那样**让浮窗自己走掉，屏幕上只剩**时间线里那一条通知**。
 Future<void> _openNoticeLine(WidgetTester tester, double scale) async {
   final c = _controller();
-  await _pump(tester, ChatScreen(controller: c, onLoggedOut: () {}), scale);
+  await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), scale);
   c.ingest(_noticeEvent());
   // ⚠️ 两拍：第一拍让那个钟到点，第二拍才把新的一帧画出来
   await tester.pump(ChatController.noticeLinger);
@@ -403,13 +404,13 @@ void main() {
         final c = _controller();
         _stuff(c.timeline);
         c.timeline.apply({'type': 'message/status', 'turn': 1, 'state': 'started'});
-        await _pump(tester, ChatScreen(controller: c, onLoggedOut: () {}), s);
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
         expect(_drain(tester), isEmpty, reason: '主界面在 ${s}x 溢出了');
       });
 
       testWidgets('主界面 @ ${s}x（步骤流水 + 推理原文拉满 —— 批 3 新加的）', (tester) async {
         final c = await _processController();
-        await _pump(tester, ChatScreen(controller: c, onLoggedOut: () {}), s);
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
         expect(_drain(tester), isEmpty, reason: '过程那一块在 ${s}x 溢出了');
       });
 
@@ -488,7 +489,7 @@ void main() {
       });
 
       testWidgets('空屏 @ ${s}x', (tester) async {
-        await _pump(tester, ChatScreen(controller: _controller(), onLoggedOut: () {}), s);
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _controller(), onLoggedOut: () {}), s);
         expect(_drain(tester), isEmpty, reason: '空屏在 ${s}x 溢出了');
       });
     }
@@ -512,12 +513,12 @@ void main() {
     }
 
     testWidgets('记下 1.0x 的字号', (tester) async {
-      await _pump(tester, ChatScreen(controller: _controller(), onLoggedOut: () {}), 1.0);
+      await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _controller(), onLoggedOut: () {}), 1.0);
       fontSize[1.0] = fontSizeAt(tester, bodyLine);
     });
 
     testWidgets('记下 3.1x 的字号', (tester) async {
-      await _pump(tester, ChatScreen(controller: _controller(), onLoggedOut: () {}), 3.1);
+      await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _controller(), onLoggedOut: () {}), 3.1);
       fontSize[3.1] = fontSizeAt(tester, bodyLine);
     });
 
@@ -667,7 +668,7 @@ void main() {
       testWidgets('主界面（含"重发"那个入口）@ ${s}x', (tester) async {
         final c = _controller();
         _stuff(c.timeline);
-        await _pump(tester, ChatScreen(controller: c, onLoggedOut: () {}), s);
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
         // ⚠️ **先滚到最上面**：时间线现在打开就停在**最新**那一条（`27-SCROLL.md`），
         //    而"重发"那个入口属于**最老**那条（第一条就发失败了）。
         //    不滚上去的话，字放大之后它可能根本没被 build ⇒ **这一条闸就漏掉了它**，

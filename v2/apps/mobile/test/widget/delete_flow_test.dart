@@ -20,6 +20,7 @@ import 'package:http/testing.dart';
 import 'package:hupo_app/models/message_state.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
+import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/draft_store.dart';
@@ -97,7 +98,7 @@ Future<void> _pumpChat(WidgetTester tester, ChatController c) async {
   for (final e in _facts()) {
     c.ingest(e);
   }
-  await tester.pumpWidget(MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})));
+  await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
   await tester.pump();
 }
 
@@ -143,7 +144,7 @@ void main() {
     final c = _controller(local: TimelineStore(), drafts: DraftStore());
     // ⚠️ `openStream: false`：这里测的是**冷启动那一屏**，不开真 socket
     await c.start(token: 'tok', openStream: false);
-    await tester.pumpWidget(MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})));
+    await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
     await tester.pump();
 
     expect(find.text(_userText), findsNothing, reason: '★ 冷启动那一屏也不许出现那一轮的字');
@@ -205,7 +206,7 @@ void main() {
   testWidgets('长按**还没发出去**的那句：不给"删掉"这个入口（那会是个删不掉的动作）', (tester) async {
     final c = _controller();
     c.timeline.addLocalUtterance('这句我还没发出去', 'u_local');
-    await tester.pumpWidget(MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})));
+    await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
     await tester.pump();
 
     await tester.longPress(find.text('这句我还没发出去'));
@@ -238,7 +239,7 @@ void main() {
       token: 'tok',
     );
     addTearDown(c.dispose);
-    await tester.pumpWidget(MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})));
+    await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
     await tester.pump();
     await tester.tap(find.byTooltip(trashTooltip));
     await tester.pumpAndSettle();

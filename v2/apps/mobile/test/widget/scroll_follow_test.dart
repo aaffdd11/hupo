@@ -11,6 +11,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
+import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
@@ -39,7 +40,7 @@ void main() {
 
   testWidgets('🔴 打开就停在**最新**那一条：一屏放不下的历史也不许停在最老', (tester) async {
     final c = _controller();
-    await tester.pumpWidget(MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})));
+    await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
     _feedHistory(c, 40);
     await tester.pumpAndSettle();
 
@@ -49,7 +50,7 @@ void main() {
 
   testWidgets('历史短到一屏放得下 ⇒ 全都看得见（跟随不许把内容弄没）', (tester) async {
     final c = _controller();
-    await tester.pumpWidget(MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})));
+    await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
     _feedHistory(c, 2);
     await tester.pumpAndSettle();
 
@@ -59,7 +60,7 @@ void main() {
 
   testWidgets('新的一句进来 ⇒ 屏幕自己跟下去（不用手划）', (tester) async {
     final c = _controller();
-    await tester.pumpWidget(MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})));
+    await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
     _feedHistory(c, 20);
     await tester.pumpAndSettle();
     expect(find.text('第 20 句'), findsOneWidget);

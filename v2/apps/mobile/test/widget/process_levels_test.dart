@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/process_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
+import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
@@ -25,7 +26,7 @@ Future<ChatController> _pump(WidgetTester tester, ProcessLevel level) async {
   final c = _controller();
   // 换档是本地设置 + 重连（这里没有流 ⇒ 只改档）
   await c.setLevel(level);
-  await tester.pumpWidget(MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})));
+  await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
   return c;
 }
 

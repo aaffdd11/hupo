@@ -24,6 +24,7 @@ import 'package:http/testing.dart';
 import 'package:hupo_app/models/notice_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
+import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/timeline_store.dart';
@@ -101,7 +102,7 @@ Map<String, dynamic> _urgent({String kind = 'disk-full', String text = _diskFull
     {'type': 'notice/urgent', 'kind': kind, 'text': text};
 
 Future<void> _pump(WidgetTester tester, ChatController c) async {
-  await tester.pumpWidget(MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})));
+  await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
   await tester.pump();
 }
 

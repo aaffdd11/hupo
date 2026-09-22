@@ -16,6 +16,7 @@ import 'package:hupo_app/models/forbidden_words.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
+import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -32,7 +33,7 @@ Future<void> _pumpChat(
 }) async {
   await tester.pumpWidget(
     MaterialApp(
-      home: ChatScreen(
+      home: ChatScreen(initialTier: FloaterTier.full, 
         controller: _controller(),
         onLoggedOut: () {},
         space: SpaceInfo(kind: 'tenant', state: 'ready', hasKey: hasKey, keyBad: keyBad),
@@ -72,7 +73,7 @@ void main() {
     expect(find.byTooltip(configEntry), findsOneWidget);
 
     await tester.pumpWidget(
-      MaterialApp(home: ChatScreen(controller: _controller(), onLoggedOut: () {})),
+      MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: _controller(), onLoggedOut: () {})),
     );
     await tester.pump();
     expect(find.byTooltip(configEntry), findsNothing, reason: '没接上那条路就不该画一个按不动的入口');

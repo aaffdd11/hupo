@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/process_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
+import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
@@ -22,7 +23,7 @@ ChatController _controller() =>
     ChatController(api: Api(base: 'http://127.0.0.1:1'), tokens: TokenStore());
 
 Future<void> _pump(WidgetTester tester, ChatController c) async {
-  await tester.pumpWidget(MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})));
+  await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
 }
 
 void main() {
