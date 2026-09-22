@@ -129,6 +129,11 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     // ⚠️ 生产上壳是 `https://w.stalkerai.cn`，所以那时要把它换成那个域名（见 §一 的"要主人签字"）。
     appsPort: Number.parseInt(env.HUPO_APPS_PORT ?? '8021', 10),
     appsHost: env.HUPO_APPS_HOST ?? '127.0.0.1',
+    // ★ **对外那个地址**（乙-5 用）：生产上制品口有自己的域名（`https://apps.…`），
+    //   而服务端自己**不知道隧道那头叫什么** ⇒ 它是**这台机器的部署状态**。
+    //   ⚠️ 没设就用本机那个（`http://host:port`）—— 本机验收走的就是它。
+    //   ⚠️ 迁移那天**只改这一处**（不留半行代码改动要跟着走）。
+    appsPublicBase: env.HUPO_APPS_PUBLIC_BASE ?? null,
     // 制品页只许**壳**嵌它（CSP 的 frame-ancestors）。默认给本机那个口。
     appsFrameAncestors: env.HUPO_APPS_FRAME_ANCESTORS ?? `http://${env.HUPO_HOST ?? '127.0.0.1'}:${Number.parseInt(env.HUPO_PORT ?? '8020', 10)}`,
     // 签名密钥（**不进日志**）。没有就现生成一个 0600 的（见 `app-serve.js` 的 `loadSignKey`）。

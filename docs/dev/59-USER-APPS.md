@@ -278,6 +278,41 @@ keyFormat: 'dsh-refs' })`），只在**宿主**上起（匣子里那份由 `entr
 
 ---
 
+## 九、**上生产原点**：要主人签字的那一步（照抄清单）
+
+> 🔴 为什么必须有第二个原点：手册 **N1**（执行第三方代码的东西**绝不与持有令牌的原点同源**）。
+> 本机验收用"另一个端口"顶替（`127.0.0.1:8021`）；**公网必须是真的另一个域名**。
+
+**代码这一侧已经准备好**（这一批做的）：对外地址是**配置**，不是写死的 ——
+`HUPO_APPS_PUBLIC_BASE`（没配就用本机那个）+ `HUPO_APPS_FRAME_ANCESTORS`（谁许嵌它）。
+⇒ **迁移那天只改配置**，不留半行代码改动跟着走。
+
+**VPS 那一侧要做的六件**（照 `03-DEPLOY-WEB.md` §三 那套"一域名一实例"的现成配方）：
+
+| # | 在哪 | 做什么 |
+|---|---|---|
+| 1 | DNS | 给新域名（建议 `apps.stalkerai.cn`）加一条 A 记录 → `120.26.179.211` |
+| 2 | 本机 | `~/.local/frp/frpc-apps.toml`：照 `frpc-w.toml` 写，`localPort = 8021`，**换一个 `name` 与 `secretKey`** |
+| 3 | VPS | `/opt/frp/frpc-visitor-apps.toml`：`[[visitors]] type="stcp"`、`serverName` 对上、**同一个 secretKey**、`bindAddr=127.0.0.1`、`bindPort=3085`（3082/3083/3084 已占） |
+| 4 | VPS | `frpc-visitor-apps.service`（systemd，`User=deploy`！⚠️ 属主写错会无限重启） |
+| 5 | VPS | `certbot certonly --nginx -d apps.stalkerai.cn` |
+| 6 | VPS | `/etc/nginx/conf.d/apps-stalkerai.conf`：80→301、443 ssl + 证书、`proxy_pass http://127.0.0.1:3085` |
+| 7 | 本机 | `data/tenants.env` 加两行：`HUPO_APPS_PUBLIC_BASE='https://apps.stalkerai.cn'`、`HUPO_APPS_FRAME_ANCESTORS='https://w.stalkerai.cn'`，然后 `bash scripts/restart-core.sh` |
+
+⚠️ **VPS 上跑着 13 个别的站** ⇒ 按 P1/P2 **要主人签字**；新加的是**纯追加**（一域名一实例，不动别人的）。
+⚠️ **第 2、3 条里的 `secretKey` 两边必须一致**，而且**不许进仓库**（它是本机/那台之间的秘密）。
+
+### iOS / 原生那一侧
+
+「**iOS 商店版不发布小程序运行时**」（`08-SPEC.md` §4.2 合规，Apple 4.7.4）——
+今天这条**无处可关**：原生侧**根本没有运行时**（`mini_runtime_stub.dart` 就是它的全部行为）。
+⇒ 这一批把它落成**代码里的标记 + 判据**，让将来做原生的人不可能忘：
+`lib/widgets/mini_runtime.dart` 的 `kNativeMiniRuntime`（**必须显式改才可能打开**）+
+`test/unit/mini_runtime_test.dart` 三条（标记为 `false` · 非 Web 拿到那句实话 ·
+**条件导入只许对 `dart.library.html` 选 Web 实现**）。
+
+---
+
 ## 八、⚠️ 现在还欠着的（别当已经做完了）
 
 1. **生产第二原点没建** ⇒ 公网上还看不到小程序（本机能验，公网不能）。**要主人签字**。

@@ -90,6 +90,14 @@ test('config 的默认值指向真实存在的文件（人格那一份同款待�
   assert.equal(cfg.appsServerPath, nodePath.join(CORE, 'src', 'mcp-apps-server.mjs'));
   assert.ok(nodeFs.existsSync(cfg.appsServerPath), '那条 MCP 脚本要在');
   assert.equal(cfg.appsSocketPath, nodePath.join(cfg.dataDir, 'apps.sock'));
+  // ★ 制品口"对外那个地址"必须**可配**（乙-5：生产上是另一个域名）
+  //   ⚠️ 写死的话，"上线"就得改代码 —— 那正是要避免的形状。
+  assert.equal(cfg.appsPublicBase, null, '没配就是本机那个（默认）');
+  assert.equal(
+    loadConfig({ HUPO_APPS_PUBLIC_BASE: 'https://apps.example' }, CORE).appsPublicBase,
+    'https://apps.example',
+    '配了就用它',
+  );
   assert.deepEqual(preflight(cfg).problems, [], '默认配置下不该有问题');
 });
 

@@ -573,7 +573,9 @@ if (process.env.HUPO_ROLE !== 'tenant') {
 //      对浏览器来说它就是**另一个原点**（同源看的是 scheme+host+port），
 //      而它自己的路由面小到看得完（三条：验签 / 读 / 带 CSP 回）。
 const appsSignKey = loadSignKey(cfg.appsSignKeyPath);
-const appsBase = `http://${cfg.appsHost}:${cfg.appsPort}`;
+// ⚠️ **对外那个地址优先**（生产上制品口是另一个域名）；没配才退回本机那个。
+//    🔴 这条一定要能配，否则"上线"就得改代码 —— 而"改代码才上线"正是要避免的形状。
+const appsBase = cfg.appsPublicBase ?? `http://${cfg.appsHost}:${cfg.appsPort}`;
 const appsOrigin = createAppServer({
   resolveApps: (sub) => worlds.worldFor(sub)?.apps ?? null,
   key: appsSignKey,

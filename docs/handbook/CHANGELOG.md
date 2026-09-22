@@ -8,6 +8,28 @@
 
 ---
 
+> ## v1.44 · **乙-5 的前半：把"上生产原点"变成一次配置 + 一份照抄清单**（2026-09-22）
+>
+> **改了哪几处**：`docs/dev/59-USER-APPS.md` **§九**（新：上生产原点的照抄清单 + iOS 那一段）·
+> 这一页 · `docs/dev/00-PROGRESS.md` §〇 · 服务端 `src/config.js` / `src/serve.js` ·
+> 客户端 `widgets/mini_runtime.dart` · `test/unit/mini_runtime_test.dart`（新）·
+> `test/capabilities.test.js`。
+>
+> ⛔ **真正那一步（VPS 上建第二个域名）要主人签字** —— 这一批做的是**不需要签字、但必须先在**的那些：
+>
+> 1. 🔴 **对外地址改成配置**（`HUPO_APPS_PUBLIC_BASE`，没配就用本机那个）：
+>    原来它是写死的 `http://host:port` ⇒ 写死的话，"上线"就得**改代码**，而那正是要避免的形状。
+>    ⇒ **迁移那天只改配置**（`data/tenants.env` 两行 + 重启），不留半行代码改动跟着走。
+> 2. **一份照抄清单**写进 `59` §九（7 条：DNS · 本机 frpc · VPS visitor/systemd/证书/nginx · 本机两行配置），
+>    照 `03-DEPLOY-WEB.md` §三 那套"一域名一实例"的现成配方 —— 签字那天是**机械操作**。
+> 3. 🔴 **iOS / 原生那条约束落成代码里的标记 + 三条判据**：
+>    「iOS 商店版不发布小程序运行时」今天**无处可关**（原生侧根本没有运行时，
+>    `mini_runtime_stub.dart` 就是它的全部行为）⇒ 把它落成 `kNativeMiniRuntime`
+>    （**必须显式改才可能打开**）+ `test/unit/mini_runtime_test.dart`（标记为 `false` ·
+>    非 Web 拿到那句实话 · **条件导入只许对 `dart.library.html` 选 Web 实现**）。
+>
+> 读数：服务端 **679 pass / 0 fail** · 客户端 unit **289** / 可访问性 **169** / widget **148**。
+
 > ## v1.43 · **乙-4c：主人那一份的"问一句"也接上了**（2026-09-22）
 >
 > **改了哪几处**：`docs/dev/59-USER-APPS.md` §七·补三 · 这一页 · 服务端 `src/model-proxy.mjs`
