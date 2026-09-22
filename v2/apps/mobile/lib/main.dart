@@ -22,6 +22,7 @@ import 'screens/model_key_screen.dart';
 import 'screens/waiting_screen.dart';
 import 'services/chat_controller.dart';
 import 'services/token_store.dart';
+import 'widgets/soft_switch.dart';
 
 void main() {
   runApp(const HupoApp());
@@ -197,16 +198,23 @@ class _HupoAppState extends State<HupoApp> {
                     if (t != null) await _askSpace(t);
                   },
                 )
-              : _showLogin
-                  ? LoginScreen(
-                      api: _api,
-                      needsSetup: _needsSetup,
-                      onLoggedIn: _onLoggedIn,
-                      // ★ **回首页**（主人 2026-09-22）：登录那一屏顶上留着首页的 header，
-                      //   箭头点一下就回到第一屏（不是退出登录 —— 那时还没登录）。
-                      onBack: () => setState(() => _showLogin = false),
-                    )
-                  : LandingScreen(onStart: () => setState(() => _showLogin = true)),
+              : SoftSwitch(
+                  // ★ **首页 ⇄ 登录页 = 丝滑地换，不是硬切**（主人 2026-09-22：
+                  //   *"从首页，点击开始，到登录页显示，我希望是一个丝滑的过渡展示效果，
+                  //   而不是突然出现的效果。"*）
+                  //   ⚠️ 两条路（"开始用"过去 / 箭头回来）**共用这一次过渡**：
+                  //     只做一半的话，回来那一下还是会"啪"地闪。
+                  showSecond: _showLogin,
+                  first: LandingScreen(onStart: () => setState(() => _showLogin = true)),
+                  second: LoginScreen(
+                    api: _api,
+                    needsSetup: _needsSetup,
+                    onLoggedIn: _onLoggedIn,
+                    // ★ **回首页**（主人 2026-09-22）：登录那一屏顶上留着首页的 header，
+                    //   箭头点一下就回到第一屏（不是退出登录 —— 那时还没登录）。
+                    onBack: () => setState(() => _showLogin = false),
+                  ),
+                ),
     );
   }
 }

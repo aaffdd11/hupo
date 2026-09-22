@@ -26,6 +26,8 @@
 // 用法：
 //   HUPO_TOKEN=<令牌> node scripts/check-web-browser.mjs
 //   HUPO_TOKEN=... node scripts/check-web-browser.mjs --shot /tmp/shot.png --wait 60000
+//   看未登录那两屏：加 `--no-token`；点一下再拍：`--click-at X,Y`（`--click-settle` 控制点完等多久）；
+//   看折叠线以下：`--scroll-px <像素>`（页内合成 touch 指针拖一段 —— 鼠标拖在网页上不滚动）
 //   （`--url` 默认打线上；`--chrome` 指定浏览器可执行文件）
 //
 // ⚠️ **它不在硬闸里**：要一个浏览器 + 一个令牌。本机没有浏览器时它就该**跳过**
@@ -62,6 +64,16 @@ const SHOT = valueOf('--shot', null);
  *    （Flutter 的滚动要滚轮或触摸拖动）。合成一次"按下 → 连续 move → 抬起"。
  */
 const SCROLL_PX = Number.parseInt(valueOf('--scroll-px', '0'), 10);
+/**
+ * **点完等多久再截图**（`--click-settle <毫秒>`，默认 1400）。
+ *
+ * ── 为什么要这个开关 ───────────────────────────────────────
+ * ⚠️ 2026-09-22：主人要"**丝滑的过渡**"。而过渡是**动态**的 ——
+ *    默认那 1.4 秒早就走完了，截出来的永远只有"到站"那一帧。
+ *    ⇒ 把它调小（比如 150）就能拍到**半途**：两屏交叠、新屏半透明。
+ *    ⚠️ 它只用来"看一眼"，**不是判据**（判据在 `test/widget/landing_transition_test.dart`）。
+ */
+const CLICK_SETTLE_MS = Number.parseInt(valueOf('--click-settle', '1400'), 10);
 /**
  * **点一下再截图**：`--click-at X,Y`（可给多次，按顺序点；坐标是**视口 CSS 像素**）。
  *
@@ -349,7 +361,8 @@ async function main() {
     })()`;
     const r = await send('Runtime.evaluate', { expression: js, returnByValue: true });
     console.log(`  🖱 点了 (${x}, ${y}) → 落在 ${r.result?.result?.value ?? '?'}`);
-    await sleep(1400); // 让它把新一屏画出来
+    // 让它把新一屏画出来。⚠️ 用 `--click-settle` 调小就能拍到**过渡半途**那一帧。
+    await sleep(CLICK_SETTLE_MS);
   }
 
   // ④.7 **往下滚一段**（可选）：折叠线以下的那一块，截图看不到 —— 只能滚过去再看
