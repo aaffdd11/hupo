@@ -430,6 +430,49 @@ async function main() {
     console.log('  续期       ⚠️ 没看到换新（续期没发生 / 失败后按"留着旧的"处理）');
   }
 
+  // ⑤.4 **制品那个沙箱的 origin**（乙-1 · 判据 N1 的**唯一可观察信号**）
+  //
+  //   🔴 为什么只能在这儿看：N1 说的是"执行第三方代码的东西**绝不与持有令牌的原点同源**"。
+  //      那件事在这一侧才看得见 —— 页面上到底起没起 iframe、它的 origin 是不是**另一个**。
+  //   ⚠️ **没有 iframe 不算失败**（可能是没开小程序）；**有而违规**才算失败：
+  //      ① 与页面同源 ② `sandbox` 里出现了 `allow-same-origin`（那等于把壳的存储给它）。
+  let appFramesBad = 0;
+  {
+    const r = await send('Runtime.evaluate', {
+      expression: `JSON.stringify({
+        page: location.origin,
+        frames: Array.from(document.querySelectorAll('iframe')).map((f) => ({
+          src: f.getAttribute('src') || '',
+          sandbox: f.getAttribute('sandbox') || '',
+        })),
+      })`,
+      returnByValue: true,
+    });
+    const raw = r.result?.result?.value ?? '';
+    try {
+      const j = JSON.parse(raw);
+      const page = String(j.page ?? '');
+      if (!j.frames?.length) {
+        console.log('  小程序壳   （这一趟没有开小程序：页面上没有 iframe）');
+      }
+      for (const f of j.frames ?? []) {
+        let origin = '(读不出)';
+        try {
+          origin = new URL(f.src).origin;
+        } catch { /* 空 src / 非 URL */ }
+        const sameOrigin = origin !== '(读不出)' && origin === page;
+        const hasSameOriginSandbox = /allow-same-origin/.test(f.sandbox);
+        const bad = sameOrigin || hasSameOriginSandbox;
+        if (bad) appFramesBad += 1;
+        console.log(`  小程序壳   ${bad ? '🔴' : '✅'} iframe origin=${origin} sandbox="${f.sandbox}"（壳是 ${page}）`);
+        if (sameOrigin) console.log('      🔴 **与壳同源** —— 那等于 N1 没做（制品读得到壳的存储与令牌）');
+        if (hasSameOriginSandbox) console.log('      🔴 sandbox 里有 `allow-same-origin` —— 不透明原点没了');
+      }
+    } catch {
+      console.log(`  小程序壳   ⚠️ 读不出来：${raw.slice(0, 120)}`);
+    }
+  }
+
   // ⑥ 报（**如实**：把数出来的一起说，别只说结论）
   const ok = wsEvents.created > 0 && wsEvents.received > 0;
   console.log(`  页面里建过的 WebSocket：${wsEvents.created}（断过 ${wsEvents.closed}）`);
@@ -445,6 +488,11 @@ async function main() {
     // 免得"0 = 路通了"被读成一句没验过的好话。
     console.log(`👀 只看了一眼屏幕（未登录那两屏）—— 那条流**没有验**（${URL_}）`);
     nodeProcess.exit(4);
+  }
+  if (appFramesBad > 0) {
+    console.error(`✗ **小程序的沙箱不合规**（${appFramesBad} 个 iframe：与壳同源 / 或 sandbox 里带了 allow-same-origin）`);
+    console.error('  ⇒ 手册 N1：执行第三方代码的东西**绝不与持有令牌的原点同源**。');
+    nodeProcess.exit(5);
   }
   if (ok) {
     console.log(`✅ 浏览器那条路通了（${URL_}）`);

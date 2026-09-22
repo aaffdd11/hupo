@@ -15,6 +15,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/export.dart';
+import '../models/app_spec.dart';
 import '../models/space.dart';
 import '../models/trash.dart';
 
@@ -232,6 +233,33 @@ class Api {
       return SpaceInfo.fromJson(jsonDecode(r.body));
     } catch (_) {
       return const SpaceInfo(); // 认不出来 / 问不到 ⇒ 按就绪
+    }
+  }
+
+  /// **我的小程序清单**（乙-1 · 契约 `docs/dev/59-USER-APPS.md`）。
+  ///
+  /// ⚠️ **问不到就是空清单**（不抛）：摆不出图标，也不该把聊天弄挂。
+  /// ⚠️ **认证只走令牌**（服务端按 `claim.sub` 取那一份）—— 客户端**不报身份**。
+  Future<List<MiniApp>> apps(String token) async {
+    try {
+      final r = await _c
+          .get(_u('/api/apps'), headers: {'authorization': 'Bearer $token'})
+          .timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) return const [];
+      final j = jsonDecode(r.body);
+      if (j is! Map) return const [];
+      final raw = j['apps'];
+      if (raw is! List) return const [];
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final out = <MiniApp>[];
+      for (final one in raw) {
+        // ⚠️ 解析不过的**跳过那一条**（不许把整个桌面弄空），见 `MiniApp.parse`
+        final app = MiniApp.parse(one, now: now);
+        if (app != null) out.add(app);
+      }
+      return out;
+    } catch (_) {
+      return const [];
     }
   }
 

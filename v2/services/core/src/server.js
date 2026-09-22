@@ -24,6 +24,7 @@ import { normalizePhone } from './users.js';
 import { ADMIT_RATIO, readAdmission } from './admission.js';
 import { CATCHUP_RENDER, markCatchUp, planResume } from './resume.js';
 import { buildExport } from './export.js';
+import { SIGNED_TTL_MS, entryUrl } from './app-serve.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -207,6 +208,14 @@ export function createServer({
    *    那些都是请求方可控的，读它们等于"报个别人的名字就能看别人的东西"。
    */
   worlds = null,
+  /**
+   * **制品入口 URL 怎么拼**（乙-1 · 契约 `docs/dev/59-USER-APPS.md`）。
+   *
+   * 形如 `{ base, key }`：`base` = 第二个原点的根（`http://127.0.0.1:8021`，生产是那个域名），
+   * `key` = 签名密钥。**给了才挂 `/api/apps`**（没给 ⇒ 那条路由 404，同回收站那条规矩）。
+   * ⚠️ `key` 只在这个进程里用，**不许进日志**。
+   */
+  apps = null,
   webRoot = null,
   buildId = 'dev',
   now = Date.now,
@@ -444,6 +453,40 @@ export function createServer({
 
       // ── "我的空间到哪一步了"（契约 `38` §8.3：等待屏靠它）──────────────
       // ⚠️ **只读**、**不带 key**、**不分配任何隧道**（探测不许有副作用）。
+      // ── 我的小程序清单（乙-1）──────────────────────────────
+      // 🔴 **按 `claim.sub` 取那个人自己的那一格**（同 timeline 那条规矩）：
+      //    身份只能从令牌来，**不许从 URL / body / 头里读**。
+      if (path === '/api/apps' && req.method === 'GET') {
+        const w = worldFor(claim.sub);
+        if (!apps || !w?.apps) return sendJson(res, 404, { error: '这台部署还没开小程序' });
+        let items = [];
+        try {
+          items = w.apps.list();
+        } catch (err) {
+          log(`清单读不出来（${claim.sub}）：${err?.message ?? err}`);
+          return sendJson(res, 500, { error: '清单读不出来' });
+        }
+        // ⚠️ **入口 URL 现签**（绑人 + 绑版本 + 短时效），清单里存的不是它 ——
+        //    存下来的 URL 一定会过期，而过期了还摆在界面上就是"点了没反应"。
+        return sendJson(res, 200, {
+          apps: items.map((a) => ({
+            ...a,
+            entryUrl: entryUrl({
+              base: apps.base,
+              key: apps.key,
+              sub: claim.sub,
+              id: a.id,
+              version: a.version,
+              entry: a.entry,
+              // ⚠️ **必须吃这个进程的时钟**（`now`），不许用墙上时间：`entryUrl` 里那个
+              //    默认值会让"签名里的到期"和"报出去的到期"差一截（判据当场抓到过）。
+              now: now(),
+            }),
+            expiresAt: now() + SIGNED_TTL_MS,
+          })),
+        });
+      }
+
       if (path === '/api/space' && req.method === 'GET') {
         return sendJson(res, 200, tenantStatusOf(claim.sub));
       }

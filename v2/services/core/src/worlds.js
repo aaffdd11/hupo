@@ -25,6 +25,7 @@
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
+import { Apps } from './apps.js';
 import { Dispatcher } from './dispatcher.js';
 import { Ledger, LEDGER_TIMELINE_ID } from './ledger.js';
 import { LedgerSocket, ledgerSocketPath } from './ledger-socket.js';
@@ -49,7 +50,7 @@ export function agentKeyFor(userId) {
 /** 每个人的世界长什么样（给文档与测试一个准确的形状）。 */
 export const WORLD_SHAPE = Object.freeze([
   'userId', 'dir', 'cfg', 'agentKey', 'scopeId',
-  'store', 'timeline', 'notice', 'say', 'trash', 'ledger', 'ledgerSocket', 'dispatcher', 'boot',
+  'store', 'timeline', 'notice', 'say', 'trash', 'ledger', 'ledgerSocket', 'apps', 'dispatcher', 'boot',
 ]);
 
 export class Worlds {
@@ -215,6 +216,11 @@ export class Worlds {
     const ledgerTimeline = new Timeline({ id: LEDGER_TIMELINE_ID, store: t.store });
     const ledger = new Ledger({ store: t.store, timeline: ledgerTimeline }).sync();
 
+    // ★ **小程序制品库**（乙-1 · 契约 `docs/dev/59-USER-APPS.md`）：**按人一份**，
+    //   落在**他自己那一格**下面（`<dir>/hupo/apps/`）—— 这就是"只有他自己可见"的落点。
+    //   ⚠️ 它**不认识令牌**；它是"谁的世界"由这里定，路由那边按 `claim.sub` 取。
+    const apps = new Apps({ dir: t.dir, sub: t.userId });
+
     const cfg = {
       ...this.#cfg,
       dshHome: paths.dshHome,
@@ -269,6 +275,7 @@ export class Worlds {
       trash,
       ledger,
       ledgerSocket,
+      apps,
       dispatcher,
       boot: { ...boot, reconciled },
     };

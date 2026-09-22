@@ -123,6 +123,16 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      */
     ledgerSocketPath: env.HUPO_LEDGER_SOCKET ?? ledgerSocketPath(dataDir),
 
+    // ── 制品（第二个原点 · 乙-1 · 契约 `docs/dev/59-USER-APPS.md`）──────
+    // 🔴 **它必须与壳不同源**（手册 N1）：不同端口（本机）或不同域名（生产）。
+    // ⚠️ 生产上壳是 `https://w.stalkerai.cn`，所以那时要把它换成那个域名（见 §一 的"要主人签字"）。
+    appsPort: Number.parseInt(env.HUPO_APPS_PORT ?? '8021', 10),
+    appsHost: env.HUPO_APPS_HOST ?? '127.0.0.1',
+    // 制品页只许**壳**嵌它（CSP 的 frame-ancestors）。默认给本机那个口。
+    appsFrameAncestors: env.HUPO_APPS_FRAME_ANCESTORS ?? `http://${env.HUPO_HOST ?? '127.0.0.1'}:${Number.parseInt(env.HUPO_PORT ?? '8020', 10)}`,
+    // 签名密钥（**不进日志**）。没有就现生成一个 0600 的（见 `app-serve.js` 的 `loadSignKey`）。
+    appsSignKeyPath: env.HUPO_APPS_SIGN_KEY_PATH ?? nodePath.join(dataDir, 'apps-signing.key'),
+
     /**
      * **临时验证码**（开发期口子 · 契约 `docs/dev/37-MULTITENANT.md` §六）。
      *

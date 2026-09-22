@@ -14,6 +14,8 @@
 // ⚠️ 文案里**不许出现内部词**（"连接/客户端/云端/工作区"…）——
 //    有 `forbidden_words` 那道闸守着，改文案时会拦。
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/conn_state.dart';
@@ -21,6 +23,7 @@ import '../models/design.dart' as d;
 import '../models/export_words.dart';
 import '../models/scroll_follow.dart';
 import '../models/space.dart';
+import '../models/app_spec.dart';
 import '../models/math_words.dart';
 import '../models/space_words.dart';
 import '../models/timeline.dart';
@@ -28,6 +31,8 @@ import '../models/trash_words.dart';
 import '../services/api.dart';
 import '../services/chat_controller.dart';
 import '../widgets/app_desktop.dart';
+import '../widgets/mini_app_icons.dart';
+import '../widgets/mini_runtime.dart';
 import '../widgets/bubble_menu.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/chat_floater.dart';
@@ -94,12 +99,30 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 浮窗那一层的把手（外面要叫它"拉满"/"收起"）。
   final _floaterKey = GlobalKey<ChatFloaterState>();
 
+  /// **"我的小程序"在 `_openApp` 里的前缀**（跟内置那两个区分开：`'settings'` / `'math'`）。
+  static const _minePrefix = 'mine:';
+
   /// **现在开着哪个小程序**（`null` = 没开）。
   ///
   /// ⚠️ 原来是个布尔（只装得下「设置」一个）。主人 2026-09-22 要加「奥数题」⇒ 改成名字。
   /// ⚠️ **同时只开一个**：关掉再开另一个。真要做"多个同时开着"（`IndexedStack` + 各自状态），
   ///    等真的需要时再说 —— 现在没有那个需求，先不做（`04-ROADMAP.md` §十一：做一半比不做更坏）。
   String? _openApp;
+
+  /// **我的小程序**（乙-1：`/api/apps` 拿回来的那一批 —— 每个人自己的）。
+  /// ⚠️ 空清单就是空清单（问不到也不摆一个假图标）。
+  List<MiniApp> _myApps = const [];
+
+  /// 打开这一条（带签名的那份 URL）；`null` = 现在开着的不是"我的小程序"。
+  MiniApp? _openMine() {
+    final id = _openApp;
+    if (id == null || !id.startsWith(_minePrefix)) return null;
+    final want = id.substring(_minePrefix.length);
+    for (final a in _myApps) {
+      if (a.id == want) return a;
+    }
+    return null;
+  }
 
   /// **它是从哪儿打开的**（图标在屏幕上的矩形）—— 小程序从那儿"扩开"到全屏。
   Rect? _appFrom;
@@ -124,6 +147,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     widget.controller.addListener(_onChanged);
+    // ★ **我的小程序**（乙-1）：登录之后拉一次。⚠️ 拉不到就是空清单，**不许**因此把界面弄坏。
+    unawaited(_loadMyApps());
     // ⚠️ **首屏也要跟一次**：本机缓存那一屏（`17-LOCAL-FIRST.md`）可能
     //    在挂载之前就已经在控制器里了，那时 `_onChanged` 一次都不会触发。
     WidgetsBinding.instance.addPostFrameCallback((_) => _followBottom());
@@ -202,14 +227,22 @@ class _ChatScreenState extends State<ChatScreen> {
                     label: settingsAppLabel,
                     icon: Icons.settings_outlined,
                     // 打开小程序 ⇒ **聊天自动收起**（§6.4 规则 5：把屏幕让给小程序）
-                    onOpen: (from) => _openMiniApp(from, 'settings'),
+                    onOpen: (from) => _openMiniApp(from, builtInSettingsId),
                   ),
                 // ★ 第二个小程序（主人 2026-09-22 点名的"奥数题库" ⇒ 见 `57-MATH.md`）
                 DesktopApp(
                   label: mathAppLabel,
                   icon: Icons.calculate_outlined,
-                  onOpen: (from) => _openMiniApp(from, 'math'),
+                  onOpen: (from) => _openMiniApp(from, builtInMathId),
                 ),
+                // ★ **我的小程序**（乙-1）：他自己/助手造的那一批 ——
+                //   图标与名字都来自 `/api/apps`，点开跑在**另一个原点**的沙箱里（N1）。
+                for (final a in _myApps)
+                  DesktopApp(
+                    label: a.title,
+                    icon: miniAppIconFor(a.icon),
+                    onOpen: (from) => _openMiniApp(from, '$_minePrefix${a.id}'),
+                  ),
               ],
               onTapBlank: () => _floaterKey.currentState?.collapse(),
             ),
@@ -219,7 +252,7 @@ class _ChatScreenState extends State<ChatScreen> {
             child: MiniAppHost(
               open: _openApp != null,
               fromRect: _appFrom,
-              title: _openApp == 'math' ? mathTitle : configTitle,
+              title: _mineTitle(c),
               onClose: () => setState(() => _openApp = null),
               covered: _floaterExpanded,
               onCoveredTap: () => _floaterKey.currentState?.collapse(),
@@ -227,9 +260,14 @@ class _ChatScreenState extends State<ChatScreen> {
               bottomInset: _floaterExpanded
                   ? 0
                   : FloaterMetrics.margin + _floaterH,
-              child: _openApp == 'math'
-                  ? const MathQuizScreen()
-                  : SettingsScreen(
+              child: _mineOpen() != null
+                  ? buildMiniAppView(
+                      entryUrl: _mineOpen()!.entryUrl,
+                      title: _mineOpen()!.title,
+                    )
+                  : _openApp == builtInMathId
+                      ? const MathQuizScreen()
+                      : SettingsScreen(
                       hasKey: widget.space.hasKey,
                       keyBad: widget.space.keyBad,
                       localOnly: !widget.space.isTenant,
@@ -300,6 +338,25 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
+  }
+
+  /// 开着的是"我的小程序"吗（乙-1）。
+  MiniApp? _mineOpen() => _openMine();
+
+  /// 容器顶上那行字：谁开着就写谁。
+  String _mineTitle(ChatController c) {
+    final mine = _openMine();
+    if (mine != null) return mine.title;
+    return _openApp == builtInMathId ? mathTitle : configTitle;
+  }
+
+  /// 拉一次"我的小程序"（乙-1）。**失败了就当空的**（不弹错 —— 它不是用户主动要的东西）。
+  Future<void> _loadMyApps() async {
+    final token = widget.controller.token;
+    if (token == null) return;
+    final got = await widget.controller.api.apps(token);
+    if (!mounted) return;
+    setState(() => _myApps = got);
   }
 
   /// **打开一个小程序**：先把聊天收起（§6.4 规则 5），再记下"从哪儿开的"（那个图标的矩形）。

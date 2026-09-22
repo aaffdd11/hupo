@@ -40,6 +40,7 @@ const RATCHET = [
   'docs/dev/56-PLAIN.md',
   'docs/dev/57-MATH.md',
   'docs/dev/58-CREATE-APP.md',
+  'docs/dev/59-USER-APPS.md',
 ];
 
 /** ② L0 = 路由层：零事实、零数值、零状态 */

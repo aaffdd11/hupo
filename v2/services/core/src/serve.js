@@ -24,6 +24,7 @@ import { ProvisionQueue } from './provision.js';
 import { dropTunnel, notifyHost } from './tenant-tunnel-agent.mjs';
 import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
+import { createAppServer, loadSignKey } from './app-serve.js';
 import { createServer } from './server.js';
 import { describeAgentIdentity, loadConfig, preflight } from './config.js';
 import { integrityReport, repoRootFor } from './integrity.js';
@@ -538,6 +539,21 @@ function ensureTenant(userId) {
   return queue.request(userId);
 }
 
+// ★ **制品那第二个原点**（乙-1 · 契约 `docs/dev/59-USER-APPS.md` §五）。
+//   🔴 手册 N1：执行第三方代码的东西**绝不与持有令牌的原点同源** ⇒ 它听**另一个端口**。
+//   ⚠️ 分成两个进程更干净（共享不到任何东西），但那要再维护一条常驻进程
+//      （这台机器上已经有"服务不在 systemd 下"那笔账）⇒ 这一批先做成**同进程第二个口**：
+//      对浏览器来说它就是**另一个原点**（同源看的是 scheme+host+port），
+//      而它自己的路由面小到看得完（三条：验签 / 读 / 带 CSP 回）。
+const appsSignKey = loadSignKey(cfg.appsSignKeyPath);
+const appsBase = `http://${cfg.appsHost}:${cfg.appsPort}`;
+const appsOrigin = createAppServer({
+  resolveApps: (sub) => worlds.worldFor(sub)?.apps ?? null,
+  key: appsSignKey,
+  frameAncestors: cfg.appsFrameAncestors,
+  log: (m) => console.warn(`  ⚠️ ${m}`),
+});
+
 const { listen, listenTrusted, close } = createServer({
   // ★ **多租户那一侧**：每个请求按令牌里的 `sub` 取那个人的世界。
   //   ⚠️ 上面那五个单例**不再传**了 —— 传了就等于"所有人共用一份"。
@@ -545,6 +561,8 @@ const { listen, listenTrusted, close } = createServer({
   auth,
   webRoot,
   buildId: cfg.buildId,
+  // ★ **我的小程序清单**（乙-1）：给了才挂 `/api/apps`
+  apps: { base: appsBase, key: appsSignKey },
   // ★ **给主人看的那一笔账**（账 #39）：注销/回收那条路上每一件都留一行
   auditFile: auditPath(cfg.dataDir),
   users,
@@ -718,6 +736,17 @@ if (cfg.trustedSocketPath) {
   }
 }
 const addr = await listen(cfg.port, cfg.host);
+
+// ★ 制品那个口（乙-1）：**它起来失败不许拖垮壳** —— 但必须**当场看得见**（静默降级是本仓库反复栽的形状）。
+try {
+  await new Promise((res2, rej) => {
+    appsOrigin.once('error', rej);
+    appsOrigin.listen(cfg.appsPort, cfg.appsHost, res2);
+  });
+  console.log(`  制品口   ${appsBase}（另一个原点 · 只许 ${cfg.appsFrameAncestors} 嵌它）`);
+} catch (err) {
+  console.warn(`  ⚠️ 制品口没起来：${err?.message ?? err}（小程序点开会取不到东西）`);
+}
 if (cfg.trustedSocketPath) {
   try {
     nodeFs.mkdirSync(nodePath.dirname(cfg.trustedSocketPath), { recursive: true, mode: 0o700 });
