@@ -85,12 +85,14 @@ void main() {
   testWidgets('🔴 点「设置」⇒ 设置那一屏开了，而且**聊天自动收起**（§6.4 规则 5）', (tester) async {
     // 从**半开**进场：这时桌面顶上那块看得见、点得到（最大化会把桌面盖住）
     await _pump(tester, tier: FloaterTier.half);
-    expect(find.byType(Composer), findsOneWidget, reason: '半开时能说话');
+    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '半开时是展开着的');
 
     await _openSettings(tester);
 
     expect(find.byType(SettingsScreen), findsOneWidget, reason: '设置那一屏该开在小程序容器里');
-    expect(find.byType(Composer), findsNothing, reason: '★ 打开小程序 ⇒ 聊天该自动收起（把屏幕让给它）');
+    // ⚠️ 判"收起了没有"要看**只有展开态才有的那个「收起」**，不是看输入条 ——
+    //    收起态**也有**输入条（主人 2026-09-22）。
+    expect(find.byTooltip(chatCollapse), findsNothing, reason: '★ 打开小程序 ⇒ 聊天该自动收起（把屏幕让给它）');
   });
 
   testWidgets('🔴 设置里有「退出登录」，点了真的回调（它原来挂在聊天抓手行上）', (tester) async {
@@ -258,7 +260,7 @@ void main() {
     await tester.tapAt(Offset(screen.left + 8, screen.top + 8));
     await tester.pumpAndSettle();
 
-    expect(find.byType(Composer), findsNothing, reason: '★ 点被盖住的小程序 = "回到小程序" ⇒ 收起聊天');
+    expect(find.byTooltip(chatCollapse), findsNothing, reason: '★ 点被盖住的小程序 = "回到小程序" ⇒ 收起聊天');
     expect(find.byType(SettingsScreen), findsOneWidget, reason: '而且小程序还在（没被那一下点走）');
   });
 }

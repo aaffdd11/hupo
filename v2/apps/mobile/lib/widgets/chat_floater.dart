@@ -80,6 +80,7 @@ class ChatFloater extends StatefulWidget {
     required this.maxHeight,
     required this.title,
     required this.child,
+    required this.composer,
     this.trailing = const <Widget>[],
     this.initialTier = FloaterTier.collapsed,
     this.onTier,
@@ -93,8 +94,13 @@ class ChatFloater extends StatefulWidget {
   /// 抓手行上那两个字（收起态那条也用它）。
   final String title;
 
-  /// 浮窗里那一整块（状态条 + 时间线 + 输入条）。
+  /// 浮窗里那一整块（状态条 + 时间线）。**不含输入条** —— 见 [composer]。
   final Widget child;
+
+  /// **输入条**。⚠️ **收起态也要它**（主人 2026-09-22：*"助手那个聊天窗口，
+  /// 收缩的时候也有一个输入框。"*）⇒ 而且上下两态用的是**同一个实例**，
+  /// 不然"打了一半再展开"会换一个 `State`、**框里的字就丢了**。
+  final Widget composer;
 
   /// 抓手行右边的动作（回收站/导出/过程/配置/退出那套）。
   /// ⚠️ **收起态不画它们** —— 收起条只留"带字的展开入口"（D3.8）。
@@ -402,10 +408,14 @@ class ChatFloaterState extends State<ChatFloater> {
                         ),
                       ),
                     ),
-                    // 收起态**不画内容**：免得它被压成一条时还在偷偷布局（那正是上一版溢出的来源）
-                    if (!collapsed) ...[
+                    // 收起态：**只画输入条**（时间线不画 —— 免得它被压成一条时还在偷偷布局，
+                    // 那正是上一版溢出的来源）。主人 2026-09-22："收缩的时候也有一个输入框。"
+                    if (collapsed)
+                      widget.composer
+                    else ...[
                       Divider(height: 1, color: d.line),
                       Expanded(child: widget.child),
+                      widget.composer,
                     ],
                   ],
                 ),

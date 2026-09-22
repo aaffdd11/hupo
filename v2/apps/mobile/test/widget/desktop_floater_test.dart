@@ -12,6 +12,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/design.dart' as d;
+import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -34,7 +35,7 @@ Future<void> _pump(WidgetTester tester, {FloaterTier tier = FloaterTier.collapse
 Rect _floaterRect(WidgetTester tester) => tester.getRect(find.byType(ChatFloater));
 
 void main() {
-  testWidgets('🔴 一进来是**收起**那一档：看得见桌面，看不见输入条', (tester) async {
+  testWidgets('🔴 一进来是**收起**那一档：看得见桌面，**输入框也在**，但时间线不画', (tester) async {
     await _pump(tester);
     // 桌面在（整页底图）
     expect(find.byType(AppDesktop), findsOneWidget);
@@ -42,13 +43,13 @@ void main() {
     //    永远在底下。所以聊天不是桌面上的一个小程序。"* ⇒ 聊天没有桌面图标。
     expect(find.text('会话'), findsNothing, reason: '聊天不是桌面上的小程序 ⇒ 它不该有图标');
     expect(find.byIcon(Icons.chat_bubble_outline), findsNothing, reason: '同上');
-    // 收起态：有**带字的**展开入口（D3.8），没有输入条
+    // 收起态：有**带字的**展开入口（D3.8）
     expect(find.text('展开'), findsOneWidget, reason: '收起态必须有带字的展开入口');
-    expect(find.byType(Composer), findsNothing, reason: '收起时不该画输入条');
-    // 负向对照：展开态才有的东西一个都不许在
-    for (final w in ['说点什么']) {
-      expect(find.text(w), findsNothing, reason: '收起态不该有「$w」');
-    }
+    // ★ **收起态也有输入框**（主人 2026-09-22：*"助手那个聊天窗口，收缩的时候也有一个输入框。"*）
+    expect(find.byType(Composer), findsOneWidget, reason: '★ 收起时也该能直接说话');
+    // 但**展开态才有的东西一个都不许在**（判档位要看这些，不是看输入条）
+    expect(find.byTooltip(chatCollapse), findsNothing, reason: '收起态不该有「收起」');
+    expect(find.byKey(chatBodyKey), findsNothing, reason: '收起态不画状态条 + 时间线那一块');
   });
 
   testWidgets('🔴 四边边距都是 30（Z3/Z4），桌面在浮窗**下面**', (tester) async {
@@ -90,12 +91,50 @@ void main() {
     expect(s.color.r, closeTo(d.ink.r, 0.01));
   });
 
-  testWidgets('🔴 点「展开」⇒ 真的开（输入条出现）', (tester) async {
+  testWidgets('🔴 在**收起态**打了一半，点「展开」⇒ 字不丢（输入条是同一个实例）', (tester) async {
+    // ⚠️ 这条钉的是**实现上的一个关键选择**：输入条从 `_sheetBody` 里**拆出来单独传给浮窗**，
+    //    上下两态共用**同一个** `Composer`。要是两处各建一个，"打了一半再展开"会换一个 `State`，
+    //    **框里的字就没了**（那是最气人的那种丢字）。
     await _pump(tester);
-    expect(find.byType(Composer), findsNothing);
+    await tester.enterText(find.byType(TextField), '半句话');
+    await tester.pump();
+
     await tester.tap(find.text('展开'));
     await tester.pumpAndSettle();
-    expect(find.byType(Composer), findsOneWidget, reason: '点了展开就该能说话');
+
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      '半句话',
+      reason: '★ 展开不该把你打了一半的字弄丢',
+    );
+  });
+
+  testWidgets('🔴 收起态那个输入框**真能发**：发出去就拉满（§6.2"发就拉满"）', (tester) async {
+    final c = _controller();
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})),
+    );
+    await tester.pump();
+    final before = _floaterRect(tester).height; // 收起态
+    expect(find.byTooltip(chatCollapse), findsNothing, reason: '一开始是收起的');
+
+    await tester.enterText(find.byType(TextField), '在吗');
+    await tester.pump();
+    await tester.tap(find.byTooltip('发送'));
+    await tester.pump();
+
+    expect(_floaterRect(tester).height > before, true,
+        reason: '★ 从收起态发出去 ⇒ 该拉满（$before → ${_floaterRect(tester).height}）');
+    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '拉满之后该有「收起」');
+  });
+
+  testWidgets('🔴 点「展开」⇒ 真的开（时间线那一块出来、多出「收起」）', (tester) async {
+    await _pump(tester);
+    expect(find.byTooltip(chatCollapse), findsNothing);
+    await tester.tap(find.text('展开'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '开了之后该有「收起」');
+    expect(find.byKey(chatBodyKey), findsOneWidget, reason: '开了之后状态条 + 时间线该在');
     expect(find.text('展开'), findsNothing, reason: '开了之后不该还挂着「展开」');
   });
 
@@ -108,7 +147,7 @@ void main() {
     await tester.tapAt(Offset(f.center.dx, f.top + 12)); // 抓手行上的空白处
     await tester.pumpAndSettle();
     expect(_floaterRect(tester).height, before, reason: '点浮窗内部不该动它（更不该漏到桌面）');
-    expect(find.byType(Composer), findsOneWidget);
+    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '还是展开着');
 
     // ② 点桌面空白 ⇒ 收起。
     //    ⚠️ **得点浮窗盖不到的地方**：桌面现在是整页底图，浮窗贴底盖住了中间那一大块，
@@ -116,7 +155,7 @@ void main() {
     final screen = tester.getRect(find.byType(MaterialApp));
     await tester.tapAt(Offset(screen.left + 10, screen.center.dy));
     await tester.pumpAndSettle();
-    expect(find.byType(Composer), findsNothing, reason: '点桌面空白该收起');
+    expect(find.byTooltip(chatCollapse), findsNothing, reason: '点桌面空白该收起');
   });
 
   testWidgets('🔴 负向对照：点**浮窗左边那条桌面**不会误伤浮窗自己的按钮', (tester) async {
@@ -194,7 +233,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 40));
     await tester.tap(find.text('助手'));
     await tester.pumpAndSettle();
-    expect(find.byType(Composer), findsNothing, reason: '双击抓手该收起');
+    expect(find.byTooltip(chatCollapse), findsNothing, reason: '双击抓手该收起');
     expect(find.text('展开'), findsOneWidget);
   });
 
@@ -205,6 +244,6 @@ void main() {
     await tester.pumpAndSettle();
     final after = _floaterRect(tester).height;
     expect(after > collapsed, true, reason: '往上拖该变高（$collapsed → $after）');
-    expect(find.byType(Composer), findsOneWidget, reason: '拖开之后该能说话');
+    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '拖开之后该有「收起」');
   });
 }

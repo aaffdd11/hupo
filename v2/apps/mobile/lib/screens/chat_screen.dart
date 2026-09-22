@@ -241,6 +241,7 @@ class _ChatScreenState extends State<ChatScreen> {
               title: '助手',
               initialTier: widget.initialTier,
               trailing: _actions(c),
+              composer: _composer(c),
               // 上层拿这两个数去算"小程序被盖住没有 / 内容要内缩多少"（§6.4 规则 1/2/3）
               onTier: (t) {
                 final expanded = t != FloaterTier.collapsed;
@@ -329,6 +330,10 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
   ];
 
+  /// **聊天区**（状态条 + 时间线）。⚠️ **不含输入条** —— 输入条由 `_composer` 单独给，
+  /// 因为**收起态也要有它**（主人 2026-09-22：*"助手那个聊天窗口，收缩的时候也有一个输入框。"*）。
+  /// ⇒ 而且必须是**同一个实例**：两个地方各建一个 Composer 的话，
+  ///    "打了一半再展开"会换一个 `State`，**框里的字就丢了**。
   Widget _sheetBody(ChatController c) {
     return Column(
       // ⚠️ 这个键是**给闸用的**（见 `chatBodyKey`）
@@ -344,28 +349,33 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
         ),
-        Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: Composer(
-              // ★ **打字框草稿**（主人 2026-09-22）：*"要有一个空的输入框，但如果用户输入过，
-              //   没发送，则显示在上面作为草稿。草稿也是要记住的。"*
-              //   ⚠️ 它和"已发未认领那句话"（`draft_store.dart`）**不是同一本账**。
-              draft: c.composeDraft,
-              onDraftChanged: c.saveComposeDraft,
-              onDraftCleared: c.clearComposeDraft,
-              // 🔴 **用户按下发送 ⇒ 最大化**（§6.2"发就拉满"）。
-              //    ⚠️ 反过来不成立：**状态变化不许动窗口**（D4.8：新增助手消息的高度变化 = 0px）。
-              onSend: (text) {
-                _floaterKey.currentState?.maximize();
-                c.clearComposeDraft(); // 发出去了 ⇒ 上面那条草稿该消失
-                c.send(text);
-              },
-            ),
-          ),
-        ),
         SizedBox(height: MediaQuery.viewInsetsOf(context).bottom),
       ],
+    );
+  }
+
+  /// **输入条**（收起态和展开态共用的**同一个**东西）。
+  Widget _composer(ChatController c) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: Composer(
+          // ★ **打字框草稿**（主人 2026-09-22）：*"要有一个空的输入框，但如果用户输入过，
+          //   没发送，则显示在上面作为草稿。草稿也是要记住的。"*
+          //   ⚠️ 它和"已发未认领那句话"（`draft_store.dart`）**不是同一本账**。
+          draft: c.composeDraft,
+          onDraftChanged: c.saveComposeDraft,
+          onDraftCleared: c.clearComposeDraft,
+          // 🔴 **用户按下发送 ⇒ 最大化**（§6.2"发就拉满"）。
+          //    ⚠️ 反过来不成立：**状态变化不许动窗口**（D4.8：新增助手消息的高度变化 = 0px）。
+          //    ★ 现在**收起态也能发**（那儿也有输入框）⇒ 发出去就拉满，这一步比以前更有用。
+          onSend: (text) {
+            _floaterKey.currentState?.maximize();
+            c.clearComposeDraft(); // 发出去了 ⇒ 上面那条草稿该消失
+            c.send(text);
+          },
+        ),
+      ),
     );
   }
 

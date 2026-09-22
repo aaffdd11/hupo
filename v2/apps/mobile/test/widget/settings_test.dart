@@ -114,7 +114,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text(configTitle), findsOneWidget, reason: '容器给的顶栏写着「配置」');
 
-    await tester.enterText(find.byType(TextField), 'sk-new-key');
+    // ⚠️ **指名道姓**：聊天收起态那条**也有**一个输入框 ⇒ 树里不止一个 `TextField`
+    await tester.enterText(
+      find.descendant(of: find.byType(SettingsScreen), matching: find.byType(TextField)).first,
+      'sk-new-key',
+    );
     await tester.tap(find.text(keySubmitChange));
     await tester.pumpAndSettle();
 
