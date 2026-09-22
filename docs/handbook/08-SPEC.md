@@ -173,8 +173,10 @@
 | `/api/message/:id/cancel` | POST | 需令牌 | **校验归属** |
 | `/api/conversations`、`/:id/events`、`/:id/export` | GET | 需令牌 | 列表 / 事件 / 导出（`md` 或 `jsonl`） |
 | `/api/conversations/:id` | DELETE | 需令牌 | 进回收站（**墓碑**），**到期真删** |
-| `/api/apps` | GET | 需令牌 | 小程序清单：`id` / `name` / `icon` / `version` / `sha256` / `permissions` / `minShellVersion` |
-| `/api/apps`、`/api/apps/:id/rollback` | POST | 需令牌（rollback）/ **特权口**（上传） | **上传不在公网路径上** |
+| `/api/apps` | GET | 需令牌 | ✅ **已实现**：我的小程序清单：`id` / `title` / `icon` / `version` / `rootHash` / `permissions` / `entryUrl`（**现签**）|
+| `/api/discover` | GET | 需令牌 | ✅ **已实现**：大家发出来的（**只读**；不给作者身份，只给昵称）|
+| `/api/app-ask` | POST | 需令牌 | ✅ **已实现**：小程序问一句。**四道闸在中心**（在他这儿 · 声明了 · 授予了 · 配额还有）· **花在他自己的环境里** |
+| `/api/apps`、`/api/apps/:id/rollback` | POST | 需令牌（rollback）/ **特权口**（上传） | ⏳ 上传那条**不在公网路径上**：今天只有 MCP 工具（`app_create` 等九件）+ `app_publish` |
 | `/api/stream` | WS | 需令牌（子协议 `['bearer', token]`） | 下行事件；`sinceSeq` 续传；**`dev=1` 是附加通道不是替代** |
 | `/api/debug/report` · `/api/debug/tasks` · `/api/debug/analyze` | GET/POST | 需令牌 | 监控出口；⚠️ **`analyze` 的 `force` 参数已删**（它绕过冷却，可无限刷） |
 
@@ -182,7 +184,7 @@
 
 | 事件 | 说明 |
 |---|---|
-| `app/installed` · `app/update-available` · `app/error` | 小程序生命周期。**每个"进行中"都要有配对收口 + 超时** |
+| `app/installed` · `app/update-available` · `app/error` | 小程序生命周期。**每个"进行中"都要有配对收口 + 超时**。✅ **`app/installed` 已实现**（装上之后桌面自己长出来）；另两条还没有 |
 | `miniapp/load-failed` | 容器 hash 校验失败并回退 `last-known-good` |
 | `audit/notice` | **只在开发者通道推**：刚发生一次"改系统"档动作（**不进用户流**） |
 
@@ -235,7 +237,7 @@ cwd: agentCwd
 | `widgets/app_desktop.dart` | 桌面（浮窗后面那层） | ✅ |
 | `widgets/mini_app_container.dart` | 容器壳（标题栏 / 返回栈 / 关闭） | ✅ |
 | `widgets/answer_bubble.dart` | 气泡（quick+deep / 来源） | ✅ |
-| `mini/runtime.dart` | 沙箱运行时（Web：`sandbox` iframe；原生：受限 WebView） | ❌ **【不建】**（本轮不做小程序运行时） |
+| `widgets/mini_runtime{,_web,_stub}.dart` | 沙箱运行时（Web：`sandbox` iframe；**原生侧仍然不建**） | ✅ **Web 侧已建**（2026-09-22，`59-USER-APPS.md`）· 原生 `kNativeMiniRuntime=false` |
 | `mini/manifest.dart` | 清单解析 + 校验（含 `minShellVersion` / `sha256`） | ❌ **【不建】** |
 | `mini/store.dart` | 本地安装 / 版本目录 / 回退 `last-known-good` | ❌ **【不建】** |
 | `mini/bridge.dart` | 容器代发、`postMessage` 校 `event.origin` | ❌ **【不建】** |
@@ -295,7 +297,7 @@ cwd: agentCwd
 | **密钥** | spawn 用**减法 env**（去掉 `*_API_KEY` / `*_TOKEN` / `*_SECRET`）；`~/.ssh` 与 `data/auth.json` 收权 |
 | **自我修改** | 见 **P1**（助手只能提申请，签字的是主人）；策略文件 root 只读 + **开机前完整性校验** + 回退不需要助手 |
 | **注入持久化** | 所有"会自动进未来上下文"的落点（人格 / 设置 / profile patch / 画像 / 手册）**都进完整性清单** |
-| **制品** | 独立 origin + 沙箱 + hash + **版本不可变** + 发布走特权口 + 不可变审计（可倒查是哪句话生成的） |
+| **制品** | ✅ **已落地**（2026-09-22）：独立 origin（`apps.stalkerai.cn`）· 沙箱（不给 `allow-same-origin`）· hash（读回来逐字节核）· **版本不可变**（同版本重发拒）· **不可变审计**（谁/哪一轮/哪句话/rootHash）· ⚠️「发布走特权口」今天的读法是**由 L2 服务端发布，不是 agent 自己写**（制品落在用户自己的世界目录里，不需要 root）—— 见 [`59`](../dev/59-USER-APPS.md) §四 |
 | **出网** | 白名单 + 审计。⚠️ **承认防不住"带走它自己推理的结论"**，追求**可发现** |
 | **合规** | **iOS 商店版不发布小程序运行时**（Apple 4.7.4 要"提交时冻结的清单"，与"运行时生成"冲突） |
 
@@ -538,11 +540,21 @@ oom_kill > 0                              memory > 0.9×max 持续 5 分钟
 > 可删除（N9）、拒绝给人话（N11）——**规则不因为模块没建而失效**，
 > 只是**暂时没有实现载体**。
 
-### 7.3 【不建】小程序运行时（本轮）
+### 7.3 小程序运行时（**2026-09-22：Web 侧已建**）
 
-`mini/*` 四件 + `apps_client.dart` + 制品管线（独立 origin / 清单 / hash / 回滚）。
-
-> ⚠️ **但 N1 / N2 仍然有效**（如果将来做，这两条是前提）。
+> 🔴 **这一节原来写着「本轮不建」。** 主人 2026-09-22 拍板**做**（*"我要做乙"*），
+> 并已**上线**（`apps.stalkerai.cn`）⇒ 下面这行**改了**，别再照旧读。
+>
+> | | 现在 |
+> |---|---|
+> | **Web 侧**（iframe 沙箱 + 制品管线） | ✅ **已建、已上线**：制品库 / 第二原点 / 签名 URL / CSP / 不可变版本 / 审计 / 发布 / 装上 / `ask` —— 契约 **[`59-USER-APPS.md`](../dev/59-USER-APPS.md)** |
+> | **原生侧**（受限 WebView） | ❌ **仍然不建**（没有安装包）· 判据钉在 `kNativeMiniRuntime=false`（`59` §九） |
+> | **iOS 商店版** | 🔴 **不发布小程序运行时**（§4.2 合规 / Apple 4.7.4）—— 今天"无处可关"（原生侧没有它），落成上面那个标记 |
+>
+> ⚠️ **N1 / N2 从"将来的前提"变成了现在的判据**：
+> 独立原点已上线（`apps.stalkerai.cn` ≠ `w.stalkerai.cn`）· 沙箱不给 `allow-same-origin` ·
+> 制品只拿得到一条窄通道（`ask`），**拿不到任何能指挥 agent 的能力**。
+> 判据：`test/apps*.test.js` · `test/app-ask.test.js` · `check-app-origin.mjs` · 浏览器那侧的 iframe origin 检查。
 > ⚠️ **内置图标不撤**（决策 D4.10）——它与小程序运行时是两回事。
 
 ### 7.4 【仍悬空】旧的悬空清单（**复核后的状态**）
@@ -1210,8 +1222,9 @@ systemd
 
 ## 十四、小程序沙箱与制品管线
 
-> ⚠️ **小程序本轮不建**（见 §7.3）。但 **N1 / N2 是它的前提**——
-> 将来做的时候，**这一节就是那些前提的落地口径**。删旧文档时差点把这批丢掉。
+> 🔴 **2026-09-22 起：这一节不再是"将来的口径"，它就是现在的契约**（主人拍板做"乙"，已上线）。
+> 落地结果与逐条判据在 **[`59-USER-APPS.md`](../dev/59-USER-APPS.md)**；下面这些铁律**一条都没放宽**。
+> ⚠️ 唯一被推翻的是 §7.3 那句"本轮不建"（原生侧仍然不建）。
 
 ### 14.1 沙箱（**三条铁律**）
 
