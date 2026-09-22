@@ -81,7 +81,7 @@ class AppDesktop extends StatelessWidget {
     //    而图标本该是**一个小方块**、列宽只决定它在哪儿 ⇒ 两端都夹住：
     //    下限 = 图标格 + 一点余量（不然字挤成一列），上限 = 一个"图标格"该有的宽度。
     final raw = (w - d.gapL * 2 - spacing * (columns - 1)) / columns;
-    final tileWidth = raw.clamp(desktopIconBox + 12, 92.0);
+    final tileWidth = raw.clamp(desktopIconBox + 10, 88.0);
     return Material(
       color: d.paper,
       child: InkWell(
@@ -96,18 +96,31 @@ class AppDesktop extends StatelessWidget {
             children: [
               if (header != null)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(d.gapL, d.gapM, d.gapL, d.gapS),
+                  padding: const EdgeInsets.fromLTRB(
+                    d.gapL,
+                    d.gapM,
+                    d.gapL,
+                    d.gapS,
+                  ),
                   child: header,
                 ),
               Expanded(
                 // ⚠️ 图标多了要能滚（窄屏 + 大字号下这一条是唯一稳的摆法）
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(d.gapL, d.gapS, d.gapL, d.gapL),
+                  // ★ 主人 2026-09-22：*"桌面排布好一点，我看小程序图标顶部 Margin 可以增加一些。"*
+                  //   ⇒ 顶部留白从 8 提到 **48**（`gapL * 2`），横向仍是 24，图标之间给足间距。
+                  padding: EdgeInsets.fromLTRB(
+                    d.gapL,
+                    d.gapL * 2,
+                    d.gapL,
+                    d.gapL,
+                  ),
                   child: Wrap(
                     spacing: spacing,
-                    runSpacing: d.gapM + 6,
+                    runSpacing: d.gapL,
                     children: [
-                      for (final a in apps) _DesktopIcon(app: a, width: tileWidth),
+                      for (final a in apps)
+                        _DesktopIcon(app: a, width: tileWidth),
                     ],
                   ),
                 ),
@@ -157,6 +170,15 @@ class _DesktopIcon extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: d.card,
                   borderRadius: BorderRadius.circular(d.radiusCard),
+                  // ★ 主人 2026-09-22：*"小程序图标要有阴影。"*
+                  //   浅一点（图标是一小块，用浮窗那种 α.45 会脏）
+                  boxShadow: [
+                    BoxShadow(
+                      color: d.ink.withValues(alpha: 0.12),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
                 child: Stack(
                   children: [
@@ -168,7 +190,10 @@ class _DesktopIcon extends StatelessWidget {
                         child: Container(
                           width: 10,
                           height: 10,
-                          decoration: const BoxDecoration(color: d.accent, shape: BoxShape.circle),
+                          decoration: const BoxDecoration(
+                            color: d.accent,
+                            shape: BoxShape.circle,
+                          ),
                         ),
                       ),
                   ],

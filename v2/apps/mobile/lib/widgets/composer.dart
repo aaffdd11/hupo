@@ -114,7 +114,8 @@ class _ComposerState extends State<Composer> {
     final showDraft =
         (widget.draft?.isNotEmpty ?? false) && _controller.text.isEmpty;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      // ★ 主人 2026-09-22："聊天浮窗的 padding 减少一些"（里面这一圈）：12/8 → 8/6
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

@@ -86,6 +86,15 @@ class _MiniAppHostState extends State<MiniAppHost>
   void initState() {
     super.initState();
     if (widget.open) _c.value = 1;
+    // 🔴 **收回动画走完的那一刻必须重建一次**（2026-09-22 主人报"退出小程序有个小bug"）。
+    //    原来只在 `build()` 里写了一句"没开而且收回去了 ⇒ 什么都不画"——
+    //    而**动画结束不会触发外层 `build()`**（只有里面那个 `AnimatedBuilder` 会重建）
+    //    ⇒ 关掉之后**那一块还留在图标的位置上**，而且它是**可点的**
+    //    ⇒ 它正好压在图标上，**把图标挡住了**：退出小程序之后再点图标**没反应**。
+    //    （实测：关掉后矩形还停在 (24,8,116,82)；再点图标开不起来。）
+    _c.addStatusListener((st) {
+      if (st == AnimationStatus.dismissed && mounted) setState(() {});
+    });
   }
 
   @override

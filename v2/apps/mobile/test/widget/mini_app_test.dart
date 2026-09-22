@@ -111,6 +111,31 @@ void main() {
     expect(loggedOut, 1, reason: '★ 点了退出登录就该退出去（一个点了没反应的入口 = 坏了）');
   });
 
+  testWidgets('🔴 退出小程序之后那一块**真的没了**，而且**图标还能再点开**（回归）', (tester) async {
+    // 🔴 主人 2026-09-22 报的"退出小程序有个小bug"。
+    //    根因：`build()` 里那句"没开而且收回了 ⇒ 什么都不画"**不会因为动画结束而重跑**
+    //    （只有里面那个 `AnimatedBuilder` 会重建）⇒ 关掉之后**那一块还留在图标的位置上**，
+    //    而且它是**可点的** ⇒ 正好压在图标上，**把图标挡住了**：退出之后**再点图标没反应**。
+    await _pump(tester);
+    await _openSettings(tester);
+    expect(find.byType(SettingsScreen), findsOneWidget);
+
+    await tester.tap(find.byTooltip(miniAppBack));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsScreen), findsNothing, reason: '★ 退出了就该真的不在树里（不许留残影）');
+    expect(find.byTooltip(miniAppBack), findsNothing, reason: '★ 连容器那条顶栏也不许留');
+
+    // ★ 再点一次图标：必须还能开（残影挡住图标的话，这一下就没反应）
+    await tester.tap(find.text(settingsAppLabel));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsScreen), findsOneWidget, reason: '★ 退出之后再点图标必须还能开');
+    final screen = tester.getRect(find.byType(MaterialApp));
+    final reveal = tester.getRect(
+      find.descendant(of: find.byType(MiniAppHost), matching: find.byType(ClipRRect)).first,
+    );
+    expect(reveal.size, screen.size, reason: '而且该是全屏');
+  });
+
   testWidgets('🔴 小程序打开后是**全屏**的 —— 只有聊天还在底下那一条', (tester) async {
     // 主人 2026-09-22：*"桌面小程序打开后，是全屏显示的，只不过聊天窗口还在底下那里。"*
     await _pump(tester);

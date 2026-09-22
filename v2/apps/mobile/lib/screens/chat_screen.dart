@@ -392,7 +392,8 @@ class _ChatScreenState extends State<ChatScreen> {
       },
       child: ListView.builder(
         controller: _scroll,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        // ★ 主人 2026-09-22："聊天浮窗的 padding 减少一些"（里面这一圈）：12 → 8
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         itemCount: c.items.length + (c.hasProcess ? 1 : 0),
         itemBuilder: (context, i) => i < c.items.length
             ? _render(c.items[i], c)
