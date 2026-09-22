@@ -302,6 +302,35 @@ keyFormat: 'dsh-refs' })`），只在**宿主**上起（匣子里那份由 `entr
 ⚠️ **VPS 上跑着 13 个别的站** ⇒ 按 P1/P2 **要主人签字**；新加的是**纯追加**（一域名一实例，不动别人的）。
 ⚠️ **第 2、3 条里的 `secretKey` 两边必须一致**，而且**不许进仓库**（它是本机/那台之间的秘密）。
 
+### ✅ 2026-09-22：**已经上线了**（主人给了 VPS 的登录）
+
+实际做的（比清单少一步、多一步）：
+
+| # | 做了什么 | 结果 |
+|---|---|---|
+| 1 | **DNS** | ✅ **本来就解析**（`apps.stalkerai.cn` → `120.26.179.211`）⇒ 没配 |
+| 2 | **VPS visitor**：`/opt/frp/frpc-visitor-apps.toml`（`bindPort=3085`，**属主 `deploy`**）+ `frpc-visitor-apps.service` | ✅ active，`ss` 看到 `127.0.0.1:3085` |
+| 3 | **本机 frpc**：`~/.local/frp/frpc-apps.toml`（`localPort=8021`，name `hupo-apps`，**新生成的 secretKey**） | ✅ `https://apps.stalkerai.cn/` → **404**（未知路径 = 制品服务在答 ⇒ 整条隧道到了） |
+| 4 | **证书**：`certbot certonly --nginx -d apps.stalkerai.cn` | ✅ 到 **2026-12-21**，自动续期 |
+| 5 | **nginx**：`/etc/nginx/conf.d/apps-stalkerai.conf`（先只放 :80 签证书 ⇒ 再换 80→301 + 443 + `proxy_pass 127.0.0.1:3085`） | ✅ `nginx -t` 过、reload 过；**没碰任何已有 conf** |
+| 6 | **本机配置**：`data/tenants.env` 两行（`HUPO_APPS_PUBLIC_BASE` / `HUPO_APPS_FRAME_ANCESTORS`）+ 重启 | ✅ 服务横幅：`制品口 https://apps.stalkerai.cn（另一个原点…）` |
+
+**验收读数**（`check-app-origin.mjs` 对着公网原点跑，全绿）：
+① 制品口 `https://apps.stalkerai.cn` ≠ 壳 `https://w.stalkerai.cn` · ② 带签名取得到 200（3655 字节）·
+③ CSP 在、**没有 `X-Frame-Options`**、`frame-ancestors` 含壳 · ④ 没签名/假签名 ⇒ 403 ·
+⑤ **它不认令牌**（带假令牌照样 200）。
+
+**浏览器里也验过**（公网 `https://w.stalkerai.cn`）：
+* 点开「掷硬币」⇒ 骰子/硬币那个页面**真的画出来了**，而 iframe 来自 **`https://apps.stalkerai.cn`**
+  （以前本机那条 http 制品被浏览器挡掉 ⇒ 那是"iframe 在、里面是打不开的图标"）。
+* 一个"一打开就自己问一句"的探针 ⇒ 页面上显示 **`✅ 公网也通了`**
+  （页面 → 壳 → 接口 → 本机代理 → 模型 → 回到页面，**整条在生产上成立**；验完探针已软删）。
+
+⚠️ **两处秘密在哪**（都不进仓库）：本机 `~/.local/frp/frpc-apps.toml`（0600）与
+VPS `/opt/frp/frpc-visitor-apps.toml`（`deploy:deploy` 0600）里的那个 `secretKey` —— **两边必须一致**。
+⚠️ **隧道是手动起的**（`frpc-w` 也一样，见账 #58）：重启机器之后要跑
+`bash scripts/start-tunnels.sh`（幂等，已在跑的不动，跑完自己报读数）。
+
 ### 那一步做完之后，怎么算"对"—— **一条命令**
 
 ```bash

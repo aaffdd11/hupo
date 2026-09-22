@@ -8,6 +8,33 @@
 
 ---
 
+> ## v1.46 · **乙-5 的后半：制品口上生产了（`apps.stalkerai.cn`）**（2026-09-22）
+>
+> **改了哪几处**：`docs/dev/59-USER-APPS.md` §九（上线记录 + 读数）· 这一页 ·
+> `docs/dev/00-PROGRESS.md` §六（**#58**）· **`scripts/start-tunnels.sh`**（新）·
+> 本机 `data/tenants.env`（**这台机器的部署状态，不进仓库**）。
+>
+> 主人给了 VPS 的登录 ⇒ 那一步做了（**VPS 上只做纯追加，没碰任何已有 conf**）：
+> **visitor**（`/opt/frp/frpc-visitor-apps.toml`，`bindPort=3085`，**属主 `deploy`**）+
+> `frpc-visitor-apps.service` · **本机 frpc**（`frpc-apps.toml`，`localPort=8021`，新生成的 secretKey）·
+> **证书**（`certbot certonly --nginx -d apps.stalkerai.cn`，到 2026-12-21）·
+> **nginx**（先只放 :80 签证书 ⇒ 再换 80→301 + 443 + `proxy_pass 127.0.0.1:3085`）·
+> 本机两行配置 + 重启。**DNS 本来就解析** ⇒ 那一步省了。
+>
+> **验收（对着公网原点，`check-app-origin.mjs` 全绿）**：制品口 ≠ 壳（N1）· 带签名 200 ·
+> 有 CSP / **没有 `X-Frame-Options`** / `frame-ancestors` 含壳 · 没签名与假签名 ⇒ 403 ·
+> **它不认令牌**。
+>
+> 🔴 **浏览器里也验过（这才是"你手机上能不能用"的答案）**：
+> 公网 `https://w.stalkerai.cn` 上点开「掷硬币」⇒ 页面**真的画出来了**，
+> 而 iframe 来自 **`https://apps.stalkerai.cn`**；「问一句」那条也在生产上通了
+> （探针当场显示 `✅ 公网也通了`，验完已软删）。
+> ⚠️ 以前看不到，是因为浏览器**不肯在 https 页面里嵌 `http://127.0.0.1`** —— 现在两个都是 https。
+>
+> ⚠️ **两处秘密都不进仓库**：本机与 VPS 各一份 `frpc-apps.toml`（0600）里的 `secretKey`，**两边必须一致**。
+> ⚠️ **隧道是手动起的**（`frpc-w` 也一样）⇒ 记成账 **#58**，并加了幂等脚本 `scripts/start-tunnels.sh`
+> （重启之后跑一条命令；真正的修法是 systemd，要连着 #48 一起定）。
+
 > ## v1.45 · **乙-5 的前半·补：那一步做完之后怎么算"对"，一条命令**（2026-09-22）
 >
 > **改了哪几处**：`docs/dev/59-USER-APPS.md` §九 · 这一页 · `docs/dev/00-PROGRESS.md` §〇 ·
