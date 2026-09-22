@@ -1,14 +1,18 @@
-// **桌面** —— 屏幕**最下面那一条**（主人 2026-09-22 定的形状 B）。
+// **桌面** —— **铺满整屏**的那一层（聊天浮窗**后面**那一层）。
 //
-// ── 为什么是"一条"而不是"整页底图" ────────────────────────
-// 手册原来写的是"图标墙 = 浮窗后面那一层"（Z1–Z3）。主人看过之后改了：
-// **桌面摆在底部一条**，聊天浮窗在它**上面**浮着、四边各留 30。
-// 理由是他那句话本身：默认收起时，"底部是桌面"要**一眼看得见**
-// （整页底图 + 最大化浮窗 ⇒ 你只看得到 30px 的一圈边）。
-// ⇒ 契约 `docs/dev/52-DESKTOP.md`，手册 `08-SPEC.md` §六 Z4 + 阈值总表。
+// ── 形状是谁定的（两次才说清，都记下来）──────────────────
+// 主人 2026-09-22 第一句：*"首先，页面底部是一个桌面。聊天窗口是一个左右上下 margin 为 30 的浮窗，有阴影。"*
+// 我把它读成了"桌面=屏幕最下面那一条"（并且问过他，他当时也选了那一条）——
+// **但那是读错了**。他看了真站点之后更正：*"桌面是全屏的，聊天窗口是在底部的。"*
+// ⇒ 正确的形状：**桌面铺满整屏**（它是底图），**聊天浮窗贴在屏幕底部**浮着、四边各 30。
+// ⇒ 契约 `docs/dev/52-DESKTOP.md`，手册 `08-SPEC.md` §六 Z4。
+//
+// ⚠️ **教训（值得留着）**：用户说"底部"时，可能是说**浮窗的位置**，也可能是说**桌面的位置** ——
+//    这两个都合理，而选中错的那个，代价是一整套布局返工。
+//    下一回遇到"底部/上面"这种词，**先让他看一眼两种摆法的截图**再动手。
 //
 // 手册里另外三件，这个文件是它们的落点：
-//   · **D4.11 手机上第一入口 = 图标墙**（桌面就是那个"墙"，只是排在底部）；
+//   · **D4.11 手机上第一入口 = 图标墙**（登录之后先看见的是它）；
 //   · **一个作用域 = 一个工作区 = 一条会话 = 一个目录 = 桌面上一个图标**（1:1:1:1）；
 //   · **点桌面空白 = 收起聊天浮窗**（`08-SPEC.md` §六 交互表）。
 //
@@ -17,10 +21,6 @@
 //
 // ⚠️ **不用 `GestureDetector`**：`accessibility_test.dart` 有一条**源码级禁令**，
 //    用它就等于让"命中区 ≥44"那份扫描多一个没人检查的缺口。点空白用 `InkWell`。
-//
-// ⚠️ **高度由内容算**（D3.5）：图标格 + 一行带字的标签 + 间距。
-//    大字号下这一条会**变高**，而浮窗拿的是**剩下的高度**
-//    ——父层是 `Column`，不是"屏高减去一个写死的数"。
 
 import 'package:flutter/material.dart';
 
@@ -54,6 +54,8 @@ class AppDesktop extends StatelessWidget {
     super.key,
     required this.apps,
     required this.onTapBlank,
+    this.header,
+    this.columns = 4,
   });
 
   final List<DesktopApp> apps;
@@ -61,9 +63,22 @@ class AppDesktop extends StatelessWidget {
   /// **点空白**（不是点图标）⇒ 上层拿它收起聊天浮窗。
   final VoidCallback onTapBlank;
 
+  /// 顶上一行（不参与点击 —— 它也是"点空白"的安全区）。
+  final Widget? header;
+
+  /// 一屏放几列。
+  final int columns;
+
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context);
+    // ⚠️ 宽度从 `MediaQuery` 来（它在 `Stack` 里是 `Positioned.fill` ⇒ 就是屏宽）
+    final w = MediaQuery.sizeOf(context).width;
+    final spacing = d.gapL - 4;
+    // 🔴 **列宽要封顶**：宽屏上按 4 列算会得到 293px 一格（实测过），
+    //    而图标本该是**一个小方块**、列宽只决定它在哪儿 ⇒ 两端都夹住：
+    //    下限 = 图标格 + 一点余量（不然字挤成一列），上限 = 一个"图标格"该有的宽度。
+    final raw = (w - d.gapL * 2 - spacing * (columns - 1)) / columns;
+    final tileWidth = raw.clamp(desktopIconBox + 12, 92.0);
     return Material(
       color: d.paper,
       child: InkWell(
@@ -71,26 +86,30 @@ class AppDesktop extends StatelessWidget {
         onTap: onTapBlank,
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,
-        child: Container(
-          // 一条上边线：让它读起来是"桌面"这一层，而不是聊天页的页脚
-          decoration: BoxDecoration(border: Border(top: BorderSide(color: d.line))),
-          padding: const EdgeInsets.symmetric(horizontal: d.gapM, vertical: d.gapS),
-          child: SafeArea(
-            top: false,
-            // ⚠️ 图标多了**横向滚**（不折行、不挤扁）——这条在窄屏 + 大字号下是唯一稳的摆法
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final a in apps)
-                    Padding(
-                      padding: const EdgeInsets.only(right: d.gapM),
-                      child: _DesktopIcon(app: a, theme: t),
-                    ),
-                ],
+        child: SafeArea(
+          bottom: false, // 浮窗贴底 ⇒ 下面那条安全区由浮窗自己管
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (header != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(d.gapL, d.gapM, d.gapL, d.gapS),
+                  child: header,
+                ),
+              Expanded(
+                // ⚠️ 图标多了要能滚（窄屏 + 大字号下这一条是唯一稳的摆法）
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(d.gapL, d.gapS, d.gapL, d.gapL),
+                  child: Wrap(
+                    spacing: spacing,
+                    runSpacing: d.gapM + 6,
+                    children: [
+                      for (final a in apps) _DesktopIcon(app: a, width: tileWidth),
+                    ],
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
         ),
       ),
@@ -99,51 +118,58 @@ class AppDesktop extends StatelessWidget {
 }
 
 class _DesktopIcon extends StatelessWidget {
-  const _DesktopIcon({required this.app, required this.theme});
+  const _DesktopIcon({required this.app, required this.width});
 
   final DesktopApp app;
-  final ThemeData theme;
+  final double width;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Material(
-          color: d.card,
-          borderRadius: BorderRadius.circular(d.radiusField),
-          child: InkWell(
-            onTap: app.onOpen,
-            borderRadius: BorderRadius.circular(d.radiusField),
-            child: SizedBox(
-              width: desktopIconBox,
-              height: desktopIconBox,
-              child: Stack(
-                children: [
-                  Center(child: Icon(app.icon, color: d.ink)),
-                  if (app.badge > 0)
-                    Positioned(
-                      top: d.gapS,
-                      right: d.gapS,
-                      child: Container(
-                        width: 10,
-                        height: 10,
-                        decoration: const BoxDecoration(color: d.accent, shape: BoxShape.circle),
+    final t = Theme.of(context);
+    // ⚠️ 图标**永远是那个小方块**（`desktopIconBox`，≥44 见 D3.6）；
+    //    `width` 只决定它在格子里的位置 —— 别把格子宽度当图标大小
+    //    （宽屏下那会变成一张 293px 的大卡片，实测栽过）。
+    return SizedBox(
+      width: width,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Material(
+            color: d.card,
+            borderRadius: BorderRadius.circular(d.radiusCard),
+            child: InkWell(
+              onTap: app.onOpen,
+              borderRadius: BorderRadius.circular(d.radiusCard),
+              child: SizedBox(
+                width: desktopIconBox,
+                height: desktopIconBox,
+                child: Stack(
+                  children: [
+                    Center(child: Icon(app.icon, color: d.ink)),
+                    if (app.badge > 0)
+                      Positioned(
+                        top: d.gapS,
+                        right: d.gapS,
+                        child: Container(
+                          width: 10,
+                          height: 10,
+                          decoration: const BoxDecoration(color: d.accent, shape: BoxShape.circle),
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
-        ),
-        const SizedBox(height: 4),
-        // ⚠️ **带字的**（D3.8：图标不许只有图形，收起态也不许）
-        Text(
-          app.label,
-          style: theme.textTheme.bodySmall?.copyWith(color: d.ink),
-          textAlign: TextAlign.center,
-        ),
-      ],
+          const SizedBox(height: 6),
+          // ⚠️ **带字的**（D3.8：图标不许只有图形）
+          Text(
+            app.label,
+            style: t.textTheme.bodySmall?.copyWith(color: d.ink),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
     );
   }
 }

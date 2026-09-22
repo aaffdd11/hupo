@@ -58,9 +58,13 @@ void main() {
     expect(f.left - screen.left, m, reason: '左边距');
     expect(screen.right - f.right, m, reason: '右边距');
     expect(f.top - screen.top, m, reason: '上边距');
-    // 下边距 = 浮窗底到**桌面顶**（桌面是底部一条，浮窗浮在它上面）
-    expect(desk.top - f.bottom, m, reason: '浮窗与桌面之间也是 $m');
-    expect(desk.bottom, screen.bottom, reason: '桌面贴着屏幕底');
+    // ⚠️ 主人更正过的那一处：**浮窗贴屏幕底**（不是"底面那条桌子的上面"）
+    expect(screen.bottom - f.bottom, m, reason: '下边距 = 浮窗底到屏幕底');
+    // ⚠️ 桌面是**整页底图**（铺满整屏），不是底部一条
+    expect(desk.top, screen.top, reason: '桌面从屏幕顶开始');
+    expect(desk.bottom, screen.bottom, reason: '桌面铺到屏幕底');
+    expect(desk.left, screen.left);
+    expect(desk.right, screen.right);
 
     // 负向对照：浮窗**不是铺满**（Z3：盖住不是铺满）
     expect(f.width < screen.width, true);
@@ -103,11 +107,21 @@ void main() {
     expect(_floaterRect(tester).height, before, reason: '点浮窗内部不该动它（更不该漏到桌面）');
     expect(find.byType(Composer), findsOneWidget);
 
-    // ② 点桌面空白 ⇒ 收起
-    final desk = tester.getRect(find.byType(AppDesktop));
-    await tester.tapAt(Offset(desk.right - 20, desk.center.dy));
+    // ② 点桌面空白 ⇒ 收起。
+    //    ⚠️ **得点浮窗盖不到的地方**：桌面现在是整页底图，浮窗贴底盖住了中间那一大块，
+    //       所以"空白"是左边那条 30px 的带子（这也正是 Z3 要留出边距的理由之一）。
+    final screen = tester.getRect(find.byType(MaterialApp));
+    await tester.tapAt(Offset(screen.left + 10, screen.center.dy));
     await tester.pumpAndSettle();
     expect(find.byType(Composer), findsNothing, reason: '点桌面空白该收起');
+  });
+
+  testWidgets('🔴 负向对照：点**浮窗左边那条桌面**不会误伤浮窗自己的按钮', (tester) async {
+    // 上一条证明了"点桌面能收起"；这一条反向确认"边距那条带子确实不属于浮窗"，
+    // 免得哪天有人把浮窗的 `left/right` 写成 0（那样桌面就点不到了，而上面那条会红）
+    await _pump(tester, tier: FloaterTier.full);
+    final f = _floaterRect(tester);
+    expect(f.left, FloaterMetrics.margin, reason: '浮窗左边必须留出桌面那条带子');
   });
 
   testWidgets('🔴 用户在输入条上按发送 ⇒ 最大化（"发就拉满"）', (tester) async {
@@ -145,16 +159,18 @@ void main() {
     expect(_floaterRect(tester).height, before, reason: '拖时间线不该改浮窗高度');
   });
 
-  testWidgets('🔴 桌面那一条**横跨整宽**（不是"内容那么宽"居中）', (tester) async {
-    // ⚠️ 2026-09-22 实测抓到的：外层 `Column` 默认 `crossAxisAlignment: center`
-    //    ⇒ 桌面那一条被缩成 **100px 宽、居中**（截图上看不出来：它底色跟页面一样）。
-    //    ⇒ 一条判据钉住"它是横跨整宽的底部一条"。
+  testWidgets('🔴 桌面**铺满整屏**（是底图，不是"内容那么宽"的一块）', (tester) async {
+    // ⚠️ 2026-09-22 实测抓到过的形状：桌面被缩成 **100px 宽、居中**
+    //    （截图上看不出来：它底色跟页面一样）—— 那时它还是"底部一条"。
+    //    现在形状改成"桌面=整页底图"，这条判据钉的就是**四边都贴屏幕**。
     await _pump(tester);
     final desk = tester.getRect(find.byType(AppDesktop));
     final screen = tester.getRect(find.byType(MaterialApp));
     expect(desk.left, screen.left, reason: '桌面左边该贴屏幕左');
     expect(desk.right, screen.right, reason: '桌面右边该贴屏幕右');
-    expect(desk.width, screen.width, reason: '桌面该横跨整宽（实测过它只有 ${desk.width}）');
+    expect(desk.top, screen.top, reason: '桌面该从屏幕顶开始');
+    expect(desk.bottom, screen.bottom, reason: '桌面该铺到屏幕底');
+    expect(desk.size, screen.size, reason: '桌面该铺满整屏（实测过它只有 ${desk.size}）');
   });
 
   testWidgets('🔴 收起态的「展开」命中区 ≥44（D3.6/D3.8）', (tester) async {

@@ -149,47 +149,47 @@ class _ChatScreenState extends State<ChatScreen> {
     //    约束 1 的判据是 **D4.8：高度变化 = 0px** —— 塞进 `Column` 就当场破掉
     //    （下面整块内容会被那条通知往下推）。有闸钉着：
     //    `test/widget/notice_overlay_test.dart` 量的是**下面内容前后同一个矩形**。
-    // ⚠️ **桌面是底部一条，浮窗在它上面浮着、四边各留 30**
-    //    （主人 2026-09-22 定的形状 B；契约 `52-DESKTOP.md`、手册 §六 Z4）。
-    //    从上到下：① 浮窗（在剩下的地方里贴着底）② 桌面那一条。
-    //    ⚠️ 这里**不用 `Positioned`**：`Positioned` 必须直接坐在 `Stack` 里，
-    //      而"桌面在下面"这件事用 `Column` 表达更直接（也就没有那个 ParentDataWidget 坑）。
+    // ⚠️ **桌面铺满整屏（底图），聊天浮窗贴在屏幕底部浮着、四边各留 30**
+    //    （主人 2026-09-22 更正："桌面是全屏的，聊天窗口是在底部的"；
+    //      契约 `52-DESKTOP.md`、手册 §六 Z4）。
+    //    两层是 `Stack`，不是上下排的 `Column` —— 桌面在**下面那一层**，不是"下面那一条"。
+    //    ⚠️ `Positioned` 必须是 `Stack` 的**直接孩子**（包一层 `LayoutBuilder` 会让整棵树报
+    //       `Incorrect use of ParentDataWidget`）；所以浮窗能用的高度从 `MediaQuery` 算，
+    //       不在 `Positioned` 里套 `LayoutBuilder`。
+    final mq = MediaQuery.of(context);
+    final maxH = mq.size.height - mq.padding.top - FloaterMetrics.margin * 2;
     final sheet = Scaffold(
       backgroundColor: d.paper,
-      body: Column(
-        // ⚠️ **`stretch` 不能少**：默认是 `center`，桌面那一条会被缩成"内容那么宽"（实测 100px + 居中），
-        //    而它应该是**横跨整宽的底部一条**（契约 `52-DESKTOP.md` §一）。
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      body: Stack(
         children: [
-          Expanded(
-            child: Padding(
-              // 四边 30（Z3/Z4）。⚠️ 这个数住在 `FloaterMetrics`（= 手册阈值总表），别处不许再写一遍。
-              padding: const EdgeInsets.all(FloaterMetrics.margin),
-              child: LayoutBuilder(
-                builder: (ctx, cons) => Align(
-                  alignment: Alignment.bottomCenter,
-                  child: ChatFloater(
-                    key: _floaterKey,
-                    maxHeight: cons.maxHeight,
-                    title: '助手',
-                    initialTier: widget.initialTier,
-                    trailing: _actions(c),
-                    child: _sheetBody(c),
-                  ),
+          // ① 桌面（整页底图；点它的空白 = 收起聊天）
+          Positioned.fill(
+            child: AppDesktop(
+              apps: [
+                DesktopApp(
+                  label: '会话',
+                  icon: Icons.chat_bubble_outline,
+                  onOpen: () => _floaterKey.currentState?.maximize(),
                 ),
-              ),
+              ],
+              onTapBlank: () => _floaterKey.currentState?.collapse(),
             ),
           ),
-          // 桌面：**点空白 ⇒ 收起聊天**；桌上那个「会话」图标 ⇒ 打开它（聊天本身就是那个 app）
-          AppDesktop(
-            apps: [
-              DesktopApp(
-                label: '会话',
-                icon: Icons.chat_bubble_outline,
-                onOpen: () => _floaterKey.currentState?.maximize(),
-              ),
-            ],
-            onTapBlank: () => _floaterKey.currentState?.collapse(),
+          // ② 聊天浮窗（贴底、四边 30、永远在最上 —— Z1/Z3/Z4）
+          Positioned(
+            left: FloaterMetrics.margin,
+            right: FloaterMetrics.margin,
+            bottom: FloaterMetrics.margin,
+            // ⚠️ **不给 `height`**：收起档的高度要**由内容算**（D3.5）；
+            //    半开/最大化由 `ChatFloater` 自己按系数定（它拿到 `maxHeight`）。
+            child: ChatFloater(
+              key: _floaterKey,
+              maxHeight: maxH,
+              title: '助手',
+              initialTier: widget.initialTier,
+              trailing: _actions(c),
+              child: _sheetBody(c),
+            ),
           ),
         ],
       ),
