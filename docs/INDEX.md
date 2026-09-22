@@ -24,6 +24,8 @@
 | **怎么跑起来 · 怎么不出事**（部署 / 完整性 / 备份 / 供给） | [`handbook/06-OPERATIONS.md`](handbook/06-OPERATIONS.md) | 碰线上之前 |
 | **现状有哪些坑 · 术语 · 评审史** | [`handbook/07-APPENDIX.md`](handbook/07-APPENDIX.md) | 觉得"这地方怎么这么怪"时 |
 | **规范与判据**（不变量 / 接口 / 安全模型 / 阈值 / 容器与上线验收 / 小程序沙箱） | [`handbook/08-SPEC.md`](handbook/08-SPEC.md) | **判"做完了没有"之前** |
+| **小程序怎么造、怎么发、怎么装、"用谁的钥匙"** | [`dev/59-USER-APPS.md`](dev/59-USER-APPS.md)（契约）+ [`handbook/08-SPEC.md`](handbook/08-SPEC.md) §7.3 / §十四 | 动小程序那一块之前 |
+| **用户创造小程序这件事当初为什么这么做** | [`dev/58-CREATE-APP.md`](dev/58-CREATE-APP.md) | 想改小程序的形状之前 |
 | **手册改过什么 · 现在是什么版本** | [`handbook/CHANGELOG.md`](handbook/CHANGELOG.md) | 要改手册之前 |
 | **已经删掉的旧实现 / 旧文档原文** | `git show f93f296:<路径>` | 手册确实没写到，而你又非要原文时 |
 
