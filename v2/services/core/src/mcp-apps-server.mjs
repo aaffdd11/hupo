@@ -157,6 +157,32 @@ const TOOLS = [
     },
   },
   {
+    name: 'app_grant',
+    description:
+      '允许他的某个小程序「**用他自己的钥匙**问话」。'
+      + '⚠️ **只有他这一轮明确说"可以""让它用我的钥匙"才调** —— '
+      + '这花的是**他自己的钱**，是他按的按钮。'
+      + '调之前**用一句人话说清这意味着什么**（问一句话就花他一次）。',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: '哪个小程序' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'app_revoke',
+    description:
+      '不再允许某个小程序用他的钥匙（撤了之后它**立刻**就问不了了）。'
+      + '⚠️ 只有他明确说"别让它用了""停了"才调。⚠️ 撤权**不影响**小程序本身（它还在桌上）。',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: '哪个小程序' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'app_uninstall',
     description:
       '把**他自己桌面上**的某个小程序撤掉。'
@@ -232,6 +258,18 @@ async function callTool(name, args) {
     const r = await ask({ op: 'install', id });
     if (r.ok) return textResult(`装好了：**${r.title}** 现在在他的桌面上，点开就能用。`);
     return textResult(`没装成：${r.error}`, true);
+  }
+
+  if (name === 'app_grant' || name === 'app_revoke') {
+    const id = typeof args?.id === 'string' ? args.id.trim().toLowerCase() : '';
+    if (!id) return textResult('没说清是哪一个，什么都没动。', true);
+    const r = await ask({ op: name === 'app_grant' ? 'grant' : 'revoke', id });
+    if (!r.ok) return textResult(`没改成：${r.error}`, true);
+    return textResult(
+      name === 'app_grant'
+        ? '可以了 —— 它问一句话就花你一次（每天有上限，太多了它会自己停）。'
+        : '撤了，它现在问不了了。',
+    );
   }
 
   if (name === 'app_uninstall') {

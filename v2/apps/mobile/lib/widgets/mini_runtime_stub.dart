@@ -11,7 +11,11 @@ import '../models/app_words.dart';
 import '../models/design.dart' as d;
 
 /// 起一个"看这个小程序的窗口"。Web 上是沙箱 iframe；别处是这句实话。
-Widget buildMiniAppView({required String entryUrl, required String title}) {
+Widget buildMiniAppView({
+  required String entryUrl,
+  required String title,
+  Future<String> Function(String prompt)? onAsk,
+}) {
   return Center(
     child: Padding(
       padding: const EdgeInsets.all(d.gapL),

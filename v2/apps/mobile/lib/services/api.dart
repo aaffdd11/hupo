@@ -263,6 +263,38 @@ class Api {
     }
   }
 
+  /// **替一个小程序问一句**（乙-4b）。
+  ///
+  /// 🔴 花的是**看的人自己的钥匙** —— 服务端那边把这个动作送进**他自己的环境**里花；
+  ///    客户端这一侧**不碰钥匙**（也从来没有钥匙）。
+  /// ⚠️ 四种结果分开：成了 / 没允许 / 问得太勤 / 别的（**不许混成一句**，
+  ///    混了用户只会一直重试）。
+  Future<AskOutcome> appAsk(String token, String appId, String prompt) async {
+    try {
+      final r = await _c
+          .post(
+            _u('/api/app-ask'),
+            headers: {'authorization': 'Bearer $token', ..._json},
+            body: jsonEncode({'appId': appId, 'prompt': prompt}),
+          )
+          .timeout(const Duration(seconds: 45));
+      final j = r.statusCode == 200 ? jsonDecode(r.body) : null;
+      if (r.statusCode == 200 && j is Map && j['text'] is String) {
+        return AskOutcome(text: j['text'] as String);
+      }
+      String why = '没问成';
+      try {
+        final e = jsonDecode(r.body);
+        if (e is Map && e['error'] is String) why = e['error'] as String;
+      } catch (_) {
+        /* 认不出就用人话那句 */
+      }
+      return AskOutcome(error: why);
+    } catch (_) {
+      return const AskOutcome(error: '问不出去（网络没通）');
+    }
+  }
+
   /// **「发现」清单**（乙-3）：大家发出来的小程序。**只读**。
   /// ⚠️ 问不到就是空清单（不抛）—— 那一屏会如实说"现在还没有"。
   Future<List<DiscoverApp>> discover(String token) async {
@@ -707,3 +739,11 @@ enum CodeSend { sent, noSms, badPhone, failed }
 // 送钥匙、取消注册那两个结果 —— **搬去 `models/key_outcome.dart` 了**
 // （楼层闸：`widgets` 只许看 `models`，而填钥匙那块表单要用它们）。
 // 下面 re-export ⇒ 老的 import 一行都不用改。
+
+/// 问一句的结果：成了给 `text`，没成给一句**人话**。
+class AskOutcome {
+  const AskOutcome({this.text, this.error});
+  final String? text;
+  final String? error;
+  bool get ok => text != null;
+}

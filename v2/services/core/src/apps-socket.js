@@ -102,12 +102,16 @@ export function handleAppsOp(apps, req, ctx = {}) {
         apps.remove(req.id);
         return { ok: true, id: req.id, removed: true };
       }
-      // ── 还没做的（**明说**，不许假装成功）──────────────────
-      // ⚠️ 授予/撤权**故意先不挂**：`ask` 那条"用他自己的钥匙"的路还没定
-      //    （见 `59` §九），挂上去就是给他一个"按了也没用"的开关。
       case 'grant':
-      case 'revoke':
-        return { ok: false, error: `这件事还没做：${op}（要等"问一句"那条路定下来）` };
+      case 'revoke': {
+        // ★ **授予/撤权**（乙-4b）：`ask` 那条路已经通了（在**他自己的环境里**花）
+        const want = apps.grants(req.id);
+        const next = op === 'grant'
+          ? [...new Set([...want, 'ask'])]
+          : want.filter((p) => p !== 'ask');
+        const kept = apps.setGrants(req.id, next);
+        return { ok: true, id: req.id, permissions: kept };
+      }
       default:
         return { ok: false, error: `认不出这条请求：${op}` };
     }

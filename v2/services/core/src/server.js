@@ -24,6 +24,7 @@ import { normalizePhone } from './users.js';
 import { ADMIT_RATIO, readAdmission } from './admission.js';
 import { CATCHUP_RENDER, markCatchUp, planResume } from './resume.js';
 import { buildExport } from './export.js';
+import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
 import { SIGNED_TTL_MS, entryUrl } from './app-serve.js';
 
 const MIME = {
@@ -415,6 +416,28 @@ export function createServer({
         }
       }
       if (tenant && TENANT_ROUTES.some((p) => path === p || path.startsWith(`${p}/`))) {
+        // 🔴 `/api/app-ask` 在这条路上要**先过闸再转发**：
+        //    匣子里那份目录与中心这一份**不是同一个**（中心是 `data/users/<id>/`，
+        //    匣子里是它自己的 `/data`）⇒ 闸只能由**中心**（权威那份）来判；
+        //    而"花"必须发生在**匣子里**（钥匙在那儿）。
+        //    转发时带一个头，告诉匣子"闸已经过了，你只管花"。
+        let askBody = null;
+        if (path === '/api/app-ask') {
+          const w = worldFor(claim.sub);
+          let body;
+          try {
+            body = await readJson(req, 16 * 1024);
+          } catch {
+            return sendJson(res, 400, { error: '这一条看不懂' });
+          }
+          const gate = checkAppAsk(w?.apps, body?.appId);
+          if (!gate.ok) return sendJson(res, gate.status, { error: gate.error });
+          // 转发的是**重写过的**请求：一个"闸过了"的头（跨进程只认头，不认内存里的字段）
+          // + 重新给一份身体（刚才 `readJson` 已经把它读掉了）。
+          req.headers['x-hupo-app-ask-checked'] = '1';
+          askBody = JSON.stringify(body ?? {});
+          req.headers['content-type'] = 'application/json';
+        }
         const sock = proxyFor ? proxyFor(tenant) : null;
         if (!sock) {
           return sendJson(res, 503, {
@@ -422,7 +445,7 @@ export function createServer({
             text: '你那台还在准备，稍等一下再试。',
           });
         }
-        return proxyToTenant(sock, req, res);
+        return proxyToTenant(sock, req, res, { body: askBody });
       }
 
       // ★ **按身份取世界**（多租户那一步）：从这里往下，一律用 `W`，
@@ -453,6 +476,45 @@ export function createServer({
 
       // ── "我的空间到哪一步了"（契约 `38` §8.3：等待屏靠它）──────────────
       // ⚠️ **只读**、**不带 key**、**不分配任何隧道**（探测不许有副作用）。
+      // ── **小程序问一句**（乙-4b）────────────────────────────
+      // 🔴 花的是**看的人自己的钥匙**：
+      //    · 租户 ⇒ 上面那段转发把它送进**他自己的盒子**，由盒里的代理花（这一份代码
+      //      在盒子里也跑，走的是"本机代理"那条同样的路）；
+      //    · 主人 ⇒ 走到这儿，本机那个代理**这一批还没接上** ⇒ **如实说**（见 §八）。
+      // ⚠️ 四道闸，缺一不可：这一条在他这儿 · 清单里**声明了** `ask` · 他**授予了** · 配额还有。
+      if (path === '/api/app-ask' && req.method === 'POST') {
+        const w = worldFor(claim.sub);
+        let body;
+        let left = null;
+        if (req.headers['x-hupo-app-ask-checked'] === '1') {
+          // ★ **匣子这一侧**：闸在中心那边已经过了（那一份才是权威的；
+          //    匣子里这份目录跟中心不是同一个，它自己也判不了）
+          try {
+            body = await readJson(req, 16 * 1024);
+          } catch {
+            return sendJson(res, 400, { error: '这一条看不懂' });
+          }
+        } else {
+          if (!w?.apps) return sendJson(res, 404, { error: '这台部署还没开小程序' });
+          try {
+            body = await readJson(req, 16 * 1024);
+          } catch {
+            return sendJson(res, 400, { error: '这一条看不懂' });
+          }
+          const gate = checkAppAsk(w.apps, body?.appId);
+          if (!gate.ok) return sendJson(res, gate.status, { error: gate.error });
+          left = gate.left;
+        }
+        const prompt = typeof body?.prompt === 'string' ? body.prompt : '';
+        const r = await askViaLocalProxy({ prompt });
+        if (!r.ok) return sendJson(res, 502, { error: r.error });
+        return sendJson(res, 200, {
+          text: r.text,
+          left: left === null ? null : left - 1,
+          max: MAX_ANSWER_CHARS,
+        });
+      }
+
       // ── 「发现」：大家发出来的小程序（乙-3）──────────────────
       // 🔴 **只读**：这一屏没有任何"装 / 发 / 改"的动作（那些都在对话里做）。
       if (path === '/api/discover' && req.method === 'GET') {
@@ -657,7 +719,9 @@ export function createServer({
    * ⚠️ 别的（`/api/renew`、`/api/audit`、`/api/model-key`）是**中心**的事，**不进容器**：
    *    续期/审计用的是宿主的密钥与吊销表；填 key 是"中心当管道"那一步。
    */
-  const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash'];
+  // ⚠️ `/api/app-ask` 也走这条：**花这个动作必须发生在 b 自己的盒子里**
+  //    （盒里那个小代理握着钥匙；中心这一侧拿不到、也不需要）。
+  const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '/api/app-ask'];
 
   /**
    * 把一条 HTTP 请求**原样**转进那个人的容器，并把响应**流式**带回来。
@@ -665,7 +729,7 @@ export function createServer({
    * ⚠️ 用 `createConnection` 把"通道那条隧道"当成 socket 塞给 `http.request`
    *    ⇒ HTTP 的序列化/解析**不用自己写**（也就少一整类"自己写解析器写错"的事）。
    */
-  function proxyToTenant(sock, req, res) {
+  function proxyToTenant(sock, req, res, { body = null } = {}) {
     const headers = { ...req.headers };
     // hop-by-hop 的头不许原样带过去
     for (const h of ['host', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade']) {
@@ -711,7 +775,15 @@ export function createServer({
         res.destroy();
       }
     });
-    req.pipe(up);
+    if (body !== null) {
+      // ⚠️ 身体已经被读过一遍（例如问一句那条路要先解析）⇒ **重新给一份**，
+      //    并把长度按这一份算（不然对面会一直等一个永远不来的身体）。
+      const buf = Buffer.from(typeof body === 'string' ? body : JSON.stringify(body), 'utf8');
+      headers['content-length'] = String(buf.length);
+      up.end(buf);
+    } else {
+      req.pipe(up);
+    }
     return undefined;
   }
 
@@ -1113,6 +1185,30 @@ export function createServer({
       'x-content-type-options': 'nosniff',
     });
     res.end(body);
+  }
+
+  /**
+   * **`ask` 的四道闸**（乙-4b）：这一条在他这儿 · 清单里**声明了** · 他**授予了** · 配额还有。
+   *
+   * ⚠️ 收成一个函数是刻意的：**中心**与**匣子**用的是同一份判断，
+   *    免得两处各写一遍、慢慢分叉。
+   * ⚠️ **先记再花**（`bumpAsk`）也在这儿 —— 宁可少花一次，也不许漏账。
+   */
+  function checkAppAsk(apps, appIdRaw) {
+    const appId = typeof appIdRaw === 'string' ? appIdRaw : '';
+    if (!apps) return { ok: false, status: 404, error: '这台部署还没开小程序' };
+    const mine = apps.list().find((a) => a.id === appId);
+    if (!mine) return { ok: false, status: 404, error: '没有这个小程序' };
+    if (!(mine.permissions ?? []).includes('ask')) {
+      return { ok: false, status: 403, error: '这个小程序没说要问话' };
+    }
+    if (!apps.grants(appId).includes('ask')) {
+      return { ok: false, status: 403, error: '你还没允许它用你的钥匙' };
+    }
+    const q = apps.askQuota(appId);
+    if (!q.ok) return { ok: false, status: 429, error: q.reason };
+    apps.bumpAsk(appId);
+    return { ok: true, left: q.left };
   }
 
   function readJson(req, limit) {

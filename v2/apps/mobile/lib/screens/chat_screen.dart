@@ -278,6 +278,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   ? buildMiniAppView(
                       entryUrl: _mineOpen()!.entryUrl,
                       title: _mineOpen()!.title,
+                      // ★ **那条唯一的回话通道**（乙-4b）：页面说"我要问一句"，
+                      //   壳替它去问 —— **花的是看的人自己的钥匙**（服务端送进他自己的环境里花）。
+                      //   ⚠️ 能不能问由**服务端**说了算（声明 + 授予 + 配额），壳这一侧不判。
+                      onAsk: (prompt) => _askFor(_mineOpen()!.id, prompt),
                     )
                   : _openApp == builtInDiscoverId
                       ? DiscoverScreen(
@@ -368,6 +372,18 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mine != null) return mine.title;
     if (_openApp == builtInDiscoverId) return discoverTitle;
     return _openApp == builtInMathId ? mathTitle : configTitle;
+  }
+
+  /// 替**现在开着的那一个小程序**问一句（乙-4b）。
+  ///
+  /// ⚠️ `appId` 取自**壳自己的状态**（`_openMine()`），不是页面说了算 ——
+  ///    页面报什么 id 都不作数（不然一个页面可以冒充另一个去花别人的额度）。
+  Future<String> _askFor(String appId, String prompt) async {
+    final token = widget.controller.token;
+    if (token == null) throw '这台设备上还没登录';
+    final r = await widget.controller.api.appAsk(token, appId, prompt);
+    if (r.ok) return r.text!;
+    throw r.error ?? '没问成';
   }
 
   /// **发现**那一屏的取数（乙-3）。**问不到就是空清单**（那一屏会如实说"还没有"）。

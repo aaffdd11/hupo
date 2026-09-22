@@ -119,32 +119,28 @@ async function handshake(c) {
 
 // ── 纯函数那一层：那几件"还没做"的必须明说 ──────────────────
 
-test('🔴 还没做的那几件 ⇒ 明说"还没做"（不许假装成功）', () => {
+test('🔴 不认识的 op ⇒ 明说认不出（不许假装成功）；坏输入只让那一条失败', () => {
   const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-op-'));
   tmpDirs.push(dir);
   const apps = new Apps({ dir });
-  // 乙-4 起 uninstall 也做了 ⇒ 只剩授权那两件（`ask` 那条路还没定）
-  for (const op of ['grant', 'revoke']) {
-    const r = handleAppsOp(apps, { op });
-    assert.equal(r.ok, false, `${op} 现在做不了，必须说做不了`);
-    assert.match(r.error, /还没做/, `${op} 要说清"还没做"`);
-  }
-  assert.equal(handleAppsOp(apps, { op: '不懂' }).ok, false);
+  // 乙-4b 起九件都做得了 ⇒ 这一段守的是"**不认识的**不许被当成做成了"
+  const r = handleAppsOp(apps, { op: 'publish-everything' });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /认不出/);
   assert.equal(handleAppsOp(apps, {}).ok, false);
-});
 
-test('坏输入只让那一条失败（校验不过 ⇒ ok:false，而且盘上没东西）', () => {
-  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-op2-'));
-  tmpDirs.push(dir);
-  const apps = new Apps({ dir });
+  // 坏输入：校验不过 ⇒ ok:false，而且盘上没东西
   const bad = handleAppsOp(apps, { op: 'create', app: { ...APP, id: '../evil' } });
   assert.equal(bad.ok, false);
   assert.equal(nodeFs.existsSync(nodePath.join(dir, 'hupo', 'apps')), false, '不该建出任何东西');
 });
 
+
+
+
 // ── 真链路 ──────────────────────────────────────────────────
 
-test('握手给的是**标准 MCP**：initialize → tools/list 七件工具', async () => {
+test('握手给的是**标准 MCP**：initialize → tools/list 九件工具', async () => {
   const s = setup();
   const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
   try {
@@ -152,8 +148,9 @@ test('握手给的是**标准 MCP**：initialize → tools/list 七件工具', a
     const list = await c.call('tools/list', {});
     const names = list.result.tools.map((t) => t.name).sort();
     assert.deepEqual(names,
-      ['app_create', 'app_discover', 'app_install', 'app_list', 'app_publish', 'app_uninstall', 'app_unpublish'],
-      '乙-4 起是这七件（授权那两件要等"问一句"那条路定下来）');
+      ['app_create', 'app_discover', 'app_grant', 'app_install', 'app_list', 'app_publish',
+        'app_revoke', 'app_uninstall', 'app_unpublish'],
+      '乙-4b 起是这九件');
     for (const t of list.result.tools) {
       assert.equal(t.inputSchema.type, 'object');
       assert.ok(t.description.length > 10, '每条都要说清什么时候调');
@@ -381,6 +378,25 @@ test('乙-4：卸载 ⇒ 清单里没了、但盘上还在（软删，能拿回�
     assert.match(gone.result.content[0].text, /收起来/);
     assert.deepEqual(s.apps.list(), [], '清单里该没了');
     assert.equal(nodeFs.existsSync(nodePath.join(s.dir, 'hupo', 'apps', '.removed')), true, '★ 软删：挪进 .removed');
+  } finally {
+    c.child.kill();
+    await s.sock.close();
+  }
+});
+
+test('乙-4b：授予 / 撤销是真做的（`ask` 那条路已经通了）', async () => {
+  const s = setup();
+  const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
+  try {
+    await handshake(c);
+    await c.call('tools/call', { name: 'app_create', arguments: { ...APP, permissions: ['ask'] } });
+    const g = await c.call('tools/call', { name: 'app_grant', arguments: { id: 'dice' } });
+    assert.equal(g.result.isError, false, JSON.stringify(g.result));
+    assert.match(g.result.content[0].text, /花你一次|可以了/);
+    assert.deepEqual(s.apps.grants('dice'), ['ask'], '授予要落盘');
+    const r = await c.call('tools/call', { name: 'app_revoke', arguments: { id: 'dice' } });
+    assert.equal(r.result.isError, false);
+    assert.deepEqual(s.apps.grants('dice'), [], '撤了就空');
   } finally {
     c.child.kill();
     await s.sock.close();

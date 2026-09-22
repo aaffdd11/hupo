@@ -5,14 +5,9 @@
 //      ⇒ 制品读不到这个页面的存储、也拿不到壳的令牌。
 //   🔴 `sandbox="allow-scripts"` **故意不给 `allow-same-origin`**
 //      ⇒ 制品活在一个**不透明原点**里：`parent.document` / `localStorage` / cookie 全都碰不到。
-//   🔴 **不给它任何回话通道**（乙-1）：这个壳**不监听它的 message**。
-//      将来要放开（乙-4 的「问一句」）＝**新的一批 + 新判据**，不许顺手加。
+//   🔴 **回话通道只有一条**（乙-4b 才开）：`{kind:'ask', prompt}` ⇒ 壳替它问一句。
+//      别的消息**一律不理会**；壳**永远不会**把"能指挥 agent"的东西交给它（N2）。
 
-// ⚠️ 两条 ignore 都是**刻意的**：
-//    · `avoid_web_libraries_in_flutter` —— 平台视图**只能**靠它（Web 上起 iframe 的正路）
-//    · `deprecated_member_use` —— `dart:html` 官方推荐迁到 `package:web`；
-//      迁它要动 `pubspec.yaml`（加一个直接依赖），所以**这一批先不迁**，
-//      但**记在账上**（`59-USER-APPS.md` §九），别当成"没人知道"。
 // ignore: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'dart:html' as html;
 import 'dart:ui_web' as ui_web;
@@ -22,10 +17,19 @@ import 'package:flutter/widgets.dart';
 /// 已经注册过的 viewId（`registerViewFactory` **同一个 id 只许注册一次**，重复注册会抛）。
 final Set<String> _registered = <String>{};
 
+/// 已经挂上监听的那些 iframe（按 viewId 记；避免重复挂）。
+final Set<String> _listening = <String>{};
+
 /// 起一个沙箱 iframe。
 ///
 /// ⚠️ `entryUrl` 是**带签名**的（绑人 + 绑版本 + 短时效）—— 制品口只认签名，不认登录态。
-Widget buildMiniAppView({required String entryUrl, required String title}) {
+/// ⚠️ `onAsk` 是那条**唯一**的回话通道：页面说"我要问一句"，壳去替他问（**用看的人的钥匙**）。
+///    拿回来的话，壳用 `postMessage` 回给**这一个** iframe。
+Widget buildMiniAppView({
+  required String entryUrl,
+  required String title,
+  Future<String> Function(String prompt)? onAsk,
+}) {
   final viewId = 'hupo-mini-${entryUrl.hashCode}';
   if (_registered.add(viewId)) {
     ui_web.platformViewRegistry.registerViewFactory(viewId, (int _) {
@@ -41,6 +45,32 @@ Widget buildMiniAppView({required String entryUrl, required String title}) {
       f.style.width = '100%';
       f.style.height = '100%';
       f.style.background = 'transparent';
+
+      if (onAsk != null && _listening.add(viewId)) {
+        // ⚠️ **按 `source` 认人**，不是按 origin：沙箱页面是**不透明原点**（origin 是 "null"），
+        //    拿 origin 判等于谁都放进来。只有"这一条 iframe 自己"发来的才算。
+        html.window.onMessage.listen((e) async {
+          final win = f.contentWindow;
+          if (win == null || !identical(e.source, win)) return;
+          final data = e.data;
+          if (data is! Map || data['kind'] != 'ask') return; // 🔴 只认这一种
+          final prompt = data['prompt'];
+          if (prompt is! String || prompt.trim().isEmpty) return;
+          Map<String, Object?> reply;
+          try {
+            final text = await onAsk(prompt);
+            reply = {'kind': 'hupo-reply', 'text': text};
+          } catch (err) {
+            // ⚠️ 失败也要**回一句话**（不然页面会一直等；"点了没反应"最忌）
+            reply = {'kind': 'hupo-error', 'error': '$err'};
+          }
+          win.postMessage(reply, '*');
+        });
+        // 页面加载完 ⇒ 告诉它"壳在、这一条路开着"（页面自己决定要不要用）
+        f.onLoad.listen((_) {
+          f.contentWindow?.postMessage({'kind': 'hupo-ready'}, '*');
+        });
+      }
       return f;
     });
   }

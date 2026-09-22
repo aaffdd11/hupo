@@ -443,6 +443,48 @@ export class Apps {
   }
 
   /**
+   * **问一句的配额**（乙-4b）：`ask` 花的是**看的人自己的钱**，所以两道闸。
+   *
+   * 状态住在 `<id>/ask.json`（`{day, n, lastAt}`）。
+   * ⚠️ **拒绝也要说清是哪一道**（"今天问得够多了" / "问得太快了"）——
+   *    混成一句，用户会一直重试。
+   *
+   * @returns {{ok:true, left:number} | {ok:false, reason:string}}
+   */
+  askQuota(id, now = null) {
+    checkAppId(id);
+    const at = now ?? this.now();
+    const day = new Date(at).toISOString().slice(0, 10);
+    let st = { day, n: 0, lastAt: 0 };
+    try {
+      const j = JSON.parse(this.fs.readFileSync(nodePath.join(this.appDir(id), 'ask.json'), 'utf8'));
+      if (j && j.day === day) st = { day, n: Number(j.n) || 0, lastAt: Number(j.lastAt) || 0 };
+    } catch {
+      /* 没有就是今天还没问过 */
+    }
+    if (st.n >= ASK_PER_DAY) return { ok: false, reason: '今天这个小程序问得够多了，明天再来' };
+    if (at - st.lastAt < ASK_MIN_INTERVAL_MS) return { ok: false, reason: '问得太快了，等一下再问' };
+    return { ok: true, left: ASK_PER_DAY - st.n };
+  }
+
+  /** 记一次问话（**先记再花**：宁可少花一次，也不许漏账）。 */
+  bumpAsk(id, now = null) {
+    checkAppId(id);
+    const at = now ?? this.now();
+    const day = new Date(at).toISOString().slice(0, 10);
+    let st = { day, n: 0, lastAt: 0 };
+    try {
+      const j = JSON.parse(this.fs.readFileSync(nodePath.join(this.appDir(id), 'ask.json'), 'utf8'));
+      if (j && j.day === day) st = { day, n: Number(j.n) || 0, lastAt: Number(j.lastAt) || 0 };
+    } catch {
+      /* 同上 */
+    }
+    const next = { day, n: st.n + 1, lastAt: at };
+    writeAtomic(this.fs, nodePath.join(this.appDir(id), 'ask.json'), `${JSON.stringify(next)}\n`, 0o644);
+    return next;
+  }
+
+  /**
    * **卸载**：从桌面上撤掉。
    *
    * ⚠️ **软删**（挪进 `<root>/.removed/`），不是真删 ——
