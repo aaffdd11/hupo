@@ -62,4 +62,7 @@ const double gapL = 24;
 ///
 /// ⚠️ **时长是产品判断，不是随手写的数**：太短看不出过渡（等于硬切），
 ///    太长会让人觉得"点了没反应"。曲线在界面层给（`Curves`，`models` 不碰 UI 类型）。
-const Duration motionPage = Duration(milliseconds: 320);
+///
+/// ⚠️ **2026-09-22 主人看过之后把它从 320 加到 400**（原话："过渡时间增加到 400ms"）——
+///    这是**他的观感判断**，不是我们算出来的 ⇒ 别"顺手调回去"。
+const Duration motionPage = Duration(milliseconds: 400);
