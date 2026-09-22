@@ -18,6 +18,7 @@ import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
+import 'package:hupo_app/widgets/app_desktop.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/widgets/mini_app_host.dart';
 import 'package:hupo_app/widgets/composer.dart';
@@ -109,6 +110,27 @@ void main() {
     await tester.tap(find.text(settingsLogout));
     await tester.pumpAndSettle();
     expect(loggedOut, 1, reason: '★ 点了退出登录就该退出去（一个点了没反应的入口 = 坏了）');
+  });
+
+  testWidgets('🔴 小程序不写 icon 也**不会空着**（默认图标）', (tester) async {
+    // 主人 2026-09-22：*"设置要给一个默认 icon"*。
+    // ⚠️ 而且这个默认值必须是**常量** —— `flutter build web` 会 tree-shake 图标字体，
+    //    运行时造出来的 `IconData` 线上是**画不出来**的（测试里却看不出来）。
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AppDesktop(
+            apps: [
+              DesktopApp(label: '随手一件', onOpen: (_) {}), // ← 刻意不写 icon
+            ],
+            onTapBlank: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byIcon(defaultAppIcon), findsOneWidget, reason: '★ 没给 icon 时该用默认那个');
+    expect(find.text('随手一件'), findsOneWidget, reason: '字还是要有（D3.8）');
   });
 
   testWidgets('🔴 退出小程序之后那一块**真的没了**，而且**图标还能再点开**（回归）', (tester) async {

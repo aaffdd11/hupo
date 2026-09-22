@@ -26,14 +26,21 @@ import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
 
+/// **小程序没给图标时用的那个**（主人 2026-09-22：*"设置要给一个默认 icon"*）。
+///
+/// ⚠️ 它必须是一个**写在代码里的常量**：`flutter build web` 默认会 tree-shake 图标字体，
+///    只有**常量**才会被收进那份子集字体；运行时算出来的 `IconData` 会在线上**画不出来**
+///    （而测试里是好的 —— 测试不 tree-shake）。⇒ 默认值放这里，别在调用处现造。
+const IconData defaultAppIcon = Icons.widgets_outlined;
+
 /// 桌面上一个图标。
 ///
 /// ⚠️ `label` **必须给人看**（D3.8：不许只有一个无字图形）。
 class DesktopApp {
   const DesktopApp({
     required this.label,
-    required this.icon,
     required this.onOpen,
+    this.icon = defaultAppIcon,
     this.badge = 0,
   });
 
