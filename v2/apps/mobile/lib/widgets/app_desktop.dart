@@ -25,6 +25,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import 'water_bg.dart';
 
 /// **小程序没给图标时用的那个**（主人 2026-09-22：*"设置要给一个默认 icon"*）。
 ///
@@ -66,6 +67,7 @@ class AppDesktop extends StatelessWidget {
     required this.onTapBlank,
     this.header,
     this.columns = 4,
+    this.animate = true,
   });
 
   final List<DesktopApp> apps;
@@ -79,6 +81,13 @@ class AppDesktop extends StatelessWidget {
   /// 一屏放几列。
   final int columns;
 
+  /// **底图动吗**（主人 2026-09-22：*"给登录后的桌面增加一个动态背景，有水面波纹状。"*）。
+  ///
+  /// ⚠️ 默认 **true** —— 线上就是动的。传 `false` 的只有**测试**
+  ///    （`test/flutter_test_config.dart`：永不结束的动画会让 `pumpAndSettle` 转到
+  ///    10 分钟超时），理由与总开关在 [`WaterBackground`] 的文件头。
+  final bool animate;
+
   @override
   Widget build(BuildContext context) {
     // ⚠️ 宽度从 `MediaQuery` 来（它在 `Stack` 里是 `Positioned.fill` ⇒ 就是屏宽）
@@ -89,53 +98,68 @@ class AppDesktop extends StatelessWidget {
     //    下限 = 图标格 + 一点余量（不然字挤成一列），上限 = 一个"图标格"该有的宽度。
     final raw = (w - d.gapL * 2 - spacing * (columns - 1)) / columns;
     final tileWidth = raw.clamp(desktopIconBox + 10, 88.0);
-    return Material(
-      color: d.paper,
-      child: InkWell(
-        // ⚠️ 点空白 = 收起聊天（§六 交互表）。splash 关掉：整屏闪一下不是反馈，是噪声。
-        onTap: onTapBlank,
-        splashColor: Colors.transparent,
-        highlightColor: Colors.transparent,
-        child: SafeArea(
-          bottom: false, // 浮窗贴底 ⇒ 下面那条安全区由浮窗自己管
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (header != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    d.gapL,
-                    d.gapM,
-                    d.gapL,
-                    d.gapS,
-                  ),
-                  child: header,
-                ),
-              Expanded(
-                // ⚠️ 图标多了要能滚（窄屏 + 大字号下这一条是唯一稳的摆法）
-                child: SingleChildScrollView(
-                  // ★ 主人 2026-09-22：*"桌面排布好一点，我看小程序图标顶部 Margin 可以增加一些。"*
-                  //   ⇒ 顶部留白从 8 提到 **48**（`gapL * 2`），横向仍是 24，图标之间给足间距。
-                  padding: EdgeInsets.fromLTRB(
-                    d.gapL,
-                    d.gapL * 2,
-                    d.gapL,
-                    d.gapL,
-                  ),
-                  child: Wrap(
-                    spacing: spacing,
-                    runSpacing: d.gapL,
-                    children: [
-                      for (final a in apps)
-                        _DesktopIcon(app: a, width: tileWidth),
-                    ],
-                  ),
+    return Stack(
+      children: [
+        // ⓪ **水面底图**（主人 2026-09-22 要的动态背景）——
+        //    ⚠️ 它在**最下面那一层**，而且自己是 `IgnorePointer`：
+        //       ① 图标墙的命中区（D3.6 ≥44）与排布一毫米都不动；
+        //       ② 点桌面空白照旧漏到下面那个 `InkWell`（§6.3 交互表）。
+        //    ⇒ "加了一层"不该让任何既有行为变样，这一句就是它不变样的理由。
+        Positioned.fill(child: WaterBackground(animate: animate)),
+        // ① 纸底 + 那一整块"点空白"的命中区
+        Positioned.fill(
+          child: Material(
+            // ⚠️ 纸底**仍然是它**（水面只是叠在上面的一层淡光）：
+            //    万一水面画不出来 / 被关掉，桌面还是那张纸，不是一个黑洞。
+            color: d.paper,
+            child: InkWell(
+              // ⚠️ 点空白 = 收起聊天（§六 交互表）。splash 关掉：整屏闪一下不是反馈，是噪声。
+              onTap: onTapBlank,
+              splashColor: Colors.transparent,
+              highlightColor: Colors.transparent,
+              child: SafeArea(
+                bottom: false, // 浮窗贴底 ⇒ 下面那条安全区由浮窗自己管
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (header != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(
+                          d.gapL,
+                          d.gapM,
+                          d.gapL,
+                          d.gapS,
+                        ),
+                        child: header,
+                      ),
+                    Expanded(
+                      // ⚠️ 图标多了要能滚（窄屏 + 大字号下这一条是唯一稳的摆法）
+                      child: SingleChildScrollView(
+                        // ★ 主人 2026-09-22：*"桌面排布好一点，我看小程序图标顶部 Margin 可以增加一些。"*
+                        //   ⇒ 顶部留白从 8 提到 **48**（`gapL * 2`），横向仍是 24，图标之间给足间距。
+                        padding: EdgeInsets.fromLTRB(
+                          d.gapL,
+                          d.gapL * 2,
+                          d.gapL,
+                          d.gapL,
+                        ),
+                        child: Wrap(
+                          spacing: spacing,
+                          runSpacing: d.gapL,
+                          children: [
+                            for (final a in apps)
+                              _DesktopIcon(app: a, width: tileWidth),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
+            ),
           ),
         ),
-      ),
+      ],
     );
   }
 }
