@@ -101,9 +101,13 @@ Map<String, dynamic> _notice({
 Map<String, dynamic> _urgent({String kind = 'disk-full', String text = _diskFullText}) =>
     {'type': 'notice/urgent', 'kind': kind, 'text': text};
 
-Future<void> _pump(WidgetTester tester, ChatController c) async {
+Future<void> _pump(WidgetTester tester, ChatController c, {bool caughtUp = true}) async {
   await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
   await tester.pump();
+  // ⚠️ **真实路径上服务端一定会发这条**（`client/hello` ⇒ 上层收到 `__caught_up__`）：
+  //    它之后到达的才叫"现在发生的"。所以"已经连上"的用例都从这一句开始；
+  //    要测"首屏那段历史"的用例显式传 `caughtUp: false`。
+  if (caughtUp) c.ingest({'type': '__caught_up__'});
 }
 
 /// 浮窗里那句通知正文（**指得准**：正文在时间线里也有一份 ⇒ 不许裸 `find.text`）。
@@ -380,5 +384,47 @@ void main() {
     expect(r.width >= _minTouch && r.height >= _minTouch, isTrue,
         reason: '★ 时间线里的撤销命中区只有 ${r.size}');
   });
-}
 
+  // ─────────────────────────────────────────────────────────────
+  // 🔴 2026-09-22：主人报的那个现象 —— 这是他报的原话：
+  //    *"登录后，出现刚才出了点事，我已经重来了。但是其他手机的并没有出现这段话。"*
+  //
+  // 查下来是**两边各说各话**：服务端（决策 P-h）说"`sinceSeq == 0` 是历史本身，
+  // 不是补发" ⇒ **故意不打 `catchUp`**；而客户端把"没打 catchUp"当成了"现在发生的"
+  // ⇒ 冷启动整段历史都被喊了一遍。于是那条**很久以前**的崩溃通知每次登录都弹。
+  // ─────────────────────────────────────────────────────────────
+
+  testWidgets('🔴 首屏那段历史里的通知**不弹浮窗**（时间线里照样留着）', (tester) async {
+    final c = _controller();
+    await _pump(tester, c, caughtUp: false); // ← 还在读首屏那段历史
+
+    // ① 连上之后、`__caught_up__` 之前到达的 ⇒ 那是**历史**
+    c.ingest(_notice(kind: 'crash', text: _expiringText));
+    await tester.pump();
+
+    expect(find.byType(NoticeOverlay), findsNothing,
+        reason: '★ 历史通知不许弹浮窗 —— 弹了就是"每次登录都喊一次"（通知疲劳 + 假话）');
+    // ⚠️ 但**时间线里必须有它**：通知要经得起"你不在"（约束 2），
+    //    所以判据的另一半是"它还在"（不许为了不弹就把它吞掉）。
+    expect(find.text(_expiringText), findsOneWidget, reason: '★ 不许为了不弹浮窗就把这一条吞掉');
+  });
+
+  testWidgets('🔴 读到 `client/hello` 之后**新来**的通知 ⇒ 必须弹（别修过头）', (tester) async {
+    final c = _controller();
+    await _pump(tester, c, caughtUp: false); // 先处在"还在读历史"那一相位
+
+    c.ingest(_notice(kind: 'crash', text: _expiringText)); // 历史：不弹
+    c.ingest({'type': '__caught_up__'}); // 服务端说：补发到此为止
+    await tester.pump();
+    expect(find.byType(NoticeOverlay), findsNothing, reason: '历史那一条仍然不许弹');
+
+    c.ingest(_notice(kind: 'expiring', text: _expiringText, seq: 8)); // 现在发生的
+    await tester.pump();
+    expect(find.byType(NoticeOverlay), findsOneWidget,
+        reason: '★ 连上之后新来的通知**必须**弹 —— 不然就是把"现在喊你"也一起修没了');
+
+    // ⚠️ 收尾：让它那个"自己消失"的钟走完（不然测试框架会报"还有定时器没结束"）
+    await tester.pump(ChatController.noticeLinger);
+    await tester.pump();
+  });
+}

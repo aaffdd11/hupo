@@ -302,6 +302,10 @@ Future<void> _openNoticeIn(WidgetTester tester, ChatController c, double scale) 
   // ⚠️ **先挂起来、再让通知到**：浮窗和主界面是 `Stack` 的两层，
   //    通知到时 `setState` 会把这一帧重画出来。
   await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), scale);
+  // ⚠️ **先补上"已连上、首屏那段历史读完了"**（真实路径上服务端一定会发 `client/hello`）：
+  //    没有它，这条通知会被当成**历史**（见 `models/notice.dart` 的 `shouldPopNotice()`）
+  //    ⇒ 浮窗根本不弹 ⇒ 这道闸扫的是底下的页面，而它照样绿 —— 那就成了"闸变弱了"。
+  c.ingest({'type': '__caught_up__'});
   c.ingest(_noticeEvent());
   await tester.pump();
   // 负向对照：**浮窗真的画出来了**才算数（没画出来的话下面那道扫描
@@ -326,6 +330,7 @@ Future<void> _closeNotice(WidgetTester tester, ChatController c) async {
 Future<void> _openNoticeLine(WidgetTester tester, double scale) async {
   final c = _controller();
   await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), scale);
+  c.ingest({'type': '__caught_up__'}); // 同 `_openNoticeIn`：先把"已连上"补上
   c.ingest(_noticeEvent());
   // ⚠️ 两拍：第一拍让那个钟到点，第二拍才把新的一帧画出来
   await tester.pump(ChatController.noticeLinger);

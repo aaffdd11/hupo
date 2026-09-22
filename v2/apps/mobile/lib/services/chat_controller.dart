@@ -112,6 +112,10 @@ class ChatController extends ChangeNotifier {
   ///    不承诺时间——"3 秒后消失"那类话是承诺，一个都不许有）。
   static const noticeLinger = Duration(seconds: 6);
 
+  /// **这条连接还在读首屏那段历史吗**（见 `ingest()` 里 `__caught_up__` 那一段）。
+  /// ⚠️ 每次连上都从 `true` 开始，读到服务端那条 `client/hello` 才变 `false`。
+  bool _readingHistory = true;
+
   Timer? _noticeTimer;
 
   String? get token => _token;
@@ -325,6 +329,8 @@ class ChatController extends ChangeNotifier {
       notifyListeners();
     });
     s.events.listen(ingest);
+    // 每开一条新连接都从「在读历史」开始（读到 `client/hello` 才算读到「现在」）
+    _readingHistory = true;
     s.open(sinceSeq: timeline.lastSeq);
     _stream = s;
   }
@@ -338,6 +344,16 @@ class ChatController extends ChangeNotifier {
   ///      （`test/widget/busy_line_test.dart`）。没有它，S2 那类
   ///      "链子断在中间、屏幕上看不出来"的缺陷就**测不到**。
   void ingest(Map<String, dynamic> event) {
+    if (event['type'] == '__caught_up__') {
+      // ★ **首屏那段历史读完了**（信号来自 `stream.dart` 收到的 `client/hello`）
+      //   —— 从这一刻起收到的才算"现在发生的"。
+      //   🔴 起因（主人 2026-09-22 报的）：*"登录后，出现'刚才出了点事，我已经重来了'。
+      //     但是其他手机的并没有出现这段话。"* 那条是**很久以前**的崩溃通知，
+      //     却**每次登录都弹一次浮窗** —— 既是骚扰（R1.2 通知疲劳），也是假话
+      //     （"刚才"其实不是刚才）。规则见 `models/notice.dart` 的 `shouldPopNotice()`。
+      _readingHistory = false;
+      return;
+    }
     if (event['type'] == '__reset__') {
       // 服务端说"你的号跑到我前面了"⇒ 本地那条时间线不作数了。
       // 不是"没有新东西"——是"从头来"。
@@ -369,7 +385,8 @@ class ChatController extends ChangeNotifier {
     final type = event['type'];
     if (type == 'notice/urgent') {
       _showNotice(Notice.fromEvent(event));
-    } else if (type == 'notice' && event['catchUp'] != true) {
+    } else if (type == 'notice' &&
+        shouldPopNotice(catchUp: event['catchUp'] == true, readingHistory: _readingHistory)) {
       // ⚠️ **浮窗里的撤销与时间线里那条是同一件事**（约束 3）⇒
       //    两处都渲染 `notice.undo`，都由 `undoNotice()` 走同一条路。
       _showNotice(Notice.fromEvent(event));

@@ -156,6 +156,15 @@ void main() {
       expect((item as TimelineNotice).notice.text, _expiringText);
     });
 
+    test('🔴 浮窗只对"现在发生的"喊（历史两种都不喊）—— `shouldPopNotice` 真值表', () {
+      // ⚠️ 这张表是"每次登录都喊一次"那个 bug 的判据形状（2026-09-22 主人报的）。
+      //    `catchUp` = 服务端标的补发；`readingHistory` = 这条连接还在读首屏那段历史。
+      expect(shouldPopNotice(catchUp: false, readingHistory: false), isTrue, reason: '现在发生的 ⇒ 喊');
+      expect(shouldPopNotice(catchUp: true, readingHistory: false), isFalse, reason: '补发 ⇒ 不喊');
+      expect(shouldPopNotice(catchUp: false, readingHistory: true), isFalse, reason: '首屏历史 ⇒ 也不喊');
+      expect(shouldPopNotice(catchUp: true, readingHistory: true), isFalse, reason: '都是历史 ⇒ 不喊');
+    });
+
     test('★ 补发上来的照样在列表里（它本来就是给"你不在"留的）', () {
       final t = Timeline();
       t.apply(_noticeEvent(kind: 'resumed', catchUp: true));

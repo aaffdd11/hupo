@@ -132,6 +132,12 @@ class StreamClient {
       case 'client/hello':
         final m = event['maxSeq'];
         if (m is int && m > _sinceSeq) _sinceSeq = m;
+        // ★ **补发到此为止**（2026-09-22 补的）：服务端的顺序是"先把补发那段发完，
+        //   再发这条 hello，然后才订阅实时"（`server.js` 那一段就是保证）。
+        //   ⇒ 给上层一个内部信号：**在这条之前收到的都算历史**。
+        //   ⚠️ 它是**客户端内部**的帧，不是协议字段（协议一旦上线就冻结）；
+        //      `__reset__` 已经开了这个先例。
+        _events.add({'type': '__caught_up__'});
         return;
       case 'client/reset':
         // ⚠️ 我们的号跑到服务端前面去了（日志被换过、或连错了线）。
