@@ -116,6 +116,29 @@ class LandingScreen extends StatelessWidget {
                       ),
                     ),
                   ),
+                const SizedBox(height: 22),
+                // ── **你的东西是你自己的**（主人 2026-09-22："不够全面" ⇒ 补上这一块）──
+                //   它回答的是**担心**，不是能力 —— 所以单独一块、单独一个标题。
+                _sectionTitle(theme, landingYoursTitle),
+                const SizedBox(height: 12),
+                for (final (title, body) in landingYours)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _cardBox(
+                      theme,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title, style: theme.textTheme.titleSmall),
+                          const SizedBox(height: 4),
+                          Text(
+                            body,
+                            style: theme.textTheme.bodyMedium?.copyWith(color: _muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 const SizedBox(height: 16),
                 // ── 对照块：跟"光是聊天"差在哪（契约 `docs/dev/51-VS-CHAT.md`）──
                 //   ⚠️ 两行**竖着排**（不是左右两列）：字号放到 3.1 倍时，
