@@ -140,8 +140,21 @@ const String keyFailed = '没送过去。是我这边的问题，等会儿再试
 /// 顶栏那个入口（图标按钮的 tooltip）。
 const String configEntry = '配置';
 
-/// 那一屏的标题。
+/// 那一屏的标题（小程序容器给的顶栏用它）。
 const String configTitle = '配置';
+
+/// 桌面那个图标上的字 + tooltip。
+/// ⚠️ 主人 2026-09-22：*"桌面上应当有一个设置的小程序，用来退出登录，注销账号，修改 apikey。"*
+///    ⇒ **「配置」从抽屉（聊天抓手行）搬到了桌面上**，叫「设置」。
+/// ⚠️ 一句话：**聊天不是桌面上的小程序**（它永续、永远在底下），
+///    所以桌面上放的是**设置**，不是"会话"。
+const String settingsAppLabel = '设置';
+
+/// 小程序容器顶栏那个返回箭头（读屏用）。
+const String miniAppBack = '返回';
+
+/// 设置里那一条：退出登录（原来挂在聊天抓手行上）。
+const String settingsLogout = '退出登录';
 
 /// 钥匙那一段的小标题。
 const String configKeySection = '你那串钥匙';

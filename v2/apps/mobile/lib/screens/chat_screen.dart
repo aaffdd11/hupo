@@ -30,6 +30,7 @@ import '../widgets/app_desktop.dart';
 import '../widgets/bubble_menu.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/chat_floater.dart';
+import '../widgets/mini_app_host.dart';
 import '../widgets/composer.dart';
 import '../widgets/notice.dart';
 import '../widgets/process_level_menu.dart';
@@ -90,6 +91,17 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// 浮窗那一层的把手（外面要叫它"拉满"/"收起"）。
   final _floaterKey = GlobalKey<ChatFloaterState>();
+
+  /// 桌面上那个小程序开着吗（现在只有「设置」一个）。
+  bool _appOpen = false;
+
+  /// 聊天**展开着**吗（展开 = 桌面小程序被盖住 —— 手册 §6.4 规则 2/3）。
+  /// ⚠️ 由浮窗自己报（它换档时调 `onTier`），不是这里猜的。
+  bool _floaterExpanded = false;
+
+  /// 浮窗现在**占多高**（含它自己那条）。收起档的高度是**内容算出来**的（D3.5）
+  /// ⇒ 只能等它画完再报；这里拿它给小程序内容做**底部内缩**（§6.4 规则 1）。
+  double _floaterH = 0;
 
   /// 用户**自己往上翻过**没有。
   ///
@@ -163,16 +175,50 @@ class _ChatScreenState extends State<ChatScreen> {
       body: Stack(
         children: [
           // ① 桌面（整页底图；点它的空白 = 收起聊天）
+          //
+          // 🔴 **聊天不是桌面上的一个小程序**（主人 2026-09-22）：
+          //    *"聊天和桌面是独立的，聊天是永续的，永远在底下。所以聊天不是桌面上的一个小程序。
+          //      桌面上应当有一个设置的小程序，用来退出登录，注销账号，修改 apikey。"*
+          //    ⇒ 桌上那个「会话」图标**删掉**（聊天永远在那条浮窗里，它不需要一个入口）；
+          //      换成**设置**。
           Positioned.fill(
             child: AppDesktop(
               apps: [
-                DesktopApp(
-                  label: '会话',
-                  icon: Icons.chat_bubble_outline,
-                  onOpen: () => _floaterKey.currentState?.maximize(),
-                ),
+                // ⚠️ 没接上那条路就不摆一个"按不动"的图标（同原来那个齿轮的规矩）
+                if (widget.onSendKey != null)
+                  DesktopApp(
+                    label: settingsAppLabel,
+                    icon: Icons.settings_outlined,
+                    // 打开小程序 ⇒ **聊天自动收起**（§6.4 规则 5：把屏幕让给小程序）
+                    onOpen: () {
+                      _floaterKey.currentState?.collapse();
+                      setState(() => _appOpen = true);
+                    },
+                  ),
               ],
               onTapBlank: () => _floaterKey.currentState?.collapse(),
+            ),
+          ),
+          // ①.5 小程序容器（**在桌面之上、聊天之下** —— Z1 说聊天永远最上）
+          Positioned.fill(
+            child: MiniAppHost(
+              open: _appOpen,
+              title: configTitle,
+              onClose: () => setState(() => _appOpen = false),
+              covered: _floaterExpanded,
+              onCoveredTap: () => _floaterKey.currentState?.collapse(),
+              // 收起那条压住多少 ⇒ 内容底部内缩（规则 1：不是简单覆盖，否则最后一行永远点不到）
+              bottomInset: _floaterExpanded ? 0 : FloaterMetrics.margin + _floaterH,
+              child: SettingsScreen(
+                hasKey: widget.space.hasKey,
+                keyBad: widget.space.keyBad,
+                localOnly: !widget.space.isTenant,
+                onSubmit: widget.onSendKey ?? ((_) async => KeySend.failed),
+                onCancel: widget.onCancelMe,
+                onCancelled: widget.onLoggedOut,
+                onKeyChanged: widget.onKeyChanged,
+                onLogout: _logout(c),
+              ),
             ),
           ),
           // ② 聊天浮窗（贴底、四边 30、永远在最上 —— Z1/Z3/Z4）
@@ -188,6 +234,15 @@ class _ChatScreenState extends State<ChatScreen> {
               title: '助手',
               initialTier: widget.initialTier,
               trailing: _actions(c),
+              // 上层拿这两个数去算"小程序被盖住没有 / 内容要内缩多少"（§6.4 规则 1/2/3）
+              onTier: (t) {
+                final expanded = t != FloaterTier.collapsed;
+                if (expanded != _floaterExpanded) setState(() => _floaterExpanded = expanded);
+              },
+              onHeight: (h) {
+                // ⚠️ 只在**真的变了**的时候 setState（它每帧都会报一次，不然会抖）
+                if ((h - _floaterH).abs() > 0.5) setState(() => _floaterH = h);
+              },
               child: _sheetBody(c),
             ),
           ),
@@ -222,6 +277,12 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
   }
+
+  /// **退出登录**（主人 2026-09-22：它属于设置，不属于聊天 —— 抓手行不该管这个）。
+  VoidCallback? _logout(ChatController c) => () async {
+        await c.logout();
+        widget.onLoggedOut();
+      };
 
   /// 抓手行右边那一串动作（原来挂在 `AppBar.actions` 上）。
   ///
@@ -258,39 +319,6 @@ class _ChatScreenState extends State<ChatScreen> {
             tooltip: '它说多少过程',
             onPressed: () => _pickLevel(c),
             icon: const Icon(Icons.tune),
-          ),
-          // ⚠️ **配置**（主人 2026-09-22："用户可以在页面唤起配置。配置上可以输入 apikey"）。
-          //    ⚠️ 它**不是**装饰：钥匙原来是"填过就再也回不去"的（欠账 #34），
-          //      这一处就是那个缺口 —— 换一把、或者看看自己到底填过没有。
-          //    ⚠️ **「关于」搬进它里面了**：顶栏原来 5 个图标，再加一个就是 7 个，
-          //      手机上那一条会挤成一团（五档字号那道硬闸本来就在盯这个）；
-          //      而"关于"本来就是配置那一类东西。
-          if (widget.onSendKey != null)
-            IconButton(
-              tooltip: configEntry,
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => SettingsScreen(
-                    hasKey: widget.space.hasKey,
-                    keyBad: widget.space.keyBad,
-                    // ⚠️ 本机那一份（主人自己那个号）**没有单独一台** ⇒ 那一屏只说实话
-                    localOnly: !widget.space.isTenant,
-                    onSubmit: widget.onSendKey!,
-                    onCancel: widget.onCancelMe,
-                    onCancelled: widget.onLoggedOut,
-                    onKeyChanged: widget.onKeyChanged,
-                  ),
-                ),
-              ),
-              icon: const Icon(Icons.settings_outlined),
-            ),
-          IconButton(
-            tooltip: '退出',
-            onPressed: () async {
-              await c.logout();
-              widget.onLoggedOut();
-            },
-            icon: const Icon(Icons.logout),
           ),
   ];
 

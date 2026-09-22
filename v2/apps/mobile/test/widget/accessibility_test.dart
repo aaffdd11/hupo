@@ -35,6 +35,7 @@ import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/screens/landing_screen.dart';
 import 'package:hupo_app/screens/login_screen.dart';
 import 'package:hupo_app/screens/model_key_screen.dart';
+import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/screens/waiting_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -95,10 +96,13 @@ Future<void> _openAbout(WidgetTester tester, double scale) async {
   //    大字号下它在**折叠线以下**，而 `ListView` **不会把屏幕外的孩子建出来**
   //    ⇒ 直接 `find.text('关于')` 会"一个都没找到"（而人是要滚一下的）。
   //    ⇒ 判据**像用户那样滚**（`scrollUntilVisible`），不是把那一行硬塞进屏幕。
+  // ⚠️ **2026-09-22 补**：桌面上了之后，树里**不止一个** `Scrollable`
+  //    （桌面图标墙自己也是）⇒ 原来那个 `find.byType(Scrollable).first` 会滚错东西。
+  //    ⇒ 指名道姓：**设置那一屏里的**那一个。
   await tester.scrollUntilVisible(
     find.text('关于'),
     240,
-    scrollable: find.byType(Scrollable).first,
+    scrollable: find.descendant(of: find.byType(SettingsScreen), matching: find.byType(Scrollable)).first,
   );
   await tester.pumpAndSettle();
   await tester.tap(find.text('关于'));
@@ -107,9 +111,12 @@ Future<void> _openAbout(WidgetTester tester, double scale) async {
 
 /// **像用户那样**打开「配置」：主界面顶栏那个齿轮。
 Future<void> _openConfig(WidgetTester tester, double scale) async {
+  // ⚠️ **不传 `initialTier`（默认收起）= 真实路径**：一进来聊天是收起那条，
+  //    桌面上的「设置」看得见、点得到。⚠️ 传 `full` 的话浮窗把桌面盖住了，
+  //    点图标会点到浮窗上（2026-09-22 实测）。
   await _pump(
     tester,
-    ChatScreen(initialTier: FloaterTier.full, 
+    ChatScreen(
       controller: _controller(),
       onLoggedOut: () {},
       space: const SpaceInfo(kind: 'tenant', state: 'ready', hasKey: false),
@@ -117,8 +124,15 @@ Future<void> _openConfig(WidgetTester tester, double scale) async {
     ),
     scale,
   );
-  await tester.tap(find.byTooltip(configEntry));
+  // 🔴 **入口变了**（主人 2026-09-22）：设置从聊天抓手行搬到了**桌面上那个小程序**
+  //    ⇒ 判据要走**新的真实路径**（点桌上的「设置」图标）。
+  await tester.tap(find.text(settingsAppLabel));
   await tester.pumpAndSettle();
+  // 🔴 **负向对照：点完必须真的到了设置那一屏。**
+  //    2026-09-22 实测栽过：图标格上那个 `InkWell` 没把下面那行字包进去 ⇒
+  //    点"设置"这行字落到了"点桌面空白"上（只收起了聊天），而下面那道扫描
+  //    **照样绿** —— 因为它扫的是**桌面**，根本没进设置那一屏。那就是"闸变弱了"。
+  expect(find.byType(SettingsScreen), findsOneWidget, reason: '★ 没进设置那一屏 ⇒ 这两条判据扫错了屏幕');
 }
 
 /// **像用户那样**打开过程四档的切换面板（批 3 新加的入口）。

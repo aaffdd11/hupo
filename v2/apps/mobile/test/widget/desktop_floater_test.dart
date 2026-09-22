@@ -36,9 +36,12 @@ Rect _floaterRect(WidgetTester tester) => tester.getRect(find.byType(ChatFloater
 void main() {
   testWidgets('🔴 一进来是**收起**那一档：看得见桌面，看不见输入条', (tester) async {
     await _pump(tester);
-    // 桌面那一条在（带字的图标是 D3.8 的要求）
+    // 桌面在（整页底图）
     expect(find.byType(AppDesktop), findsOneWidget);
-    expect(find.text('会话'), findsOneWidget);
+    // 🔴 **桌面上不该有「会话」**（主人 2026-09-22）：*"聊天和桌面是独立的，聊天是永续的，
+    //    永远在底下。所以聊天不是桌面上的一个小程序。"* ⇒ 聊天没有桌面图标。
+    expect(find.text('会话'), findsNothing, reason: '聊天不是桌面上的小程序 ⇒ 它不该有图标');
+    expect(find.byIcon(Icons.chat_bubble_outline), findsNothing, reason: '同上');
     // 收起态：有**带字的**展开入口（D3.8），没有输入条
     expect(find.text('展开'), findsOneWidget, reason: '收起态必须有带字的展开入口');
     expect(find.byType(Composer), findsNothing, reason: '收起时不该画输入条');

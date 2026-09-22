@@ -34,6 +34,7 @@ class SettingsScreen extends StatelessWidget {
     this.onCancel,
     this.onCancelled,
     this.onKeyChanged,
+    this.onLogout,
   });
 
   /// 现在有没有一串能用的钥匙（服务端说的）。
@@ -52,13 +53,18 @@ class SettingsScreen extends StatelessWidget {
   /// 换成功之后叫一声（上层去重问一次状态，让别处也跟着对）。
   final VoidCallback? onKeyChanged;
 
+  /// **退出登录**（主人 2026-09-22：*"桌面上应当有一个设置的小程序，用来退出登录，
+  /// 注销账号，修改 apikey。"*）
+  /// ⚠️ 它**原来挂在聊天抓手行上**（一个 logout 图标）—— 现在搬进来了：
+  ///    那一行是"聊天"的地方，而退出登录不是聊天的事。
+  final VoidCallback? onLogout;
+
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(title: const Text(configTitle)),
-      body: SafeArea(
-        child: Center(
+    // ⚠️ **没有 `Scaffold` / `AppBar`**：顶上那一条由**小程序容器**给
+    //    （`MiniAppHost`）—— 小程序自己画的话，"跳不出容器"这件事就没了保证。
+    return Center(
           child: ConstrainedBox(
             // ⚠️ **和首页同一条窄列**（契约 `49-STYLE.md`）：一行太长没人读得下去
             constraints: const BoxConstraints(maxWidth: 640),
@@ -130,11 +136,20 @@ class SettingsScreen extends StatelessWidget {
                     ),
                   ),
                 ),
+                const SizedBox(height: d.gapM),
+                // ── **退出登录**（主人 2026-09-22：设置里管"退出登录 / 注销账号 / 改钥匙"）──
+                // ⚠️ 它原来挂在**聊天抓手行**上 —— 那一行是"聊天"的地方，退出登录不是聊天的事。
+                if (onLogout != null)
+                  Card(
+                    child: ListTile(
+                      leading: Icon(Icons.logout, color: d.accent),
+                      title: Text(settingsLogout, style: t.textTheme.bodyLarge?.copyWith(color: d.ink)),
+                      onTap: onLogout,
+                    ),
+                  ),
               ],
             ),
           ),
-        ),
-      ),
-    );
+        );
   }
 }

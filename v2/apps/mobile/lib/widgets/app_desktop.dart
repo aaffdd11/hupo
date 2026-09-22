@@ -126,23 +126,28 @@ class _DesktopIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
-    // ⚠️ 图标**永远是那个小方块**（`desktopIconBox`，≥44 见 D3.6）；
-    //    `width` 只决定它在格子里的位置 —— 别把格子宽度当图标大小
-    //    （宽屏下那会变成一张 293px 的大卡片，实测栽过）。
+    // 🔴 **图标 + 它下面那行字，一起可点**（2026-09-22 实测抓到的）：
+    //    第一版把 `InkWell` 只包在图标格上，**字在外面** ⇒ 点字落到了"点桌面空白"上
+    //    （于是"点设置"变成"收起聊天"，而且判据还照样绿 —— 扫的是桌面，不是设置那一屏）。
+    //    ⚠️ 字才是人第一眼看到的靶子，它必须能点。
     return SizedBox(
       width: width,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Material(
-            color: d.card,
-            borderRadius: BorderRadius.circular(d.radiusCard),
-            child: InkWell(
-              onTap: app.onOpen,
-              borderRadius: BorderRadius.circular(d.radiusCard),
-              child: SizedBox(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: app.onOpen,
+          borderRadius: BorderRadius.circular(d.radiusCard),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 图标格：**永远是那个小方块**（`desktopIconBox`，≥44 见 D3.6）
+              Container(
                 width: desktopIconBox,
                 height: desktopIconBox,
+                decoration: BoxDecoration(
+                  color: d.card,
+                  borderRadius: BorderRadius.circular(d.radiusCard),
+                ),
                 child: Stack(
                   children: [
                     Center(child: Icon(app.icon, color: d.ink)),
@@ -159,16 +164,16 @@ class _DesktopIcon extends StatelessWidget {
                   ],
                 ),
               ),
-            ),
+              const SizedBox(height: 6),
+              // ⚠️ **带字的**（D3.8：图标不许只有图形）
+              Text(
+                app.label,
+                style: t.textTheme.bodySmall?.copyWith(color: d.ink),
+                textAlign: TextAlign.center,
+              ),
+            ],
           ),
-          const SizedBox(height: 6),
-          // ⚠️ **带字的**（D3.8：图标不许只有图形）
-          Text(
-            app.label,
-            style: t.textTheme.bodySmall?.copyWith(color: d.ink),
-            textAlign: TextAlign.center,
-          ),
-        ],
+        ),
       ),
     );
   }

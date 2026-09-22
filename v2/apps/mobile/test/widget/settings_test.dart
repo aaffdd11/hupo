@@ -16,7 +16,6 @@ import 'package:hupo_app/models/forbidden_words.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
-import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -33,7 +32,9 @@ Future<void> _pumpChat(
 }) async {
   await tester.pumpWidget(
     MaterialApp(
-      home: ChatScreen(initialTier: FloaterTier.full, 
+      // ⚠️ **默认收起档 = 真实路径**：桌面看得见、点得到「设置」。
+      //    传 `full` 的话浮窗把桌面盖住，点图标会点到浮窗上（2026-09-22 实测）。
+      home: ChatScreen(
         controller: _controller(),
         onLoggedOut: () {},
         space: SpaceInfo(kind: 'tenant', state: 'ready', hasKey: hasKey, keyBad: keyBad),
@@ -68,15 +69,17 @@ Future<void> _pumpSettings(
 }
 
 void main() {
-  testWidgets('顶栏那个入口在（而且没给回调时**不在** —— 老测试不受影响）', (tester) async {
+  testWidgets('桌面那个「设置」入口在（没接上回调时**不在** —— 老测试不受影响）', (tester) async {
+    // ⚠️ **入口变了**（主人 2026-09-22）：设置从聊天抓手行搬到了**桌面上那个小程序**。
+    //    ⇒ 这里也走真实路径（默认收起档 ⇒ 桌面看得见、点得到）。
     await _pumpChat(tester, hasKey: false, keyBad: false, onSendKey: (_) async => KeySend.ok);
-    expect(find.byTooltip(configEntry), findsOneWidget);
+    expect(find.text(settingsAppLabel), findsOneWidget);
 
     await tester.pumpWidget(
-      MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: _controller(), onLoggedOut: () {})),
+      MaterialApp(home: ChatScreen(controller: _controller(), onLoggedOut: () {})),
     );
     await tester.pump();
-    expect(find.byTooltip(configEntry), findsNothing, reason: '没接上那条路就不该画一个按不动的入口');
+    expect(find.text(settingsAppLabel), findsNothing, reason: '没接上那条路就不该画一个按不动的入口');
   });
 
   testWidgets('🔴 三种现状说的话**不一样**（"填过但被拒"不许被告知"还没有填"）', (tester) async {
@@ -106,9 +109,10 @@ void main() {
       onKeyChanged: () => changed += 1,
     );
 
-    await tester.tap(find.byTooltip(configEntry));
+    // 真实路径：桌面上那个「设置」图标 ⇒ 小程序容器里打开设置
+    await tester.tap(find.text(settingsAppLabel));
     await tester.pumpAndSettle();
-    expect(find.text(configTitle), findsOneWidget);
+    expect(find.text(configTitle), findsOneWidget, reason: '容器给的顶栏写着「配置」');
 
     await tester.enterText(find.byType(TextField), 'sk-new-key');
     await tester.tap(find.text(keySubmitChange));

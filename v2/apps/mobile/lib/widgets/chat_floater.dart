@@ -81,6 +81,8 @@ class ChatFloater extends StatefulWidget {
     required this.child,
     this.trailing = const <Widget>[],
     this.initialTier = FloaterTier.collapsed,
+    this.onTier,
+    this.onHeight,
   });
 
   /// **父层量好给它的可用高度**（父层是 `LayoutBuilder`）。
@@ -99,6 +101,14 @@ class ChatFloater extends StatefulWidget {
 
   /// 一进来是哪一档。**默认收起**（主人 2026-09-22 定：先看见桌面）。
   final FloaterTier initialTier;
+
+  /// **换档了**（上层拿它算"小程序被盖住了没有" —— §6.4 规则 2/3）。
+  final ValueChanged<FloaterTier>? onTier;
+
+  /// **我现在占多高**（上层拿它给小程序内容做底部内缩 —— §6.4 规则 1）。
+  /// ⚠️ 收起档的高度是**内容算出来**的（D3.5）⇒ 只能**画完再报**，
+  ///    所以它在 post-frame 里回调；上层自己判"变了没有"再 setState（免得抖）。
+  final ValueChanged<double>? onHeight;
 
   @override
   State<ChatFloater> createState() => ChatFloaterState();
@@ -130,6 +140,10 @@ class ChatFloaterState extends State<ChatFloater> {
     super.initState();
     _tier = widget.initialTier;
     _lastOpen = widget.initialTier == FloaterTier.collapsed ? FloaterTier.full : widget.initialTier;
+    // 初始档位也报一次（不然上层以为"还没展开"而屏幕上已经展开了）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onTier?.call(_tier);
+    });
   }
 
   int _nowMs() => DateTime.now().millisecondsSinceEpoch;
@@ -144,6 +158,7 @@ class ChatFloaterState extends State<ChatFloater> {
       _tier = t;
       if (t != FloaterTier.collapsed) _lastOpen = t;
     });
+    widget.onTier?.call(t);
   }
 
   /// **外面叫它拉满**（"用户按下发送 ⇒ 最大化" · §6.2）。
@@ -155,6 +170,7 @@ class ChatFloaterState extends State<ChatFloater> {
       _lastOpen = FloaterTier.full;
       _dragging = null;
     });
+    widget.onTier?.call(FloaterTier.full);
   }
 
   /// 外面叫它收起（点桌面空白时用）。
@@ -240,6 +256,13 @@ class ChatFloaterState extends State<ChatFloater> {
     final maxH = math.max(widget.maxHeight, FloaterMetrics.dragFloor);
     final h = _heightFor(maxH);
     final collapsed = _collapsed;
+    if (widget.onHeight != null) {
+      // 画完再报（收起档的高度只有画完才知道 —— D3.5）
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final h = context.size?.height;
+        if (mounted && h != null) widget.onHeight!(h);
+      });
+    }
     return ConstrainedBox(
       constraints: BoxConstraints(maxHeight: maxH),
       // ⚠️ 收起档 `h == null` ⇒ `SizedBox` 不约束高度 ⇒ 由内容算（D3.5）
