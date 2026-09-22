@@ -84,7 +84,11 @@ class LandingScreen extends StatelessWidget {
                 const SizedBox(height: 22),
                 _phone(),
                 const SizedBox(height: 26),
-                // ── 三张卡（记 / 办 / 实）──
+                // ── 它能替你做什么（记 / 办 / 实 / 回）──
+                //   ⚠️ 小标题本身就是那句话：**扫一眼就知道这一块讲什么**（主人 2026-09-22：
+                //     "重新规划设计首页内容，能让用户看明白"）。
+                _sectionTitle(theme, landingCanTitle),
+                const SizedBox(height: 12),
                 for (final (mark, title, body) in landingCards)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 12),

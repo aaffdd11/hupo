@@ -47,8 +47,10 @@ void main() {
       landingStartHint,
       landingAndroidNotYet,
       landingDownloadTitle,
-      // ⚠️ 对照块（契约 `docs/dev/51-VS-CHAT.md`）：**新加的句子必须列在这里**，
+      // ⚠️ 首页重排（主人 2026-09-22）：**新加的句子必须列在这里**，
       //    没进这份清单的句子 = 没验过。
+      landingCanTitle,
+      // ⚠️ 对照块（契约 `docs/dev/51-VS-CHAT.md`）：同上。
       landingDiffTitle,
       landingDiffLeft,
       landingDiffRight,

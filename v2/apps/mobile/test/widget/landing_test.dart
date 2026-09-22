@@ -25,15 +25,27 @@ void main() {
     expect(find.text(landingPromise), findsOneWidget, reason: '手册 〇 那句承诺必须在这儿');
     expect(find.text(landingStart), findsOneWidget);
     expect(find.text(landingDownload), findsOneWidget);
-    // ⚠️ 三张卡在**首屏之外** ⇒ 要像用户那样**滚下去**再看
-    //    （`ListView` 是懒的，不滚就不会建 ⇒ 直接 find 会说"找不到"，那是假的）
-    for (final (mark, title, _) in landingCards) {
-      await tester.scrollUntilVisible(find.text(title), 240);
-      expect(find.text(title), findsOneWidget, reason: '三张卡少了一张：$title');
-      expect(find.text(mark), findsOneWidget, reason: '标记少了一个：$mark');
-    }
-    // ⚠️ "第一次要等一下"必须**在点之前**就说（别让他登录完才发现）
+    // ⚠️ "第一次要等一下"必须**在点之前**就说（别让他登录完才发现）。
+    //    ⚠️ 这句要在**滚动之前**查：它在顶上，滚到底之后 `ListView` 会把它回收掉（我栽过）。
     expect(find.text(landingStartHint), findsOneWidget);
+    // ⚠️ 这几张卡在**首屏之外** ⇒ 要像用户那样**滚下去**再看
+    //    （`ListView` 是懒的，不滚就不会建 ⇒ 直接 find 会说"找不到"，那是假的）
+    //
+    // ⚠️ **别用 `scrollUntilVisible` 逐张找**（2026-09-22 实测）：它一步 240px 地跳，
+    //    卡片一多就会**冲过头**，然后报 "Bad state: No element"（找不着了）。
+    //    ⇒ 改成**一路滚下去、边滚边收**：验证的是"每一张都被画出来过"。
+    final wanted = <String>{
+      for (final (mark, title, _) in landingCards) ...[title, mark],
+    };
+    final seen = <String>{};
+    for (var i = 0; i < 40 && seen.length < wanted.length; i++) {
+      for (final w in wanted) {
+        if (find.text(w).evaluate().isNotEmpty) seen.add(w);
+      }
+      await tester.drag(find.byType(ListView), const Offset(0, -200));
+      await tester.pump();
+    }
+    expect(seen.length, wanted.length, reason: '这些没被画出来过：${wanted.difference(seen).toList()}');
   });
 
   testWidgets('🔴 点"下载安卓版" ⇒ **如实说没上线**，而且不许装出"正在下载"', (tester) async {
