@@ -49,6 +49,9 @@ function setup({ withPublished = true, installed = [] } = {}) {
       sub: 'u1',
       authorName: '用户 1111',
       onInstalled: (info) => installed.push(info),
+      // ★ P1-22：造东西那条闸要看"**这一轮他说了什么**"。
+      //   这一批验的不是那条闸（它在 `apps-consent.test.js`），所以**照他真会说的一句**接线。
+      turnInput: () => '帮我做一个小程序',
     },
   }).listen();
   return { dir, apps, published, sock, socketPath: path, installed };
@@ -130,8 +133,10 @@ test('🔴 不认识的 op ⇒ 明说认不出（不许假装成功）；坏输�
   assert.equal(handleAppsOp(apps, {}).ok, false);
 
   // 坏输入：校验不过 ⇒ ok:false，而且盘上没东西
-  const bad = handleAppsOp(apps, { op: 'create', app: { ...APP, id: '../evil' } });
+  const bad = handleAppsOp(apps, { op: 'create', app: { ...APP, id: '../evil' } },
+    { turnInput: () => '帮我做一个小程序' });
   assert.equal(bad.ok, false);
+  assert.doesNotMatch(String(bad.error), /亲口说一句/, '★ 拒的原因要是"id 坏了"，不是"没明说"');
   assert.equal(nodeFs.existsSync(nodePath.join(dir, 'hupo', 'apps')), false, '不该建出任何东西');
 });
 
@@ -139,12 +144,14 @@ test('🔴 建成的回执里**要带回图标**（没给的话自动配的那�
   const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-op-'));
   tmpDirs.push(dir);
   const apps = new Apps({ dir });
+  // ★ 允许他造：这一条验的是"图标要带回去"，不是那条闸
+  const ctx = { turnInput: () => '帮我做一个小程序' };
   // ① 不给图标 ⇒ 按名字自动配，回执里得能读到它
-  const auto = handleAppsOp(apps, { op: 'create', app: { ...APP, id: 'tianqi', title: '查天气', icon: undefined } });
+  const auto = handleAppsOp(apps, { op: 'create', app: { ...APP, id: 'tianqi', title: '查天气', icon: undefined } }, ctx);
   assert.equal(auto.ok, true);
   assert.equal(auto.icon, 'weather', '★ 回执里没有图标 ⇒ 工具那边会把 undefined 念出来');
   // ② 给了白的 ⇒ 原样带回（负向对照：不许被自动配覆盖）
-  const given = handleAppsOp(apps, { op: 'create', app: { ...APP, id: 'mydice', title: '掷骰子', icon: 'star' } });
+  const given = handleAppsOp(apps, { op: 'create', app: { ...APP, id: 'mydice', title: '掷骰子', icon: 'star' } }, ctx);
   assert.equal(given.ok, true);
   assert.equal(given.icon, 'star');
 });

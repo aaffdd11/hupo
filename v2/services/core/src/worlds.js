@@ -230,6 +230,11 @@ export class Worlds {
     //   落在**他自己那一格**下面（`<dir>/hupo/apps/`）—— 这就是"只有他自己可见"的落点。
     //   ⚠️ 它**不认识令牌**；它是"谁的世界"由这里定，路由那边按 `claim.sub` 取。
     const apps = new Apps({ dir: t.dir, sub: t.userId });
+    // ⚠️ **调度器建在这下面**（它要 timeline 那几样），而"造东西那条闸"（P1-22）
+    //   要看**这一轮他说了什么** —— 那句话住在调度器里。
+    //   ⇒ 先空着，等它建好再指过来（`ctx.turnInput` 是个**取值函数**，调的时候才读）。
+    let dispatcher = null;
+
     // ★ **模型那几条工具走的通道**（乙-2）：写入只有上面那一个 `Apps` 实例能做，
     //   工具进程只把请求递过来（照账本那条的规矩：**工具进程不写盘**）。
     const appsSocket = new AppsSocket({
@@ -242,6 +247,10 @@ export class Worlds {
         sub: t.userId,
         // ⚠️ 对外显示的名字**按哈希生成**：手机号那种东西**绝不进共享库**
         authorName: `用户 ${authorHashOf(t.userId).slice(0, 4)}`,
+        // ★ **他明说才许写**（P1-22）：造东西那条闸要"当轮他自己说的那句话"。
+        //   取的是**服务端记的**那一份（`dispatcher.turnInput`）；
+        //   还没建好（`null`）⇒ 当作"没有明说"（那正是**开机那几秒**该有的保守行为）。
+        turnInput: () => dispatcher?.turnInput ?? null,
         // ★ 装上了 ⇒ 往**他自己**的流里推一条（客户端收到就重拉清单，桌面自己长出来）
         onInstalled: (info) => {
           try {
@@ -262,7 +271,7 @@ export class Worlds {
       appsServerPath: this.#cfg.appsServerPath,
     };
 
-    const dispatcher = new Dispatcher({
+    dispatcher = new Dispatcher({
       timeline,
       runtime: this.#runtime,
       // ⚠️ 回调里带的是**这个人**（每个世界各一份调度器 ⇒ 不用再传 userId）

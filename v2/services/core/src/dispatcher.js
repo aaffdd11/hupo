@@ -66,6 +66,26 @@ export class Dispatcher {
    * 一轮开始 = 消费一条投递（今天的轮**全部**由投递引起）。
    */
   #delivered = [];
+
+  /**
+   * **这一轮他说了什么**（P1-22，2026-09-24）。
+   *
+   * 🔴 为什么要有它：小程序那条"**他明说才许写**"的闸原来是**软的** ——
+   *    工具那边只看得到"调用了哪个工具"，**看不到"这一轮他说了什么"**
+   *    ⇒ 助手越权的唯一挡板是它**自己的自觉**（`59-USER-APPS.md` §八 第 1 条）。
+   *    这里把**当轮输入**记下来并暴露出去；**"什么算明说"是产品规则**，
+   *    由上层定（见 `77-BLOCKERS.md` B8 —— 那一条要主人拍）。
+   *
+   * ⚠️ 它只活**一轮**：`turn-start` 时从那一轮的票上认领（**不是"最后投递的那句"** ——
+   *    他可能在一轮半路又补一句，那不该算到正在跑的轮上），
+   *    `turn-end` / 超时 / 失败三处都清（下一句投递**不会**直接覆盖它）。
+   */
+  #turnInput = '';
+
+  /// 见 [#turnInput]。
+  get turnInput() {
+    return this.#turnInput;
+  }
   /**
    * turn 号 → **是主人哪句话引起来的**（我们这边的 `messageId`）。
    *
@@ -150,6 +170,8 @@ export class Dispatcher {
       // 一轮开始 = 消化掉一条投递。**顺手记住是哪句话引起来的**（见 `#turnOwner`）
       const owner = this.#delivered.shift();
       this.#turnOwner.set(turn, owner?.messageId ?? null);
+      // ★ P1-22：**这一轮他说了什么** = 引起来的那句话（没有票 ⇒ 空 ⇒ 不许造东西）
+      this.#turnInput = owner?.text ?? '';
       this.#armDeadline(turn);
       this.#announceTurn(turn);
     });
@@ -169,7 +191,14 @@ export class Dispatcher {
         this.#lastError = `动过东西这件事没记下来：${err?.message ?? err}`;
       }
     });
-    this.#translator.on('turn-end', ({ turn }) => this.#clearDeadline(turn));
+    this.#translator.on('turn-end', ({ turn }) => {
+      this.#clearDeadline(turn);
+      // ★ P1-22：**这一轮结束了 ⇒ 当轮输入立刻作废。**
+      //   ⚠️ 这条不是"顺手清理"：一轮结束到下一句之间，**助手自己发起的那一轮**
+      //      （定时 / 重做 / 别人代投）用的是**同一个派发器**。
+      //      不清的话它看到的是**上一句他说过的话** ⇒ 造东西那条闸会拿旧话当"他明说了"。
+      this.#turnInput = '';
+    });
   }
 
   get translator() {
@@ -308,6 +337,8 @@ export class Dispatcher {
    * 不收的话用户看到的是**一个永远等不到回答的气泡**——N19 就是禁这个。
    */
   #closeUndelivered(reason) {
+    // ★ P1-22：这条路是"这一轮不会再有下文了"（超时 / 失败）⇒ 当轮输入同样作废
+    this.#turnInput = '';
     const n = this.#delivered.length;
     this.#delivered.length = 0;
     for (let i = 0; i < n; i += 1) {
@@ -467,7 +498,13 @@ export class Dispatcher {
     //      （实测：`turn/start` 在 +1116ms，`prompt` 的结果在 +1122ms）。
     //      等返回了才记账的话，那一刻 `turn-start` 已经来过了，
     //      这一条会被"消费"掉、而队列里少了一条 ⇒ 超时时漏收一句。
-    const ticket = { messageId, at: Date.now() };
+    // ★ P1-22：**这句话跟着这一轮的票走**（而不是"最后投递的那句"）。
+    //   为什么要这样：他可能在一轮**还没说完**时又补一句（投递排队、`target=next-turn`）。
+    //   读"最后投递的那句"的话，**正在跑的这一轮**会拿**新那句话**去判"他有没有明说" ——
+    //   于是"帮我做一个小程序" + "快点" 会被判成"没说"（误拒）。
+    //   ⚠️ 只挂在票上、**不在这里写 `#turnInput`**：真正认领的是 `turn-start`
+    //     （那时才知道"这一轮是哪句话引起来的"）。
+    const ticket = { messageId, at: Date.now(), text: typeof text === 'string' ? text : '' };
     this.#delivered.push(ticket);
     if (needsRecap) this.#recapFedTo = agent;
 

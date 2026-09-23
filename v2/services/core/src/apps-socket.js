@@ -18,6 +18,7 @@ import nodeNet from 'node:net';
 import nodePath from 'node:path';
 
 import { AppsError } from './apps.js';
+import { NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
 import { PublishedError, authorHashOf } from './published.js';
 import { handSocketToAgent } from './socket-owner.mjs';
 
@@ -43,6 +44,9 @@ const MAX_LINE_BYTES = 512 * 1024;
  *   · `sub`        这是谁（**身份只从这里来**，绝不从请求里读）
  *   · `authorName` 他对外显示的名字（默认按哈希生成，**绝不显示手机号**）
  *   · `onInstalled(info)` 装上了 ⇒ 让他的桌面自己刷新（外面往流里推一条）
+ *   · `turnInput()` **这一轮他自己说的那句话**（P1-22：造东西那条闸要看它）。
+ *     🔴 它是**服务端自己记的**（`dispatcher.turnInput`），**绝不从请求里读**；
+ *     没接线 ⇒ 当作"没有明说"（**fail-closed**，见 `apps-consent.js` 顶上）。
  * @returns {object} 永远 `{ok:true,…}` 或 `{ok:false,error,…}`（**绝不抛**）
  */
 export function handleAppsOp(apps, req, ctx = {}) {
@@ -51,6 +55,12 @@ export function handleAppsOp(apps, req, ctx = {}) {
   try {
     switch (op) {
       case 'create': {
+        // ★ **他明说才许写**（P1-22）：造东西是"往他桌面上放一个他没要的东西"的唯一入口，
+        //   所以闸装在**写盘之前**，而且看的是**他自己那一句话**（不是请求里带的任何字段）。
+        const turnInput = typeof ctx.turnInput === 'function' ? ctx.turnInput() : null;
+        if (!asksToMakeApp(turnInput)) {
+          return { ok: false, error: NEEDS_ASK, refused: 'needs-ask' };
+        }
         const a = req.app ?? {};
         const m = apps.create({
           id: a.id,
