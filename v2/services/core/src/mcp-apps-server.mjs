@@ -76,11 +76,15 @@ function ask(payload) {
   });
 }
 
-/** 图标名（服务端那份白名单）。让模型只从这些里挑，别自己编。 */
-const ICONS = [
-  'dice', 'quiz', 'list', 'checklist', 'calculator', 'book', 'timer', 'star',
-  'paint', 'music', 'map', 'pet', 'wallet', 'leaf',
-];
+/**
+ * 图标名（**唯一出处**：`src/app-icons.js`）。
+ *
+ * ⚠️ 这里原来**又抄了一份**（和 `apps.js` 一模一样的两张表 ⇒ 迟早漂；
+ *    而客户端那条"两张表不许漂"的判据只对了其中一份）。2026-09-23 收成一处。
+ * ⚠️ 它只用于**给模型看的 enum**（帮它挑一个贴切的）；**给不认识的词也不报错** ——
+ *    服务端 `apps.js` 那边会按名字自动配一个（`resolveIcon`）。
+ */
+import { ICONS } from './app-icons.js';
 
 const TOOLS = [
   {
@@ -98,7 +102,11 @@ const TOOLS = [
       properties: {
         id: { type: 'string', description: '短名，**只许小写字母/数字/短横**（如 dice、shui-guo），也是它的地址' },
         title: { type: 'string', description: '它的名字，给人看的（如"掷骰子"），别超过十来个字' },
-        icon: { type: 'string', enum: ICONS, description: '桌面上那个图标用哪个' },
+        icon: {
+          type: 'string',
+          enum: ICONS,
+          description: '桌面上那个图标用哪个；**不给也行**（不给就按它的名字自动配一个）',
+        },
         entry: { type: ['string', 'null'], description: '入口文件名，一般就是 index.html；不确定就传 null' },
         files: {
           type: 'object',
@@ -106,7 +114,7 @@ const TOOLS = [
           additionalProperties: { type: 'string' },
         },
       },
-      required: ['id', 'title', 'icon', 'files'],
+      required: ['id', 'title', 'files'],
       additionalProperties: false,
     },
   },
@@ -214,14 +222,16 @@ async function callTool(name, args) {
     const title = typeof args?.title === 'string' ? args.title.trim() : '';
     const icon = typeof args?.icon === 'string' ? args.icon : '';
     const files = args?.files && typeof args.files === 'object' ? args.files : null;
-    if (!id || !title || !icon || !files || Object.keys(files).length === 0) {
-      return textResult('这次没做成：短名、名字、图标、内容都得有。', true);
+    if (!id || !title || !files || Object.keys(files).length === 0) {
+      return textResult('这次没做成：短名、名字、内容都得有。', true);
     }
     const entry = typeof args?.entry === 'string' && args.entry ? args.entry : 'index.html';
     const r = await ask({ op: 'create', app: { id, title, icon, entry, files } });
     if (r.ok) {
+      // ⚠️ 图标是**自动配**的时候要如实说一句：不然模型以为它挑的那个生效了
+      const iconNote = icon && icon === r.icon ? '' : `（桌面上的图标我按名字配了一个：\`${r.icon}\`）`;
       return textResult(
-        `做好了：**${r.title}**（短名 ${r.id}，第 ${r.version} 版）。它现在在他的桌面上，点开就能用。`,
+        `做好了：**${r.title}**（短名 ${r.id}，第 ${r.version} 版）。它现在在他的桌面上，点开就能用。${iconNote}`,
       );
     }
     return textResult(`这次没做成：${r.error}`, true);

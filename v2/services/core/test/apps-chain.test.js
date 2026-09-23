@@ -135,6 +135,20 @@ test('🔴 不认识的 op ⇒ 明说认不出（不许假装成功）；坏输�
   assert.equal(nodeFs.existsSync(nodePath.join(dir, 'hupo', 'apps')), false, '不该建出任何东西');
 });
 
+test('🔴 建成的回执里**要带回图标**（没给的话自动配的那个 —— 工具要据此说实话）', () => {
+  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-op-'));
+  tmpDirs.push(dir);
+  const apps = new Apps({ dir });
+  // ① 不给图标 ⇒ 按名字自动配，回执里得能读到它
+  const auto = handleAppsOp(apps, { op: 'create', app: { ...APP, id: 'tianqi', title: '查天气', icon: undefined } });
+  assert.equal(auto.ok, true);
+  assert.equal(auto.icon, 'weather', '★ 回执里没有图标 ⇒ 工具那边会把 undefined 念出来');
+  // ② 给了白的 ⇒ 原样带回（负向对照：不许被自动配覆盖）
+  const given = handleAppsOp(apps, { op: 'create', app: { ...APP, id: 'mydice', title: '掷骰子', icon: 'star' } });
+  assert.equal(given.ok, true);
+  assert.equal(given.icon, 'star');
+});
+
 
 
 

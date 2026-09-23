@@ -135,9 +135,14 @@ test('限额：文件太多 / 单文件太大 / 未知权限 ⇒ 拒', () => {
   assert.throws(() => apps.create({ ...OK, id: 'bad', permissions: ['root'] }), /不认识|还不给/);
 });
 
-test('图标与 id 都走白名单；入口必须在文件里', () => {
+test('图标：认得的照用、不认得的**自动配**（不再抛错 —— 桌面上不许空白）；id 与入口照旧严', () => {
   const apps = new Apps({ dir: tmp() });
-  assert.throws(() => apps.create({ ...OK, icon: 'nope' }), /图标/);
+  // 🔴 2026-09-23 改了行为（主人："给每个小程序创造一个默认 icon"）：
+  //    原来给一个白名单外的图标 ⇒ **抛错**；现在 ⇒ **按名字自动配一个**。
+  //    ⚠️ 判据跟着改：这一条现在钉的是"配出来的**在库里**"，而不是"抛错"。
+  const fixed = apps.create({ ...OK, id: 'autoicon', icon: 'nope' });
+  assert.equal(ICONS.includes(fixed.icon), true, `自动配出来的不在库里：${fixed.icon}`);
+  assert.notEqual(fixed.icon, 'nope');
   assert.throws(() => apps.create({ ...OK, id: 'Bad_Id' }), /id/);
   assert.throws(() => apps.create({ ...OK, id: '../evil' }), /id/);
   assert.throws(() => apps.create({ ...OK, entry: 'nope.html' }), /入口文件不在/);

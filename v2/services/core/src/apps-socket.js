@@ -61,7 +61,10 @@ export function handleAppsOp(apps, req, ctx = {}) {
           createdBy: 'agent',
           createdTurn: Number.isInteger(req.turn) ? req.turn : null,
         });
-        return { ok: true, id: m.id, version: m.version, title: m.title, rootHash: m.rootHash };
+        // ⚠️ **`icon` 要带回去**（2026-09-23）：造它的人可能**没给图标**（或者给错了），
+        //    而服务端会自动配一个 —— 那边得知道**最后配的是哪个**，才说得出一句实话
+        //    （第一版漏了这个字段 ⇒ 工具回执会把 `undefined` 念给模型听）。
+        return { ok: true, id: m.id, version: m.version, title: m.title, icon: m.icon, rootHash: m.rootHash };
       }
       case 'list':
         return { ok: true, apps: apps.list() };

@@ -57,10 +57,12 @@ void main() {
 
   test('🔴 两张白名单不许漂：客户端映射表 vs 服务端 ICONS', () {
     // ⚠️ 只读一次源码、逐字对（两处漂了 = 线上会出现"图标画不出来"的空白方块）
-    final f = File('../../services/core/src/apps.js');
+    // ⚠️ 2026-09-23：图标库**收到了一处**（原来服务端有两份抄本，而这条判据只对了一份）
+    //    ⇒ 现在只读 `app-icons.js` 这一份。
+    final f = File('../../services/core/src/app-icons.js');
     expect(f.existsSync(), true, reason: '找不到服务端那份（cwd 不对？）');
     final src = f.readAsStringSync();
-    final m = RegExp(r'export const ICONS = Object\.freeze\(\[([^\]]*)\]\)').firstMatch(src);
+    final m = RegExp(r'export const ICONS = Object\.freeze\(\[([\s\S]*?)\]\)').firstMatch(src);
     expect(m, isNotNull, reason: '服务端那份 ICONS 的形状变了 ⇒ 这条判据要跟着改');
     final serverNames = RegExp("'([a-z0-9_-]+)'")
         .allMatches(m!.group(1)!)
@@ -69,6 +71,17 @@ void main() {
     final clientNames = miniAppIcons.keys.toSet();
     expect(clientNames.difference(serverNames), isEmpty, reason: '客户端多出来的名字');
     expect(serverNames.difference(clientNames), isEmpty, reason: '★ 服务端有、客户端没映射的名字（线上会画成空白）');
+  });
+
+  test('🔴 库里每一个名字都得有**自己的图形**（谁都不许落到兜底那个）', () {
+    final fallback = miniAppIconFor('这个名字不存在');
+    for (final name in miniAppIcons.keys) {
+      expect(
+        miniAppIconFor(name),
+        isNot(fallback),
+        reason: '「$name」画出来跟"认不出"一样 ⇒ 线上就是一堆同款图标',
+      );
+    }
   });
 
   test('内置那两个不算"我的"', () {

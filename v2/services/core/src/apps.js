@@ -15,6 +15,7 @@
 // ⚠️ **它不做**：不发布到共享库（那是乙-3）· 不签名（签名在 `app-serve.js`）·
 //    不认识令牌（调用方已经知道这是谁）。
 
+import { pickIcon, resolveIcon } from './app-icons.js';
 import nodeCrypto from 'node:crypto';
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
@@ -48,10 +49,9 @@ export const MAX_REL_CHARS = 120;
  *    运行时算出来的图标**线上画不出来**（`52-DESKTOP.md` §6.3 记着这个坑）。
  * ⇒ 这里只放**客户端真的有映射**的名字。
  */
-export const ICONS = Object.freeze([
-  'dice', 'quiz', 'list', 'checklist', 'calculator', 'book', 'timer', 'star',
-  'paint', 'music', 'map', 'pet', 'wallet', 'leaf',
-]);
+// ⚠️ **图标库只有一处出处**（`src/app-icons.js`）—— 这里不再抄一份
+//    （原来这里一份、`mcp-apps-server.mjs` 又抄了一份，而客户端只跟其中一份对表）。
+export { ICONS } from './app-icons.js';
 
 /**
  * **权限白名单**（乙-4 开门：`ask`）。
@@ -309,7 +309,11 @@ export class Apps {
     }
     if (typeof title !== 'string' || title.trim().length === 0) throw new AppsError('小程序要有一个名字');
     if (title.length > MAX_TITLE_CHARS) throw new AppsError(`名字太长（上限 ${MAX_TITLE_CHARS} 个字）`);
-    if (!ICONS.includes(icon)) throw new AppsError(`图标不在白名单里：${String(icon).slice(0, 30)}`);
+    // ★ **图标：给了白的就用，别的（没给 / 不认识）一律自动配一个**
+    //   （主人 2026-09-23：*"给每个小程序创造一个默认 icon"*）。
+    //   ⚠️ 这里**不再抛错** —— 桌面上出现一个空白图标，比换一个相近的图标坏得多。
+    const picked = resolveIcon({ icon, title, id });
+    icon = picked.icon;
     if (typeof entry !== 'string' || entry.length === 0) throw new AppsError('入口文件必填');
     checkRelPath(entry);
     if (!files || typeof files !== 'object') throw new AppsError('files 必填');
