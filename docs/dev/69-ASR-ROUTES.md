@@ -145,3 +145,27 @@ TENCENT_APPID=… TENCENT_SECRET_ID=… TENCENT_SECRET_KEY=… \
 > **"不够用（哪儿不够）"** → 我从 A/B/C 里按他的实际情况选一条，先备那 80 条语料。
 >
 > ⚠️ 在他回话之前，**我不会先写代码** —— 这就是"不确定就先问，别猜"。
+
+---
+
+## 四·补2、又一对 `ak-` / `sk-` 实测：**腾讯云三处都不认**（2026-09-23）
+
+主人又给了这对（`id` = `ak-20260923-…`、`key` = `sk-Q66CU…`，原话：
+*"key的名称是hupo"*）。**它仍然不是这条路要的** —— 四张嘴都问过了：
+
+| 敲哪儿 | 回什么 |
+|---|---|
+| **混元 ASR 实时 WebSocket**（本仓库 `scripts/check-asr-tencent.mjs`，占位 AppID） | `code=4002 密钥不存在。请在控制台（https://console.cloud.tencent.com/cam/capi）检查密钥是否已被删除或者禁用…` |
+| **混元 OpenAI 兼容** `GET /v1/models` | `401 Incorrect API key provided: sk-Q66CU***` |
+| **知识引擎 LKE** `GET /v1/models` 与 `POST /v1/chat/completions`（`Bearer` 与 `x-api-key` 两种都试了） | `401 not authorized` |
+| （先前那对同族的）**TC3 签名** | `AuthFailure.SecretIdNotFound` |
+
+⇒ 结论不变：**这条路要的三样只能在 CAM 建** ——
+**AppID（数字账号 ID）+ SecretID（`AKID` 开头）+ SecretKey**。
+
+⚠️ 两条最容易搞混的：
+1. **`ak-…` 不是腾讯云的 SecretId 形式**（SecretId 一律 `AKID` 开头）；
+2. **AppID 不是 SecretId** —— AppID 是那个**数字账号 ID**，和密钥不在同一栏。
+
+⇒ 下一步只有一条：**问主人那把"名字叫 hupo"的密钥是在哪个控制台建的**
+（截图或网址即可），在拿到答案之前**不要再往腾讯云这边瞎试**（每试一次都是白跑）。
