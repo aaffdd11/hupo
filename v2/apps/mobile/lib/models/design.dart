@@ -44,6 +44,38 @@ const Color accentTint = Color(0xFFF7E4DF);
 
 /// 圆角（收成三档，别再各写各的）。
 const double radiusCard = 18; // 卡片 / 大块
+
+/// **图标格那一圈阴影**（主人 2026-09-22：*"小程序图标要有阴影。"*）。
+///
+/// 🔴 2026-09-23 提成 token：小程序**打开 / 收回**那一层要**从图标那儿长出来**
+///    ⇒ 它的起点必须和图标格**逐字相同**（主人：*"那一层效果没有阴影，所以开启和打开的
+///    效果并不如意。"*）。两处各写一份数 ⇒ 迟早漂（本项目第一条纪律）。
+const double tileShadowAlpha = 0.12;
+const double tileShadowBlur = 12;
+const double tileShadowDy = 4;
+
+/// **小程序那一层在"扩开 / 收回"途中的样子**（纯函数，判据在 `test/unit`）。
+///
+/// @param v 已经过缓动的进度：**0 = 还只有图标那么大，1 = 全屏**
+///   （⚠️ 传进来的是**缓动之后**的值 —— 缓动在调用处做，这里只管"形状怎么变"）
+/// @returns 圆角、阴影的三个数（α / 模糊 / 下移）
+///
+/// ⚠️ **v = 0 时必须和 `_DesktopIcon` 那一格一模一样**（圆角 = [radiusCard]，
+///    阴影 = [tileShadowAlpha] / [tileShadowBlur] / [tileShadowDy]）——
+///    不然"从图标那儿扩开"那一下会**跳**一下。
+/// ⚠️ 到全屏（v = 1）**圆角 0、阴影 0**：整页贴着屏幕边，画阴影只是白费。
+/// ⚠️ 越界（v < 0 或 > 1）按两端夹住（动画被打断时也画得出一个合理的样子）。
+({double radius, double shadowAlpha, double shadowBlur, double shadowDy}) miniAppSurfaceAt(
+  double v,
+) {
+  final k = (1 - v).clamp(0.0, 1.0);
+  return (
+    radius: radiusCard * k,
+    shadowAlpha: tileShadowAlpha * k,
+    shadowBlur: tileShadowBlur * k,
+    shadowDy: tileShadowDy * k,
+  );
+}
 const double radiusField = 12; // 输入框 / 小卡片
 const double radiusChip = 10; // 小方块（首页那种"记 / 办 / 实"）
 

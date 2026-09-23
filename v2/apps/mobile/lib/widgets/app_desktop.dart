@@ -179,11 +179,13 @@ class _DesktopIcon extends StatelessWidget {
                   borderRadius: BorderRadius.circular(d.radiusCard),
                   // ★ 主人 2026-09-22：*"小程序图标要有阴影。"*
                   //   浅一点（图标是一小块，用浮窗那种 α.45 会脏）
+                  // ⚠️ 这三个数**住 `design.dart`**（`tileShadow*`）：小程序扩开那一层
+                  //    的**起点就是它**，两处必须是同一份（主人 2026-09-23 报的"没有阴影"）。
                   boxShadow: [
                     BoxShadow(
-                      color: d.ink.withValues(alpha: 0.12),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
+                      color: d.ink.withValues(alpha: d.tileShadowAlpha),
+                      blurRadius: d.tileShadowBlur,
+                      offset: const Offset(0, d.tileShadowDy),
                     ),
                   ],
                 ),

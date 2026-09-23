@@ -162,6 +162,59 @@ void main() {
     expect(reveal.size, screen.size, reason: '而且该是全屏');
   });
 
+  /// 读"小程序那一层"的阴影（画在裁剪**外面**那一层 `DecoratedBox`）。
+  ///
+  /// ⚠️ 为什么要读它：主人 2026-09-23 报的 *"打开和关闭的时候，那一层效果没有阴影"* ——
+  ///    而 `ClipRRect` 会把**里面**的阴影一起剪掉，所以阴影只能画在它**外面**。
+  BoxShadow? surfaceShadow(WidgetTester tester) {
+    final box = find.ancestor(
+      of: find.byKey(miniAppSurfaceKey),
+      matching: find.byType(DecoratedBox),
+    );
+    if (box.evaluate().isEmpty) return null;
+    final deco = tester.widget<DecoratedBox>(box.first).decoration;
+    if (deco is! BoxDecoration || deco.boxShadow == null || deco.boxShadow!.isEmpty) return null;
+    return deco.boxShadow!.first;
+  }
+
+  testWidgets('🔴 打开那一瞬间：那一层**带阴影**（主人 2026-09-23 报的）', (tester) async {
+    await _pump(tester);
+    // 点开一个不是设置的小程序（缩小动画那一下才看得出"从图标长出来"）
+    await tester.tap(find.text(mathAppLabel));
+    await tester.pump(); // 起第一帧
+    await tester.pump(const Duration(milliseconds: 60)); // 落在扩开动画里
+
+    final sh = surfaceShadow(tester);
+    expect(sh, isNotNull, reason: '★ 扩开途中那一层**必须有阴影**（不然就是一块白板）');
+    expect(sh!.blurRadius > 0, true, reason: '模糊要是正的，实际 ${sh.blurRadius}');
+    expect(sh.color.a > 0, true, reason: '阴影要看得见，实际 α=${sh.color.a}');
+
+    await tester.pumpAndSettle();
+    expect(
+      surfaceShadow(tester),
+      isNull,
+      reason: '★ 到全屏就**不该**再有阴影（整页贴边，画它只是白费）',
+    );
+  });
+
+  testWidgets('🔴 收回的时候阴影**回来了**（缩回图标那一下也要有）', (tester) async {
+    await _pump(tester);
+    await tester.tap(find.text(mathAppLabel));
+    await tester.pumpAndSettle();
+    expect(surfaceShadow(tester), isNull, reason: '全屏时没有阴影');
+
+    await tester.tap(find.byTooltip(miniAppBack));
+    // ⚠️ 先空 pump 一次（让 `didUpdateWidget` 起跑），**再**推进 250ms。
+    //    为什么不是 60ms：形状那条曲线是 `easeOutCubic` —— 刚起步时它**几乎还是全屏**，
+    //    阴影那一项被压到 0.001 以下（正是"贴边时不该有阴影"那条规矩），量出来是 null。
+    //    推进到中段，它才真的在"变回一个图标"。
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    final sh = surfaceShadow(tester);
+    expect(sh, isNotNull, reason: '★ 收回途中要有阴影（它正在变回"一个图标"）');
+    expect(sh!.blurRadius > 0, true);
+  });
+
   testWidgets('🔴 退出小程序时**不许先闪到「设置」那一屏**（主人 2026-09-23 报的）', (tester) async {
     // 主人原话：*"在小程序退出的时候，其他的小程序竟然会先切换页面到设置才缩小隐藏。"*
     //

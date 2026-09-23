@@ -131,6 +131,9 @@ const CLICKS = [];
 for (let i = 0; i < argv.length; i += 1) {
   if (argv[i] === '--click-at' && argv[i + 1]) CLICKS.push(argv[i + 1]);
 }
+/** 两次 `--eval` 之间歇多久（要看动画途中那一帧就调小它）。 */
+const EVAL_SETTLE_MS = Number.parseInt(valueOf('--eval-settle', '600'), 10);
+
 /** `--eval <js>`（可多次）：在页面里跑一段 JS 并把结果打出来（取证用，见下面 ④.4）。 */
 const EVALS = [];
 for (let i = 0; i < argv.length; i += 1) {
@@ -474,7 +477,9 @@ async function main() {
     } catch (err) {
       console.error(`  ⚠️ eval 失败：${err?.message ?? err}`);
     }
-    await sleep(600);
+    // ⚠️ **两次 eval 之间默认歇 600ms**（给页面时间画完）；要看**动画途中**那一帧就得调小它
+    //    （例如 `--eval-settle 0`：点完立刻截图 ⇒ 拍到"刚扩开"那一帧）。
+    await sleep(EVAL_SETTLE_MS);
   }
 
   // ④.5 **按顺序点几下**（可选）：用来"走到某一屏再看一眼"

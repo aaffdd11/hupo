@@ -27,7 +27,13 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import '../models/design.dart' show miniAppSurfaceAt;
 import '../models/space_words.dart';
+
+/// **小程序那一层的 key**（给判据用：量"扩开/收回"途中的圆角与阴影）。
+///
+/// ⚠️ 与 `chatBodyKey` 同一条做法：**它是给闸用的**，不是给业务逻辑用的。
+final GlobalKey miniAppSurfaceKey = GlobalKey(debugLabel: 'mini-app-surface');
 
 class MiniAppHost extends StatefulWidget {
   const MiniAppHost({
@@ -194,11 +200,33 @@ class _MiniAppHostState extends State<MiniAppHost>
           builder: (ctx, _) {
             final v = Curves.easeOutCubic.transform(_c.value);
             final rect = Rect.lerp(from, screen, v) ?? screen;
+            // 🔴 **起点 = 图标那一格，终点 = 全屏**（主人 2026-09-23：
+            //    *"小程序 icon 是有圆角有阴影的。而打开和关闭的时候，那一层效果没有阴影，
+            //    所以开启和打开的效果并不如意。"*）
+            //    ⚠️ 圆角原来就有（下面那个 `ClipRRect` 一直在插值），**缺的是阴影** ——
+            //      而且阴影**必须画在裁剪外面**：`ClipRRect` 会把里面的阴影一起剪掉，
+            //      这正是它一直"没有影子"的原因。
+            final face = miniAppSurfaceAt(v);
             return Positioned.fromRect(
               rect: rect,
-              child: ClipRRect(
+              child: DecoratedBox(
+                // 阴影层（在 `ClipRRect` **外面**，所以看得见）
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(face.radius),
+                  boxShadow: face.shadowAlpha <= 0.001
+                      ? const <BoxShadow>[]
+                      : [
+                          BoxShadow(
+                            color: d.ink.withValues(alpha: face.shadowAlpha),
+                            blurRadius: face.shadowBlur,
+                            offset: Offset(0, face.shadowDy),
+                          ),
+                        ],
+                ),
+                child: ClipRRect(
+                key: miniAppSurfaceKey,
                 // 小的时候有点圆角（像一张卡），长到全屏就是直角
-                borderRadius: BorderRadius.circular((1 - v) * d.radiusCard),
+                borderRadius: BorderRadius.circular(face.radius),
                 child: IgnorePointer(
                   ignoring: covered,
                   child: AnimatedOpacity(
@@ -220,6 +248,7 @@ class _MiniAppHostState extends State<MiniAppHost>
                       ),
                     ),
                   ),
+                ),
                 ),
               ),
             );
