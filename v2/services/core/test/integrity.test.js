@@ -86,6 +86,120 @@ test('对上了 ⇒ ok，而且一条问题都没有', () => {
   }
 });
 
+// ── ★ P1-15：清单**按谁的 home** 建的（2026-09-24）────────────
+//
+// 这一组守的是**同一个静默失效的另一半**：清单里存的是**绝对路径**，
+// 所以"换一个 home"之后**逐条 hash 照样全绿** —— 变的只是
+// `coverageGaps()` 问的那句"盘上有没有东西"：新 home 底下空空 ⇒ 一条漏都不报。
+// ⇒ 那就是"横幅写对上了、而 P1 那几条根本没在核"。
+
+test('清单里**记着**它是按谁的 home 建的（不记就查不出"换了 home"）', () => {
+  const f = fixture();
+  try {
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    assert.equal(baseline.home, f.home, '★ 建清单时要把 home 记下来');
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('🔴 换了 home ⇒ **大声说**那几条没在核（而且不许写成"对上了"）', () => {
+  const f = fixture();
+  try {
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    nodeFs.writeFileSync(f.baselinePath, JSON.stringify(baseline));
+    // 现在按**另一个** home 算（管理员用 sudo 起服务、或者换了账号跑）
+    const other = nodePath.join(f.root, 'root-home');
+    nodeFs.mkdirSync(nodePath.join(other, '.dsh'), { recursive: true });
+    const ig = integrityReport({ repo: f.repo, home: other, baselinePath: f.baselinePath });
+
+    assert.equal(ig.state, 'ok', '逐条 hash 是过的 —— 这恰恰是危险的地方');
+    assert.equal(ig.identity.mismatch, true);
+    const said = ig.notes.join('\n');
+    assert.match(said, /没在核对/, `要说清"那几条没在核"：${said}`);
+    assert.ok(said.includes(f.home), '要点名清单是按哪个 home 建的');
+    assert.ok(said.includes(other), '要点名现在按哪个 home 算');
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('同一个 home ⇒ **不许多那句**（负向对照：不然那句话永远是响的）', () => {
+  const f = fixture();
+  try {
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    nodeFs.writeFileSync(f.baselinePath, JSON.stringify(baseline));
+    const ig = integrityReport({ repo: f.repo, home: f.home, baselinePath: f.baselinePath });
+    assert.equal(ig.identity.mismatch, false);
+    assert.doesNotMatch(ig.notes.join('\n'), /没在核对/, '同一个 home 不许报这一条');
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('老清单（里面**没有** home 这个字段）⇒ 不算不一致（不许拿"没记"当"不一样"）', () => {
+  const f = fixture();
+  try {
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    delete baseline.home;
+    nodeFs.writeFileSync(f.baselinePath, JSON.stringify(baseline));
+    const ig = integrityReport({ repo: f.repo, home: f.home, baselinePath: f.baselinePath });
+    assert.equal(ig.identity.mismatch, false);
+    assert.equal(ig.identity.builtWith, null);
+    // ⚠️ 措辞也不许吹：没记 ⇒ 只能说"按谁算"，**不能说**"清单就是按它建的"
+    assert.match(ig.notes.join('\n'), /没记.*按谁的 home 建/);
+    assert.doesNotMatch(ig.notes.join('\n'), /清单也是按它建的/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('🔴 `serve.js` 里**不许**再出现 `os.homedir()`（身份只住 `resolveServiceHome` 一处）', () => {
+  // 变异验证过的那一类：把 `home: serviceHome` 换回 `nodeOs.homedir()` ⇒
+  // `sudo` 起服务时算的是 `/root`，而那几条 `~/.dsh/**` 是**按仓库属主**建的 ⇒ 静默不核。
+  const src = nodeFs.readFileSync(REPO + '/v2/services/core/src/serve.js', 'utf8');
+  const code = src.split('\n').filter((l) => !l.trimStart().startsWith('//')).join('\n');
+  assert.doesNotMatch(code, /homedir\(\)/, '★ serve.js 里不许自己算 home'); 
+  assert.match(code, /resolveServiceHome\(/, '要用那一处身份');
+});
+
+// ── ★ P1-15 的另一半：**明说"接受的风险"**（2026-09-24）──────────
+//
+// 有两类东西**故意不在清单里**（运行时数据 / 天天在长的用户数据）。
+// 那是一个**取舍**，不是"漏了" —— 而取舍**必须写下来**，否则下一个人
+// 会当成漏项去"修"（把它加进去 ⇒ 服务天天拒绝启动）。
+// ⇒ 这一组判据两头都盯：**清单里确实没有这些路径** ＋ **两边文档都写着这件事**。
+
+test('🔴 运行时数据与账本**确实不在清单里**（负向对照：别哪天被人"顺手补上"）', () => {
+  const f = fixture();
+  try {
+    const baseline = buildBaseline({ repo: f.repo, home: f.home });
+    const files = Object.keys(baseline.entries);
+    assert.equal(files.some((x) => x.includes('/.dsh/storages/')), false,
+      '★ `~/.dsh/storages/**` 不许进清单（agent 每轮都在写它）');
+    assert.equal(files.some((x) => x.endsWith('data/ledger.jsonl')), false,
+      '★ 账本不许进清单（每一笔都在写它）');
+    // 负向对照：同一个 fixture 里**该在的**确实在（证明上面两条不是因为"清单是空的"）
+    assert.equal(files.some((x) => x.endsWith('data/auth.json')), true);
+    assert.equal(files.some((x) => x.includes('/.dsh/profiles/')), true);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('🔴 这两条**接受的风险**两边都得写着（代码里 ＋ `19-P1-P2.md` §七）', () => {
+  // 为什么非要这条：取舍写在代码注释里、而文档表里没有（2026-09-24 实测就是这样），
+  // 下一个读文档的人会以为它是漏项。⇒ 两边都写着，谁删了一边这里就红。
+  const code = nodeFs.readFileSync(REPO + '/v2/services/core/src/integrity.js', 'utf8');
+  assert.match(code, /storages[\s\S]{0,400}?故意不在清单里/, '代码里要写清"storages 是故意不进的"');
+  assert.match(code, /ledger\.jsonl[\s\S]{0,400}?故意不在清单里/, '代码里要写清"账本也是故意不进的"');
+
+  const doc = nodeFs.readFileSync(REPO + '/docs/dev/19-P1-P2.md', 'utf8');
+  const seven = doc.slice(doc.indexOf('## 七、'));
+  assert.match(seven, /storages/, '`19-P1-P2.md` §七 要有 storages 那条');
+  assert.match(seven, /ledger\.jsonl/, '`19-P1-P2.md` §七 要有账本那条');
+});
+
 // ── ★ 2026-09-21 那个**静默失效**（清单漏了一整类路径）──────────
 //
 // 实测踩到的形状：清单是主人用 `sudo` 建的，而 `sudo` 下 `os.homedir()` = `/root`
@@ -315,8 +429,10 @@ test('report 条目被动过 ⇒ 只报，**不拦**（换口令不该让服务�
     const rep = integrityReport({ repo: f.repo, home: f.home, baselinePath: f.baselinePath });
     assert.deepEqual(rep.problems, [], '换口令是主人的正常动作');
     assert.equal(rep.warnings.length, 1);
-    assert.equal(rep.notes.length, 1);
-    assert.match(rep.notes[0], /只报不拦/);
+    // ⚠️ 盯的是"**恰好一条**说它"，不盯"总共几条"：启动横幅还会说别的
+    //    （比如 P1-15 那条"清单按谁的 home 算"）—— 写死总数 ⇒ 加一条提示就假红。
+    const said = rep.notes.filter((n) => /只报不拦/.test(n));
+    assert.equal(said.length, 1, `要**恰好一条**"只报不拦"：${rep.notes.join(' | ')}`);
   } finally {
     f.cleanup();
   }

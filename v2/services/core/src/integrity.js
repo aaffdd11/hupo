@@ -242,8 +242,15 @@ export function filesUnder(entry) {
  * 按当前磁盘状态**重建**清单。由**主人**跑（命令别手打：用 [rebuildCommand] 拼的那种绝对路径写法）。
  */
 export function buildBaseline({ repo, home, now = Date.now(), builtBy = 'root' }) {
+  // ★ **记下这份清单是按谁的 home 算的**（P1-15，2026-09-24）。
+  //   为什么非记不可：几处 `~/.dsh/**` 是**按 home 拼出来的绝对路径**。
+  //   清单里存的是**绝对路径**，所以"home 变了"之后**逐条 hash 照样全绿** ——
+  //   变的只是 `coverageGaps()` 问的那句"盘上有没有东西"：
+  //   换一个 home ⇒ 那底下空空 ⇒ "没什么可保护的" ⇒ **一条漏都不报**。
+  //   ⇒ 那就是这个仓库最忌的形状：**横幅写"对上了"，而 P1 那几条根本没在核**。
+  const home_ = home ?? (repo ? resolveServiceHome({ repo }) : nodeOs.homedir());
   const entries = {};
-  for (const e of protectedPaths({ repo, home })) {
+  for (const e of protectedPaths({ repo, home: home_ })) {
     for (const f of filesUnder(e)) {
       let sha256;
       try {
@@ -254,7 +261,7 @@ export function buildBaseline({ repo, home, now = Date.now(), builtBy = 'root' }
       entries[f] = { sha256, mode: e.mode, why: e.why };
     }
   }
-  return { version: BASELINE_VERSION, builtAt: now, builtBy, entries };
+  return { version: BASELINE_VERSION, builtAt: now, builtBy, home: home_, entries };
 }
 
 /**
@@ -355,6 +362,20 @@ export function writeBaselineFile(file, baseline) {
   return file;
 }
 
+/**
+ * **这份清单是按谁的 home 建的、现在又按谁的算**（P1-15）。
+ *
+ * @returns {{used:string, builtWith:string|null, mismatch:boolean}}
+ *   `mismatch` 为真 ⇒ `~/.dsh/**` 那几条**没在核对**（不是"对不上"，是"根本没看"）。
+ *   ⚠️ 老清单里**没有** `home` 这个字段（`BASELINE_VERSION` 之前建的）⇒ `builtWith=null`、
+ *      **不算不一致**（不能拿"没记"当"不一样" —— 那会假红）。
+ */
+export function identityOf({ baseline, home }) {
+  const used = home ?? null;
+  const builtWith = typeof baseline?.home === 'string' && baseline.home ? baseline.home : null;
+  return { used, builtWith, mismatch: Boolean(builtWith && used && builtWith !== used) };
+}
+
 /** 从磁盘读清单并核对（`serve.js` 开机走这条）。 */
 export function checkAgainstDisk({ repo, home, baselinePath = BASELINE_PATH }) {
   // ⚠️ **没给 home 就按"仓库属主"算**（不是 `os.homedir()`）：
@@ -378,6 +399,9 @@ export function checkAgainstDisk({ repo, home, baselinePath = BASELINE_PATH }) {
   // ★ **反着查一遍**：声明要保护的路径里，盘上有东西、而清单里一条都没有的
   //   —— 那几条就是"没被看着的"。`verifyBaseline` 永远看不见它们（它只看清单里已有的）。
   r.gaps = repo ? coverageGaps({ repo, home: who, baseline }) : [];
+  // ★ P1-15：**清单是按谁的 home 建的 vs 现在按谁的算**。
+  //   不一致 ⇒ `~/.dsh/**` 那几条**没在核对**（见 `buildBaseline` 顶上那段）。
+  r.identity = identityOf({ baseline, home: who });
   return r;
 }
 
@@ -408,6 +432,25 @@ export function integrityReport({ repo, home, baselinePath = BASELINE_PATH }) {
   }
   for (const c of r.warnings) {
     notes.push(`开机清单里"只报不拦"的条目动过：${c.file}（${c.what}）`);
+  }
+  // ★ P1-15：**清单是按谁的 home 建的**。不一致 ⇒ `~/.dsh/**` 那几条等于没核对。
+  if (r.identity?.mismatch) {
+    notes.push(
+      `⚠️ 这份开机清单是按 \`${r.identity.builtWith}\` 算的，而现在按 \`${r.identity.used}\` 算 ⇒ ` +
+        '**`~/.dsh/**`（设置 / 凭据 / 那份 profile）那几条实际上没在核对**' +
+        '（条目里存的是绝对路径，所以逐条 hash 照样过得去）。' +
+        `\n      ⇒ 多半是换了账号跑、或者起服务时 home 不对。重建：${rebuildCommand({ repo })}`,
+    );
+  }
+  if (r.identity?.used) {
+    // ⚠️ 措辞要**老实**：老清单里没有 `home` 这个字段 —— 那时只能说"按谁算"，
+    //    **不能说**"清单就是按这份 home 建的"（那是我们不知道的事）。
+    notes.push(
+      r.identity.builtWith
+        ? `开机清单按 \`${r.identity.used}\` 算（清单也是按它建的）`
+        : `开机清单按 \`${r.identity.used}\` 算（⚠️ 这份老清单里**没记**它是按谁的 home 建的；` +
+            '重建一次就会记上，那时"换了 home"才查得出来）',
+    );
   }
   // ★ **漏掉的那几条**（2026-09-21 实测踩到的那一类）。
   //   ⚠️ strict 的那几条**算问题**（拒绝启动）：声明了"对不上就不许起"，

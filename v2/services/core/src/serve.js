@@ -10,7 +10,6 @@
 //    stcp **不占任何公网端口**，所以 nginx 绕不过去（见 docs/dev/03-DEPLOY-WEB.md）。
 
 import nodeFs from 'node:fs';
-import nodeOs from 'node:os';
 import nodePath from 'node:path';
 
 import { AgentRuntime } from './agent-runtime.js';
@@ -28,7 +27,7 @@ import { appsBaseOf, createAppServer, loadSignKey } from './app-serve.js';
 import { asrConfigFromEnv, createAsrRelay } from './asr.js';
 import { createServer } from './server.js';
 import { describeAgentIdentity, loadConfig, preflight } from './config.js';
-import { integrityReport, repoRootFor } from './integrity.js';
+import { integrityReport, repoRootFor, resolveServiceHome } from './integrity.js';
 import { describeAdmission, readAdmission } from './admission.js';
 import { applyPrune, groupSlugFor, planPrune, scanEntries, summarize } from './prune.js';
 import { createTurnStatus, statusPath } from './turn-status.js';
@@ -62,12 +61,18 @@ const adm = readAdmission();
 //    盘上是两层的（`sessions/<项目>-<slug>--/<记录>/`），不分组地清会连
 //    **别的项目**和**这个 GUI 自己的可 resume 记录**一起删（AGENTS §六.5）。
 // ⚠️ 而且它**不许阻断启动**：清记录是维护动作，出任何事都只记一句（照开机对账那条规矩）。
+const repoRoot = repoRootFor(import.meta.dirname);
+// ⚠️ **不许在这儿写 `os.homedir()`**（P1-15，2026-09-24）：那算的是**现在跑这条命令的人**
+//    的 home。用 `sudo` 起服务时它是 `/root`，而清单里几条 `~/.dsh/**` 是**按仓库属主**算的
+//    ⇒ 两边算的不是同一个 home ⇒ 那几条**没在核对**，而横幅照样写"对上了"。
+//    ⇒ 身份只住在 `resolveServiceHome()` 一处（与 `--build` 那一侧同一个函数）。
+const serviceHome = resolveServiceHome({ repo: repoRoot });
 const ig = integrityReport({
   // ⚠️ **不许在这儿手写"往上几级"**（2026-09-22：写成 `'../../..'` ⇒ 只到 `v2/`，
   //    7 条受保护路径不存在、那条闸空转、补救命令指向不存在的文件）。
   //    ⇒ 那一段只住在 `integrity.js` 的 `REPO_ROOT_FROM_SRC`。
-  repo: repoRootFor(import.meta.dirname),
-  home: nodeOs.homedir(),
+  repo: repoRoot,
+  home: serviceHome,
 });
 problems.push(...ig.problems);
 notes.push(...ig.notes);
@@ -813,11 +818,13 @@ console.log(`  准入     ${describeAdmission(adm)}`);
 for (const p of pruned) console.log(`  顺手清   ${p.userId}：${p.text}`);
 console.log(
   `  完整性   ${
-    ig.state === 'ok'
-      ? '对上了'
-      : ig.state === 'tampered'
-        ? `⚠️ 有 ${ig.warnings.length} 个"只报不拦"的条目动过`
-        : '⚠️ **还没启用**（清单不在，见上面那条提示）'
+    ig.identity?.mismatch
+      ? `⚠️ **看着是"对上了"，其实那几条没在核**：清单按 ${ig.identity.builtWith} 算、现在按 ${ig.identity.used} 算`
+      : ig.state === 'ok'
+        ? `对上了（按 ${ig.identity?.used ?? serviceHome} 算）`
+        : ig.state === 'tampered'
+          ? `⚠️ 有 ${ig.warnings.length} 个"只报不拦"的条目动过`
+          : '⚠️ **还没启用**（清单不在，见上面那条提示）'
   }`,
 );
 console.log(`  agent    ${cfg.dshBin} --profile ${cfg.agentProfile}（最多 ${cfg.agentMaxProcesses} 个）`);
