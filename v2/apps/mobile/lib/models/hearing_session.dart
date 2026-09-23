@@ -130,7 +130,13 @@ class Hearing {
       busy ? _put(index, text) : this;
 
   /// 整段收尾（服务端说 `asr/end`）⇒ 停下，**字留着**。
-  Hearing done() => _copy(phase: HearingPhase.idle);
+  ///
+  /// ⚠️ **一个字都没听到的时候要说出来**（2026-09-23：主人手机上"按一下就没声了"，
+  ///    而屏幕上**什么都不说** —— 那正是"页面在说假话"那一族：
+  ///    它明明听到了一次会话结束，却不告诉人"我什么都没听到"）。
+  Hearing done() => text.trim().isEmpty
+      ? _copy(phase: HearingPhase.idle, why: hearNothing)
+      : _copy(phase: HearingPhase.idle);
 
   /// 到点了（服务端说 `asr/capped`）：字留着，并说一句为什么。
   Hearing capped() => _copy(phase: HearingPhase.idle, why: hearCapped);

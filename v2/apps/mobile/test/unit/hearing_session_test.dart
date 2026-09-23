@@ -137,6 +137,16 @@ void main() {
     );
   });
 
+  test('★ 一个字都没听到 ⇒ **说出来**（不许悄悄退出语音档）', () {
+    final empty = const Hearing().tapped().done();
+    expect(empty.phase, HearingPhase.idle);
+    expect(empty.why, hearNothing);
+    // 有字的时候**不许**挂这句提示（不然正常收尾也像出了事）
+    final got = const Hearing().tapped().finalText('今天', index: 0).done();
+    expect(got.why, '');
+    expect(got.hasText, isTrue);
+  });
+
   test('★ 「没额度」与「识别出错」必须分开说（腾讯 4004 那条）', () {
     final h = const Hearing().tapped().event({
       'type': 'asr/error',

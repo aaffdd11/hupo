@@ -1237,7 +1237,7 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     }
     if (wantAsr) {
       // 音频那条：身份**同一个来源**（验过签的 `claim`），但帧走另一套。
-      return asrWss.handleUpgrade(req, socket, head, (ws) => onAsr(ws));
+      return asrWss.handleUpgrade(req, socket, head, (ws) => onAsr(ws, req));
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       onStream(ws, url, claim);
@@ -1251,7 +1251,7 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
    * 而界面就得猜一个理由（本项目最贵的那类毛病：页面在说假话）。
    * ⇒ 接上，然后**如实说一句"没配"**，由客户端原话转达。
    */
-  function onAsr(ws) {
+  function onAsr(ws, req = null) {
     if (!asr) {
       try {
         ws.send(JSON.stringify({ type: 'asr/unavailable', reason: 'not-configured' }));
@@ -1265,7 +1265,8 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
       }
       return;
     }
-    asr.attach(ws);
+    // 把"是哪台设备来的"传下去（只用于日志：某台手机上不行时，这一行是唯一线索）
+    asr.attach(ws, { ua: req?.headers?.['user-agent'] ?? '未知设备' });
   }
 
   /**

@@ -163,6 +163,20 @@ void main() {
     expect(find.byIcon(Icons.arrow_upward), findsOneWidget);
   });
 
+  testWidgets('★ 一句都没听到 ⇒ **留在语音档**并把那句话说清楚（不许悄悄退回键盘）', (tester) async {
+    final n = await pump(tester);
+    await toVoice(tester);
+    n.value = const Hearing().tapped();
+    await tester.pumpAndSettle();
+    expect(find.text(hearListening), findsOneWidget);
+    // 对面说"整段完了"，可一个字都没有
+    n.value = n.value.done();
+    await tester.pumpAndSettle();
+    expect(find.text(hearNothing), findsOneWidget); // 屏幕上说了实话
+    expect(find.text(hearStart), findsOneWidget); // 按钮还在（他能再按一次）
+    expect(find.byIcon(Icons.keyboard_alt_outlined), findsOneWidget); // **还在语音档**
+  });
+
   testWidgets('★ 那颗按钮的命中区 ≥44（D3.6）', (tester) async {
     await pump(tester);
     await toVoice(tester);

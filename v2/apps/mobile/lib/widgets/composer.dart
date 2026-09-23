@@ -117,9 +117,13 @@ class _ComposerState extends State<Composer> {
     // —— 主人那句"然后将文字展示出来。用户可以选择发送"落在这儿。
     // ⚠️ 判据是 `busy`（在听 **或** 收尾中）**不是 `listening`**：
     //    按下"结束"之后还有一句要等，那一句没到就切回去 = 切早了（字会迟到）。
+    // 🔴 **只有"真的听到字"才切回键盘那一档**：一句都没听到时切回去，
+    //    用户看到的就是"按一下、什么都没发生"（正是主人 2026-09-23 报的现象）。
+    //    那种情况留在语音这一档，把"什么都没听到"那句话显出来。
     if (old.hearing.busy &&
         !widget.hearing.busy &&
-        widget.hearing.phase == HearingPhase.idle) {
+        widget.hearing.phase == HearingPhase.idle &&
+        widget.hearing.hasText) {
       setState(() => _voice = false);
       _focus.requestFocus();
     }

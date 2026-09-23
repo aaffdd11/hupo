@@ -66,7 +66,7 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
   /**
    * @param {import('ws').WebSocket} ws 面向浏览器那条（身份已验）
    */
-  function attach(ws) {
+  function attach(ws, info = {}) {
     const send = (o) => {
       try {
         if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(o));
@@ -84,6 +84,7 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
 
     if (!config.configured) {
       // 如实说：这条部署没配钥匙。**绝不假装开麦。**
+      log('asr：有人来了，但这台没配凭据 ⇒ 如实回 unavailable');
       send({ type: 'asr/unavailable', reason: 'not-configured' });
       return closeClient();
     }
@@ -132,15 +133,24 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
     const finish = (text = lastText) => {
       if (!ended) {
         ended = true;
+        log(`asr：会话结束 · 收到 ${bytes} 字节 ≈ ${(bytes / 32000).toFixed(1)} 秒 · 原因：${why}`);
         send({ type: 'asr/end', text, index: typeof lastIndex === 'number' ? lastIndex : 0 });
       }
       stopUpstream();
       closeClient();
     };
 
+    /** 收到多少音频（日志里只报这个数，不报内容）。 */
+    let bytes = 0;
+    /** 这次会话是怎么结束的（日志里要能看出"为什么"）。 */
+    let why = '（还在跑）';
+
     /** 客户端说"开始"（或者直接推了音频）⇒ 去连上游。 */
     const start = () => {
       if (up) return;
+      // ⚠️ 这一行是**排查用的**（2026-09-23 加）：主人手机上"按一下就没声了"，
+      //    而服务端以前**什么都不记** ⇒ 只能猜。现在至少能看清"有没有走到这里、是谁的设备"。
+      log(`asr：会话开始 · 引擎 ${config.engine} · 来自 ${String(info.ua ?? '未知设备').slice(0, 90)}`);
       let url;
       try {
         url = upstreamUrl();
@@ -150,6 +160,7 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
       }
       up = new WebSocket(url);
       cap = setTimeout(() => {
+        why = '到点收手（上游一次连接的上限）';
         // 内测版上限 ⇒ 我们提前收手，并**告诉客户端为什么**
         send({ type: 'asr/capped' });
         try {
@@ -184,6 +195,7 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
           if (j.code === 0) {
             send({ type: 'asr/ready', engine: config.engine });
           } else {
+            why = `上游不成（code ${j.code}）`;
             // ⚠️ 只说服务端那句原话（鉴权 / 没开通 / 参数）——**不带密钥、不带 URL**
             send({
               type: 'asr/error',
@@ -211,9 +223,13 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
         // ⚠️ **收尾那条要带最后听到的字**：腾讯的 `final:1` 里没有 `result`，
         //    照抄就是一条空字 —— 客户端那半边虽然也不许被空字擦掉，
         //    但这条本来就该把"整段最后是什么"说清楚。
-        if (j.final === 1) finish(lastText);
+        if (j.final === 1) {
+          why = '上游说整段说完了';
+          finish(lastText);
+        }
       });
       up.on('error', (err) => {
+        why = '上游出错';
         // ⚠️ **不许把签名 URL 写进日志/回话**（`safeAsrMessage` 负责）
         log(`asr 上游出错：${safeAsrMessage(err)}`);
         send({ type: 'asr/error', reason: 'upstream', message: safeAsrMessage(err) });
@@ -223,7 +239,10 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
       });
       up.on('close', () => {
         // 上游自己断了（没走到 final）⇒ 也算收尾，别让界面挂在那儿
-        if (!ended) finish();
+        if (!ended) {
+          why = why === '（还在跑）' ? '上游把连接关了' : why;
+          finish();
+        }
       });
     };
 
@@ -231,6 +250,7 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
       if (isBinary) {
         // ★ 音频：**原样**转给上游（一个字节都不改）
         start();
+        bytes += data.length ?? 0;
         upSend(Buffer.isBuffer(data) ? data : Buffer.from(data));
         return;
       }
@@ -251,6 +271,7 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
     ws.on('close', () => {
       if (cap) clearTimeout(cap);
       cap = null;
+      log(`asr：浏览器那一边断了（收到 ${bytes} 字节）`);
       stopUpstream();
     });
     ws.on('error', () => {
