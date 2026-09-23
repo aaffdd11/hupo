@@ -174,17 +174,69 @@ VPS 上 `/etc/nginx/conf.d/w-stalkerai.conf` 原来只有 `location = /api/strea
 `/etc/nginx/conf.d/w-stalkerai.conf.bak-20260923215845`。
 ⚠️ **以后再加 WS 路径，别忘了这一跳**（漏了的表现是"本机好好的、公网握手就断"）。
 
-### 6.2 凭据（主人自己动手 · P2）
+### 6.2 凭据怎么进服务（**主人自己动手** · 2026-09-23 已把管子接好）
+
+服务从**环境变量**读那三样。而环境由 `scripts/restart-core.sh` 从
+**`v2/services/core/data/asr.env`** 装进去（**照 `data/tenants.env` 那条已有的路**）：
 
 ```bash
-# ① 三样凭据进环境（**别写进任何文件**，命令行里也别留历史：用 read -s）
-read -rsp 'AppID: ' TENCENT_APPID; echo
-read -rsp 'SecretId: ' TENCENT_SECRET_ID; echo
-read -rsp 'SecretKey: ' TENCENT_SECRET_KEY; echo
-export TENCENT_APPID TENCENT_SECRET_ID TENCENT_SECRET_KEY
-# ② 自测（输出里没有密钥，可以直接贴）
-/home/deploy/.nvm/versions/node/v24.15.0/bin/node scripts/check-asr-tencent.mjs --pcm /tmp/hupo-asr-16k.pcm
+cd /home/deploy/proj/hupo/v2/services/core
+umask 077                     # 只有自己能读
+cat > data/asr.env <<'EOF'
+TENCENT_APPID=你的AppID
+TENCENT_SECRET_ID=你的SecretId
+TENCENT_SECRET_KEY=你的SecretKey
+EOF
+chmod 600 data/asr.env        # 0600
+cd /home/deploy/proj/hupo && bash scripts/restart-core.sh
 ```
 
-在那之前，页面上的语音那一档会**如实说**「语音这条路还没配好（缺钥匙）」——
-**不会假装开麦**，也不会用假字糊过去。
+重启时它**只报"齐没齐"，不打印任何值**：
+
+```
+   （读到了 data/asr.env：APPID 有 · SECRET_ID 有 · SECRET_KEY 有）
+```
+
+⚠️ **三条**：
+1. `data/` **在 `.gitignore` 里**（`git check-ignore` 验过）⇒ 这个文件**不可能被提交**；
+2. 这个文件**只有你自己写**（我不碰那个值，也不打印它）；
+3. 多租户：容器里那台也要有这三样（客户端连的是**他自己那台**的 `/api/asr`）。
+   今天**没配** —— 别人的语音会如实说"没配好"。
+
+### 6.3 🔴 接这根管子时顺手拆掉的一个坑（`restart-core.sh`）
+
+原来那一段长这样：
+
+```bash
+setsid nohup env \
+  HUPO_DATA="$DIR/data" \
+  HUPO_PORT="$PORT" \
+  HUPO_WEB="$DIR/web" \
+# ← 紧跟一条注释，**它把这个命令结束了**
+if [ -f data/tenants.env ]; then … fi
+  HUPO_BUILD_ID="$BUILD" \
+  node src/serve.js > serve.log 2>&1 < /dev/null &
+```
+
+bash 的续行符在注释**之前**就把行接起来了，于是那其实是一条
+**没有命令的 `env`**：
+
+- ① 它把**整个环境打印一遍** —— 环境里但凡有密钥（比如我正要接进去的
+  `TENCENT_SECRET_KEY`），就会**当场印在屏幕上**（`deploy-web-v2.sh` 调它时那一段
+  被 `grep` 滤掉了，所以以前没露出来；**直接跑就不会**）；
+- ② `HUPO_DATA / HUPO_PORT / HUPO_WEB` **根本没传给服务** —— 服务一直在用默认值，
+  而脚本却照着变量 echo「端口 $PORT」⇒ 谁把 `HUPO_PORT` 改了，**脚本就在说假话**。
+
+⇒ 改成显式 `export`（一个字节都不打印，值真的进服务）。⚠️ **起进程那一段没动**：
+线上服务的 cgroup 是 DSH 的 subprocess scope（`AGENTS.md` §一 记着），
+换 detach 方式会动到它。
+
+**验过的读数**（2026-09-23，用**不含任何密钥**的 `HUPO_ASR_URL` 当文件内容）：
+
+| 验什么 | 读数 |
+|---|---|
+| 不打印环境 | 重启输出里 `SESSION_MANAGER=` / `^PATH=` **0 次**（修之前会出现） |
+| 只说齐没齐 | `（读到了 data/asr.env：APPID 没有 · SECRET_ID 没有 · SECRET_KEY 没有）` |
+| 值真进服务 | `/proc/<pid>/environ` 里 `HUPO_DATA / HUPO_PORT / HUPO_WEB / HUPO_ASR_URL` **都在**，`HUPO_DATA` 正是 `…/core/data` |
+| **真页面走通** | **公网** `w.stalkerai.cn` + 假麦克风：框里出现上游那句话、桩那头收到 **141960 字节**音频 |
+| 拆完不留痕 | 删文件 + 重启 ⇒ 环境里 `HUPO_ASR_URL` / `TENCENT_SECRET_KEY` **都不在**，页面回到"缺钥匙" |

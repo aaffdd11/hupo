@@ -183,10 +183,22 @@ if [ -z "$BUILD" ]; then
 fi
 PORT="${HUPO_PORT:-8020}"
 echo "▶ 起新服务：端口 $PORT，构建指纹 $BUILD"
-setsid nohup env \
-  HUPO_DATA="$DIR/data" \
-  HUPO_PORT="$PORT" \
-  HUPO_WEB="$DIR/web" \
+# ⚠️ **这一段 2026-09-23 修过**，原来长这样：
+#       setsid nohup env \
+#         HUPO_DATA="$DIR/data" \
+#         HUPO_PORT="$PORT" \
+#         HUPO_WEB="$DIR/web" \
+#       <紧跟一条注释>
+#    而它后面那条注释**结束了这个命令** ⇒ 那其实是一条**没有命令的 `env`**：
+#      ① 它把**整个环境打印一遍**（环境里但凡有密钥，就当场印在屏幕上/日志里）；
+#      ② `HUPO_DATA / HUPO_PORT / HUPO_WEB` **根本没传给服务** —— 服务一直在用默认值，
+#         而脚本却照着变量 echo「端口 $PORT」⇒ 谁改了 `HUPO_PORT`，**脚本就在说假话**。
+#    ⇒ 改成显式 `export`：**一个字节都不打印**，而值真的进到服务里。
+#    ⚠️ **起进程那一段没动**（没有加 `setsid`）：线上服务的 cgroup 现在是
+#       DSH 的 subprocess scope（`AGENTS.md` §一 记着这件事），换 detach 方式会动到它。
+export HUPO_DATA="$DIR/data"
+export HUPO_PORT="$PORT"
+export HUPO_WEB="$DIR/web"
 # ★ **机器本地的环境**（可选，**不进仓库**）：`data/tenants.env`。
 #   多租户那张 `userId → 租户名` 的表住在那儿 —— 它是**这台机器的状态**
 #   （谁在哪台容器里），不是代码。⚠️ 显式一张表、**不许从手机号推**（权限席点名）。
@@ -197,6 +209,23 @@ if [ -f data/tenants.env ]; then
   . ./data/tenants.env
   set +a
   echo "   （读到了 data/tenants.env）"
+fi
+
+# ★ **语音那三样凭据**（可选，**不进仓库**）：`data/asr.env`（**0600**）。
+#   一行一个：`TENCENT_APPID` / `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY`
+#   （引擎名可用 `TENCENT_ASR_ENGINE` 覆盖；`HUPO_ASR_URL` 是取证时换上游用的，
+#    **生产里不许设** —— 设了就等于拿桩当真的。）
+#   ⚠️ 它在**启动之前** source，而上面那条"打印整个环境"的坑已经拆掉
+#      ⇒ 这三个值不会出现在任何输出里。
+if [ -f data/asr.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./data/asr.env
+  set +a
+  # ⚠️ **只说"齐没齐"，不打印值、也不打印长度**
+  have() { if [ -n "${!1:-}" ]; then echo "有"; else echo "没有"; fi; }
+  echo "   （读到了 data/asr.env：APPID $(have TENCENT_APPID) · SECRET_ID $(have TENCENT_SECRET_ID) · SECRET_KEY $(have TENCENT_SECRET_KEY)）"
+  unset -f have
 fi
 
   HUPO_BUILD_ID="$BUILD" \
