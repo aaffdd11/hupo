@@ -21,6 +21,7 @@ import nodePath from 'node:path';
 
 import { LedgerError } from './ledger.js';
 import { renderLedger } from './ledger-text.js';
+import { handSocketToAgent } from './socket-owner.mjs';
 
 /** 账本套接字放哪。**跟着 dataDir 走**（它和账本日志是一对）。 */
 export function ledgerSocketPath(dataDir) {
@@ -162,6 +163,10 @@ export class LedgerSocket {
         } catch (err) {
           this.#log(`[ledger] 本地通道权限没设上：${err?.message ?? err}`);
         }
+        // 🔴 **盒子里还得把它交给 agent**（同 `apps.sock` 那条）：服务是 root 起的、
+        //    agent 是 uid 1000 ⇒ 0600 属主 root 会让它连不上（真机 EACCES）。
+        //    规则只住在 `socket-owner.mjs`；宿主上这条是空操作。
+        handSocketToAgent(this.#path, { log: (m) => this.#log(`[ledger] ${m}`) });
         resolve();
       });
     });

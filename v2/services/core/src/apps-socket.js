@@ -19,6 +19,7 @@ import nodePath from 'node:path';
 
 import { AppsError } from './apps.js';
 import { PublishedError, authorHashOf } from './published.js';
+import { handSocketToAgent } from './socket-owner.mjs';
 
 /** 小程序那条口放哪。**跟着那个人的目录走**（`<他那一格>/apps.sock`）。 */
 export function appsSocketPath(dir) {
@@ -184,6 +185,10 @@ export class AppsSocket {
         } catch (err) {
           this.#log(`[apps] 本地通道权限没设上：${err?.message ?? err}`);
         }
+        // 🔴 **盒子里还得把它交给 agent**：那边**服务是 root 起的、agent 是 uid 1000**，
+        //    0600 且属主 root ⇒ agent 连不上（2026-09-24 真机复现：EACCES）。
+        //    规则只住在 `socket-owner.mjs`；宿主上这条是空操作。
+        handSocketToAgent(this.#path, { log: (m) => this.#log(`[apps] ${m}`) });
         resolve();
       });
     });
