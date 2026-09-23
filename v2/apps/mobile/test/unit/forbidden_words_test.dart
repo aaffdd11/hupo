@@ -112,6 +112,7 @@ void main() {
       reasoningLabel,
       // ⚠️ **关于页那几句也在这儿**（直接引数据源，不手抄 —— 手抄会漂）
       ...aboutFacts.expand((f) => [f.title, ...f.lines]),
+      ...aboutFactsFor(canHear: true).expand((f) => [f.title, ...f.lines]),
       // ⚠️ 批 3「删掉 / 回收站」那一批（`28-DELETE.md`）：顶栏入口、气泡长按菜单、
       //    删前那份清单、回收站页的按钮与几句回话 —— **直接引数据源**。
       trashTitle,

@@ -53,6 +53,7 @@ const RATCHET = [
   'docs/dev/69-ASR-ROUTES.md',
   'docs/dev/70-APP-ICONS.md',
   'docs/dev/71-MIC-ASR.md',
+  'docs/dev/72-UI-PASS.md',
 ];
 
 /** ② L0 = 路由层：零事实、零数值、零状态 */

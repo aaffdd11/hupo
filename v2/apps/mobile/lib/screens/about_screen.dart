@@ -13,6 +13,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/about_facts.dart';
+import '../services/hearing.dart' as hearing_service;
 
 class AboutScreen extends StatelessWidget {
   const AboutScreen({super.key});
@@ -20,6 +21,9 @@ class AboutScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // ★ **按这台设备说**（D3.3）：开得了麦就说网页那套，开不了就说另一套。
+    //   ⚠️ 原来这里写死了"我们自己没有另外做一个话筒" —— 那句话现在已经是假的。
+    final facts = aboutFactsFor(canHear: hearing_service.canHear);
     return Scaffold(
       appBar: AppBar(title: const Text('关于')),
       body: Center(
@@ -28,9 +32,9 @@ class AboutScreen extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 760),
           child: ListView.builder(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-            itemCount: aboutFacts.length,
+            itemCount: facts.length,
             itemBuilder: (context, i) {
-              final f = aboutFacts[i];
+              final f = facts[i];
               return Padding(
                 // ⚠️ 间距不许用"写死的高度"包住字（D3.5）：这里是**字外面的留白**，
                 //    字长多大它都不挡。真正的容器一律跟字算。

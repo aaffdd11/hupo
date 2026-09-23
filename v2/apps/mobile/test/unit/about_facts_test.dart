@@ -13,12 +13,15 @@ import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
 
 String allText() =>
-    aboutFacts.expand((f) => [f.title, ...f.lines]).join('\n');
+    [
+      ...aboutFacts,
+      ...aboutFactsFor(canHear: true),
+    ].expand((f) => [f.title, ...f.lines]).join('\n');
 
 void main() {
   group('「关于」页', () {
     test('🔴 每一句都不许含禁用词（工作区 / 连接 / 工具 / 正在听…）', () {
-      for (final f in aboutFacts) {
+      for (final f in [...aboutFacts, ...aboutFactsFor(canHear: true)]) {
         for (final line in [f.title, ...f.lines]) {
           final hits = scanForbidden(line);
           expect(hits, isEmpty, reason: '「$line」里有禁用词：$hits');
@@ -26,17 +29,29 @@ void main() {
       }
     });
 
-    test('🔴 D3.3：语音那条要**按设备说**，而且要说得保守', () {
-      final t = allText();
-      expect(
-        t.contains('取决于') && t.contains('输入法'),
-        isTrue,
-        reason: '★ 必须说清"能不能用嘴说取决于你这台设备的输入法" —— 这是 D3.3 的核心',
-      );
-      // 保守那一半：告诉他**怎么判断**（有麦克风就能用）
-      expect(t.contains('麦克风'), isTrue, reason: '要给出他能自己核对的判据');
-      // 而且要明说我们没有自己的话筒（否则他会去找一个不存在的按钮）
-      expect(t.contains('话筒'), isTrue);
+    test('🔴 D3.3：语音那条**按设备说**，而且两个说法都要交代清楚', () {
+      final web = aboutFactsFor(canHear: true)
+          .expand((f) => [f.title, ...f.lines])
+          .join('\n');
+      final no = aboutFactsFor(canHear: false)
+          .expand((f) => [f.title, ...f.lines])
+          .join('\n');
+
+      // ① 网页那一版（我们**真有**一个话筒了，2026-09-23）：要说清怎么用
+      expect(web.contains('话筒'), isTrue, reason: '网页上那个话筒是真的，必须写出来');
+      expect(web.contains('按一下'), isTrue, reason: '要说清怎么按（按一下开始、再按一下结束）');
+      expect(web.contains('输入法'), isTrue, reason: '输入法自带麦克风那条路也要留着（D3.3 v1.1）');
+
+      // ② 开不了麦那一版：**不许一刀切**，要说清"换浏览器就能用"
+      expect(no.contains('浏览器'), isTrue, reason: '要给出他能自己核对的出路');
+      expect(no.contains('输入法'), isTrue);
+
+      // ③ 🔴 **回归条**：那句假话一个字节都不许再出现
+      //    （2026-09-23 关于页上写着"我们自己没有另外做一个话筒"，而那时已经做了）
+      for (final t in [web, no]) {
+        expect(t.contains('没有另外做一个话筒'), isFalse,
+            reason: '那句话在 2026-09-23 之后就是假的（话筒做了）—— 这是防它被写回来的回归条');
+      }
     });
 
     test('🔴 D3.3：**不许一刀切** —— 一个字的"用不了"都不许有', () {

@@ -24,14 +24,38 @@ class AboutFact {
 }
 
 /// D3.3：**按设备说**。⚠️ 不许改成"不会拼音就用不了"那种一刀切。
-const AboutFact aboutVoice = AboutFact(
+///
+/// 🔴 **2026-09-23 大改过一次 —— 原来这三行里有一句假话**：
+///    它写着"**我们自己没有另外做一个话筒**"，而那一版**真的做了**
+///    （网页上那颗话筒 → 按一下说话 → 实时出字，契约 `docs/dev/71-MIC-ASR.md`）。
+///    是主人要"整理整个 UI"时，我在**关于页里当场读出来的**。
+///    ⇒ 现在按设备分两种说法（`canHear`），而且两种都过禁用词硬闸。
+const AboutFact aboutVoiceWeb = AboutFact(
   title: '它怎么听你说话',
   lines: [
-    '能不能用嘴说，取决于你这台设备上的输入法。',
-    '如果你的输入法有麦克风：点麦克风 → 说 → 字进到输入框里 → 按发送。',
-    '我们自己没有另外做一个话筒。',
+    '点那个话筒 → 按一下「按一下 说话」→ 说完再按一下。',
+    '字会进到输入框里，你自己决定发不发 —— 它不会替你发出去。',
+    '你的输入法自带麦克风时，也能照常用它。',
   ],
 );
+
+/// 这台设备**开不了麦**（原生那个包里还没做录音）时说的那几句。
+const AboutFact aboutVoiceNo = AboutFact(
+  title: '它怎么听你说话',
+  lines: [
+    '这一台还不能用嘴说 —— 用浏览器打开就能用（那儿有一个话筒）。',
+    '你的输入法自带麦克风时，也能照常用它。',
+  ],
+);
+
+/// **按设备说**：网页（开得了麦）用 [aboutVoiceWeb]，否则用 [aboutVoiceNo]。
+///
+/// ⚠️ 纯函数（`test/unit/about_facts_test.dart` 两种都要扫硬闸）。
+List<AboutFact> aboutFactsFor({required bool canHear}) => [
+  canHear ? aboutVoiceWeb : aboutVoiceNo,
+  aboutMemory,
+  aboutTruth,
+];
 
 /// ★2「记忆不可验证 ⇒ 黑盒记忆 = 默认没记住」。
 ///
@@ -61,4 +85,6 @@ const AboutFact aboutTruth = AboutFact(
 );
 
 /// 这一页按顺序摆这几条。
-const List<AboutFact> aboutFacts = [aboutVoice, aboutMemory, aboutTruth];
+/// ⚠️ **保守那一份**（开不了麦的说法）。判据扫这一份 + `aboutFactsFor` 的那两份。
+/// 界面**不要**直接用这个常量 —— 用 [aboutFactsFor]（按设备说）。
+const List<AboutFact> aboutFacts = [aboutVoiceNo, aboutMemory, aboutTruth];
