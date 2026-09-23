@@ -22,6 +22,11 @@
 #    别的 dsh 会话（几百个）。杀错了是**毁别人的活**。
 #    我们的 agent 是**本服务的子进程**；优雅地 SIGTERM 服务本身，
 #    `serve.js` 会 `dispatcher.shutdown()` → `runtime.shutdown()` 把子进程带走。
+# ⚠️ **这个脚本不解决"开机自启"**（P1-21，2026-09-24 写清）：
+#    它只是"现在把服务重启成新的那一版"。**机器重启之后，服务不会自己回来** ——
+#    那一件要 systemd（见 `docs/dev/00-PROGRESS.md` §六 #48，**还没做**）。
+#    ⚠️ 同一条也写在 `scripts/start-tunnels.sh` 顶上（那几条隧道一样不会自己回来）。
+#
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../v2/services/core" && pwd)"
