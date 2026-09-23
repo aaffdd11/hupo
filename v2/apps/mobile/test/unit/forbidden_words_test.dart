@@ -3,6 +3,8 @@
 //
 // 走查里最一致的失败不是"功能没有"，是"我看不懂这句话"。
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
@@ -174,6 +176,16 @@ void main() {
     for (final c in copies) {
       final hits = scanForbidden(c);
       expect(hits, isEmpty, reason: '「$c」里有禁用词：$hits');
+    }
+  });
+
+  // ★ P0-4（2026-09-24）：这两句**曾经把「服务器」写到屏幕上**（内部词，词表里本来就禁它）。
+  //   这条判据扫的是**源码里那两句本身** —— 比只扫一份文案清单更硬（改回来当场红）。
+  test('P0-4：状态条那两句（_lastError）里不许出现「服务器」', () {
+    final src = File('lib/services/chat_controller.dart').readAsStringSync();
+    for (final line in src.split('\n')) {
+      if (!line.contains('_lastError')) continue;
+      expect(line.contains('服务器'), isFalse, reason: '内部词不许上屏：$line');
     }
   });
 }

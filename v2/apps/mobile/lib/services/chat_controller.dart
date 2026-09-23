@@ -661,7 +661,8 @@ class ChatController extends ChangeNotifier {
       //    用户自己未确认的那几句 ⇒ 立刻按"幸存下来的时间线"重存一次。
       //    不重存的话，刷新之后那几句就真没了——那正是欠账 18 要修的东西。
       _saveDrafts();
-      _lastError = '和服务器对不上了，正在重新同步';
+      // ★ P0-4（2026-09-24）：原来这里把「服务器」写上了屏幕 —— 内部词不许上屏
+      _lastError = '这边对不上了，正在重新同步';
       notifyListeners();
       return;
     }
@@ -973,7 +974,7 @@ class ChatController extends ChangeNotifier {
         _lastError = '它现在忙不过来，过一会儿再发一次';
       case SayRejected(:final message):
         timeline.setLocalState(messageId, MessageState.failed);
-        _lastError = '服务器没收下：$message';
+        _lastError = '没收下：$message';
       case SayNetworkError():
         timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '网没通，这条没发出去';
