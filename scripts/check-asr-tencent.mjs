@@ -141,7 +141,10 @@ const timer = setTimeout(() => {
 }, 15000);
 
 ws.on('open', () => {
-  console.log('✓ WebSocket 连上了（说明签名这一关过了）');
+  // 🔴 **这句话 2026-09-23 修过**：原来写的是"说明签名这一关过了"——**那是假话**。
+  //    腾讯是**连上之后**用第一句回话验签的（`code` 非 0 就是没过），
+  //    ⇒ TCP/HTTP 这一跳通了**什么都不说明**（拿一把不存在的密钥来试，它照样"连上"）。
+  console.log('✓ WebSocket 连上了（⚠️ 这不代表签名对 —— 腾讯是连上之后用第一句回话验签的）');
   // 200ms 一片（16k × 2 字节 × 0.2s = 6400）
   for (let i = 0; i < audio.length; i += 6400) {
     ws.send(audio.subarray(i, Math.min(i + 6400, audio.length)));
@@ -162,6 +165,14 @@ ws.on('message', (raw) => {
     if (j.code !== 0) {
       clearTimeout(timer);
       console.error(`✗ 服务端不收（code ${j.code}）—— 这一条要照着 message 去查（鉴权 / 没开通 / 参数）`);
+      // ⚠️ **这两种回话要点破**（2026-09-23 实测出来的区别：拿两把不同的密钥一试就知道）：
+      const m = String(j.message ?? '');
+      if (m.includes('密钥不存在')) {
+        console.error('   ⇒ 腾讯说**没有这个 SecretId**（密钥被删/被禁/填错/多了空格）。');
+      } else if (m.includes('签名错误')) {
+        console.error('   ⇒ 腾讯**认得这个 SecretId**，是 **SecretKey 对不上**（或签名方法不对）。');
+        console.error('      （SecretKey 是控制台上那一串 32 位随机字符，**通常没有 `sk-` 前缀**。）');
+      }
       done(2);
     }
     return;
