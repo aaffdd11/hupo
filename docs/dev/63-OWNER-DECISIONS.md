@@ -35,6 +35,12 @@ sudo bash scripts/install-provision-helper.sh --yes
 
 ⚠️ 我没有自己动 `/etc/hupo`（那是**特权侧**，按 P1/P2 归你签字）。
 
+**还有一件同类的**（清账⑧/#42 之后）：租户镜像**重造过了**（`src/` 兜底已拿掉，403MB，自检 5/5），但**跑着的那两台**要到**下次重建容器**才用得上新镜像（`podman load` 换的是存储里的 tag）。⚠️ 在那之前它们照旧从 `/app/code` 跑产品层，**行为没有任何差别**（所以这不是「坏了」，只是「旧镜像还挂在那两台上」）。
+
+```bash
+sudo bash scripts/create-tenant-pool.sh --yes
+```
+
 ---
 
 ## 二、你不点头，我也能自己做完的那几条（**不用等**）

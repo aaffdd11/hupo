@@ -64,7 +64,15 @@ done
 echo "  库: $(find "$R" -name '*.so*' | wc -l) 个"
 
 # ── ② 调度器本体 ──
-cp -r "$CORE/src" "$R/app/src"
+#
+# 🔴 **2026-09-23（账 #42）：这里**不再**拷 `src/` 进镜像。**
+#    原来镜像里带一份 `src/` 当**兜底**（产品层认不到时回落到它）——
+#    代价是"**两处代码**"：跑着的那份到底是哪一份，得看挂载在不在，
+#    而"悄悄跑一份旧的"正是这套东西最该防的状态（`45-TENANT-UPDATE.md`）。
+#    ⚠️ 拿掉它的**条件**（两台都迁移完、`check-tenant-update.sh --live` 绿）已经满足；
+#    拿掉之后**认不到产品层就起不来**（薄加载器会说清为什么，见下面那段）。
+#    仍然留在镜像里的那几样是**几 KB 的指针/配置**（人格 · 能力 · 模型代理 patch），
+#    它们不是"第二份代码"（`ws` 也在：产品层只带自己的 `src/`，不带 node_modules）。
 cp "$CORE/package.json" "$R/app/package.json"
 mkdir -p "$R/app/node_modules"
 # ⚠️ 只带**真正用到的那一个依赖**（`ws`）—— 不带整个 node_modules（那会把 dev 依赖也搬进去）
@@ -72,7 +80,6 @@ if [ -d "$CORE/node_modules/ws" ]; then cp -r "$CORE/node_modules/ws" "$R/app/no
 # 人格层 + 能力层 + MCP 那支脚本（服务开机 preflight 会查它们在不在）
 cp "$CORE/hupo-persona.yml" "$R/app/hupo-persona.yml"
 [ -f "$CORE/hupo-capabilities.yml" ] && cp "$CORE/hupo-capabilities.yml" "$R/app/hupo-capabilities.yml"
-[ -f "$CORE/src/mcp-ledger-server.mjs" ] && cp "$CORE/src/mcp-ledger-server.mjs" "$R/app/src/mcp-ledger-server.mjs"
 
 # ── ②·代理：让模型那条路走盒内的 root 小代理（多租户 ②-3）──
 # ⚠️ **它现在是仓库里一个真文件**（2026-09-21 改）：
@@ -84,7 +91,7 @@ MODEL_PATCH="$CORE/hupo-model-proxy.yml"
 [ -f "$MODEL_PATCH" ] || { echo "✗ 找不到 $MODEL_PATCH"; exit 2; }
 cp "$MODEL_PATCH" "$R/app/hupo-model-proxy.yml"
 echo "  模型代理 patch: /app/hupo-model-proxy.yml（兜底那份）"
-echo "  服务: $(find "$R/app/src" -name '*.js' | wc -l) 个 js + ws"
+echo "  服务: **不在镜像里**（在产品层；这里只有一个薄加载器 + ws）"
 
 # ── ②·dsh：**agent 本体**（多租户 ②-1）──
 #
@@ -160,14 +167,23 @@ import { pathToFileURL } from 'node:url';
 // ════════════════════════════════════════════════════════════
 function pickCodeDir() {
   const want = process.env.HUPO_CODE_DIR ?? '';
-  if (!want) return { dir: '/app', why: '宿主没给 HUPO_CODE_DIR' };
+  if (!want) return { dir: '', why: '宿主没给 HUPO_CODE_DIR' };
   if (!nodeFs.existsSync(nodePath.join(want, 'src', 'entry.mjs'))) {
-    return { dir: '/app', why: `产品层里没有 ${want}/src/entry.mjs` };
+    return { dir: '', why: `产品层里没有 ${want}/src/entry.mjs` };
   }
   return { dir: want, why: '' };
 }
 
 const picked = pickCodeDir();
+// 🔴 **2026-09-23（账 #42）：镜像里那份 `src/` 兜底**已经拿掉** ⇒ 认不到产品层就**起不来**。
+//    为什么不悄悄回落：那会变成"两台跑着不同的代码，而界面上看不出来"。
+//    ⇒ 跑不了就说跑不了，并说清**怎么办**（宿主上那条软链 + 重开一次）。
+if (!picked.dir) {
+  console.error('  ✗ 找不到产品层，这一台起不了：' + picked.why);
+  console.error('    怎么办：在宿主上确认 /srv/hupo/tenant-code/current 在（bash scripts/build-tenant-code.sh --list），');
+  console.error('    然后重开这一台（宿主会发现指纹不同、叫它重开；或由主人显式重启那个单元）。');
+  process.exit(1);
+}
 const CODE = picked.dir;
 process.env.HUPO_CODE_DIR = CODE;
 
@@ -178,11 +194,11 @@ try {
   const m = JSON.parse(nodeFs.readFileSync(nodePath.join(CODE, 'manifest.json'), 'utf8'));
   if (typeof m?.fingerprint === 'string' && m.fingerprint) BUILD = m.fingerprint;
 } catch {
-  /* 兜底那份没有 manifest ⇒ 就是 dev，**如实** */
+  /* 产品层少了 manifest（按理不会）⇒ 如实报 `dev`，**不许**编一个指纹出来 */
 }
 // ⚠️ **必须在产品层那个入口被 import 之前设**：`config.js` 是**被 import 的那一刻**读 env 的。
 process.env.HUPO_BUILD_ID = BUILD;
-console.log(`  产品层：${CODE}${picked.why ? `（回落到镜像里那份：${picked.why}）` : ''} · 版本 ${BUILD}`);
+console.log(`  产品层：${CODE} · 版本 ${BUILD}`);
 
 await import(pathToFileURL(nodePath.join(CODE, 'src', 'entry.mjs')).href);
 
@@ -307,33 +323,78 @@ echo "✅ 镜像好了：$IMG（$( "$PODMAN" images --format '{{.Size}}' "$IMG" 
 
 [ "$DO_RUN" = "1" ] || { echo "（想顺手跑一台：加 --run）"; exit 0; }
 
-# ── ⑤ 跑一台，验它能起来（**宿主只绑回环**）──
-echo "▶ 跑一台"
+# ── ⑤ 跑两台：**没产品层必须起不来 · 有产品层必须起来**（账 #42 · 2026-09-23）──
+#
+# ⚠️ 为什么是两台：镜像里那份 `src/` 兜底拿掉之后，"认不到产品层"**不再是**一个
+#    "悄悄跑旧的"的分支，而是一个**必须说出来**的失败。⇒ 判据也得两边都钉：
+#    只验"能起来"的话，回落那条路**永远验不到**（而它正是刚刚被拿掉的那个东西）。
+echo "▶ ⑤·甲 没挂产品层 ⇒ **必须起不来**（拿掉兜底之后这是正确行为）"
 PORT="${HUPO_TENANT_PORT:-18090}"
 DATA="$(mktemp -d)"
-cid="$("$PODMAN" run -d --rm \
+PASS=0; FAIL=0
+ok() { printf '  ✅ %s\n' "$*"; PASS=$((PASS + 1)); }
+bad() { printf '  ✗ %s\n' "$*"; FAIL=$((FAIL + 1)); }
+
+# ⚠️ 这一台**本来就该立刻退**（loader `process.exit(1)`）⇒ **前台跑**、直接抓它的
+#    stdout/stderr。用 `-d` + `podman logs` 会**扑空**：`--rm` 在它退出那一刻就把容器收了
+#    （第一版就是这么扑空的：日志尾巴是一句 "no such container"）。
+out="$("$PODMAN" run --rm \
     -p "127.0.0.1:$PORT:8080" -v "$DATA:/data" \
     --read-only --tmpfs /tmp --tmpfs /run/hupo:rw,nosuid,nodev,mode=0700 \
     --security-opt=no-new-privileges \
     --cap-drop=ALL \
     --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
     --pids-limit=512 --memory=768m --memory-swap=768m \
-    "$IMG" 2>&1 | tail -1)"
-echo "  容器 ${cid:0:12} · 数据 $DATA · 口 127.0.0.1:$PORT"
-for _ in $(seq 1 20); do
-  code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/version" 2>/dev/null || true)"
-  [ "$code" = "200" ] && break
-  sleep 0.5
-done
-echo "  /api/version → ${code:-（没起来）}"
-echo -n "  对外开了吗："; ss -ltn 2>/dev/null | grep ":$PORT" | awk '{print $4}' | tr '\n' ' '; echo "（应只有 127.0.0.1）"
-echo "  容器里 uid 映射：$(podman exec "$cid" /bin/node -e 'process.stdout.write(require("node:fs").readFileSync("/proc/self/uid_map","utf8"))' 2>/dev/null | tr -s ' ')"
-# ⚠️ 判据要挑**存在的**路径：scratch 镜像里没有 /usr，拿它试写会得到 ENOENT —
-#    那证明的是"路径不存在"，不是"只读"（这就是"看着像过了"）。
-echo -n "  根真只读吗（挑存在的 /etc/hosts）："
-"$PODMAN" exec "$cid" /bin/node -e 'try{require("node:fs").appendFileSync("/etc/hosts","# canary\n");console.log("🔴 写得进去 —— 根不是只读")}catch(e){console.log("✅ 【"+e.code+"】")}' 2>/dev/null
-echo -n "  正对照（/tmp 与 /data 该能写）："
-"$PODMAN" exec "$cid" /bin/node -e 'const fs=require("node:fs");const o=[];for(const p of ["/tmp/canary","/data/canary"]){try{fs.writeFileSync(p,"y");o.push(p+" ✓")}catch(e){o.push(p+" 【"+e.code+"】")}}console.log(o.join(" | "))' 2>/dev/null
-echo "  日志尾巴："; "$PODMAN" logs "$cid" 2>&1 | tail -5 | sed 's/^/    /'
-"$PODMAN" kill "$cid" >/dev/null 2>&1
+    "$IMG" 2>&1)"
+rc=$?
+echo "  退出码 $rc（**不为 0 才对**）· 数据 $DATA · 口 127.0.0.1:$PORT"
+[ "$rc" -ne 0 ] && ok "它**退出了**（没有赖着起一个没有代码的服务）" || bad "退出码 0 —— 它起来了？"
+if printf '%s' "$out" | grep -q '找不到产品层'; then
+  ok "它**说清了**为什么起不来（那句人话在）"
+else
+  bad "没看到那句人话 —— 输出尾巴：$(printf '%s' "$out" | tail -2 | tr '\n' ' ')"
+fi
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/version" 2>/dev/null || true)"
+[ "$code" != "200" ] && ok "接口**没有**起来（code=${code:-无}）" || bad "竟然起来了（code=200）—— 说明兜底还在"
+
+echo "▶ ⑤·乙 挂了产品层 ⇒ **必须起来**，而且自报当前指纹"
+CODE_ROOT="${HUPO_CODE_ROOT:-/srv/hupo/tenant-code}"
+CODE_NOW="$(readlink "$CODE_ROOT/current" 2>/dev/null | sed 's|.*/||')"
+if [ -z "$CODE_NOW" ] || [ ! -d "$CODE_ROOT/current/src" ]; then
+  bad "宿主上没有可用的产品层（$CODE_ROOT/current）⇒ 这一半**没验**"
+else
+  PORT2=$((PORT + 1))
+  cid2="$("$PODMAN" run -d --rm \
+      -p "127.0.0.1:$PORT2:8080" -v "$DATA:/data" \
+      -v "$CODE_ROOT/current:/app/code:ro" --env HUPO_CODE_DIR=/app/code \
+      --read-only --tmpfs /tmp --tmpfs /run/hupo:rw,nosuid,nodev,mode=0700 \
+      --security-opt=no-new-privileges \
+      --cap-drop=ALL \
+      --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
+      --pids-limit=512 --memory=768m --memory-swap=768m \
+      "$IMG" 2>&1 | tail -1)"
+  for _ in $(seq 1 20); do
+    code2="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT2/api/version" 2>/dev/null || true)"
+    [ "$code2" = "200" ] && break
+    sleep 0.5
+  done
+  [ "$code2" = "200" ] && ok "/api/version → 200" || bad "/api/version → ${code2:-（没起来）}"
+  logs2="$("$PODMAN" logs "$cid2" 2>&1 || true)"
+  printf '%s' "$logs2" | grep -q "版本 $CODE_NOW" && ok "自报版本 = 当前指纹（$CODE_NOW）" || bad "没自报当前指纹（应为 $CODE_NOW）"
+  echo -n "  对外开了吗："; ss -ltn 2>/dev/null | grep ":$PORT2" | awk '{print $4}' | tr '\n' ' '; echo "（应只有 127.0.0.1）"
+  echo -n "  根真只读吗（挑存在的 /etc/hosts）："
+  "$PODMAN" exec "$cid2" /bin/node -e 'try{require("node:fs").appendFileSync("/etc/hosts","# canary\n");console.log("🔴 写得进去 —— 根不是只读")}catch(e){console.log("✅ 【"+e.code+"】")}' 2>/dev/null
+  # ⚠️ **先取日志、再杀**：`--rm` 一杀就什么都没了（上面那一台已经栽过一次）
+  echo "  日志尾巴（有产品层那台）："
+  "$PODMAN" logs "$cid2" 2>&1 | tail -4 | sed 's/^/    /' || true
+  "$PODMAN" kill "$cid2" >/dev/null 2>&1
+fi
+
 echo "（容器已收，数据留在 $DATA）"
+echo
+if [ "$FAIL" -eq 0 ]; then
+  echo "✅ 镜像自检全过（$PASS 条）—— 没产品层起不来 · 有产品层起得来"
+else
+  echo "✗ 镜像自检有 $FAIL 条没过（过 $PASS 条）"
+  exit 1
+fi

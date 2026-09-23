@@ -60,12 +60,16 @@ export function readProductLayer({ root = process.env.HUPO_CODE_ROOT ?? DEFAULT_
  * 三种"不一样"，而且**每一种都要说出来**（这是这套东西最该防的状态：
  * 一台悄悄跑着旧的，而两边都以为没事）：
 
- *   `same`     这一台就是当前那一版
- *   `fallback` 它跑的是**镜像里那份兜底**（宿主压根没给它挂产品层，或者挂的目录里没有）
- *   `stale`    它跑的是**另一个版本**（产品层翻过了，它还没重开）
- *   `unknown`  宿主自己读不到当前那一版 ⇒ **不敢叫任何人重开**（叫了就是让它们去挂一个不存在的东西）
+ *   `same`        这一台就是当前那一版
+ *   `unversioned` 🔴 它**自报不出产品层的版本**（报的是空 / `dev`）——
+ *                 要么挂载没进去、要么那一版里没有 `manifest.json`。
+ *                 ⚠️ **2026-09-23（账 #42）之前**这一档叫 `fallback`，意思是
+ *                 "它跑的是**镜像里那份兜底**"；**兜底已经拿掉**（镜像里不再有 `src/`，
+ *                 认不到产品层直接起不来）⇒ 那个意思已经不成立，名字与话都跟着改。
+ *   `stale`       它跑的是**另一个版本**（产品层翻过了，它还没重开）
+ *   `unknown`     宿主自己读不到当前那一版 ⇒ **不敢叫任何人重开**（叫了就是让它们去挂一个不存在的东西）
  *
- * @returns {{verdict:'same'|'fallback'|'stale'|'unknown', reload:boolean, line:string}}
+ * @returns {{verdict:'same'|'unversioned'|'stale'|'unknown', reload:boolean, line:string}}
  */
 export function compareTenantBuild({ reported, current }) {
   if (!current) {
@@ -78,9 +82,11 @@ export function compareTenantBuild({ reported, current }) {
   const r = typeof reported === 'string' ? reported : '';
   if (!r || r === FALLBACK_BUILD) {
     return {
-      verdict: 'fallback',
+      verdict: 'unversioned',
       reload: true,
-      line: `这一台跑的是**镜像里那份兜底**（自报「${r || '空'}」），不是产品层 ${current}`,
+      // ⚠️ 这句要说**两种**可能（挂载没进去 / 那一版里没有 manifest），
+      //    不许再写"跑的是镜像里那份兜底" —— 那份兜底 2026-09-23 已经拿掉了。
+      line: `这一台**自报不出产品层的版本**（自报「${r || '空'}」）—— 要么挂载没进去，要么那一版里没有 manifest.json（当前那一版是 ${current}）`,
     };
   }
   if (r !== current) {

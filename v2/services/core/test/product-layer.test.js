@@ -61,12 +61,18 @@ test('🔴 同一版 ⇒ 不叫它重开（**这一条最要紧**：判错就是
   assert.equal(v.reload, false);
 });
 
-test('🔴 兜底那份（`dev`）要认出来，并叫它重开 —— 还要**说清是兜底**', () => {
+test('🔴 自报不出产品层版本（`dev` / 空）要认出来，并叫它重开 —— 还要**说清是哪种可能**', () => {
+  // ⚠️ **2026-09-23（账 #42）改了这一条**：镜像里那份 `src/` 兜底**已经拿掉**
+  //    ⇒ "它跑的是镜像里那份兜底"这个解释**不再成立**（认不到产品层会直接起不来）。
+  //    现在这一档的意思是"**它自报不出产品层的版本**"，可能有两种原因，
+  //    而那句话必须把两种都说到（挂载没进去 / 那一版里没有 manifest.json）。
   for (const reported of [FALLBACK_BUILD, '', null, undefined]) {
     const v = compareTenantBuild({ reported, current: 'abc123abc123' });
-    assert.equal(v.verdict, 'fallback', `reported=${JSON.stringify(reported)}`);
+    assert.equal(v.verdict, 'unversioned', `reported=${JSON.stringify(reported)}`);
     assert.equal(v.reload, true);
-    assert.match(v.line, /兜底/, '一句指错方向的话比不说更费时间');
+    assert.match(v.line, /自报不出产品层的版本/, '一句指错方向的话比不说更费时间');
+    assert.ok(!/兜底/.test(v.line), '🔴 不许再说"兜底" —— 那份兜底已经拿掉了（说了就是假话）');
+    assert.match(v.line, /manifest/, '两种可能之一要说出来');
   }
 });
 
@@ -88,7 +94,7 @@ test('⚠️ 变异验证：把"同一版"那条判据改坏（永远说 stale�
   // 复制一份实现，只改一处（`===` 换成 `!==`），确认**判据本身**抓得住
   const broken = ({ reported, current }) => {
     const r = typeof reported === 'string' ? reported : '';
-    if (!r || r === FALLBACK_BUILD) return { verdict: 'fallback', reload: true };
+    if (!r || r === FALLBACK_BUILD) return { verdict: 'unversioned', reload: true };
     if (r !== current) return { verdict: 'stale', reload: true };
     return { verdict: 'stale', reload: true }; // ← 坏在这里
   };
@@ -102,11 +108,11 @@ test('🔴 扫描：只挑"该叫它重开"的那几台，而且**读不到当�
   const reports = new Map([
     ['hupo-a', 'abc123abc123'], // 就是当前这一版
     ['hupo-b', 'oldoldoldold'], // 旧的
-    ['hupo-c', 'dev'], // 兜底那份
+    ['hupo-c', 'dev'], // 自报不出产品层版本的那台
   ]);
   const out = planRollout({ reports, current: 'abc123abc123' });
   assert.deepEqual(out.map((x) => x.tenant).sort(), ['hupo-b', 'hupo-c']);
-  assert.equal(out.find((x) => x.tenant === 'hupo-c').verdict, 'fallback');
+  assert.equal(out.find((x) => x.tenant === 'hupo-c').verdict, 'unversioned');
   // ⚠️ 宿主自己读不到当前那一版 ⇒ **一台都不挑**（挑了就全弄死）
   assert.deepEqual(planRollout({ reports, current: null }), []);
   assert.deepEqual(planRollout({ reports: null, current: 'abc123abc123' }), []);
