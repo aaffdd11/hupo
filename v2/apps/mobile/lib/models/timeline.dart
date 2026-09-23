@@ -419,6 +419,12 @@ class Timeline {
   /// 已收到的最大服务端号。**补发就从它开始要**。
   int get lastSeq => _lastSeq;
 
+  /// **我手上最老那一号**（往前翻的游标；一条都没有 ⇒ `null`）。
+  ///
+  /// ⚠️ 用 `_seenSeq` 而不是"第一个条目"：条目里有日期行那种没有号的装饰，
+  ///    而且被隐藏的那些条目也照样占着号。
+  int? get oldestSeq => _seenSeq.isEmpty ? null : _seenSeq.reduce((a, b) => a < b ? a : b);
+
   /// **界面上该画的那几条**（按 `(seq, tie)` 排）。
   ///
   /// ⚠️ **被删掉的那些不在这儿**（契约 §8.3：藏起来，不销毁）——

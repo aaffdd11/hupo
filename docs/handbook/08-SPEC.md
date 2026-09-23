@@ -176,6 +176,7 @@
 | `/api/apps` | GET | 需令牌 | ✅ **已实现**：我的小程序清单：`id` / `title` / `icon` / `version` / `rootHash` / `permissions` / `entryUrl`（**现签**）|
 | `/api/discover` | GET | 需令牌 | ✅ **已实现**：大家发出来的（**只读**；不给作者身份，只给昵称）|
 | `/api/app-ask` | POST | 需令牌 | ✅ **已实现**：小程序问一句。**四道闸在中心**（在他这儿 · 声明了 · 授予了 · 配额还有）· **花在他自己的环境里** |
+| `/api/timeline` | GET | 需令牌 | ✅ **已实现**（2026-09-23 · 批 C）：`?before=<seq>&limit=<n>` **往前取一页**（给"老消息往上翻着加载"用）。**只读** · 给的是**原始带号事件**（含墓碑 —— 去重/隐藏由客户端按同一套规则做，服务端**不替它筛**）· 回报 `{frames, oldestSeq, hasMore}`。一页默认/上限**住代码里**（`server.js` 的 `BACKFILL_PAGE`/`BACKFILL_MAX`）|
 | `/api/apps`、`/api/apps/:id/rollback` | POST | 需令牌（rollback）/ **特权口**（上传） | ⏳ 上传那条**不在公网路径上**：今天只有 MCP 工具（`app_create` 等九件）+ `app_publish` |
 | `/api/stream` | WS | 需令牌（子协议 `['bearer', token]`） | 下行事件；`sinceSeq` 续传；**`dev=1` 是附加通道不是替代** |
 | `/api/debug/report` · `/api/debug/tasks` · `/api/debug/analyze` | GET/POST | 需令牌 | 监控出口；⚠️ **`analyze` 的 `force` 参数已删**（它绕过冷却，可无限刷） |

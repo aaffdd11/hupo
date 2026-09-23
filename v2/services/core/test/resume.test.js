@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CATCHUP_RENDER, markCatchUp, planResume } from '../src/resume.js';
+import { CATCHUP_RENDER, markCatchUp, planBackfill, planResume } from '../src/resume.js';
 
 const log = [
   { type: 'user/echo', seq: 1 },
@@ -80,4 +80,47 @@ test('不补发时原样返回，不做多余拷贝', () => {
 test('★ 补发段不参与"谁还没收口"的排队（P-2 是客户端渲染规则）', () => {
   assert.equal(CATCHUP_RENDER.style, 'history');
   assert.equal(CATCHUP_RENDER.participatesInQueue, false);
+});
+
+// ══ 往前取一页（批 C：老消息往上翻着加载）══════════════════════
+
+const log10 = Array.from({ length: 10 }, (_, i) => ({ type: 'message/text', seq: i + 1 }));
+
+test('★ 取"比 before 更早"的最后 limit 条，按 seq **升序**给', () => {
+  const p = planBackfill({ events: log10, before: 9, limit: 3 });
+  assert.deepEqual(
+    p.frames.map((e) => e.seq),
+    [6, 7, 8],
+    '★ 离客户端最近的那一页（不是最老的），而且升序 ⇒ 客户端能直接接在前面',
+  );
+  assert.equal(p.oldestSeq, 6);
+  assert.equal(p.hasMore, true, '前面还有 1..5');
+});
+
+test('★ 翻到头 ⇒ `hasMore:false`（不许让客户端一遍遍问）', () => {
+  const p = planBackfill({ events: log10, before: 4, limit: 50 });
+  assert.deepEqual(p.frames.map((e) => e.seq), [1, 2, 3]);
+  assert.equal(p.oldestSeq, 1);
+  assert.equal(p.hasMore, false);
+});
+
+test('★ 一页都取不到（已经是最老）⇒ 空页 + `oldestSeq:null`', () => {
+  const p = planBackfill({ events: log10, before: 1, limit: 5 });
+  assert.deepEqual(p.frames, []);
+  assert.equal(p.oldestSeq, null);
+  assert.equal(p.hasMore, false);
+});
+
+test('🔴 不给号的事件（瞬态）**不进这一页**（它不是历史）', () => {
+  const events = [...log10, { type: 'message/status', state: 'thinking' }, { type: 'plan/updated' }];
+  const p = planBackfill({ events, before: 99, limit: 99 });
+  assert.equal(p.frames.length, 10, '只有带号的才在');
+  assert.ok(p.frames.every((e) => typeof e.seq === 'number'));
+});
+
+test('🔴 参数不许猜：`before` 非负整数、`limit` 正整数', () => {
+  assert.throws(() => planBackfill({ events: log10, before: -1, limit: 5 }), /非负整数/);
+  assert.throws(() => planBackfill({ events: log10, before: 1.5, limit: 5 }), /非负整数/);
+  assert.throws(() => planBackfill({ events: log10, before: 5, limit: 0 }), /正整数/);
+  assert.throws(() => planBackfill({ events: log10, before: 5, limit: Number.NaN }), /正整数/);
 });

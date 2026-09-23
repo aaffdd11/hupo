@@ -148,7 +148,11 @@ class ChatController extends ChangeNotifier {
   ProcessLevel get level => _level;
 
   /// 界面读这个。
-  List<TimelineItem> get items => timeline.items;
+  /// 界面上现在这些条目 —— **更早那几页在最前面**（批 C：往上翻加载）。
+  ///
+  /// ⚠️ 更早那几页**不在** `timeline` 里（它们不进本机缓存，见 `_olderItems`），
+  ///    所以这里要把两段拼起来；界面那一层照旧只用这一个口。
+  List<TimelineItem> get items => [..._olderItems, ...timeline.items];
 
   /// 界面上那行「它正在做…」；`null` = 什么都不显示。
   ///
@@ -193,6 +197,88 @@ class ChatController extends ChangeNotifier {
   ///    而且新的一轮开始时服务端会发一条"清空"的 ⇒ 倒着找第一条就是现在这份。
   ///    ⚠️ 冷启动也从 `_facts` 里拿（本机缓存带号事件）——刷新一下计划条不该变空。
   /// ⚠️ 解不出来（认不出形状 / 空的那份）⇒ `null` ⇒ 界面**一个像素都不画**。
+  // ── 往前翻：更早那几页**只用来显示**（批 C · `64-CHAT-REDESIGN.md` §三）────────
+  //
+  // ⚠️ **为什么不塞进 `_facts`**：那一份是"本机只留一屏"的缓存（`17-LOCAL-FIRST.md`），
+  //    它的裁剪会把这些**刚从服务端取回来的**老消息又丢掉（于是下次还得再取一遍，
+  //    而且用户会看到"我刚翻上去的那几条又没了"）。⇒ 分开：`_facts` = 落盘的，
+  //    `_olderItems` = 现在屏幕上多出来的那几页。
+  final List<TimelineItem> _olderItems = [];
+  final Set<int> _olderSeqs = {};
+  bool _olderLoading = false;
+  bool _olderDone = false;
+  bool _olderFailed = false;
+  int _olderPages = 0;
+
+  /// 一页取多少条 / 本机最多留几页（**住代码里**：阈值不进文档）。
+  static const int olderPageSize = 50;
+  static const int olderMaxPages = 10;
+
+  bool get olderLoading => _olderLoading;
+
+  /// 到头了（服务端说没有更早的，或者本机留的页数到顶了）。
+  bool get olderExhausted => _olderDone;
+
+  /// 刚才**没问上**（跟"真到头了"是两件事，界面上要分开说）。
+  bool get olderFailed => _olderFailed;
+
+  /// 本机留的页数到顶了（不是服务端没有，是我们不再留了）——**如实说**。
+  bool get olderCapped => _olderDone && _olderPages >= olderMaxPages;
+
+  /// 往前取一页更早的。**幂等/防重入**：正在取、已经到头 ⇒ 直接返回。
+  Future<void> loadOlder() async {
+    if (_olderLoading || _olderDone) return;
+    final before = _oldestKnownSeq();
+    if (before == null || before <= 1) {
+      _olderDone = true;
+      notifyListeners();
+      return;
+    }
+    _olderLoading = true;
+    _olderFailed = false;
+    notifyListeners();
+    final page = await api.older(token: token ?? '', before: before, limit: olderPageSize);
+    _olderLoading = false;
+    if (!page.ok) {
+      // ⚠️ 没问到 ⇒ **不说"到头了"**（那会把"网络不好"说成"没有更早的了"）
+      _olderFailed = true;
+      notifyListeners();
+      return;
+    }
+    // ★ 用**同一套**时间线规则把它变成条目（去重、分组、墓碑、隐藏都照旧）——
+    //   在别处再写一套 = 两处口径，迟早会漂。
+    final tmp = Timeline();
+    for (final e in page.frames) {
+      tmp.apply(e);
+    }
+    final fresh = <TimelineItem>[];
+    for (final it in tmp.items) {
+      if (_olderSeqs.add(it.seq)) fresh.add(it);
+    }
+    _olderItems.insertAll(0, fresh);
+    _olderPages += 1;
+    if (!page.hasMore || _olderPages >= olderMaxPages) _olderDone = true;
+    notifyListeners();
+  }
+
+  /// 我手上**最老那一号**（往前走就从它开始）。
+  int? _oldestKnownSeq() {
+    final a = timeline.oldestSeq;
+    final b = _olderSeqs.isEmpty ? null : _olderSeqs.reduce((x, y) => x < y ? x : y);
+    if (a == null) return b;
+    if (b == null) return a;
+    return a < b ? a : b;
+  }
+
+  void _clearOlder() {
+    _olderItems.clear();
+    _olderSeqs.clear();
+    _olderPages = 0;
+    _olderDone = false;
+    _olderFailed = false;
+    _olderLoading = false;
+  }
+
   Plan? get plan {
     for (var i = _facts.length - 1; i >= 0; i -= 1) {
       final e = _facts[i];
@@ -345,6 +431,7 @@ class ChatController extends ChangeNotifier {
     //    也**不许看见上一个人打了一半的话**（欠账 18）
     _invalidateLocal();
     timeline.reset();
+    _clearOlder(); // ★ 更早那几页跟着时间线一起清（同一个世界的）
     // ⚠️ 打字框那份草稿**跟着账号走**：换个人登录不许看见上一个人打了一半的话
     composeDraft = null;
     await compose.clear();
@@ -396,6 +483,7 @@ class ChatController extends ChangeNotifier {
       // 服务端说"你的号跑到我前面了"⇒ 本地那条时间线不作数了。
       // 不是"没有新东西"——是"从头来"。
       timeline.reset();
+    _clearOlder(); // ★ 更早那几页跟着时间线一起清（同一个世界的）
       // ⚠️ **浮窗一起撤**：它是"现在喊你一声"，而这一屏已经不算是那个世界了
       //    （时间线里那一条也跟着被清掉，重放会把它重新送上来）。
       _dismissNotice();
@@ -607,6 +695,9 @@ class ChatController extends ChangeNotifier {
   void _invalidateLocal() {
     _textSinceSave = 0;
     _facts.clear();
+    // ★ **更早那几页也一起清**（批 C）：它们是"上一个世界"的老消息，
+    //   留着的话下一个用这台机器的人会看到别人的历史（`38` §8.2 同一类病）。
+    _clearOlder();
     _draftsHandedOff = null; // 存档要清了 ⇒ "上一次交出去的那份"也不作数了
     local.clear();
     drafts.clear();

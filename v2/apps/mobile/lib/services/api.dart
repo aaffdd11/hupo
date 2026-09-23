@@ -297,6 +297,40 @@ class Api {
 
   /// **「发现」清单**（乙-3）：大家发出来的小程序。**只读**。
   /// ⚠️ 问不到就是空清单（不抛）—— 那一屏会如实说"现在还没有"。
+  /// **往前取一页**（批 C：老消息往上翻着加载 · `docs/dev/64-CHAT-REDESIGN.md` §三）。
+  ///
+  /// ⚠️ 回来的是**原始带号事件**（和流里那些一模一样，含墓碑）——去重/隐藏由
+  ///    `Timeline` 那一层按同一套规则做（服务端**不替我们筛**，免得两处口径）。
+  /// ⚠️ 失败 ⇒ **空的一页 + `hasMore:false`**：宁可"取不到"（界面上如实说），
+  ///    也不许抛到界面那一层变成一句看不懂的错。
+  Future<OlderPage> older({
+    required String token,
+    required int before,
+    int limit = 50,
+  }) async {
+    try {
+      final r = await _c
+          .get(
+            _u('/api/timeline?before=$before&limit=$limit'),
+            headers: {'authorization': 'Bearer $token'},
+          )
+          .timeout(const Duration(seconds: 12));
+      if (r.statusCode != 200) return const OlderPage(frames: [], hasMore: false, ok: false);
+      final j = jsonDecode(r.body);
+      if (j is! Map) return const OlderPage(frames: [], hasMore: false, ok: false);
+      final raw = j['frames'];
+      final frames = <Map<String, dynamic>>[];
+      if (raw is List) {
+        for (final one in raw) {
+          if (one is Map) frames.add(Map<String, dynamic>.from(one));
+        }
+      }
+      return OlderPage(frames: frames, hasMore: j['hasMore'] == true, ok: true);
+    } catch (_) {
+      return const OlderPage(frames: [], hasMore: false, ok: false);
+    }
+  }
+
   Future<List<DiscoverApp>> discover(String token) async {
     try {
       final r = await _c
@@ -548,6 +582,18 @@ extension ExportApi on Api {
       return TrashFailed<ExportDoc>('$e');
     }
   }
+}
+
+/// **往前取一页**的回执（批 C）。
+///
+/// ⚠️ `ok:false` 与"取到了空的一页"**必须分得开**：前者是"没问到"（界面要说
+///    "刚才没问上"或者"再试一次"），后者是"真到头了"。混成一个就是假话。
+class OlderPage {
+  const OlderPage({required this.frames, required this.hasMore, this.ok = true});
+
+  final List<Map<String, dynamic>> frames;
+  final bool hasMore;
+  final bool ok;
 }
 
 /// `/api/say` 的回执 → 结果。**纯函数**（不起网络、不碰界面、不看钟）——

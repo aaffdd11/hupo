@@ -42,6 +42,43 @@ export function planResume({ events, sinceSeq = 0 }) {
 }
 
 /**
+ * **往前取一页**（主人 2026-09-23 · 批 C：老消息要能往上翻着加载）。
+ *
+ * 与 `planResume` 同族、同样是**纯函数**（不碰 IO ⇒ 好测、进硬闸）。
+ *
+ * ⚠️ 三条口径：
+ *   ① 返回的是**原始带号事件**（和流里那些一模一样，含墓碑）——
+ *      客户端那一侧本来就要按同样的规则去重/隐藏，这里**不许替它筛**
+ *      （筛两遍 = 两处口径，迟早会漂）；
+ *   ② 取的是"**比 `before` 更早**的最后 `limit` 条"，按 seq **升序**给
+ *      （客户端拿到就能直接接在前面）；
+ *   ③ `hasMore` 说的是"**这一页之前还有**"，客户端据此决定还要不要继续取
+ *      （**不许猜**：没有更多就该停，而不是一遍遍问）。
+ *
+ * @param {object} o
+ * @param {Array<{seq?: number, type: string}>} o.events 已落盘事件（seq 升序）
+ * @param {number} o.before 客户端的"最老那一号"（取严格早于它的）
+ * @param {number} o.limit  一页最多几条（上限住代码里，调用方给）
+ * @returns {{frames: Array<object>, oldestSeq: number|null, hasMore: boolean}}
+ */
+export function planBackfill({ events, before, limit }) {
+  if (!Number.isInteger(before) || before < 0) {
+    throw new Error(`before 必须是非负整数，收到 ${before}`);
+  }
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error(`limit 必须是正整数，收到 ${limit}`);
+  }
+  const persisted = events.filter((e) => typeof e.seq === 'number' && e.seq < before);
+  // 最后 limit 条（离客户端最近的那一页），再按升序给出去
+  const page = persisted.slice(Math.max(0, persisted.length - limit));
+  return {
+    frames: page,
+    oldestSeq: page.length > 0 ? page[0].seq : null,
+    hasMore: persisted.length > page.length,
+  };
+}
+
+/**
  * 给一帧打上补发标记。
  *
  * ⚠️ **必须浅拷贝**：事件对象是从日志里读出来的，

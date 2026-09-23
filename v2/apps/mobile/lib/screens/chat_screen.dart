@@ -546,7 +546,29 @@ class _ChatScreenState extends State<ChatScreen> {
             child: ConstrainedBox(
               // 内容列限宽（手册 D4.6 / R5）：平板上一行七十个字读不下去
               constraints: const BoxConstraints(maxWidth: 760),
-              child: _body(c),
+              // ⚠️ **更早那句提示不许放在列表外面**（2026-09-23 实测栽过）：
+              //    它一出现就会把列表的**视口**压小 —— 而"最老那条消息在不在树里"
+              //    是 a11y 那条判据量的东西（3.1 倍字号下当场红）。⇒ 它现在当
+              //    **列表的第一项**（见 `_body`），视口一个像素都不变。
+              child: Stack(
+                children: [
+                  _body(c),
+                  // ★ **回到最新**（用户自己翻走了才出现；他没翻走 = 本来就在最新）
+                  //    ⚠️ 它是 `Positioned` ⇒ **不参与 Stack 的尺寸计算**，视口不受影响。
+                  if (_userScrolledAway)
+                    Positioned(
+                      right: 8,
+                      bottom: 8,
+                      child: FilledButton.tonalIcon(
+                        // 命中区 ≥44（D3.6）
+                        style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+                        onPressed: _backToBottom,
+                        icon: const Icon(Icons.arrow_downward, size: 18),
+                        label: const Text(backToLatestWords),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -588,8 +610,36 @@ class _ChatScreenState extends State<ChatScreen> {
   ///
   /// ⚠️ 那一块**算在列表里**（会跟着滚），不是浮在输入框上面——
   ///    它是"这一轮正在发生"，属于对话流，不属于工具栏。
+  /// **更早的消息那一条**（`null` = 一个字都不画）。
+  ///
+  /// ⚠️ 四种情形**各说各的**，尤其"没问到"与"到头了"不许混（那是假话）。
+  Widget? _olderLine(ChatController c) {
+    final loadedOlder = c.items.length > c.timeline.items.length;
+    final String? text = c.olderLoading
+        ? olderLoadingWords
+        : c.olderFailed
+        ? olderFailedWords
+        : c.olderCapped
+        ? olderCappedWords
+        : (c.olderExhausted && loadedOlder)
+        ? olderEndWords
+        : null;
+    if (text == null) return null;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: d.muted),
+      ),
+    );
+  }
+
   Widget _body(ChatController c) {
     if (c.items.isEmpty && !c.hasProcess) return const _EmptyState();
+    // ★ **更早那句提示当第一项**（放外面会改变视口 —— 见 `_sheetBody` 那条注释）
+    final olderLine = _olderLine(c);
+    final header = olderLine == null ? 0 : 1;
     return NotificationListener<ScrollNotification>(
       // ⚠️ **只有手指拖出来的滚动**才算"用户自己翻走了"。
       //    我们自己 `animateTo` 产生的那一次不算 —— 否则第一次跟随
@@ -597,28 +647,88 @@ class _ChatScreenState extends State<ChatScreen> {
       onNotification: (n) {
         // ⚠️ 两类分开判：`dragDetails` 不在基类 `ScrollNotification` 上，
         //    合在一个条件里 Dart 提升不出类型来（会报 undefined_getter）。
-        if (n is ScrollStartNotification && n.dragDetails != null) {
-          _userScrolledAway = true;
+        // ⚠️ **要 setState**：那颗「回到最新」是按这个标志画的 ——
+        //    只改字段不重建的话，用户翻上去了而按钮**不出现**（判据当场抓到过）。
+        if (n is ScrollStartNotification && n.dragDetails != null && !_userScrolledAway) {
+          setState(() => _userScrolledAway = true);
         }
-        if (n is ScrollUpdateNotification && n.dragDetails != null) {
-          _userScrolledAway = true;
+        if (n is ScrollUpdateNotification && n.dragDetails != null && !_userScrolledAway) {
+          setState(() => _userScrolledAway = true);
         }
+        // ★ **滚到顶 ⇒ 往前取一页**（批 C：老消息往上翻着加载）
+        if (n.metrics.pixels <= _olderTriggerPx) _maybeLoadOlder();
         return false;
       },
       child: ListView.builder(
         controller: _scroll,
         // ★ 主人 2026-09-22："聊天浮窗的 padding 减少一些"（里面这一圈）：12 → 8
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        itemCount: c.items.length + (c.hasProcess ? 1 : 0),
-        itemBuilder: (context, i) => i < c.items.length
-            ? _render(c.items[i], c)
-            : ProcessTail(
-                level: c.level,
-                busyText: c.agentLine,
-                steps: c.steps,
-              ),
+        itemCount: header + c.items.length + (c.hasProcess ? 1 : 0),
+        itemBuilder: (context, i) {
+          if (header == 1 && i == 0) return olderLine!;
+          final k = i - header;
+          if (k < c.items.length) return _render(c.items[k], c);
+          return ProcessTail(
+            level: c.level,
+            busyText: c.agentLine,
+            steps: c.steps,
+          );
+        },
       ),
     );
+  }
+
+  /// **离顶多近就触发"再往前取一页"**（住代码里；大一点更容易触发，但会多问几次）。
+  static const double _olderTriggerPx = 32;
+
+  /// 正在取 / 取到了几页 —— 防重入（用户一直往上蹭会call很多次）。
+  bool _olderInFlight = false;
+
+  /// **往前取一页，并且把视觉锚点钉住**。
+  ///
+  /// ⚠️ 为什么必须钉锚点：几页老消息**插在最前面** ⇒ 内容总高度变高，
+  ///    而滚动偏移不变 ⇒ 用户眼前那一条会**突然往下跳**（看着像"刚才那些字跑了"）。
+  ///    做法：取之前记下 `maxScrollExtent`，取完在 post-frame 里把偏移加上"长出来的那一段"。
+  Future<void> _maybeLoadOlder() async {
+    final c = widget.controller;
+    if (_olderInFlight || c.olderLoading || c.olderExhausted) return;
+    if (!_scroll.hasClients) return;
+    final before = _scroll.position.maxScrollExtent;
+    final atTop = _scroll.position.pixels;
+    // ⚠️ **只有真的插进了内容才需要钉锚点**（2026-09-23 实测栽过）：
+    //    "正在取更早的…"那句提示自己也会让 `maxScrollExtent` 变大一点点，
+    //    要是照着它去 `jumpTo`，就会**把最老那条滚出视野** ——
+    //    而"最老那条在不在树里"正是 a11y 那条判据量的东西（1.75x 下当场红）。
+    final beforeCount = c.items.length;
+    _olderInFlight = true;
+    try {
+      await c.loadOlder();
+    } catch (_) {
+      // ⚠️ **取更早的失败绝不许影响这一屏**：它是"多给一点历史"，不是主线。
+      //    （控制器那边本来就把失败吞成 `olderFailed`；这里再兜一层，
+      //      免得将来哪次改动把异常甩到滚动手势里 —— 那会让整屏都坏掉。）
+    } finally {
+      _olderInFlight = false;
+    }
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      if (c.items.length <= beforeCount) return; // 没取到东西 ⇒ **一个像素都别动**
+      final grew = _scroll.position.maxScrollExtent - before;
+      if (grew > 0) _scroll.jumpTo(atTop + grew);
+    });
+  }
+
+  /// 回到最新那一条（用户自己翻走之后才出现那个按钮）。
+  void _backToBottom() {
+    if (!_scroll.hasClients) return;
+    _userScrolledAway = false;
+    _scroll.animateTo(
+      _scroll.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
+    setState(() {});
   }
 
   /// 打开四档的切换面板。**选中即生效**（换档会重连，见 `setLevel`）。

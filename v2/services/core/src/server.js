@@ -22,7 +22,7 @@ import { SayError } from './say.js';
 // ⚠️ 只借它**校验手机号形状**（`/api/send-code` 用）；模块本身不碰用户表
 import { normalizePhone } from './users.js';
 import { ADMIT_RATIO, readAdmission } from './admission.js';
-import { CATCHUP_RENDER, markCatchUp, planResume } from './resume.js';
+import { CATCHUP_RENDER, markCatchUp, planBackfill, planResume } from './resume.js';
 import { buildExport } from './export.js';
 import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
 import { SIGNED_TTL_MS, entryUrl } from './app-serve.js';
@@ -692,6 +692,25 @@ export function createServer({
         });
       }
 
+      // ── **往前取一页**（批 C：老消息往上翻着加载 · 契约 `docs/dev/64-CHAT-REDESIGN.md` §三）──
+      // ⚠️ 与 `/api/export` 同族：**只读**、要令牌、走**用户自己那一份**
+      //    （所以也在 `TENANT_ROUTES` 里 —— 租户用户的那一份在盒子里答）。
+      // ⚠️ 给的是**原始带号事件**（含墓碑），客户端按它本来那套规则去重/隐藏：
+      //    这里替它筛 = 两处口径（见 `resume.js` 的 `planBackfill` 顶上那三条）。
+      if (path === '/api/timeline' && req.method === 'GET') {
+        const q = new URL(req.url, 'http://x').searchParams;
+        const before = Number.parseInt(q.get('before') ?? '', 10);
+        const limit = Number.parseInt(q.get('limit') ?? '', 10);
+        if (!Number.isInteger(before) || before < 0) {
+          return sendJson(res, 400, { error: 'bad-before' });
+        }
+        const page = planBackfill({
+          events: W.store.readAll(W.timeline.id),
+          before,
+          limit: Number.isInteger(limit) && limit > 0 ? Math.min(limit, BACKFILL_MAX) : BACKFILL_PAGE,
+        });
+        return sendJson(res, 200, page);
+      }
       if (path === '/api/export' && req.method === 'GET') {
         const bin = W.trash ? W.trash.list() : [];
         return sendJson(res, 200, buildExport(W.store.readAll(W.timeline.id), {
@@ -768,7 +787,11 @@ export function createServer({
    */
   // ⚠️ `/api/app-ask` 也走这条：**花这个动作必须发生在 b 自己的盒子里**
   //    （盒里那个小代理握着钥匙；中心这一侧拿不到、也不需要）。
-  const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '/api/app-ask'];
+  // 往前取一页：默认多少条、最多多少条（**住代码里**；客户端也能提，但这里封顶）
+const BACKFILL_PAGE = 50;
+const BACKFILL_MAX = 200;
+
+const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '/api/app-ask'];
 
   /**
    * 把一条 HTTP 请求**原样**转进那个人的容器，并把响应**流式**带回来。

@@ -159,6 +159,17 @@ const String settingsLogout = '退出登录';
 /// 钥匙那一段的小标题。
 const String configKeySection = '你那串钥匙';
 
+/// ── 更早的消息：往上翻着加载（批 C · `docs/dev/64-CHAT-REDESIGN.md` §三）──────
+///
+/// ⚠️ **"没问到"与"到头了"必须分开说**（混成一句就是把网络问题说成"没有更早的"）。
+const String olderLoadingWords = '正在取更早的…';
+const String olderFailedWords = '刚才没问上，往上再滑一次试试';
+const String olderCappedWords = '先到这（这台设备只留最近这些）';
+const String olderEndWords = '到头了';
+
+/// 回到最新那一条那颗按钮上的字（**有字**，D3.8）。
+const String backToLatestWords = '回到最新';
+
 /// **现在是什么状态**（三种，必须分得开 —— 见 `keyStateLine`）。
 const String keyStateHas = '现在用的是一串已经填好的钥匙。';
 const String keyStateNone = '还没有填。填上它，琥珀才能开口说话。';
