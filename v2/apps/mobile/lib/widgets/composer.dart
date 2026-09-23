@@ -207,6 +207,11 @@ class _ComposerState extends State<Composer> {
                   setState(() {
                     _voice = !_voice;
                     _holding = false;
+                    // ⚠️ **回键盘档 ⇒ 听筒那一档跟着关**（2026-09-23 重设计）：
+                    //    听筒只在语音档有意义（它现在也只在语音档画 —— 见下面）。
+                    //    不关的话，"演示"那条会留在一个**已经没有听筒按钮**的界面上，
+                    //    而用户找不到地方把它关掉。
+                    if (!_voice) _earpiece = false;
                   });
                 },
                 icon: Icon(
@@ -247,40 +252,56 @@ class _ComposerState extends State<Composer> {
                   ),
                 ),
               // ★ 微信那个**听筒 / 扬声器**（主人："要能切听筒"）
-              IconButton(
-                tooltip: _earpiece ? voiceEarpieceOn : voiceEarpieceOff,
-                onPressed: () => setState(() => _earpiece = !_earpiece),
-                icon: Icon(
-                  _earpiece ? Icons.hearing : Icons.volume_up_outlined,
+              // ⚠️ **只在语音档画它**（2026-09-23 重设计，主人拍板）：键盘档用不着听筒，
+              //    而它常驻要占掉一格 48px —— 那一格给输入框更值。
+              //    配套那条：回键盘档时 `_earpiece` 跟着关（见上面话筒那个 handler）。
+              if (_voice)
+                IconButton(
+                  tooltip: _earpiece ? voiceEarpieceOn : voiceEarpieceOff,
+                  onPressed: () => setState(() => _earpiece = !_earpiece),
+                  icon: Icon(
+                    _earpiece ? Icons.hearing : Icons.volume_up_outlined,
+                  ),
                 ),
-              ),
               const SizedBox(width: 4),
               // ★ 只有这一块跟着输入变——输入框本身不会被重建
-              ValueListenableBuilder<TextEditingValue>(
-                valueListenable: _controller,
-                builder: (context, value, _) {
-                  final canSend = value.text.trim().isNotEmpty;
-                  return Semantics(
-                    button: true,
-                    label: canSend ? '发送' : '还没有话要说',
-                    child: IconButton.filled(
-                      // 触控目标 ≥44
-                      constraints: const BoxConstraints(
-                        minWidth: 48,
-                        minHeight: 48,
+              //
+              // 🔴 **框里有字才画那个发送钮**（2026-09-23 重设计，主人拍板）：
+              //    原来它常驻、没字时是**禁用态**（`onPressed: null`）—— 一个 48px 的
+              //    "按不动"的按钮一直挂在那儿，既占地又容易被当成坏了。
+              //    ⚠️ **位置与宽度必须固定**：它一会儿有一会儿没有，如果让它撑开/收窄，
+              //       输入框的宽度就会跳 —— 那是同 D4.8 一种病（界面自己抖）。
+              //       ⇒ 用固定 48×48 的盒子占住位置，没字时**里面什么都不画**。
+              SizedBox(
+                width: 48,
+                height: 48,
+                child: ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _controller,
+                  builder: (context, value, _) {
+                    final canSend = value.text.trim().isNotEmpty;
+                    // 没话要说 ⇒ 那个位置**什么都不画**（不是禁用态；位置由外面那个
+                    // 固定 48×48 的盒子占着，所以界面不跳）
+                    if (!canSend) return const SizedBox.shrink();
+                    return Semantics(
+                      button: true,
+                      label: '发送',
+                      child: IconButton.filled(
+                        // 触控目标 ≥44
+                        constraints: const BoxConstraints(
+                          minWidth: 48,
+                          minHeight: 48,
+                        ),
+                        onPressed: _submit,
+                        icon: const Icon(Icons.arrow_upward),
+                        tooltip: '发送',
+                        style: IconButton.styleFrom(
+                          minimumSize: const Size(48, 48),
+                          backgroundColor: theme.colorScheme.primary,
+                        ),
                       ),
-                      onPressed: canSend ? _submit : null,
-                      icon: const Icon(Icons.arrow_upward),
-                      tooltip: '发送',
-                      style: IconButton.styleFrom(
-                        minimumSize: const Size(48, 48),
-                        backgroundColor: canSend
-                            ? theme.colorScheme.primary
-                            : null,
-                      ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
             ],
           ),
@@ -400,10 +421,30 @@ class _ComposerState extends State<Composer> {
                   ),
                 ),
                 const SizedBox(width: 8),
+                // 🔴 **假的每一半都要说出来**（2026-09-23 重设计配套改）：
+                //    听筒现在**只在语音档**能开 ⇒ 原来那种"二选一"会让
+                //    "读出来也还没做"这句**永远看不见** —— 那等于**少说一句真话**，
+                //    与 D5.13 那一族规矩（不录音时禁用"听"字 / 假的一眼看得出）同源。
+                //    ⇒ 两句**各自一行**（各自一个 `Text`，读屏与判据都能逐句找到）。
                 Expanded(
-                  child: Text(
-                    _voice ? voiceNotWired : voiceEarpieceNotWired,
-                    style: theme.textTheme.bodySmall?.copyWith(color: d.muted),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (_voice)
+                        Text(
+                          voiceNotWired,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: d.muted,
+                          ),
+                        ),
+                      if (_earpiece)
+                        Text(
+                          voiceEarpieceNotWired,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: d.muted,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ],
