@@ -211,7 +211,7 @@
 | ~~`miniapp/load-failed`~~ | ⏳ **今天没有**（全仓 0 命中）—— 回退机制本身在，但**不发这个事件** |
 | ~~`audit/notice`~~ | ⏳ **今天没有**（`audit.js` 不产这个事件）；审计今天落在两份文件上（`data/audit.log` + 特权侧 `/var/log/hupo/`） |
 | `task/resumed` · `notice/urgent` · `turn/deleted`/`turn/restored`/`turn/purged` | ✅ **在跑但一直没进表**（2026-09-23 补上）：`resume-plan.js` 的 `task/resumed`（续做）· `notice.js` 的 `notice/urgent`（盘满那条，**瞬态**）· `trash.js` 的三条墓碑（删/恢复/真删） |
-| `plan/updated` | ✅ **已实现**（2026-09-23）：助手**自己的目标 / 任务清单**（harness 的 `todo/write` 快照与 `goal/change`）翻成人话之后那一条 —— `{goal:{text,phase}\|null, todos:[{text,now,done}], doneCount, total, more}`。**持久事件**（有号、会补发）· **每轮开头清空** · 🔴 **工具名 / goalId / callId 一个字节都不许进这条**（`26-PROCESS-LEVELS.md:180`）。界面上那条**没有计划就一个像素都不画**（主人 2026-09-23 定案：浮在屏幕上方，窗口不动）|
+| `plan/updated` | ✅ **已实现**（2026-09-23）：助手**自己的目标 / 任务清单**（harness 的 `todo/write` 快照与 `goal/change`）翻成人话之后那一条 —— `{goal:{text,phase}\|null, todos:[{text,now,done}], doneCount, total, more}`。**持久事件**（有号、会补发）· **每轮开头清空** · 🔴 **工具名 / goalId / callId 一个字节都不许进这条**（`26-PROCESS-LEVELS.md:180`）。界面上那条**没有计划就一个像素都不画**（主人 2026-09-23 定案：浮在屏幕上方，窗口不动）· 🔴 **全部做完也收起来**（它不再是"进行中"）· 🔴 **完成的条目不许画删除线** —— 主人实测把那道横线读成了"**删掉了**"（`64-CHAT-REDESIGN.md` §四·补）|
 
 > ⚠️ 协议 v2 要加的字段（作用域标识 / 补发标记 / 步骤事件）见 `03-DEVELOPMENT.md` §三。
 

@@ -25,7 +25,12 @@ class PlanStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = plan;
-    if (p == null) return const SizedBox.shrink();
+    // 🔴 **两个"什么都不画"的条件**：
+    //   ① 没有计划（`null`）—— 空态禁令；
+    //   ② **全做完了**（`p.allDone`）—— 主人 2026-09-23 的实测反馈：*"还在。它列了几件事"*。
+    //      这条的定位是"它**现在**打算做哪几件"；全做完之后它就不再是"进行中"，
+    //      挂在那儿只会剩一排打勾 + 划掉的字（而"划掉的字"被读成了"删掉了"）。
+    if (p == null || p.allDone) return const SizedBox.shrink();
     final t = Theme.of(context);
     final phaseWord =
         planPhaseWords[switch (p.phase) {
@@ -101,12 +106,12 @@ class PlanStrip extends StatelessWidget {
                             todo.text,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
+                            // ⚠️ **完成的条目不许画删除线**（2026-09-23 主人实测：
+                            //    那条横线被读成了"**删掉了**"）—— "做完了"靠**勾**说，
+                            //    颜色只是第二眼；判据钉着这件事。
                             style: t.textTheme.bodySmall?.copyWith(
                               color: todo.done ? d.muted : d.ink,
                               fontWeight: todo.now ? FontWeight.w600 : null,
-                              decoration: todo.done
-                                  ? TextDecoration.lineThrough
-                                  : null,
                             ),
                           ),
                         ),

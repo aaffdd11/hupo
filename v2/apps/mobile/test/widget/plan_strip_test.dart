@@ -90,6 +90,51 @@ void main() {
       expect(planMoreWords(p.hidden), contains('22'));
     });
 
+    test('★ 每一件都做完了 ⇒ `allDone`（界面据此把这条收起来）', () {
+      final plan = Plan.fromEvent(
+        ev(todos: [
+          {'text': '写计划条', 'now': false, 'done': true},
+          {'text': '跑闸', 'now': false, 'done': true},
+        ]),
+      )!;
+      expect(plan.allDone, true);
+      expect(plan.doneCount, 2);
+      expect(plan.total, 2);
+    });
+
+    test('🔴 负向对照：还有没做完的 ⇒ 不算全做完', () {
+      final plan = Plan.fromEvent(
+        ev(todos: [
+          {'text': '写完了', 'now': false, 'done': true},
+          {'text': '还没做', 'now': true, 'done': false},
+        ]),
+      )!;
+      expect(plan.allDone, false);
+    });
+
+    test('🔴 服务端**封过顶**时绝不说"全做完"（没画出来的那几件我们不知道）', () {
+      // 画面上三件全打勾，而服务端说一共 7 件 ⇒ 剩下 4 件做没做完**不知道**
+      final plan = Plan.fromEvent(
+        ev(
+          todos: [
+            {'text': '甲', 'now': false, 'done': true},
+            {'text': '乙', 'now': false, 'done': true},
+            {'text': '丙', 'now': false, 'done': true},
+          ],
+          doneCount: 3,
+          total: 7,
+          more: 4,
+        ),
+      )!;
+      expect(plan.allDone, false, reason: '★ 封顶之外的没画出来 ⇒ 不许假装收工');
+    });
+
+    test('🔴 一件都没有（只有目标）⇒ 不算"全做完"（那叫"没有计划"，本来就不画）', () {
+      final plan = Plan.fromEvent(ev(goal: {'text': '把这件事做完', 'phase': 'active'}))!;
+      expect(plan.total, 0);
+      expect(plan.allDone, false);
+    });
+
     test('★ 条目的形状卡住：没有正文 / 不是 map 的直接丢掉', () {
       final p = Plan.fromEvent(
         ev(
@@ -125,6 +170,39 @@ void main() {
       await pump(tester, null);
       expect(find.byType(Text), findsNothing);
       expect(find.byType(Icon), findsNothing);
+    });
+
+    testWidgets('🔴 全做完了 ⇒ **收起来**（"还在"不是我们要的：它不再是"进行中"）', (tester) async {
+      final plan = Plan.fromEvent(
+        ev(todos: [
+          {'text': '查北京天气', 'now': false, 'done': true},
+          {'text': '查上海天气', 'now': false, 'done': true},
+        ]),
+      )!;
+      expect(plan.allDone, true, reason: '★ 夹具本身要真是全做完的');
+      await pump(tester, plan);
+      expect(find.byType(Text), findsNothing, reason: '★ 全做完就得收起来（主人 2026-09-23 的实测反馈）');
+      expect(find.byType(Icon), findsNothing);
+    });
+
+    testWidgets('🔴 完成的条目不画**删除线**（那条横线会被读成"删掉了"）', (tester) async {
+      final plan = Plan.fromEvent(
+        ev(todos: [
+          {'text': '这一件做完了', 'now': false, 'done': true},
+          {'text': '这一件在做', 'now': true, 'done': false},
+        ]),
+      )!;
+      await pump(tester, plan);
+      final done = tester.widget<Text>(find.textContaining('这一件做完了'));
+      final doing = tester.widget<Text>(find.textContaining('这一件在做'));
+      expect(
+        done.style?.decoration,
+        isNot(TextDecoration.lineThrough),
+        reason: '★ 完成用勾说，不用横线说（横线被读成"删掉了"）',
+      );
+      expect(doing.style?.decoration, isNot(TextDecoration.lineThrough));
+      // 负向对照：勾**还在**（"做完了"这个信息一个都没少）
+      expect(find.byIcon(Icons.check_box_outlined), findsOneWidget);
     });
 
     testWidgets('★ 有计划 ⇒ 目标一行 + 那几件 + 「还有 N 件」都在屏幕上', (tester) async {
