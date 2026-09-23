@@ -345,3 +345,90 @@ test('★ 套接字不在（没挂进来）⇒ 返回 false，**不抛**（宿�
   assert.equal(got, false);
   assert.equal(nodeFs.existsSync('/tmp/never-written'), false);
 });
+
+// ── ⑤ 日志：**例行轮询不许被念成"容器连进来了"**（账 #54 · 2026-09-23）──────
+//
+// 真机症状：两个租户**还没填钥匙**时，`serve.log` 每 60 秒长两行
+// "通道 hupo-a：容器连进来了（有没有钥匙，等它自报）" ⇒ **真错误被淹掉**
+// （查那次事故时第一眼什么也看不出来 —— 账 #54 就是这么记的）。
+//
+// 根因**不是隧道坏了**（实测：隧道那条长连接好好的，`tunnel-ready` 也报过）：
+// 那是容器里 **"等钥匙"的轮询** —— `watchForKey` 每一圈开一条**新连接**问一次，
+// 问完就断、歇 5 秒再来。宿主把**每一次例行询问**都念成了"一台容器连进来了"。
+// ⇒ 判据：**两种连接各连一次，看谁留痕**。
+
+/** 等一次事件（这个小工具只给下面两条判据用）。 */
+const waitEvent = (emitter, ev) => new Promise((r) => emitter.once(ev, r));
+
+test('🔴 例行"等钥匙"的轮询**不许**在宿主日志里留"容器连进来了"（真容器才留）', async () => {
+  const h = host({ key: null });
+  h.ch.listenFor('u1');
+  const sock = channelPathFor(h.dir, 'u1');
+
+  // ① 容器里那个轮询：`hello` + `role:'tenant-shell'`（它每 60 秒来一次）
+  const shell = nodeNet.connect(sock);
+  openClose.add(() => shell.destroy());
+  await waitEvent(shell, 'connect');
+  shell.write(`${JSON.stringify({ v: CHANNEL_VERSION, type: 'hello', role: 'tenant-shell' })}\n`);
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(
+    h.lines.filter((l) => l.includes('连进来了')).length,
+    0,
+    '★ 例行轮询不该留"容器连进来了" —— 它每 60 秒来一次，正是把真错误淹掉的那两行',
+  );
+
+  // ② 真的容器数据面：`tunnel-ready` ⇒ **必须**留痕（不然排障时少一条证据）
+  const tun = nodeNet.connect(sock);
+  openClose.add(() => tun.destroy());
+  await waitEvent(tun, 'connect');
+  tun.write(
+    `${JSON.stringify({ v: CHANNEL_VERSION, type: 'tunnel-ready', hasKey: false, buildId: 'dev' })}\n`,
+  );
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(
+    h.lines.filter((l) => l.includes('连进来了')).length,
+    1,
+    '★ 真容器连上时必须留痕',
+  );
+  assert.ok(
+    h.lines.some((l) => l.includes('隧道通了')),
+    '★ 而且"隧道通了"那条也在',
+  );
+});
+
+test('🔴 容器侧"还没等到 key"**只说一次**，而钥匙到了**照样送进去**', async () => {
+  const h = host({ key: null });
+  h.ch.listenFor('u1');
+  const keyFile = nodePath.join(h.dir, 'creds.yaml');
+  const lines = [];
+
+  // ⚠️ `attemptMs: 0` ⇒ 每一圈**立刻**收场（不等那一分钟），好让这条判据在毫秒级
+  //    跑完好几十圈；真机上是 60 秒一圈（`HUPO_CHANNEL_WAIT_MS`）。
+  //    ⚠️ 这不改变被测的那件事：**同一句"还没等到"说几遍**。
+  const w = watchForKey({
+    socketPath: channelPathFor(h.dir, 'u1'),
+    keyFile,
+    attemptMs: 0,
+    idleMs: 10,
+    log: (m) => lines.push(m),
+  });
+  openClose.add(() => w.stop());
+
+  await new Promise((r) => setTimeout(r, 300)); // 够它空转十几圈
+  const waited = lines.filter((l) => l.includes('还没等到 key')).length;
+  assert.equal(
+    waited,
+    1,
+    `★ 同一句话说了 ${waited} 次 —— 没等到就是没等到，重复说只是把真错误淹掉`,
+  );
+
+  // 而且**功能一个字没动**：钥匙到了照样写进卷里（这是"填了会自动送到"那条路）
+  h.state.key = REAL_KEY;
+  for (let i = 0; i < 40 && !nodeFs.existsSync(keyFile); i += 1) {
+    h.ch.pushKey('u1', REAL_KEY);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.equal(nodeFs.existsSync(keyFile), true, '★ 说过一次"没等到"之后，钥匙照样送得进去');
+  assert.match(nodeFs.readFileSync(keyFile, 'utf8'), new RegExp(REAL_KEY));
+  w.stop();
+});

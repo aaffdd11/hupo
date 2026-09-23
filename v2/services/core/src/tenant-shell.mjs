@@ -53,14 +53,23 @@ export function watchForKey({
   attemptMs = 60_000,
   idleMs = 5_000,
   log = (m) => console.log(m),
-} = {}) {
-  // 🔴 **归一必须写在函数体里，不能只写在默认值里**（2026-09-21 真机栽的第三层）：
+} = {}) {  // 🔴 **归一必须写在函数体里，不能只写在默认值里**（2026-09-21 真机栽的第三层）：
   //    默认值**只在参数是 `undefined` 时**才生效，而镜像里那个**旧入口**是
   //    **显式**传 `keyFile: '/run/hupo/creds.yaml'`（tmpfs）进来的 ⇒ 默认值被绕过，
   //    钥匙照样写进 tmpfs（现象：容器日志说"拿到凭据了"，而**卷里没有那个文件**）。
   keyFile = adoptKeyFile(keyFile);
   let stopped = false;
   let timer = null;
+  /**
+   * **"还没等到 key"那句话说过没有**（2026-09-23 修，账 #54）。
+   *
+   * ⚠️ 为什么要有它：这一圈是**一直守着**的（下面那条注释解释了为什么不能领一次就走），
+   *    而**用户几天不填钥匙**时，原来**每一圈都念一遍同一句话** ⇒
+   *    容器日志（和宿主日志）每 60 秒长两行，把真错误淹掉。
+   *    ⇒ 现在**那句话只说第一次**：没等到就是没等到，重复说不提供任何新信息；
+   *      真变了（钥匙到了 / 钥匙坏了）本来就有各自的那一句。
+   */
+  let toldWaiting = false;
 
   const once = async () => {
     if (stopped) return;
@@ -69,10 +78,12 @@ export function watchForKey({
       keyFile,
       waitMs: attemptMs,
       hardMs: attemptMs + 10_000,
+      logWaiting: !toldWaiting,
       log,
     });
     if (stopped) return;
     if (ok) {
+      toldWaiting = false; // 钥匙到了 ⇒ 下一次"没等到"又是一条新消息（他可能又换一把）
       // 🔴 **领到了也要接着守**（2026-09-21 实测栽了一次）。
       //
       //    原来这里是 `return`（"不再等了"）—— 于是**只有第一把钥匙能送到**：
@@ -89,6 +100,7 @@ export function watchForKey({
       return;
     }
     // 没领到：过一会儿再来（宿主的通道可能还没起来 / 用户还没填）
+    toldWaiting = true; // 这一圈已经说过了 ⇒ 下一圈不再重复同一句（见上面那条）
     timer = setTimeout(once, idleMs);
     timer.unref?.();
   };
@@ -121,6 +133,7 @@ export function fetchKeyFromHost({
   waitMs = 120_000,
   retryMs = 3_000,
   hardMs = null,
+  logWaiting = true,
   log = (m) => console.log(m),
 } = {}) {
   keyFile = adoptKeyFile(keyFile); // ⚠️ 同上：显式传进来的坏值也要在这里被纠正
@@ -210,7 +223,11 @@ export function fetchKeyFromHost({
             // ⚠️ **原来的话是假的**（2026-09-21 修）：它写"先把服务起起来"，
             //    可真原因是**用户还没在网页上填钥匙**（宿主服务一直活着）。
             //    一句指错方向的话，比不说更费时间 —— 这个项目里已经栽过好几次。
-            log('  · 还没等到 key —— 用户还没在网页上填（填了会自动送到，不用重启这一台）');
+            // ⚠️ `logWaiting === false` ⇒ **这一圈不重复说**（账 #54：一直守着的那个
+            //    循环里，同一句话每 60 秒念一遍会把真错误淹掉；由调用方决定说几次）。
+            if (logWaiting) {
+              log('  · 还没等到 key —— 用户还没在网页上填（填了会自动送到，不用重启这一台）');
+            }
             return finish(false);
           }
           timer = setTimeout(() => {
