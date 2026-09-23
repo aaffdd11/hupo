@@ -27,8 +27,6 @@ import nodeNet from 'node:net';
 import nodePath from 'node:path';
 import { Duplex } from 'node:stream';
 
-import { isCredField } from './creds.mjs';
-
 /** 协议版本。**一旦上线就冻结**（手册 §2.1 纪律 2）。 */
 export const CHANNEL_VERSION = 1;
 
@@ -97,40 +95,18 @@ export class TenantChannel {
    *    不然用户明明换了一把好的，界面上还挂着"刷新一下重新填"。
    */
   #onKeyUp = null;
-  /**
-   * **这个人在宿主手上存着的那几把**（短名 → 值），`(userId) => [{field, key}]`。
-   *
-   * ⚠️ 为什么要有它（2026-09-23 加的多把钥匙）：一次连接**只送得动一把**
-   *    （容器那头写一把就收场）⇒ 若用户在"那台没连着"的空档里填了图片 / 视频 /
-   *    语音，那一把不能只记在内存里就完事。有了它，**每一圈重连按字段轮着送**
-   *    （见 `#nextCredFrame`），几圈之内全都到位。
-   * ⚠️ **不给就退老路**（`keyFor` 那一帧）—— 判据里那些只给 `keyFor` 的用例逐字不变。
-   */
-  #credsFor = null;
-  /** userId → 下一圈该送列表里的第几项（送出去、对面认了才前进）。 */
-  #credCursor = new Map();
-  /** 这一条连接上刚送出去的是哪一项（`type:'ready'` 那一帧回来时据此前进）。 */
-  #credSent = new Map();
-  /**
-   * **容器自报的四个状态**（短名 → bool）· 契约 `48-SETTINGS-KEY.md`。
-   *
-   * ⚠️ 权威在容器（文件在它那儿）；宿主这本只是**它说了什么**的落脚处。
-   */
-  #status = new Map();
 
   /**
    * @param {object} o
    * @param {string} o.dir                    套接字放哪个目录
    * @param {(userId:string)=>(string|null)} o.keyFor  **这个人的 key**；`null` = 还没有
-   * @param {(userId:string)=>Array<{field:string,key:string}>} [o.credsFor] 手上存着的那几把
    * @param {(m:string)=>void} [o.log]
    */
-  constructor({ dir, keyFor, credsFor = null, log = () => {}, onKeyBad = null, onBuild = null, onKeyUp = null }) {
+  constructor({ dir, keyFor, log = () => {}, onKeyBad = null, onBuild = null, onKeyUp = null }) {
     if (!dir) throw new Error('TenantChannel 需要 dir');
     if (typeof keyFor !== 'function') throw new Error('TenantChannel 需要 keyFor(userId)');
     this.#dir = dir;
     this.#keyFor = keyFor;
-    this.#credsFor = typeof credsFor === 'function' ? credsFor : null;
     this.#log = log;
     this.#onKeyBad = onKeyBad;
     this.#onBuild = onBuild;
@@ -235,7 +211,6 @@ export class TenantChannel {
     this.#conns.set(userId, set);
     conn.on('close', () => {
       set.delete(conn);
-      this.#credSent.delete(conn);
       if (set.size === 0) this.#conns.delete(userId);
     });
 
@@ -256,38 +231,7 @@ export class TenantChannel {
 
     // ★ 容器一连上就先把它要的东西给它：**不等它问**
     //   （少一次往返，也少一个"该谁先说话"的歧义）
-    // ⚠️ **一次只送得动一把**（容器写一把就收场）⇒ 手上存着好几把时，
-    //    这里按字段**轮着送**（见 `#nextCredFrame`），几圈重连之内全都到位。
-    const frame = this.#nextCredFrame(userId);
-    if (frame) {
-      this.#credSent.set(conn, frame);
-      this.#send(conn, frame.frame);
-    } else {
-      this.#send(conn, hasKey ? { state: 'ready', key } : { state: 'waiting' });
-    }
-  }
-
-  /**
-   * **这一圈该送哪一把**。
-   *
-   * ⚠️ 没有 `credsFor`（判据里那些只给 `keyFor` 的用例）⇒ `null` ⇒ 走老那一帧。
-   * ⚠️ 认不出的字段 / 空值 ⇒ 跳过那一项（宁可少送一把，也不送一帧坏话）。
-   */
-  #nextCredFrame(userId) {
-    if (!this.#credsFor) return null;
-    let list;
-    try {
-      list = this.#credsFor(userId);
-    } catch {
-      return null;
-    }
-    if (!Array.isArray(list) || list.length === 0) return null;
-    const index = (this.#credCursor.get(userId) ?? 0) % list.length;
-    const item = list[index];
-    if (!item || !isCredField(item.field) || typeof item.key !== 'string' || item.key.length === 0) {
-      return null;
-    }
-    return { frame: { state: 'ready', key: item.key, field: item.field }, userId, index, len: list.length };
+    this.#send(conn, hasKey ? { state: 'ready', key } : { state: 'waiting' });
   }
 
   #onLine(userId, conn, line) {
@@ -310,13 +254,6 @@ export class TenantChannel {
         return;
       case 'need-key': {
         // 容器说"我还没拿到 key，再给我一次"（它自己会退避重试）
-        // ⚠️ 手上存着好几把时**照 `#nextCredFrame` 那一套轮着给**（见 `#onConn`）
-        const frame = this.#nextCredFrame(userId);
-        if (frame) {
-          this.#credSent.set(conn, frame);
-          this.#send(conn, frame.frame);
-          return;
-        }
         const key = this.#keyFor(userId);
         if (typeof key === 'string' && key.length > 0) {
           this.#send(conn, { state: 'ready', key });
@@ -325,14 +262,10 @@ export class TenantChannel {
         }
         return;
       }
-      case 'ready': {
+      case 'ready':
         this.#record(userId, 'up');
         this.#log(`  ✓ ${userId} 的容器起来了`);
-        // ★ **对面认了这一把** ⇒ 下一圈该送列表里的下一项（一次只送得动一把）
-        const sent = this.#credSent.get(conn);
-        if (sent && sent.len > 0) this.#credCursor.set(userId, (sent.index + 1) % sent.len);
         return;
-      }
       case 'key-bad': {
         // 🔴 **容器说"那一把钥匙上游不认"**（2026-09-21 加）。
         //    为什么必须由它来说：`turn/end` 那句 `code:'AUTH'` 只有
@@ -350,20 +283,6 @@ export class TenantChannel {
         return;
       }
       case 'tunnel-ready': {
-        // ★ **容器自报的四把状态**（`creds`，契约 `48-SETTINGS-KEY.md`）——
-        //   权威在它那儿（文件在它容器里），宿主这本只是"它说了什么"的落脚处。
-        //   ⚠️ **老容器不带这个可选字段** ⇒ 这一条不记 ⇒ 界面如实说"问不到"
-        //      （不许拿"宿主手上有几把"去替它回答：宿主一重启就忘，那正是
-        //       `hasKeyReported` 这条修过的老 bug）。
-        const c = msg?.creds;
-        if (c && typeof c === 'object') {
-          this.#status.set(userId, {
-            model: c.model === true,
-            image: c.image === true,
-            video: c.video === true,
-            voice: c.voice === true,
-          });
-        }
         // ★ 容器自报"我这儿有没有钥匙" ⇒ 记下来（**它是这个事实的来源**）
         if (msg?.hasKey === true) {
           const first = !this.#keyKnown.has(userId);
@@ -522,17 +441,6 @@ export class TenantChannel {
     return this.#keyKnown.has(userId);
   }
 
-  /**
-   * **那一台自报的四把状态**（`{model,image,video,voice}`），没报过 ⇒ `null`。
-   *
-   * ⚠️ `null` 的意思是**问不到**，不是"没有" —— 界面据此如实说
-   *    "现在问不到"（拿"没有"去替它回答就是页面在说假话）。
-   */
-  credsStatusFor(userId) {
-    const s = this.#status.get(userId);
-    return s ? { ...s } : null;
-  }
-
   /** 有几个租户的隧道通着（给横幅/排障用）。 */
   get tunnelCount() {
     return this.#tunnelConns.size;
@@ -546,6 +454,7 @@ export class TenantChannel {
     }
   }
 
+  /** 这个人的 key **刚刚**才有的 ⇒ 主动推给已经连着的容器（不用等它重连）。 */
   /**
    * **主动叫某一台重开**（契约 `docs/dev/45-TENANT-UPDATE.md` §三）。
    *
@@ -563,22 +472,10 @@ export class TenantChannel {
     return true;
   }
 
-  /**
-   * 这个人的 key **刚刚**才有的 ⇒ 主动推给已经连着的容器（不用等它重连）。
-   *
-   * @param {string} userId
-   * @param {string} key
-   * @param {string|null} [field]  **可选**：这一帧说的是哪一把（短名）。
-   *   给了就带上（`{state:'ready', key, field}`）；**不给 = `model`**（老那一帧逐字不变）。
-   *   ⚠️ 协议**只许加不许改语义**：老容器看不懂 `field` 就忽略它（它那边默认也是 `model`）。
-   * @returns {number} 推出去了几条（0 = 那台现在没连着）
-   */
-  pushKey(userId, key, field = null) {
-    const frame = { state: 'ready', key };
-    if (isCredField(field)) frame.field = field;
+  pushKey(userId, key) {
     let n = 0;
     for (const conn of this.#conns.get(userId) ?? []) {
-      this.#send(conn, frame);
+      this.#send(conn, { state: 'ready', key });
       n += 1;
     }
     // ⚠️ **要如实报"推出去了几条"**（2026-09-22 加）：投递那条路靠它判断

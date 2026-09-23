@@ -17,45 +17,20 @@
 import nodeFs from 'node:fs';
 import nodeNet from 'node:net';
 
-import { CRED_FIELDS, isCredField, mergeCreds } from './creds.mjs';
 import { adoptKeyFile } from './key-path.mjs';
 
 /** `creds.yaml` 里那个字段名（`model-proxy.mjs` 的 `parseKey` 认得它）。 */
-export const KEY_FIELD = CRED_FIELDS.model;
+export const KEY_FIELD = 'HUPO_MODEL_KEY';
 
 /**
- * 现在文件里有哪些字（读不到 / 不在 / 假 fs 没有这个方法 ⇒ 一律 `''`）。
- *
- * ⚠️ **不抛**：文件不在是正常的（第一次就是这么来的）；读不到就当"现在是空的"，
- *    让 `mergeCreds` 照样能把这一把写下去。
- */
-export function readCredsText(keyFile, fs = nodeFs) {
-  try {
-    const text = fs.readFileSync(keyFile, 'utf8');
-    return typeof text === 'string' ? text : '';
-  } catch {
-    return '';
-  }
-}
-
-/**
- * 把 key 写进它该在的地方。**原子写 + 0600 + 合并**。
+ * 把 key 写进它该在的地方。**原子写 + 0600**。
  *
  * ⚠️ 先写 `.tmp` 再 `rename`：代理是**每次请求现读**的，
  *    直接写会让它读到半个 key（然后拿半个 key 去请求上游）。
- *
- * 🔴 **不许整文件覆盖**（2026-09-23 改成合并）：文件里现在可能有
- *    六把（语言 / 图片 / 视频 / 语音那三样）—— 覆盖式写入会把**别人那几把抹掉**。
- *    规则住在 `creds.mjs` 的 `mergeCreds`（只有那一处）。
- *
- * @param {string} keyFile
- * @param {string} key
- * @param {{field?: string, fs?: import('node:fs')}} [o] `field` 缺省 = `model`（老调用点逐字不变）
  */
-export function writeKeyFile(keyFile, key, { field = 'model', fs = nodeFs } = {}) {
-  const next = mergeCreds(readCredsText(keyFile, fs), { [field]: key });
+export function writeKeyFile(keyFile, key, fs = nodeFs) {
   const tmp = `${keyFile}.tmp`;
-  fs.writeFileSync(tmp, next, { mode: 0o600 });
+  fs.writeFileSync(tmp, `${KEY_FIELD}: ${key}\n`, { mode: 0o600 });
   fs.chmodSync(tmp, 0o600);
   fs.renameSync(tmp, keyFile);
   return true;
@@ -231,18 +206,14 @@ export function fetchKeyFromHost({
           return finish(false);
         }
         if (msg?.state === 'ready' && typeof msg.key === 'string' && msg.key.length > 0) {
-          // 🔴 **这一帧说的是哪一把**（协议**只许加不许改语义**）：
-          //    老宿主不带 `field` ⇒ 按 `model` 解（那时文件里也**只有**那一把）。
-          //    认不出的 `field` 也退回 `model` —— 不许因为一个不认识的字段名把整把丢掉。
-          const field = isCredField(msg.field) ? msg.field : 'model';
           try {
-            writeKeyFile(keyFile, msg.key, { field });
+            writeKeyFile(keyFile, msg.key);
           } catch (err) {
             log(`  ⚠️ 凭据写不进去：${err?.message ?? err}`);
             conn.write(`${JSON.stringify({ v: 1, type: 'error', why: 'key-write-failed' })}\n`);
             return finish(false);
           }
-          log('  ✓ 拿到一把凭据了（放在它该在的地方）');
+          log('  ✓ 拿到模型凭据了（放在它该在的地方）');
           conn.write(`${JSON.stringify({ v: 1, type: 'ready' })}\n`);
           return finish(true);
         }

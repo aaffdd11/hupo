@@ -107,22 +107,6 @@ test('★ `parseKey`：单行 / YAML 那种 / 引号 / 注释 / 空', () => {
   assert.equal(parseKey(''), null);
   assert.equal(parseKey('   \n# 只有注释\n'), null);
   assert.equal(parseKey('NAME:\n'), null, '值是空的 ⇒ 不算有 key（不许拿空串去请求）');
-
-  // ★ 2026-09-24：这份文件**不止一把钥匙**了（还有图片/视频/语音那几把，见 `src/creds.mjs`）
-  //   ⇒ 指名要哪一把时，**找不到就是没有**，绝不许退而求其次。
-  const many = 'HUPO_IMAGE_KEY: ark-image-1\nHUPO_MODEL_KEY: sk-abc\nHUPO_VOICE_SECRET_KEY: tx-secret\n';
-  assert.equal(parseKey(many, 'HUPO_MODEL_KEY'), 'sk-abc', '指名的就该拿到它自己那一把');
-  assert.equal(
-    parseKey('HUPO_IMAGE_KEY: ark-image-1\nHUPO_VOICE_SECRET_KEY: tx-secret\n', 'HUPO_MODEL_KEY'),
-    null,
-    '🔴 只填了图片那把 ⇒ **不许**拿它当语言钥匙（那就是"挑错了钥匙"，现象是"鉴权失败"）',
-  );
-  assert.equal(parseKey('HUPO_model_key: sk-abc\n', 'HUPO_MODEL_KEY'), 'sk-abc', '名字大小写不敏感');
-  assert.equal(
-    parseKey('HUPO_IMAGE_KEY: ark-image-1\n', null),
-    'ark-image-1',
-    '**不指名**时保持老规矩（别的调用方还靠它）',
-  );
 });
 
 test('★ `readKeyFile`：文件不在 ⇒ null（**不抛**，让调用方回 503）', () => {
