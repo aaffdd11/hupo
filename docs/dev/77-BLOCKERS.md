@@ -14,6 +14,7 @@
 
 ## 已做完的（这一批）
 
+| ✅ | **P1-7** 沙箱三属性**一条判据都没有** | 落源码级判据 `test/unit/mini_sandbox_test.dart`：`sandbox=allow-scripts`（**不给** `allow-same-origin`）· `referrerpolicy=no-referrer` · `allow=''`；**三条负向对照**（给了 allow-same-origin / 不设 sandbox / 放开 allow ⇒ 都必须抓住） | 2 条全过。⚠️ 写它时先被自己判红一次：**注释里**就写着"故意不给 allow-same-origin" ⇒ 先剥注释再扫 |
 | ✅ | **P1-5** Z2「回到可见不许重建」原来只验了「没被销毁」 | 补强成**同一个 Element**：盖住 → 回到可见后，`MiniAppHost` 与小程序的 `Element` 必须 `identical`（重建 ⇒ 用户填了一半的东西会没） | `mini_app_test.dart` 新判据（2 个 identity 断言） |
 | ✅ | **P1-6** 图标⇄内容交接只有纯函数判据 | 补**界面**判据：在那一层的 `Stack` 里读两个 `Opacity` —— 起点（图标 1 / 页面 0）· **半路两层都在且加起来 = 1** · 终点（0 / 1） | `mini_app_test.dart` 新判据（三点各若干断言）。⚠️ 写它时先判错了一次结构（图标层在 `ClipRRect` **外面**，是兄弟不是后代）⇒ 改成从外层 `Stack` 找 |
 | ✅ | **P1-8** 写死尺寸棘轮只扫圆角 | 扩到**间距/尺寸**（`EdgeInsets.all/symmetric/fromLTRB/only` 与 `SizedBox(height/width)` 里的**数字字面量**），用**基线计数**（2026-09-24 实测 **161 处 / 25 个文件**）：每个文件**只许少、不许多**，总数也不许涨 | `design_tokens_test.dart` 两条（棘轮 + **负向对照**：`EdgeInsets.all(12)` 数得出、`d.gapM` 数不出）；**变异验证**：塞一处 `SizedBox(height: 9)` ⇒ 当场红，还原 ⇒ 5 条全过 |
