@@ -27,10 +27,12 @@ import 'package:hupo_app/models/export_words.dart';
 import 'package:hupo_app/models/message_state.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/space.dart';
+import 'package:hupo_app/models/source_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/timeline.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
+import 'package:hupo_app/widgets/bubbles.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/screens/landing_screen.dart';
 import 'package:hupo_app/screens/login_screen.dart';
@@ -280,6 +282,29 @@ ChatController _turnController() {
   return c;
 }
 
+/// 一条**带出处**的回答（契约 `67-SOURCES.md`）——
+/// ⚠️ 新加的界面/新加的能点的东西**必须进下面那两组扫描**，不然
+///    "五档不溢出"与"命中区 ≥44"就有了一个不受检查的缺口（这一节顶上那句老话）。
+ChatController _sourceController() {
+  final c = _trashController();
+  c.ingest({'type': 'user/echo', 'seq': 1, 'messageId': 'u_1', 'text': '北京今天天气怎么样'});
+  c.ingest({'type': 'message/start', 'seq': 2, 'messageId': 'm_1'});
+  c.ingest({'type': 'message/text', 'seq': 3, 'messageId': 'm_1', 'block': 'quick', 'text': '北京今天多云。'});
+  c.ingest({
+    'type': 'message/end',
+    'seq': 4,
+    'messageId': 'm_1',
+    'reason': 'completed',
+    'sources': [
+      {'title': '中国天气网 · 北京今天多云', 'url': 'https://www.weather.com.cn/bj'},
+      {'title': 'weather.com.cn', 'url': 'https://www.weather.com.cn/beijing'},
+      {'title': 'news.example.cn', 'url': 'https://news.example.cn/x'},
+      {'title': 'data.example.cn', 'url': 'https://data.example.cn/y'},
+    ],
+  });
+  return c;
+}
+
 /// **像用户那样**打开回收站页：从主界面点顶栏那个入口。
 Future<void> _openTrash(WidgetTester tester, double scale) async {
   await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _trashController(), onLoggedOut: () {}), scale);
@@ -459,6 +484,13 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '过程那一块在 ${s}x 溢出了');
       });
 
+      testWidgets('主界面 @ ${s}x（出处那几行拉满 —— 2026-09-23 新加的）', (tester) async {
+        final c = _sourceController();
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        expect(find.text(sourcesHeadWords), findsOneWidget, reason: '★ 出处没进到这棵树里 ⇒ 这道闸漏了它');
+        expect(_drain(tester), isEmpty, reason: '出处那几行在 ${s}x 溢出了');
+      });
+
       testWidgets('配置页（从真入口进）@ ${s}x', (tester) async {
         // ⚠️ 新加的界面**必须也过这道闸** —— 不然"五档不溢出"会随时间失效。
         await _openConfig(tester, s);
@@ -607,8 +639,19 @@ void main() {
     /// ⚠️ 量之前**先把这个按钮完整露出来**（见下面"被裁过的矩形"那段）。
     Future<void> sweep(WidgetTester tester, String where) async {
       var checked = 0;
-      for (final type in <Type>[IconButton, TextButton, FilledButton, ElevatedButton]) {
-        for (final e in find.byType(type).evaluate()) {
+      // ⚠️ **用 `is ButtonStyleButton`，不要用 `find.byType(TextButton)`**
+      //    （2026-09-23 修）：`TextButton.icon(...)` / `FilledButton.tonalIcon(...)`
+      //    造出来的是**子类**（`_TextButtonWithIcon`…），而 `find.byType` 只认
+      //    **精确类型** ⇒ 那些**带图标的按钮从来没被这道闸量过**。
+      //    发现经过：出处那几行新加的按钮一条都没扫到，而 `checked > 0` 照样绿
+      //    （顶栏那几个图标撑着它）—— 这正是"闸在替自己作假"的形状。
+      final targets = <(String, Finder)>[
+        ('IconButton', find.byType(IconButton)),
+        ('ButtonStyleButton', find.byWidgetPredicate((w) => w is ButtonStyleButton)),
+      ];
+      for (final (label, finder) in targets) {
+        for (final e in finder.evaluate()) {
+          final type = label;
           final w = find.byWidget(e.widget);
           // ⚠️ **先 `ensureVisible`，再量语义矩形。**
           //    为什么非这样不可（2026-09-21 实测）：时间线**会滚**之后，
@@ -747,6 +790,34 @@ void main() {
         await sweep(tester, '主界面 @${s}x');
       });
     }
+
+    testWidgets('出处那几行（能点开时）的命中区 ≥44 —— 五档都量', (tester) async {
+      // ⚠️ 为什么要单独一条：**测试环境里 `canOpenLinks` 是假**（`services/links_stub.dart`）
+      //    ⇒ 从真入口进去，出处是**纯文字**、根本没有按钮 ⚠️ 于是"命中的东西"这一档
+      //    会**悄悄漏掉**这个控件。⇒ 这里把回调**注入**进气泡，直接量它。
+      for (final s in scales) {
+        final m = AssistantMessage(messageId: 'm_src', seq: 9)
+          ..quick = '北京今天多云。'
+          ..ended = true
+          ..reason = 'completed';
+        m.sources = [
+          {'title': '中国天气网 · 北京今天多云', 'url': 'https://www.weather.com.cn/bj'},
+          {'title': 'news.example.cn', 'url': 'https://news.example.cn/x'},
+        ];
+        await _pump(
+          tester,
+          Scaffold(
+            body: SingleChildScrollView(
+              child: AnswerBubble(message: m, onOpenSource: (_) {}),
+            ),
+          ),
+          s,
+        );
+        await tester.pumpAndSettle();
+        await sweep(tester, '出处那几行 @${s}x');
+        expect(_drain(tester), isEmpty, reason: '出处那几行在 ${s}x 溢出了');
+      }
+    });
   });
 
   test('🔴 lib 里不许出现**裸的** GestureDetector（框架的选字手柄不算）', () {

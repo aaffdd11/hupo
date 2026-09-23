@@ -60,6 +60,7 @@
 import { EventEmitter } from 'node:events';
 
 import { MessageWriter } from './message-writer.js';
+import { MAX_SOURCES, sourcesFromToolResult } from './sources.js';
 import { isReadOnlyTool } from './tools.js';
 // ★ **失败五类那几句人话只有一处出处**（`notice.js` 的 `FAILED_LINES`）——
 //   这一层要用"外面那条路不通"那一句（账 #33），但**不许在这儿再抄一份字**。
@@ -235,6 +236,8 @@ export class TurnTranslator extends EventEmitter {
   #reasoningSeen = 0;
   /** 已经报过"动过东西"的轮号（一轮只报一次） */
   #mutatedTurns = new Set();
+  /** `turn:step` → 工具名（`tool/result` 上没有名字，见 `#onToolCall`）。 */
+  #stepTools = new Map();
   /**
    * 已经由 `step/start` 报过的步（键 `turn:step`）。
    *
@@ -328,6 +331,11 @@ export class TurnTranslator extends EventEmitter {
       case 'tool/call':
         this.#onToolCall(data);
         break;
+      case 'tool/result':
+        // ★ **出处**就在这条上（`meta.sources`）—— 见 `src/sources.js` 顶上那三条规矩。
+        //   ⚠️ 它上面**没有工具名**（实测）⇒ 名字去 `tool/call` 那一侧配（`#stepTools`）。
+        this.#onToolResult(data);
+        break;
       case 'todo/write':
         // 整表快照（last-write-wins）—— **不是**增量
         this.#onPlanEvent('todos', data);
@@ -389,9 +397,53 @@ export class TurnTranslator extends EventEmitter {
     this.#timeline.emit({ type: PLAN_EVENT, ...next, at: Date.now() });
   }
 
+  /**
+   * **工具结果 ⇒ 出处**（`src/sources.js` 是判据所在）。
+   *
+   * ⚠️ 只在**这一轮还在账上**时收（`#turns` 里有它）——轮已经收了，
+   *    这条结果就属于"已经说完的那句话"，晚了（不许倒着往旧气泡上贴出处）。
+   */
+  #onToolResult(data) {
+    const turn = data?.turn;
+    if (typeof turn !== 'number') return;
+    const rec = this.#turns.get(turn);
+    if (!rec) return;
+    const name = typeof data?.step === 'number' ? this.#stepTools.get(`${turn}:${data.step}`) : undefined;
+    const found = sourcesFromToolResult(name, data?.meta);
+    if (found.length === 0) return;
+    for (const one of found) {
+      if (rec.sources.length >= MAX_SOURCES) break;
+      if (rec.sources.some((x) => x.url === one.url)) continue;
+      rec.sources.push(one);
+    }
+  }
+
+  /**
+   * **收口**：把这一轮攒下的出处写进 `message/end`，再 `end()`。
+   *
+   * ⚠️ 为什么统一在这一处写：`message/end` 是**权威那一版**（协议 R8），
+   *    而出处是在一轮里**陆续**攒起来的 ⇒ 前面每一条 `chunk()` 都不该操心它。
+   * ⚠️ 没有出处时**什么都不用做**：`message/end.sources` 是 `MessageWriter.end()` 本来就带的字段
+   *    （空数组 = 没有出处）—— 这里只负责把攒到的那几条写进去。
+   *
+   * @param {import('./message-writer.js').MessageWriter} writer
+   * @param {{sources?: {title: string, url: string}[]}|undefined} rec
+   * @param {string} reason
+   */
+  #endWriter(writer, rec, reason) {
+    if (rec && Array.isArray(rec.sources) && rec.sources.length > 0) writer.sources = rec.sources;
+    writer.end(reason);
+  }
+
   #onToolCall(data) {
     const turn = data?.turn;
     if (typeof turn !== 'number') return;
+    // ★ **这一步用的是哪件工具**：`tool/result` 上**没有工具名**（实测），
+    //   而"出处"只认 `web_search` / `web_fetch` ⇒ 名字只能在这一侧配上去。
+    //   ⚠️ 键与 `#seenSteps` 同款（`turn:step`）⇒ 收尾时一起清。
+    if (typeof data?.step === 'number' && typeof data?.name === 'string') {
+      this.#stepTools.set(`${turn}:${data.step}`, data.name);
+    }
     // ★ 契约 §6.1：顺带给**这一步**补上"是什么类别的活"（人话表在客户端）。
     //   ⚠️ 它和下面那个布尔是**两件事**：这一步读文件也要说"在读东西"，
     //      哪怕整轮一次都没改过东西（只读白名单那条路）。
@@ -487,7 +539,7 @@ export class TurnTranslator extends EventEmitter {
     if (typeof turn !== 'number') return;
     // ★ 键是 turn —— 见文件头 ②
     if (!this.#turns.has(turn)) {
-      this.#turns.set(turn, { writer: null, startedAt: ev.time ?? Date.now(), texts: 0 });
+      this.#turns.set(turn, { writer: null, startedAt: ev.time ?? Date.now(), texts: 0, sources: [] });
     }
     this.emit('turn-start', turn);
   }
@@ -546,6 +598,9 @@ export class TurnTranslator extends EventEmitter {
       for (const key of this.#seenSteps) {
         if (key.startsWith(`${turn}:`)) this.#seenSteps.delete(key);
       }
+      for (const key of this.#stepTools.keys()) {
+        if (key.startsWith(`${turn}:`)) this.#stepTools.delete(key);
+      }
     }
     const rec = this.#turns.get(turn);
     if (!rec) return;
@@ -574,7 +629,7 @@ export class TurnTranslator extends EventEmitter {
         scopeId: this.#scopeId,
       });
       w.chunk('deep', kind === 'completed' ? EMPTY_LINE : stuckLine);
-      w.end('failed');
+      this.#endWriter(w, rec, 'failed');
       // ★ 「这一轮出事了」已经在这条通道上说过了（文件头 ⑥）
       this.#claimProcess(turn, 'failed');
       this.emit('turn-end', { turn, kind, empty: true });
@@ -585,10 +640,10 @@ export class TurnTranslator extends EventEmitter {
       // ③ **半句**：补一句说明，并**标成失败收尾**。
       //    绝不许把半句当完整回答（事故三）。
       writer.chunk('deep', kind === 'max-tokens' ? TRUNCATED_LINE : stuckLine);
-      writer.end('failed');
+      this.#endWriter(writer, rec, 'failed');
       this.#claimProcess(turn, 'failed');
     } else {
-      writer.end('completed');
+      this.#endWriter(writer, rec, 'completed');
     }
     this.emit('turn-end', { turn, kind, empty: false });
   }
@@ -605,6 +660,7 @@ export class TurnTranslator extends EventEmitter {
   reset() {
     this.#turns.clear();
     this.#mutatedTurns.clear(); // 轮号在新进程里从 1 重来 ⇒ 这份账也是新的
+    this.#stepTools.clear(); // 同上：轮号重来了，`turn:step` 那本账也是旧的
   }
 
   /**
@@ -635,7 +691,7 @@ export class TurnTranslator extends EventEmitter {
     if (rec.writer && !rec.writer.ended) {
       // ① 说了一半
       rec.writer.chunk('deep', DEADLINE_PARTIAL_LINE);
-      rec.writer.end('timeout');
+      this.#endWriter(rec.writer, rec, 'timeout');
     } else if (!rec.writer) {
       // ② 一句都没说 —— **不许留白**
       const w = new MessageWriter({
@@ -645,7 +701,7 @@ export class TurnTranslator extends EventEmitter {
         scopeId: this.#scopeId,
       });
       w.chunk('deep', DEADLINE_EMPTY_LINE);
-      w.end('timeout');
+      this.#endWriter(w, rec, 'timeout');
     }
     // ★ 「这一轮卡住、收了口」在过程通道上说过了（文件头 ⑥）
     this.#claimProcess(turn, 'timeout');
@@ -699,7 +755,7 @@ export class TurnTranslator extends EventEmitter {
       if (rec.writer && !rec.writer.ended) {
         // 用户已经看到半句 ⇒ 补一句"没说完"，别重复它的开头
         rec.writer.chunk('deep', INTERRUPTED_LINE);
-        rec.writer.end(reason);
+        this.#endWriter(rec.writer, rec, reason);
       } else if (!rec.writer) {
         // 一句话都没说 ⇒ **主动交代**（不许留白）
         const w = new MessageWriter({
@@ -709,7 +765,7 @@ export class TurnTranslator extends EventEmitter {
           scopeId: this.#scopeId,
         });
         w.chunk('deep', line);
-        w.end(reason);
+        this.#endWriter(w, rec, reason);
       }
       // ★ 这一轮"以失败收场"在过程通道上说了（文件头 ⑥）
       this.#claimProcess(turn, reason);

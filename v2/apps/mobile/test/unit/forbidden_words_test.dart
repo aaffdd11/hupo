@@ -11,6 +11,7 @@ import 'package:hupo_app/models/login_words.dart';
 import 'package:hupo_app/models/notice_words.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/process_words.dart';
+import 'package:hupo_app/models/source_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
 
 void main() {
@@ -156,6 +157,9 @@ void main() {
       noticeUndoLabel,
       noticeDismissLabel,
       noticeNotKeptLine,
+      // ⚠️ 出处（`67-SOURCES.md`）：抬头与"还有 N 处" —— **直接引数据源**（手抄会漂）
+      sourcesHeadWords,
+      sourcesMoreWords(2),
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

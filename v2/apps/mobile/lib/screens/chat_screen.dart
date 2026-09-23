@@ -31,6 +31,7 @@ import '../models/timeline.dart';
 import '../models/trash_words.dart';
 import '../services/api.dart';
 import '../services/chat_controller.dart';
+import '../services/links.dart';
 import '../widgets/app_desktop.dart';
 import '../widgets/mini_app_icons.dart';
 import '../widgets/mini_runtime.dart';
@@ -803,7 +804,12 @@ class _ChatScreenState extends State<ChatScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        AnswerBubble(message: m, onLongPress: () => _onBubbleLongPress(c, m)),
+        AnswerBubble(
+          message: m,
+          onLongPress: () => _onBubbleLongPress(c, m),
+          // ⚠️ 开不了外面的地址就传 `null` ⇒ 出处只当文字（**不画按不动的按钮**）
+          onOpenSource: canOpenLinks ? openExternal : null,
+        ),
         if (reasoning.isNotEmpty) ReasoningBlock(text: reasoning),
       ],
     );

@@ -20,14 +20,28 @@
 //   ① **自动断言**：那个页面里的 WebSocket 到底连上没有、有没有收到帧
 //      （这正是 `ws://` 那类 bug 的唯一可观察信号）；
 //   ② **截图**：`--shot` 存一张 PNG —— 人（或助手）能**看一眼**屏幕上到底什么样。
-//      为什么要有这一半：Flutter web 把字画在 canvas 上，**DOM 里没有文本**，
+//      为什么要有这一半：Flutter web 把字画在 canvas 上，**默认 DOM 里没有文本**，
 //      所以"页面上到底写了什么"靠查 DOM 是查不到的；而"看一眼"是最诚实的办法。
+//
+//      🔴 **2026-09-23 更新（重要）**：**打开无障碍语义树之后，DOM 里就有字了** ——
+//         `--eval "document.querySelector('flt-semantics-placeholder').click()"` 一下，
+//         Flutter 会建出真 DOM：`document.querySelector('flt-semantics-host').innerText`
+//         就是屏幕上那些字（**近似**：它含列表里**没在视口里**的条目，所以"在树里"
+//         ≠ "在屏幕上"，看屏幕仍然要看截图）；语义节点也**收得住 `click()`**。
+//         ⇒ 现在有两条互补的路：**截图看"长什么样"**、**语义树读"写了什么"**。
+//      ⚠️ **合成鼠标/指针事件仍然送不进画布**（pointer 与 mouse 都在
+//         `flt-glass-pane` 上派过，页面**逐像素不变**）⇒ `--click-at` 那一套
+//         **基本无效**，要"走到某一屏"请用 `--eval` + 语义节点点击。
+//      ⚠️ **滚轮事件是有效的**：`flt-glass-pane` 上派 `WheelEvent`（deltaY 正数 = 往下）。
 //
 // 用法：
 //   HUPO_TOKEN=<令牌> node scripts/check-web-browser.mjs
 //   HUPO_TOKEN=... node scripts/check-web-browser.mjs --shot /tmp/shot.png --wait 60000
 //   看未登录那两屏：加 `--no-token`；点一下再拍：`--click-at X,Y`（`--click-settle` 控制点完等多久）；
 //   看折叠线以下：`--scroll-px <像素>`（页内合成 touch 指针拖一段 —— 鼠标拖在网页上不滚动）；
+//   在页面里跑一段 JS（取证用，最有用的是"打开无障碍树"与"按语义节点点一下"）：
+//     `--eval "<js>"`（可给多次，按顺序跑，结果打出来；`awaitPromise` 已开）；
+//   滚到底：`--eval "(()=>{const g=document.querySelector('flt-glass-pane');for(let i=0;i<8;i++)g.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:600,clientX:640,clientY:300}));return 'ok'})()"`；
 //   截图前等多久：`--shot-after <毫秒>`（默认 6000 —— **中文字体是异步下的，拍早了就是豆腐块**）；
 //   屏掉 gstatic 验自托管：`--block-gstatic`（**在开页面之前**就屏，见 ②.5）
 //   （`--url` 默认打线上；`--chrome` 指定浏览器可执行文件）
@@ -116,6 +130,11 @@ const CLICK_SETTLE_MS = Number.parseInt(valueOf('--click-settle', '1400'), 10);
 const CLICKS = [];
 for (let i = 0; i < argv.length; i += 1) {
   if (argv[i] === '--click-at' && argv[i + 1]) CLICKS.push(argv[i + 1]);
+}
+/** `--eval <js>`（可多次）：在页面里跑一段 JS 并把结果打出来（取证用，见下面 ④.4）。 */
+const EVALS = [];
+for (let i = 0; i < argv.length; i += 1) {
+  if (argv[i] === '--eval' && argv[i + 1]) EVALS.push(argv[i + 1]);
 }
 // ⚠️ **CDP 的 `Input.*` 送不到 Flutter**（2026-09-22 实测：鼠标与触摸都试了、
 //    连聚焦模拟也加了，**页面逐字节不变**）；而**页内合成 pointer 事件**可以
@@ -437,6 +456,27 @@ async function main() {
     await sleep(500);
   }
 
+  // ④.4 **在页面里跑一段 JS**（可选）：`--eval <js>`（可给多次，按顺序跑，结果打出来）。
+  //
+  // 🔴 为什么需要它（2026-09-23 实测）：**合成鼠标事件送不进 Flutter 的画布**
+  //    （pointer 与 mouse 都在 `flt-glass-pane` 上派过，页面**逐像素不变**）。
+  //    而 Flutter 有一套**真 DOM 的无障碍树**：把 `flt-semantics-placeholder`
+  //    点一下就会建出来，那之后：
+  //      · 屏幕上的**字能在 DOM 里查到**（`aria-label`）—— 不用只靠看截图；
+  //      · 语义节点**收得住真点击**（Flutter 自己转回框架）。
+  //    ⇒ 它让"走到某一屏再看一眼"这条路重新可用。
+  // ⚠️ 它**只是取证**（看一眼），**不是判据** —— 判据是 `test/` 里那些。
+  for (const expr of EVALS) {
+    try {
+      const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
+      const v = r.result?.result?.value;
+      console.log(`  🧪 eval → ${typeof v === 'string' ? v : JSON.stringify(v)}`);
+    } catch (err) {
+      console.error(`  ⚠️ eval 失败：${err?.message ?? err}`);
+    }
+    await sleep(600);
+  }
+
   // ④.5 **按顺序点几下**（可选）：用来"走到某一屏再看一眼"
   for (const spec of CLICKS) {
     const m = /^\s*([0-9.]+)\s*,\s*([0-9.]+)\s*$/.exec(spec);
@@ -448,20 +488,52 @@ async function main() {
     const y = Number(m[2]);
     const js = `(() => {
       const x = ${x}, y = ${y};
-      const el = document.elementFromPoint(x, y) || document.body;
+      // 🔴 **要往 shadow root 里钻**（2026-09-23 修）：
+      //    Flutter web 把画布装在一个 shadow root 里，elementFromPoint
+      //    **只会返回宿主元素**（实测：FLUTTER-VIEW），而监听 pointer 的是里面那一层
+      //    ⇒ 事件派在宿主上**进不去**（页面逐字节不变 —— 我拿坐标点"展开"验过两次）。
+      //    ⚠️ 这一段在**外层模板串里**生成 ⇒ 注释里**不许出现反引号**（会掐断字符串，当场语法错）。
+      const deep = (px, py) => {
+        let el = document.elementFromPoint(px, py) || document.body;
+        for (let i = 0; i < 8 && el && el.shadowRoot; i += 1) {
+          const inner = el.shadowRoot.elementFromPoint(px, py);
+          if (!inner || inner === el) break;
+          el = inner;
+        }
+        return el || document.body;
+      };
+      const el = deep(x, y);
       const mk = (type, buttons) => new PointerEvent(type, {
         bubbles: true, cancelable: true, composed: true,
         clientX: x, clientY: y, screenX: x, screenY: y,
         pointerId: 1, pointerType: 'mouse', isPrimary: true,
         button: 0, buttons, width: 1, height: 1, pressure: buttons ? 0.5 : 0,
       });
-      el.dispatchEvent(mk('pointerover', 0));
-      el.dispatchEvent(mk('pointerenter', 0));
-      el.dispatchEvent(mk('pointermove', 0));
-      el.dispatchEvent(mk('pointerdown', 1));
-      el.dispatchEvent(mk('pointerup', 0));
-      el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y }));
-      return el.tagName + '|' + (el.className || '');
+      // 🔴 **派给 Flutter 真正收事件的那个元素**（2026-09-23 修）：
+      //    实测这一版 DOM 是 flutter-view + flt-glass-pane / flt-text-editing-host /
+      //    flt-semantics-host，而 elementFromPoint 只回 flutter-view（玻璃板
+      //    pointer-events 是 none）⇒ 事件派在 flutter-view 上**进不去**。
+      //    ⇒ 优先派给玻璃板，它不在就退回那个命中元素。
+      const target = document.querySelector('flt-glass-pane') || el;
+      // ⚠️ 光有 pointer 事件不够（实测点不动）：**老式的 mouse 事件一起给**。
+      const mouse = (type, buttons) => new MouseEvent(type, {
+        bubbles: true, cancelable: true, composed: true,
+        clientX: x, clientY: y, button: 0, buttons,
+      });
+      for (const ev of [mk('pointerover', 0), mk('pointerenter', 0), mk('pointermove', 0)]) target.dispatchEvent(ev);
+      target.dispatchEvent(mouse('mouseover', 0));
+      target.dispatchEvent(mouse('mousemove', 0));
+      target.dispatchEvent(mk('pointerdown', 1));
+      target.dispatchEvent(mouse('mousedown', 1));
+      target.dispatchEvent(mk('pointerup', 0));
+      target.dispatchEvent(mouse('mouseup', 0));
+      target.dispatchEvent(mouse('click', 0));
+      // ⚠️ 打印**整摞**命中的元素（不只是最上面那个）：排查"事件到底该派给谁"时，
+      //    只看最上面那个会把人带偏（实测 elementFromPoint 只回宿主）。
+      const stack = Array.from(document.elementsFromPoint(x, y))
+        .map((e) => e.tagName + (e.className ? '.' + String(e.className).split(' ')[0] : ''))
+        .join(' > ');
+      return target.tagName + ' ⟸ ' + stack;
     })()`;
     const r = await send('Runtime.evaluate', { expression: js, returnByValue: true });
     console.log(`  🖱 点了 (${x}, ${y}) → 落在 ${r.result?.result?.value ?? '?'}`);

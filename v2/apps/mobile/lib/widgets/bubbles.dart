@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 
 import '../models/message_state.dart';
 import '../models/notice_words.dart';
+import '../models/source_words.dart';
 import '../models/timeline.dart';
 
 /// 四态的视觉。**图标 + 文字**双通道，不靠颜色单独承载信息。
@@ -99,12 +100,71 @@ class UserBubble extends StatelessWidget {
 
 /// 助手说的一条。快答与深答**在同一个气泡里**（协议 R2）。
 class AnswerBubble extends StatelessWidget {
-  const AnswerBubble({super.key, required this.message, this.onLongPress});
+  const AnswerBubble({
+    super.key,
+    required this.message,
+    this.onLongPress,
+    this.onOpenSource,
+  });
 
   final AssistantMessage message;
 
   /// 长按气泡（同 [UserBubble.onLongPress]）。
   final VoidCallback? onLongPress;
+
+  /// **出处那一行能不能点开**（契约 `docs/dev/67-SOURCES.md`）。
+  ///
+  /// ⚠️ `null` = 这个平台开不了外面的地址（见 `services/links.dart`）⇒
+  ///    出处**只当文字显示**，**不画一个按不动的按钮**
+  ///    （界面上不许出现做不到的东西 —— `AGENTS.md` §六 第 4 条那一族）。
+  final void Function(String url)? onOpenSource;
+
+  /// **出处那几行**（「它替你查过的东西是哪来的」）。
+  ///
+  /// 三条规矩（契约 `67-SOURCES.md`）：
+  ///   ① 有标题用标题、没有用域名 —— 那个名字**由服务端算好**（`sources.js` 的 `sourceLabel`），
+  ///      这里只负责画（同一件事两处口径 ⇒ 迟早会漂）。
+  ///   ② 能点开的时候**命中区 ≥44**（D3.6），图标大小跟字算（不写死尺寸）。
+  ///   ③ 画不下就**如实报数**，不许静默少画。
+  List<Widget> _sourceRows(ThemeData theme) {
+    final shown = message.sources.take(sourcesShown).toList();
+    final extra = message.sources.length - shown.length;
+    final markSize = (theme.textTheme.bodySmall?.fontSize ?? 12) + 4;
+    final rows = <Widget>[];
+    for (final s in shown) {
+      final url = '${s['url'] ?? ''}'.trim();
+      // 服务端已经给好"给人看的名字"；万一它没给，就用地址兜底（不许出现空行）
+      final label = '${s['title'] ?? ''}'.trim().isEmpty ? url : '${s['title']}'.trim();
+      if (url.isEmpty || label.isEmpty) continue;
+      rows.add(
+        onOpenSource == null
+            ? Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text('· $label', style: theme.textTheme.bodySmall),
+              )
+            : TextButton.icon(
+                onPressed: () => onOpenSource!(url),
+                icon: Icon(Icons.open_in_new, size: markSize),
+                label: Text(label, style: theme.textTheme.bodySmall),
+                style: TextButton.styleFrom(
+                  // D3.6：命中区 ≥44（视觉可以小，手指要够得着）
+                  minimumSize: const Size(0, 44),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  alignment: Alignment.centerLeft,
+                ),
+              ),
+      );
+    }
+    if (extra > 0) {
+      rows.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Text(sourcesMoreWords(extra), style: theme.textTheme.bodySmall),
+        ),
+      );
+    }
+    return rows;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -134,13 +194,10 @@ class AnswerBubble extends StatelessWidget {
                   else
                     Text(text, style: theme.textTheme.bodyLarge),
                   if (message.sources.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    ...message.sources.take(5).map(
-                          (s) => Text(
-                            '· ${s['title'] ?? s['url'] ?? '来源'}',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                        ),
+                    const SizedBox(height: 10),
+                    Text(sourcesHeadWords, style: theme.textTheme.bodySmall),
+                    const SizedBox(height: 2),
+                    ..._sourceRows(theme),
                   ],
                   if (message.ended && message.reason != null && message.reason != 'completed')
                     Padding(
