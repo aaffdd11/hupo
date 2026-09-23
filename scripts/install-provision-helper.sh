@@ -24,6 +24,10 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# ★ **容量算式只有一处**（欠账 #35 · 2026-09-23）：装机报的"放得下几台"与
+#    `set-tenant-limit.sh` 写进模板的上限**用同一个函数**（以前是两处各算 ⇒ 会漂）。
+# shellcheck source=lib/tenant-capacity.sh
+. "$ROOT/scripts/lib/tenant-capacity.sh"
 SERVICE_USER="${HUPO_SERVICE_USER:-deploy}"
 
 MODE="show"
@@ -174,12 +178,17 @@ if [ -n "$MAX_T" ] && [ -n "$IMG_SZ" ] && [ "${IMG_SZ:-0}" -gt 0 ]; then
   home_dir="$(getent passwd "$OWNER_USER" | cut -d: -f6)"
   avail="$(df -B1 --output=avail "$home_dir" 2>/dev/null | tail -1 | tr -d ' ')"
   if [ -n "${avail:-}" ] && [ "${avail:-0}" -gt 0 ]; then
-    fits=$((avail / IMG_SZ))
-    printf '  %s\n' "磁盘       $(awk -v b="$need" 'BEGIN{printf "%.1f", b/1073741824}') GB 才够 $MAX_T 台；可用 $(awk -v b="$avail" 'BEGIN{printf "%.1f", b/1073741824}') GB ⇒ **放得下 $fits 台**"
+    # ★ **算式只有一处**（欠账 #35）：`scripts/lib/tenant-capacity.sh`
+    #    —— 装机时这句"放得下几台"与 `set-tenant-limit.sh` 生成的上限**同一口径**。
+    fits="$(capacity_fits "$avail" "$IMG_SZ")"
+    limit="$(capacity_limit "$avail" "$IMG_SZ")"
+    printf '  %s\n' "磁盘       $(awk -v b="$need" 'BEGIN{printf "%.1f", b/1073741824}') GB 才够 $MAX_T 台；可用 $(awk -v b="$avail" 'BEGIN{printf "%.1f", b/1073741824}') GB ⇒ **放得下 $fits 台**（扣 $(capacity_reserve_pct)% 余量 ⇒ 上限 **$limit 台**）"
     if [ "$fits" -lt "$MAX_T" ]; then
       say "           ⚠️ **上限（模板里的 max_tenants=$MAX_T）比磁盘放得下的多** —— 第 $((fits + 1)) 个申请会失败。改 ${SRC_CONF} 里的 max_tenants，或腾地方"
+      say "              （按磁盘算：bash scripts/set-tenant-limit.sh --write）"
     else
-      say "           ✅ 放得下（模板里的上限就是 $MAX_T）"
+      say "           ✅ 放得下（模板里的上限 $MAX_T ≤ 磁盘放得下的 $fits）"
+      [ "$MAX_T" = "$limit" ] || say "              （按磁盘算出来的建议上限是 $limit 台：bash scripts/set-tenant-limit.sh）"
     fi
   else
     say "磁盘       ⚠️ 算不出可用空间（$home_dir）"

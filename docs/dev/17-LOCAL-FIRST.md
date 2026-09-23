@@ -85,7 +85,18 @@ static bool isPersistable(Map<String, dynamic> e) => e['seq'] is int;
 
 手册 `03-DEVELOPMENT.md` 写着：必须带 **`scopeId + userId`** 命名空间。
 
-⚠️ **今天只能填一半**：客户端里既没有 `scopeId`（单作用域），
+> ✅ **2026-09-23 更新：`userId` 那一半已经补上了**（在隔离那一批落的，见
+> `38-ISOLATION-SPLIT.md` §8.1–§8.6）：客户端从**令牌的 `sub`** 读出"这是谁"
+> （`models/token_sub.dart` 的 `cacheNamespaceOf`），在**读缓存之前**把三份缓存
+> （时间线 / 草稿 / 打了一半那句）的 `namespace` 绑上去；读不出 `sub` 就退回一个
+> **谁都不属于**的名字（`cacheNamespaceFallback`），**绝不**退回可能撞上真人的值。
+> 判据 9 条：`test/unit/cache_namespace_test.dart`（含**真写盘**的"甲的缓存乙一条读不到"、
+> 退出登录清**全部**命名空间、以及**负向对照**"不清的话它确实还在"）。
+> ⚠️ 下面那几段记的是"当时为什么只能填一半" —— **留着当背景，别再照着做**。
+> `scopeId` 那一半**仍然没有**（单作用域；见 `04-ROADMAP.md` §十二 与
+> `docs/dev/64-CHAT-REDESIGN.md` 里"计划条/聊天记录"那两批会不会带来多作用域）。
+
+⚠️ **当时只能填一半**：客户端里既没有 `scopeId`（单作用域），
 也**不解析令牌里的用户名**（那就等于把令牌当数据源，没必要）。
 ⇒ 现在：
 

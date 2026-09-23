@@ -22,6 +22,21 @@
 
 ---
 
+## 一·补、**顺手一件**（不是决定，是一条命令）
+
+仓库里 `v2/services/core/tenant-template.conf` 的**注释**改了（`max_tenants=8` 的值**没动**）——原来那句"这个数按磁盘算"是假话，现在写清楚了：它是**策略上限**，按磁盘算的值用 `scripts/set-tenant-limit.sh` 看。
+
+⚠️ **装机那份 `/etc/hupo/tenant-template.conf` 还是旧的**（只差注释）⇒ `--check` 在那之前会报一次"不一致"（无害）。
+要同步（一条命令，会顺带把仓库里那份装机脚本也刷新）：
+
+```bash
+sudo bash scripts/install-provision-helper.sh --yes
+```
+
+⚠️ 我没有自己动 `/etc/hupo`（那是**特权侧**，按 P1/P2 归你签字）。
+
+---
+
 ## 二、你不点头，我也能自己做完的那几条（**不用等**）
 
 | # | 是什么 | 什么时候做 |
