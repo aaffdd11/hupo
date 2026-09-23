@@ -32,6 +32,10 @@ class StreamClient {
     required this.api,
     this.level = defaultProcessLevel,
     this.pingTimeout = const Duration(seconds: 60),
+    /// ★ P1-10（2026-09-24）："令牌还行不行"那一问**可注入** ——
+    ///   判据要能验"401 就停下重连"那条路（B1），而真的去连一个坏地址是验不准的。
+    ///   `null` = 用真那个（`api.health`）。
+    this.probe,
   });
 
   final String base; // 空串 = 同源
@@ -43,6 +47,9 @@ class StreamClient {
   final ProcessLevel level;
 
   final Duration pingTimeout;
+
+  /// 见构造函数里的说明：只为判据而存在的注入口。
+  final Future<TokenProbe> Function(String token)? probe;
 
   final _events = StreamController<Map<String, dynamic>>.broadcast();
   final _states = StreamController<ConnState>.broadcast();
@@ -190,8 +197,10 @@ class StreamClient {
     _ch = null;
     if (!_wantOpen) return;
 
-    final probe = await api.health(token);
-    switch (probe) {
+    // ★ P1-10：可注入（判据用），默认走真那一问
+    // ⚠️ 局部变量**不能叫 probe**（那会遮住字段 `probe`，Dart 直接报"先引用后声明"）
+    final answer = await (probe?.call(token) ?? api.health(token));
+    switch (answer) {
       case TokenProbe.unauthorized:
         _wantOpen = false;
         _set(ConnState.unauthorized);
@@ -205,7 +214,7 @@ class StreamClient {
         break;
     }
     _scheduleRetry(
-      state: probe == TokenProbe.ok ? ConnState.streamBlocked : ConnState.reconnecting,
+      state: answer == TokenProbe.ok ? ConnState.streamBlocked : ConnState.reconnecting,
     );
   }
 

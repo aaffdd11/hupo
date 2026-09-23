@@ -14,7 +14,8 @@
 
 ## 已做完的（这一批）
 
-| 🚧 | **P1-10** `stream.dart` 本体判据 | **退避那一半做完**：算式从 `stream.dart` 提成纯函数 `models/retry.dart` 的 `retrySeconds()`（原来是一句写死的 `(_attempt*2).clamp(1,8)`，没人判过）+ 3 条判据（逐档对表 · 永不为 0 · 单调不降 · 乱传参数不许炸）。**还没做**：401 那条（要给它一个可注入的探针）与**续传游标**（`sinceSeq` 的补发顺序）—— 那两条要动 `StreamClient` 的构造，留下一条清晰的接力点 | 无（不是卡点，是还没做到） | 不做的后果：401/游标仍只有集成测试覆盖 |
+| ✅ | **P1-10** `stream.dart` 本体判据 | **全做完了**。① 退避提成纯函数 `models/retry.dart`；② **给 `StreamClient` 加了可注入的探针**（`probe`）⇒ 判 401 那条路：探针说 401 ⇒ 状态如实报 `unauthorized` 且**之后不许再出现"重连中"**（B1 那个"永远转圈"），正向对照（探针 OK ⇒ 该走退避重连）；③ **游标判据**：`streamUri(... sinceSeq: _sinceSeq)`（重连不许把游标写成 0）+ 收到帧要推进游标 + 退避不许改回写死的算式。⚠️ 写它时踩了两个小坑：局部变量名 `probe` **遮住字段**（Dart 报"先引用后声明"）· 还有一行 `probe == TokenProbe.ok` 没跟着改名（analyze 当场红） | `test/unit/stream_retry_test.dart` 3 条 + `retry_test.dart` 3 条，全过 |
+| 🚧 | ~~**P1-10** 退避那一半~~（已完成，见上）：算式从 `stream.dart` 提成纯函数 `models/retry.dart` 的 `retrySeconds()`（原来是一句写死的 `(_attempt*2).clamp(1,8)`，没人判过）+ 3 条判据（逐档对表 · 永不为 0 · 单调不降 · 乱传参数不许炸）。**还没做**：401 那条（要给它一个可注入的探针）与**续传游标**（`sinceSeq` 的补发顺序）—— 那两条要动 `StreamClient` 的构造，留下一条清晰的接力点 | 无（不是卡点，是还没做到） | 不做的后果：401/游标仍只有集成测试覆盖 |
 | ✅ | **P1-4** 手机壳里"画不画话筒"口径 | 文档 `71-MIC-ASR.md` 那一条**改成与代码一致**：话筒**照画**，点它出一句白话「这里开不了麦（换个浏览器打开就能用）」，**不进语音档也不装开麦**（原文写"界面上不画话筒"是旧口径）；判据在 `test/widget/hearing_test.dart` | 文档闸 ✅ |
 | ✅ | **P1-7** 沙箱三属性**一条判据都没有** | 落源码级判据 `test/unit/mini_sandbox_test.dart`：`sandbox=allow-scripts`（**不给** `allow-same-origin`）· `referrerpolicy=no-referrer` · `allow=''`；**三条负向对照**（给了 allow-same-origin / 不设 sandbox / 放开 allow ⇒ 都必须抓住） | 2 条全过。⚠️ 写它时先被自己判红一次：**注释里**就写着"故意不给 allow-same-origin" ⇒ 先剥注释再扫 |
 | ✅ | **P1-5** Z2「回到可见不许重建」原来只验了「没被销毁」 | 补强成**同一个 Element**：盖住 → 回到可见后，`MiniAppHost` 与小程序的 `Element` 必须 `identical`（重建 ⇒ 用户填了一半的东西会没） | `mini_app_test.dart` 新判据（2 个 identity 断言） |
