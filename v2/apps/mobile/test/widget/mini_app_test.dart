@@ -363,4 +363,79 @@ void main() {
     expect(find.byTooltip(chatCollapse), findsNothing, reason: '★ 点被盖住的小程序 = "回到小程序" ⇒ 收起聊天');
     expect(find.byType(SettingsScreen), findsOneWidget, reason: '而且小程序还在（没被那一下点走）');
   });
+
+  // ── P1-5（2026-09-24）：Z2「回到可见**不许重建**」 ────────────────────
+  //
+  // ⚠️ 原来那条只验了「没被销毁」（还在树里）。Z2 要更强：**回到可见时不许重建** ——
+  //    重建 = 换了一个 Element/State ⇒ 用户在小程序里填了一半的东西会**没**。
+  testWidgets('★ P1-5（Z2）：盖住 → 回到可见 ⇒ **同一个 Element**（不是重建）', (tester) async {
+    await _pump(tester);
+    await _openSettings(tester);
+    final hostBefore = tester.element(find.byType(MiniAppHost));
+    final appBefore = tester.element(find.byType(SettingsScreen));
+
+    // 盖住（展开聊天）
+    await tester.tap(find.byKey(chatHandleKey));
+    await tester.pumpAndSettle();
+    // 再回到可见（点被盖住的那一块 ⇒ 收起聊天）
+    final screen = tester.getRect(find.byType(MaterialApp));
+    await tester.tapAt(Offset(screen.left + 8, screen.top + 8));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SettingsScreen), findsOneWidget);
+    expect(
+      identical(hostBefore, tester.element(find.byType(MiniAppHost))),
+      isTrue,
+      reason: '容器那一层被重建了（动画控制器会跟着重来 ⇒ 视觉上会跳）',
+    );
+    expect(
+      identical(appBefore, tester.element(find.byType(SettingsScreen))),
+      isTrue,
+      reason: '★ Z2：回到可见时小程序那一屏被**重建**了 ⇒ 用户填了一半的东西会没',
+    );
+  });
+
+  // ── P1-6（2026-09-24）：图标 ⇄ 页面内容 的交接要**看得见判据** ──────────
+  //
+  // 主人 2026-09-24 定案：*"让内容按照透明度来…不要到达一半更换"* ⇒
+  //   起点：图标 1 / 页面 0；终点：图标 0 / 页面 1；中间**两边都在、加起来是 1**。
+  testWidgets('★ P1-6：交接是按透明度的——起点/终点/半路三个位置都对', (tester) async {
+    await _pump(tester);
+    // 点开设置：动画第 0 帧
+    final icon = tester.getRect(
+      find.ancestor(of: find.text(settingsAppLabel), matching: find.byType(InkWell)).first,
+    );
+    await tester.tap(find.text(settingsAppLabel));
+    await tester.pump();
+
+    // ⚠️ 图标层在 `ClipRRect`（那个 key）**外面** ⇒ 要从包着它的那个 `Stack` 往下找
+    final surfaceStack = find.ancestor(
+      of: find.byKey(miniAppSurfaceKey),
+      matching: find.byType(Stack),
+    ).first;
+    List<double> shares() => tester
+        .widgetList<Opacity>(
+          find.descendant(of: surfaceStack, matching: find.byType(Opacity)),
+        )
+        .map((o) => o.opacity)
+        .toList();
+
+    final start = shares()..sort();
+    expect(start.length, greaterThanOrEqualTo(2), reason: '那一层里该有两层：图标 + 内容');
+    expect(start.first, closeTo(0, 0.02), reason: '起点：页面内容该是全透明的');
+    expect(start.last, closeTo(1, 0.02), reason: '起点：图标该是满的');
+
+    await tester.pump(Duration(milliseconds: d.motionAppOpen.inMilliseconds ~/ 2));
+    final mid = shares()..sort();
+    expect(mid.first, greaterThan(0.02), reason: '半路：两层都该在（不许"到点切换"）');
+    expect(mid.last, lessThan(0.98), reason: '半路：没有哪一层该是满的');
+    expect(mid.first + mid.last, closeTo(1, 0.02), reason: '两层加起来恒为 1');
+
+    await tester.pumpAndSettle();
+    final end = shares()..sort();
+    expect(end.first, closeTo(0, 0.02), reason: '终点：图标该透明');
+    expect(end.last, closeTo(1, 0.02), reason: '终点：页面该是满的');
+    // 起点那个图标格还在（负向对照：别把桌面那一格弄没了）
+    expect(icon.width, greaterThan(0));
+  });
 }
