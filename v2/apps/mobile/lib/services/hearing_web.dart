@@ -55,6 +55,34 @@ const Duration _lingerLimit = Duration(seconds: 8);
 /// 手里开着的那些（通常 0 或 1 条；"正在等最后一句"那条也算开着）。
 final Set<_Session> _open = <_Session>{};
 
+/// 拦住"长按弹出来的那个菜单"（右键 / 手机上的长按菜单）。
+StreamSubscription<html.MouseEvent>? _menuBlocker;
+
+/// 🔴 **语音这一档里，长按不许弹浏览器那个菜单**（2026-09-23 主人实测出来的）。
+///
+/// 原话：*"因为按住会触发默认的右键"* —— 用户会**照着微信的习惯按住**，
+/// 而按住在浏览器里会弹出系统/浏览器的右键菜单（选择、复制…那一套）。
+/// 这一版已经改成"点一下开始 / 再点一下结束"，但**按住这个动作在语音档里本来就没有别的意思**
+/// ⇒ 干脆在这一档里把它按住（出了这一档立刻还回去，别影响别处的选择与复制）。
+void _blockMenu(bool on) {
+  if (on) {
+    if (_menuBlocker != null) return;
+    try {
+      _menuBlocker = html.document.onContextMenu.listen((e) => e.preventDefault());
+    } catch (_) {
+      _menuBlocker = null; // 这个浏览器不给拦：不影响功能，只是长按还会弹
+    }
+    return;
+  }
+  final sub = _menuBlocker;
+  _menuBlocker = null;
+  try {
+    sub?.cancel();
+  } catch (_) {
+    /* 已经没了 */
+  }
+}
+
 class _Session {
   _Session({required this.ch});
 
@@ -113,6 +141,7 @@ Future<String?> startHearing({
 
   final session = _Session(ch: ch);
   _open.add(session);
+  _blockMenu(true);
 
   // 🔴 **在对面说"能听"之前，一下都不去碰麦克风**：
   //    没配钥匙的部署上先弹一个权限框、再说"没配好"，是白打扰一次
@@ -277,6 +306,7 @@ void stopHearing() {
 /// 收干净一条（连接、音频图、麦克风）。
 void _close(_Session s) {
   if (!_open.remove(s)) return;
+  if (_open.isEmpty) _blockMenu(false);
   s.linger?.cancel();
   s.stopping = true;
   _stopCaptureHardware(s);
@@ -296,6 +326,7 @@ void _closeAll() {
   for (final s in _open.toList()) {
     _close(s);
   }
+  if (_open.isEmpty) _blockMenu(false); // 一条都不剩 ⇒ 把菜单还回去
 }
 
 /// 麦克风与音频图这一半（**立刻**放掉：用户按了结束，就不该再采）。
