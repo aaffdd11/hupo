@@ -160,6 +160,33 @@ test('🔴 条数 **N 对得上**：造 N 条进回收站 ⇒ 报 N；N = 0 时�
   }
 });
 
+test('🔴 那句话的**量词必须与它数的东西是同一件事**（账 #46）', () => {
+  // 原来写的是"有 N **条**你说过要删掉的" —— 而 `n` 数的是**删除次数**
+  // （回收站里一条记录 = 一次 `remove`）。"N 条"读起来是"几句话 / 几轮"，
+  // **那是另一件事**：`POST /api/trash/remove` **一次可以删好几轮**。
+  // 今天两者相等只因为客户端一次只删一轮 ⇒ **靠巧合撑着的真话**。
+  const one = trashNote(1);
+  assert.match(one, /1 次/, '★ 数的是"删除次数"，就要说"次"');
+  assert.ok(!/条/.test(one), '★ 不许说"条" —— 那读起来是"几条话/几轮"，不是"删了几次"');
+
+  // 负向对照：**一次删三轮**（多选删除那条路）⇒ 报的是 **1 次**，
+  // 而"没算进来"的其实是 **6 句** —— 这两个数不是一回事，正因如此量词不能混。
+  const b = bench();
+  b.trash.remove([...b.idsA, ...b.idsB, ...b.idsC]);
+  const bin = b.trash.list();
+  assert.equal(bin.length, 1, '一次删除 ⇒ 回收站里一条记录');
+  assert.equal(bin[0].messageIds.length, 6, '而它盖住了三轮、六句');
+  const text = buildExport(raw(b), {
+    hiddenIds: bin.flatMap((t) => t.messageIds),
+    hiddenCount: bin.length,
+  }).text;
+  assert.ok(text.includes(trashNote(1)), '★ 报"1 次"');
+  assert.ok(!text.includes('1 条'), '★ 不许让"1 条"这种话出现（它会被读成"只有一句/一轮"）');
+  for (const w of [T_A, A_A, T_B, B_B, T_C, C_C]) {
+    assert.ok(!text.includes(w), `★ 被删的「${w}」一个都不许在导出里`);
+  }
+});
+
 test('§三 第三行：**恢复回来的算**（它是活的）', () => {
   const b = bench();
   b.trash.remove(b.idsB);
