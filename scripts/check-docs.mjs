@@ -59,6 +59,7 @@ const RATCHET = [
   'docs/dev/75-ACCEPTANCE.md',
   'docs/dev/76-PLAN.md',
   'docs/dev/77-BLOCKERS.md',
+  'docs/dev/78-OUT-OF-REPO.md',
 ];
 
 /** ② L0 = 路由层：零事实、零数值、零状态 */
