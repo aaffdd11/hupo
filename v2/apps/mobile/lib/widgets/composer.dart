@@ -38,6 +38,7 @@ class Composer extends StatefulWidget {
     this.canHear = false,
     this.hearing = const Hearing(),
     this.onMicToggle,
+    this.leading,
   });
 
   final void Function(String text) onSend;
@@ -80,6 +81,14 @@ class Composer extends StatefulWidget {
   /// **按了一下那个按钮**（开始 / 结束都由上层按当前状态决定）。
   final VoidCallback? onMicToggle;
 
+  /// **这一行最前面那个东西**（主人 2026-09-24：*"homeicon 放在聊天窗口左边"*）。
+  ///
+  /// 就是原来挂在抓手行标题前面那个"在哪儿说话"的图标（桌面 = `home`，
+  /// 进了某个小程序 = 它自己的图标，见 `screens/chat_screen.dart` 的 `_scopeBadge`）——
+  /// 现在聊天窗口是**一行**，所以它跟着搬到这一行的最前面。
+  /// ⚠️ 它**只指示、不响应点击**（所以不参与 D3.6 的 ≥44 那条）。
+  final Widget? leading;
+
   @override
   State<Composer> createState() => _ComposerState();
 }
@@ -87,9 +96,6 @@ class Composer extends StatefulWidget {
 class _ComposerState extends State<Composer> {
   final _controller = TextEditingController();
   final _focus = FocusNode();
-
-  /// **现在是语音那一档吗**（微信那个话筒/键盘切换）。
-  bool _voice = false;
 
   /// 开麦之前框里已经有那几个字 —— 识别出来的字**接在它们后面**
   /// （绝不把用户打了一半的字擦掉）。
@@ -105,7 +111,17 @@ class _ComposerState extends State<Composer> {
   @override
   void initState() {
     super.initState();
-    _mirror = _controller.text;
+    // 🔴 **进来的时候就已经在听**（窗口刚被重建、或者上层先把状态推过来了）
+    //    ⇒ 那半句必须**摆进框里**。
+    //    ⚠️ 2026-09-24 之前不用管这件事：那时字活在"语音档"那块卡片上，
+    //      框里那份只靠 `didUpdateWidget` 搬。现在**字就是框里的内容** ——
+    //      少了这一步，屏幕上会是一句空的（而它明明听到了）。
+    final t = widget.hearing.text;
+    _mirror = t;
+    _controller.value = TextEditingValue(
+      text: t,
+      selection: TextSelection.collapsed(offset: t.length),
+    );
   }
 
   @override
@@ -113,18 +129,15 @@ class _ComposerState extends State<Composer> {
     super.didUpdateWidget(old);
     // 语音那一边变了 ⇒ 把字搬进框里
     if (widget.hearing.text != old.hearing.text) _pushMirror();
-    // **这一轮真的完了就回到键盘那一档**：字在框里、键盘在、发送钮也在
+    // **这一轮真的完了 ⇒ 焦点回框里**：字已经在框里、发送钮也在
     // —— 主人那句"然后将文字展示出来。用户可以选择发送"落在这儿。
-    // ⚠️ 判据是 `busy`（在听 **或** 收尾中）**不是 `listening`**：
-    //    按下"结束"之后还有一句要等，那一句没到就切回去 = 切早了（字会迟到）。
-    // 🔴 **只有"真的听到字"才切回键盘那一档**：一句都没听到时切回去，
-    //    用户看到的就是"按一下、什么都没发生"（正是主人 2026-09-23 报的现象）。
-    //    那种情况留在语音这一档，把"什么都没听到"那句话显出来。
-    if (old.hearing.busy &&
-        !widget.hearing.busy &&
-        widget.hearing.phase == HearingPhase.idle &&
-        widget.hearing.hasText) {
-      setState(() => _voice = false);
+    //
+    // 🔴 2026-09-24 改：原来这里还要**切一档**（语音档 ⇄ 键盘档），
+    //    现在没有那两档了（主人：*"我们做成一行"*）——
+    //    按一下话筒就开始听、字**直接落进这个框**，再按一下结束。
+    //    所以这里只剩"把光标放回去"这一件事。
+    // ⚠️ 判据是 `busy`（在听 **或** 收尾中）：按下"结束"之后还有一句要等。
+    if (old.hearing.busy && !widget.hearing.busy) {
       _focus.requestFocus();
     }
   }
@@ -229,127 +242,31 @@ class _ComposerState extends State<Composer> {
           if (showDraft) _draftStrip(theme),
           // 一句白话（有才画）——例如"这里开不了麦"
           if (_notice.isNotEmpty) _noticeStrip(theme),
+          // ★ **正在听 / 为什么停了**（2026-09-24：只剩这一行 —— 字直接落进框里）
+          if (widget.hearing.busy || widget.hearing.notice.isNotEmpty)
+            _hearingStrip(theme),
+          // ★ 2026-09-24：**这一条现在只有一行**（主人：*"我们做成一行"*）——
+          //   `[在哪儿说话] [框（右边里头是话筒）] [发送]`
           Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // 🔴 **粘贴**（2026-09-21 主人报「我无法黏贴」之后加的）。
-              //    ⚠️ 同一个病：Flutter 把字画在 canvas 上，**空输入框长按不弹菜单**
-              //      （它自己的选择菜单要有可选中的文字才弹）⇒ 手机没物理键盘就粘不进来。
-              //    ⇒ 一个按钮按下去就是「用户手势」，能合法读剪贴板。
-              //    ⚠️ 命中区 ≥44（`IconButton` 默认 48）。
-              // ★ 微信那个**话筒 / 键盘**（主人："要能切语音"）
-              //
-              // ⚠️ **开不了麦就不画这个话筒**（`canHear` 假 ⇒ 这一档整个不存在）——
-              //    同一个道理：界面上不许出现按不动的东西（2026-09-23 真开麦那一批）。
-              // ★ **话筒一直在**（2026-09-23 主人问"为什么录音的 icon 没有"之后改的）。
-              //   ⚠️ 原来这一档是"开不了麦就把话筒藏起来" —— 那个决定是**坏的**：
-              //      用户看到的是"功能没了"，而不是"这里用不了"（他自己就来问了）。
-              //      ⇒ 现在：**摆着**，点下去**说一句白话**（`hearCantHere`）。
-              //   ⚠️ 它仍然**不装开麦**（不进语音档、不开麦、不出假字）。
-              IconButton(
-                tooltip: _voice ? voiceToKeyboard : voiceToMic,
-                onPressed: () {
-                  if (!widget.canHear) {
-                    setState(() => _notice = hearCantHere);
-                    return;
-                  }
-                  setState(() {
-                    _notice = '';
-                    _voice = !_voice;
-                  });
-                },
-                icon: Icon(
-                  _voice ? Icons.keyboard_alt_outlined : Icons.mic_none,
-                ),
-              ),
-              if (_voice)
-                Expanded(child: _micBar(theme))
-              else
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    focusNode: _focus,
-                    enabled: true, // ★ 永远不锁（D5.14）
-                    minLines: 1,
-                    maxLines: 6,
-                    textInputAction: TextInputAction.send,
-                    // ★ **点了打字框 ⇒ 告诉上层"把窗口打开"**（主人 2026-09-22：
-                    //   *"点击说点什么，聊天窗口会自动打开。"*）
-                    onTap: widget.onFocused,
-                    onChanged: _onChanged,
-                    onSubmitted: (_) => _submit(),
-                    decoration: InputDecoration(
-                      hintText: widget.hint ?? '说点什么',
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 14,
-                      ),
-                    ),
-                  ),
-                ),
-              // ★ **读出来**（主人 2026-09-23 定案：**替掉**原来那个演示用的「听筒 / 扬声器」）。
-              //
-              // 🔴 为什么替掉：网页上**没有"听筒"这个出口**（浏览器只有扬声器/耳机，
-              //    `setSinkId` 在 iOS 上无效 —— 手册 §3.2 自己写着）⇒ 留着它就是
-              //    假装有一个做不到的东西。**"从哪儿出声"那套语义明说砍掉**，
-              //    留下真做得到的那半：**让它念出来**。契约 `docs/dev/68-SPEAK.md`。
-              //
-              // ⚠️ **只在语音档画**（与话筒/键盘同一档 —— 主人 2026-09-23 定案里就是这么定的）：
-              //    键盘档那一格留给输入框。
-              // ⚠️ **念不了就不画**（`canSpeak` 假）—— 界面上不许出现按不动的东西。
-              if (_voice && widget.canSpeak)
-                IconButton(
-                  tooltip: widget.autoSpeak ? speakAutoHintOn : speakAutoHintOff,
-                  onPressed: () => widget.onToggleAutoSpeak?.call(!widget.autoSpeak),
-                  icon: Icon(
-                    widget.autoSpeak ? Icons.volume_up : Icons.volume_off_outlined,
-                  ),
-                ),
+              // ★ **最前面那个"在哪儿说话"的图标**（主人 2026-09-24："homeicon 放在聊天窗口左边"）。
+              //   原来它在抓手行的标题前面；这一条收成一行之后跟到这儿来。
+              if (widget.leading != null) ...[
+                widget.leading!,
+                const SizedBox(width: 8),
+              ],
+              // ★ 2026-09-24：原来这里那个**话筒/键盘切换**按钮搬走了 ——
+              //   主人：*"语音按钮放在聊天框内部的右侧"* ⇒ 它现在是框里那行的
+              //   `suffixIcon`（见 `_field`）。**没有"语音档"了**：按一下就开始听、
+              //   字直接落进这个框、再按一下结束。
+              // ★ 框（**话筒在它里面的右侧** —— 主人 2026-09-24）
+              Expanded(child: _field()),
               const SizedBox(width: 4),
-              // ★ 只有这一块跟着输入变——输入框本身不会被重建
-              //
-              // 🔴 **框里有字才画那个发送钮**（2026-09-23 重设计，主人拍板）：
-              //    原来它常驻、没字时是**禁用态**（`onPressed: null`）—— 一个 48px 的
-              //    "按不动"的按钮一直挂在那儿，既占地又容易被当成坏了。
-              //    ⚠️ **位置与宽度必须固定**：它一会儿有一会儿没有，如果让它撑开/收窄，
-              //       输入框的宽度就会跳 —— 那是同 D4.8 一种病（界面自己抖）。
-              //       ⇒ 用固定 48×48 的盒子占住位置，没字时**里面什么都不画**。
-              SizedBox(
-                width: 48,
-                height: 48,
-                child: ValueListenableBuilder<TextEditingValue>(
-                  valueListenable: _controller,
-                  builder: (context, value, _) {
-                    // ⚠️ **正在听/收尾中不画发送**：那会儿框里的字是"还在长"的半句，
-                    //    发出去就是替他做了决定（而且主人要的是"停下之后再决定发不发"）。
-                    final canSend =
-                        value.text.trim().isNotEmpty && !widget.hearing.busy;
-                    // 没话要说 ⇒ 那个位置**什么都不画**（不是禁用态；位置由外面那个
-                    // 固定 48×48 的盒子占着，所以界面不跳）
-                    if (!canSend) return const SizedBox.shrink();
-                    return Semantics(
-                      button: true,
-                      label: '发送',
-                      child: IconButton.filled(
-                        // 触控目标 ≥44
-                        constraints: const BoxConstraints(
-                          minWidth: 48,
-                          minHeight: 48,
-                        ),
-                        onPressed: _submit,
-                        icon: const Icon(Icons.arrow_upward),
-                        tooltip: '发送',
-                        style: IconButton.styleFrom(
-                          minimumSize: const Size(48, 48),
-                          backgroundColor: theme.colorScheme.primary,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
+              // ★ **发送**（主人 2026-09-24：*"聊天框右侧应该是一个发送按钮。一开始是灰色的。"*）
+              //   ⚠️ 这一条**推翻了 2026-09-23 那个"有字才画"**（那也是主人拍的板）：
+              //      现在它**一直在**，没字时是灰的、按不动 —— 位置固定，界面不跳（D4.8）。
+              _sendButton(theme),
             ],
           ),
         ],
@@ -420,108 +337,159 @@ class _ComposerState extends State<Composer> {
     ),
   );
 
-  /// **语音那一块**（2026-09-23 主人定案：按一下开始 / 再按一下结束）。
+  /// **框**（主人 2026-09-24：*"语音按钮放在聊天框内部的右侧"*）。
   ///
-  /// 三件事按顺序摆：
-  ///   ① **为什么停了 / 为什么开不了**那一句（有才画 —— 人话，直接显示）；
-  ///   ② 一个**大按钮**：`按一下 说话` ⇄ `正在听…再按一下 结束`；
-  ///   ③ 闲下来时那句**怎么用**（说完了按一下，字留在这儿，你自己决定发不发）。
+  /// 🔴 两条老规矩照旧：
+  ///   ① **永远不锁**（D5.14）—— 网不好、断线、在重连，都不该让人打不了字；
+  ///   ② **打字框本身不重建**（只有发送钮那一小块跟着字变，见 `_sendButton`）。
   ///
-  /// 🔴 **"正在听"这三个字只在真的在听时出现**（D5.13：不录音时禁用"听"字）；
-  ///    没配钥匙那一档**连按钮都不画**（按不动的东西不许摆出来）。
-  /// ⚠️ 命中区 ≥44：用 `TextButton`（它就是 `ButtonStyleButton`），
-  ///    显式写 `minimumSize` —— 别用 `Container` 自己画一个"像按钮的东西"。
-  Widget _micBar(ThemeData theme) {
+  /// ⚠️ **话筒在框里面**（`suffixIcon`）：它在，就一定点得到（命中区 ≥44）；
+  ///    **开不了麦也画它**（点下去说一句白话 —— 2026-09-23 主人问过"为什么录音的
+  ///    icon 没有"，藏起来的那个决定是坏的）。
+  Widget _field() => TextField(
+    controller: _controller,
+    focusNode: _focus,
+    enabled: true, // ★ 永远不锁（D5.14）
+    minLines: 1,
+    maxLines: 6,
+    textInputAction: TextInputAction.send,
+    // ★ **点了打字框 ⇒ 告诉上层"把窗口打开"**（主人 2026-09-22：
+    //   *"点击说点什么，聊天窗口会自动打开。"*）
+    onTap: widget.onFocused,
+    onChanged: _onChanged,
+    onSubmitted: (_) => _submit(),
+    decoration: InputDecoration(
+      hintText: widget.hint ?? '说点什么',
+      border: const OutlineInputBorder(),
+      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+      // ⚠️ 框里那两颗按钮的**下限**：命中区 ≥44（D3.6）。
+      //    不写这一条，`isDense` 的框会把它们压小 —— a11y 那道硬闸当场会抓。
+      suffixIconConstraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+      suffixIcon: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ★ **读出来**（主人 2026-09-23 定案：替掉原来演示用的「听筒 / 扬声器」）。
+          //   契约 `docs/dev/68-SPEAK.md`。**念不了就不画**（界面上不许有按不动的东西）。
+          //   2026-09-24：它原来住在"语音档"里，那一档没了 ⇒ 跟话筒一起住在框里。
+          if (widget.canSpeak) _speakerButton(),
+          _micButton(),
+        ],
+      ),
+    ),
+  );
+
+  /// **话筒**（2026-09-24：它在框里，不在左边）。
+  ///
+  /// 按一下**开始听**、再按一下**结束**；正在听时它是红的、图形换成"停"。
+  /// ⚠️ `canHear` 假 ⇒ **照样画**，点下去说一句白话（`hearCantHere`）——
+  ///    不装开麦、不进语音档、不出假字。
+  Widget _micButton() {
+    final busy = widget.hearing.busy;
+    return IconButton(
+      tooltip: busy ? hearStop : hearStart,
+      onPressed: () {
+        if (!widget.canHear) {
+          setState(() => _notice = hearCantHere);
+          return;
+        }
+        setState(() => _notice = '');
+        _toggleMic();
+      },
+      icon: Icon(
+        busy ? Icons.stop_circle_outlined : Icons.mic_none,
+        color: busy ? d.accent : d.muted,
+      ),
+    );
+  }
+
+  /// **读出来**那个开关（设备级偏好，状态住上层）。
+  Widget _speakerButton() => IconButton(
+    tooltip: widget.autoSpeak ? speakAutoHintOn : speakAutoHintOff,
+    onPressed: () => widget.onToggleAutoSpeak?.call(!widget.autoSpeak),
+    icon: Icon(
+      widget.autoSpeak ? Icons.volume_up : Icons.volume_off_outlined,
+      color: widget.autoSpeak ? d.accent : d.muted,
+    ),
+  );
+
+  /// **发送**（主人 2026-09-24：*"聊天框右侧应该是一个发送按钮。一开始是灰色的。"*）。
+  ///
+  /// 🔴 它**一直在**（不再"有字才画"）：没字、或还在听/收尾中 ⇒ **灰的、按不动**。
+  ///    ⚠️ 位置与大小**固定 48×48**：它要是一会儿有一会儿没有，框的宽度就会跳
+  ///      —— 那是 D4.8 一种病（界面自己抖）。
+  /// ⚠️ 只有这一小块跟着输入变（`ValueListenableBuilder`）—— **框本身不重建**。
+  Widget _sendButton(ThemeData theme) => SizedBox(
+    width: 48,
+    height: 48,
+    child: ValueListenableBuilder<TextEditingValue>(
+      valueListenable: _controller,
+      builder: (context, value, _) {
+        // ⚠️ **正在听/收尾中按不动**：那会儿框里的字是"还在长"的半句，
+        //    发出去就是替他做了决定（主人要的是"停下之后再决定发不发"）。
+        final canSend = value.text.trim().isNotEmpty && !widget.hearing.busy;
+        return Semantics(
+          button: true,
+          label: '发送',
+          enabled: canSend,
+          child: IconButton.filled(
+            // 触控目标 ≥44
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            onPressed: canSend ? _submit : null,
+            icon: const Icon(Icons.arrow_upward),
+            tooltip: '发送',
+            style: IconButton.styleFrom(
+              minimumSize: const Size(48, 48),
+              backgroundColor: canSend ? theme.colorScheme.primary : d.line,
+              disabledBackgroundColor: d.line,
+              foregroundColor: canSend ? theme.colorScheme.onPrimary : d.muted,
+              disabledForegroundColor: d.muted,
+            ),
+          ),
+        );
+      },
+    ),
+  );
+
+  /// **正在听 / 收尾中**那一行（一行、淡色）。
+  ///
+  /// 🔴 2026-09-24：原来它是一大块（"语音档"里那个卡片 + 大按钮），现在**只剩这一行** ——
+  ///    识别出来的字**直接落进框里**（`_pushMirror`），屏幕上的字只有一份。
+  /// ⚠️ **"正在听"这三个字只在真的在听时出现**（D5.13：不录音时禁用"听"字）。
+  Widget _hearingStrip(ThemeData theme) {
     final h = widget.hearing;
     final live = h.listening;
-    final finishing = h.phase == HearingPhase.finishing;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // 听的时候把**正在听到的**那行字摆出来（"实时转化语音成文字"那一半）
-        // ⚠️ **收尾中也要摆**（那半句还在，只是还没定稿）
-        //
-        // ★ 2026-09-23 重排：上面加一个**一眼看得见的录音标记**
-        //   （`● 正在听` —— 那一点是文字画出来的，不是写死的尺寸；
-        //     红点用 `●` 加主题色，跟着字号缩放）。
-        //   原来只有按钮上那行字，主人看了问"为什么录音的 icon 没有"。
-        if (h.busy) ...[
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-            decoration: BoxDecoration(
-              color: d.card,
-              borderRadius: BorderRadius.circular(d.radiusField),
-              border: Border.all(color: live ? d.accent : d.line),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      '●',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: live ? d.accent : d.muted,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      live ? hearListening : hearFinishing,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: live ? d.accent : d.muted,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  h.text.isEmpty ? hearListeningEmpty : h.text,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodyLarge?.copyWith(
-                    color: h.text.isEmpty ? d.muted : d.ink,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 6),
-        ],
-        // 为什么停了 / 为什么开不了（**原话**，不再翻译一遍）
-        if (h.notice.isNotEmpty) ...[
-          Text(
-            h.notice,
-            style: theme.textTheme.bodySmall?.copyWith(color: d.muted),
-          ),
-          const SizedBox(height: 6),
-        ],
-        // 那个按钮：没配钥匙时**不画**（做不了的按钮不许摆出来）；
-        // 收尾中也不画（那会儿按它没有意义 —— 字马上就到）
-        if (h.phase != HearingPhase.unavailable && !finishing)
-          TextButton.icon(
-            style: TextButton.styleFrom(
-              minimumSize: const Size(88, 48),
-              backgroundColor: live ? d.accentTint : d.card,
-              foregroundColor: live ? d.accent : d.ink,
-              side: BorderSide(color: live ? d.accent : d.line),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(d.radiusField),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          if (h.busy) ...[
+            Text(
+              '●',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: live ? d.accent : d.muted,
               ),
             ),
-            onPressed: widget.onMicToggle == null ? null : _toggleMic,
-            icon: Icon(live ? Icons.stop_circle_outlined : Icons.mic),
-            label: Text(live ? hearStop : hearStart),
-          ),
-        if (!h.busy && h.notice.isEmpty) ...[
-          const SizedBox(height: 4),
-          Text(
-            hearHint,
-            textAlign: TextAlign.center,
-            style: theme.textTheme.bodySmall?.copyWith(color: d.muted),
+            const SizedBox(width: 6),
+            Text(
+              live ? hearListening : hearFinishing,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: live ? d.accent : d.muted,
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+          // **为什么停了**（原话，不再翻译一遍）
+          Expanded(
+            child: Text(
+              h.notice,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(color: d.muted),
+            ),
           ),
         ],
-      ],
+      ),
     );
   }
 }

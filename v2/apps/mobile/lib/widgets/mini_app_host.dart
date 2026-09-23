@@ -47,6 +47,7 @@ class MiniAppHost extends StatefulWidget {
     required this.bottomInset,
     required this.child,
     this.fromRect,
+    this.icon,
   });
 
   /// 现在有 app 开着吗。
@@ -74,6 +75,10 @@ class MiniAppHost extends StatefulWidget {
   /// 🔴 主人 2026-09-22：*"小程序点开要有效果，就是从哪里打开，就从哪里扩开到全屏的效果。"*
   /// `null` = 没给 ⇒ 从屏幕中心"长出来"（总比硬切好）。
   final Rect? fromRect;
+
+  /// **这一屏的图标**（主人 2026-09-24：前半程要看到"图标自己在长大"）。
+  /// `null` = 没给 ⇒ 这一层不画（老行为：一上来就是页面被裁出的一小块）。
+  final IconData? icon;
 
   @override
   State<MiniAppHost> createState() => _MiniAppHostState();
@@ -230,14 +235,21 @@ class _MiniAppHostState extends State<MiniAppHost>
                           ),
                         ],
                 ),
-                child: ClipRRect(
+                child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ClipRRect(
                 key: miniAppSurfaceKey,
                 // 小的时候有点圆角（像一张卡），长到全屏就是直角
                 borderRadius: BorderRadius.circular(face.radius),
                 child: IgnorePointer(
-                  ignoring: covered,
-                  child: AnimatedOpacity(
-                    opacity: covered ? 0.55 : 1,
+                  // ★ 前半程画的是"长大中的图标"，页面还没出来 ⇒ 也先别收点击
+                  ignoring: covered || miniAppContentShare(v) < 0.5,
+                  child: Opacity(
+                    // ★ "到一半左右换成页面内容"（按位置进度 ⇒ 打开/收回对称）
+                    opacity: miniAppContentShare(v),
+                    child: AnimatedOpacity(
+                     opacity: covered ? 0.55 : 1,
                     duration: d.motionAppOpen,
                     child: AnimatedScale(
                       scale: covered ? 0.98 : 1,
@@ -258,6 +270,23 @@ class _MiniAppHostState extends State<MiniAppHost>
                 ),
                 ),
               ),
+                // ★ 上层：**那个图标本身**（按格子比例放大 ⇒ p=0 时和桌面那一格逐像素一致，
+                        //   所以"从图标长出来"那一下不会跳）
+                if (widget.icon != null)
+                  IgnorePointer(
+                    child: Opacity(
+                      opacity: miniAppIconShare(v),
+                      child: Center(
+                        child: Icon(
+                          widget.icon,
+                          size: rect.shortestSide * miniAppIconOfBox,
+                          color: d.ink,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            )),
             );
           },
         ),

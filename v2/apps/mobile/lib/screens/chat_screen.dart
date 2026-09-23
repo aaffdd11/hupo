@@ -317,6 +317,8 @@ class _ChatScreenState extends State<ChatScreen> {
               fromRect: _appFrom,
               // ⚠️ 没开的时候用**上一帧那一屏**（收回动画要缩的是它自己，不是别的）
               title: _appView(c)?.title ?? _lastAppTitle,
+              // ★ 2026-09-24 主人定案：前半程要看到"**图标自己在长大**"
+              icon: _appIconFor(),
               onClose: () => setState(() => _openApp = null),
               covered: _floaterExpanded,
               onCoveredTap: () => _floaterKey.currentState?.collapse(),
@@ -349,8 +351,6 @@ class _ChatScreenState extends State<ChatScreen> {
               key: _floaterKey,
               maxHeight: maxH,
               title: '助手',
-              // ★ **最前面那个图标：这句话是在哪儿说的**（桌面 = 家；进了小程序 = 它自己的图标）
-              leading: _scopeBadge(c),
               initialTier: widget.initialTier,
               trailing: _actions(c),
               composer: _composer(c),
@@ -423,6 +423,22 @@ class _ChatScreenState extends State<ChatScreen> {
   ///
   /// ⚠️ 这里**顺手把 `mine` 捕获在闭包外**：原来 `onAsk` 里是 `_mineOpen()!.id`，
   ///    而收回动画期间 `_openApp` 已经是 `null` ⇒ 那一句会**空指针**（潜在崩溃）。
+  /// **现在（或刚才）那一屏的图标** —— "从图标长出来"那一层用它。
+  ///
+  /// ⚠️ 收回的时候 `_openApp` 已经是 null 了，所以要**自己记一份**
+  ///    （跟 `_lastAppView` / `_lastAppTitle` 同一个道理：动画要缩的是**它自己**）。
+  IconData? _lastAppIcon;
+
+  IconData? _appIconFor() {
+    final mine = _openMine();
+    // ⚠️ `mine.icon` 是**名字**（服务器给的那个），要过同一张表变成 `IconData`
+    //   （和桌面那一格用的是同一个函数 ⇒ 两处永远一致）
+    if (mine != null) return _lastAppIcon = miniAppIconFor(mine.icon);
+    final id = _openApp;
+    if (id != null) return _lastAppIcon = _builtInIcon(id);
+    return _lastAppIcon;
+  }
+
   ({Widget view, String title})? _appView(ChatController c) {
     final mine = _openMine();
     if (mine != null) {
@@ -684,6 +700,10 @@ class _ChatScreenState extends State<ChatScreen> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 760),
         child: Composer(
+          // ★ **这一行最前面那个图标：这句话是在哪儿说的**（桌面 = 家；进了小程序 = 它自己的图标）。
+          //   ⚠️ 2026-09-24：聊天窗口收成**一行**之后，它从抓手行搬到了这一行的最前面
+          //      （主人：*"homeicon 放在聊天窗口左边"*）。
+          leading: _scopeBadge(c),
           // ★ **打字框草稿**（主人 2026-09-22）：*"要有一个空的输入框，但如果用户输入过，
           //   没发送，则显示在上面作为草稿。草稿也是要记住的。"*
           //   ⚠️ 它和"已发未认领那句话"（`draft_store.dart`）**不是同一本账**。

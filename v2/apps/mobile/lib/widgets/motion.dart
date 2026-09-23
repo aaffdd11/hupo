@@ -62,3 +62,30 @@ double miniAppSurfaceProgress({required double value, required bool closing}) {
       ? 1 - miniAppOpenCurve.transform(1 - v)
       : miniAppOpenCurve.transform(v);
 }
+
+// ── 内容 ⇄ 图标 的交接（主人 2026-09-24 定案）────────────────────
+//
+// 原话：*"小程序在返回，即缩小时，内容其实也应该变成icon，放大时，icon随着放大，
+//         到一半左右换成页面内容；缩小时，在一半左右，页面内容换成大icon，随之缩小。"*
+//
+// ⚠️ 关键：它按**位置进度** [miniAppSurfaceProgress] 算，**不按时间** ——
+//    于是"打开到一半"和"收到一半"是同一件事 ⇒ 两个方向自动对称（不用写两套）。
+//
+// 交接带：从 [_swapFrom] 开始淡、到 [_swapTo] 淡完（各 45% → 60%）。
+
+const double _swapFrom = 0.45;
+const double _swapTo = 0.60;
+
+double _smooth(double t) => t <= 0 ? 0 : (t >= 1 ? 1 : t * t * (3 - 2 * t));
+
+/// **页面内容那一层**的不透明度（0 = 只有图标，1 = 只有页面）。
+double miniAppContentShare(double p) =>
+    _smooth((p - _swapFrom) / (_swapTo - _swapFrom));
+
+/// **大图标那一层**的不透明度（和 [miniAppContentShare] 互补，加起来是 1）。
+double miniAppIconShare(double p) => 1 - miniAppContentShare(p);
+
+/// 图标在那一层里的相对大小：**桌面那一格的比例**（格 64 : 图标 24 = 0.375）。
+/// ⚠️ 它不是随手挑的 —— p=0 时这一层必须和桌面上那个图标格**逐像素一致**，
+///    否则"从图标长出来"那一下会**跳**（同圆角/阴影当初那条规矩）。
+const double miniAppIconOfBox = 0.375;

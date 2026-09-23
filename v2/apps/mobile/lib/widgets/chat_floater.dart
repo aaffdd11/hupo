@@ -44,6 +44,9 @@ enum FloaterTier {
   full,
 }
 
+/// **抓手那颗按钮的 key**（判据用它量命中区、也用它点/拖 —— 图形上没有字可找）。
+const Key chatHandleKey = Key('chat-handle');
+
 /// 浮窗自己的几条常量（**不散在代码里**）。
 class FloaterMetrics {
   const FloaterMetrics._();
@@ -70,8 +73,9 @@ class FloaterMetrics {
   /// 连续触发的**合并窗口**（§6.2：400ms 内合并成一次）。
   static const int debounceMs = 400;
 
-  /// 双击抓手的判定窗（与防抖无关：这是"用户的手势"）。
-  static const int doubleTapMs = 300;
+  // ⚠️ 原来这里有一个 `doubleTapMs`（双击抓手的判定窗）。2026-09-24 起抓手是
+  //    **单击 = 收起 ⇄ 展开**（主人：*"展开用一条杠"*）⇒ 双击那套拿掉：
+  //    留着它只会让"点两下"变成"展开又收起"（看起来就是点了没反应）。
 }
 
 class ChatFloater extends StatefulWidget {
@@ -81,7 +85,6 @@ class ChatFloater extends StatefulWidget {
     required this.title,
     required this.child,
     required this.composer,
-    this.leading,
     this.trailing = const <Widget>[],
     this.initialTier = FloaterTier.collapsed,
     this.onTier,
@@ -107,11 +110,10 @@ class ChatFloater extends StatefulWidget {
   /// ⚠️ **收起态不画它们** —— 收起条只留"带字的展开入口"（D3.8）。
   final List<Widget> trailing;
 
-  /// **标题前面那个东西**（主人 2026-09-23：左边一个图标，说明这句话是在哪儿说的）。
-  ///
-  /// ⚠️ 浮窗自己**不认识"作用域"**：它只负责把上层给的东西画在标题前面
-  ///    （"现在在桌面还是在小程序里"是上层的事 —— 见 `screens/chat_screen.dart` 的 `_scopeBadge`）。
-  final Widget? leading;
+  // ⚠️ 2026-09-24：原来这里有一个 `leading`（标题前面那个"在哪儿说话"的图标）。
+  //    聊天窗口收成**一行**之后，它搬到了输入条那一行的最前面
+  //    （主人：*"homeicon 放在聊天窗口左边"*）⇒ 浮窗不再认识它，
+  //    由 `screens/chat_screen.dart` 直接交给 `Composer`。
 
   /// 一进来是哪一档。**默认收起**（主人 2026-09-22 定：先看见桌面）。
   final FloaterTier initialTier;
@@ -142,8 +144,6 @@ class ChatFloaterState extends State<ChatFloater> {
   double _dragVelocity = 0;
   int _lastMoveMs = 0;
 
-  /// 双击抓手用（两次抬手之间的间隔）。
-  int _lastUpMs = 0;
   bool _movedInGesture = false;
 
   /// 上一次**自动**换档的时间（防抖：400ms 内合并成一次）。
@@ -263,15 +263,9 @@ class ChatFloaterState extends State<ChatFloater> {
     final now = _nowMs();
     final h = _dragging;
     if (h == null) {
-      // 没拖动 ⇒ 可能是一次"点"：双击抓手 = 收起 ⇄ 上次档位（§6.3）
-      if (!_movedInGesture) {
-        if (now - _lastUpMs <= FloaterMetrics.doubleTapMs) {
-          _lastUpMs = 0;
-          _setTier(_collapsed ? _lastOpen : FloaterTier.collapsed, auto: false);
-        } else {
-          _lastUpMs = now;
-        }
-      }
+      // 没拖动 ⇒ 这一下是"点"。⚠️ **点由抓手那颗按钮处理**（见 `_handle`），
+      // 这里**不再自己判双击**：2026-09-24 起抓手是"单击 = 收起 ⇄ 展开"，
+      // 而双击 = 两次单击 = 自己把自己抵消掉（真机上就是"点了没反应"）。
       return;
     }
     final durMs = now - _dragStartMs;
@@ -342,39 +336,41 @@ class ChatFloaterState extends State<ChatFloater> {
                 child: Column(
                   mainAxisSize: collapsed ? MainAxisSize.min : MainAxisSize.max,
                   children: [
-                    // ── 抓手行（收起态就是那条"带字的入口"）──────────
-                    //  🔴 **手势只绑在这一行**（§6.3："竖向拖抓手 / 标题行"）。
-                    //     绑在整块浮窗上会把时间线的滚动吃掉 —— 那正是上一版没暴露的 bug。
+                    // ── 抓手（主人 2026-09-24）────────────────────────
+                    //   原话：*"展开用一条杠，杠上面有一个小箭头，箭头比较平，
+                    //   所以不会显得那么突兀，放在上边框的正中央"*
+                    //
+                    // 🔴 **一根杠 + 一个"平"的小箭头**，**永远在上边框正中央**
+                    //    （收起、展开都在同一个位置 —— 位置不动，只有箭头朝上/朝下）。
+                    //   · **点它 = 收起 ⇄ 展开**（单击就够）；
+                    //   · **竖向拖它 = 跟手变高**（§6.3 的手势表）。
+                    //
+                    //   ⚠️ **命中区 96×44（D3.6）**，图形只有 26×7 —— 好点，但不显眼。
+                    //   ⚠️ 它**没有可见的字**（主人这次的原话就是"一条杠 + 小箭头"）：
+                    //      D3.8 那条"必须带字"由这一版**改掉**（手册同日改），
+                    //      字改挂在 tooltip 与无障碍名上（`展开` / `收起`）。
+                    //   ⚠️ 手势**只绑在这一行**（§6.3）：绑在整块浮窗上会把时间线的滚动吃掉
+                    //      —— 那正是上一版没暴露的 bug。
                     Listener(
                       behavior: HitTestBehavior.opaque,
                       onPointerDown: _onDown,
                       onPointerMove: _onMove,
                       onPointerUp: _onUp,
                       child: Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: _handle(collapsed),
+                      ),
+                    ),
+                    // ── 展开态：标题行（**收起态不画它** —— 那一档就是"一行"）──
+                    if (!collapsed)
+                      Padding(
                         padding: const EdgeInsets.symmetric(
                           horizontal: d.gapS,
                           vertical: 2,
                         ),
                         child: Row(
                           children: [
-                            if (!collapsed) ...[
-                              const SizedBox(width: d.gapS),
-                              Container(
-                                width: 28,
-                                height: 4,
-                                decoration: BoxDecoration(
-                                  color: d.line,
-                                  borderRadius: BorderRadius.circular(2),
-                                ),
-                              ),
-                            ],
                             const SizedBox(width: d.gapS),
-                            // ★ **标题前面那个图标**（在哪儿说话 —— 桌面 / 某个小程序）。
-                            //   ⚠️ 收起态也画它：那句话在收起态照样是要发出去的。
-                            if (widget.leading != null) ...[
-                              widget.leading!,
-                              const SizedBox(width: 6),
-                            ],
                             Text(
                               widget.title,
                               // ★ 2026-09-23：`titleSmall`(≈14) → `titleMedium`(≈16)
@@ -385,48 +381,34 @@ class ChatFloaterState extends State<ChatFloater> {
                               ),
                             ),
                             const Spacer(),
-                            // 🔴 **收起态必须有"带字的展开入口"**（D3.8：不是 40px 无字箭头），
-                            //    命中区 ≥44（D3.6）—— 上一版就是被这条判据当场抓住的。
-                            if (collapsed)
-                              TextButton(
-                                style: TextButton.styleFrom(
-                                  minimumSize: const Size(88, 44),
-                                ),
-                                onPressed: () =>
-                                    _setTier(_lastOpen, auto: false),
-                                child: const Text('展开'),
-                              )
-                            else ...[
-                              // ⚠️ 那一串动作要能**横向滚**：窄屏 + 大字号下它**一定**放不下；
-                              //    折行会让这一行变高 ⇒ 把时间线挤没。一行 + 横滚：高度不变、一个都不藏。
-                              Flexible(
-                                child: SingleChildScrollView(
-                                  scrollDirection: Axis.horizontal,
-                                  reverse: true,
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: widget.trailing,
-                                  ),
+                            // ⚠️ 那一串动作要能**横向滚**：窄屏 + 大字号下它**一定**放不下；
+                            //    折行会让这一行变高 ⇒ 把时间线挤没。一行 + 横滚：高度不变、一个都不藏。
+                            Flexible(
+                              child: SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                reverse: true,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: widget.trailing,
                                 ),
                               ),
-                              // 🔴 **「收起」钉在横滚之外**（主人 2026-09-22：*"展开后要有收回的按钮"*）：
-                              //    它原来在那条**横向滚动**里 ⇒ 窄屏 + 大字号下会被滚出视野，
-                              //    而"想收起来"的时候找不到按钮 = 一个点不到的出口。
-                              //    ⚠️ **只在展开态画它**：收起态本来就已经收起来了
-                              //      （第一版把它放在 if/else 之外 ⇒ 收起那条上也挂着一个"收起"，是错的）。
-                              IconButton(
-                                tooltip: chatCollapse,
-                                onPressed: () => _setTier(
-                                  FloaterTier.collapsed,
-                                  auto: false,
-                                ),
-                                icon: const Icon(Icons.keyboard_arrow_down),
+                            ),
+                            // 🔴 **「收起」钉在横滚之外**（主人 2026-09-22：*"展开后要有收回的按钮"*）：
+                            //    它原来在那条**横向滚动**里 ⇒ 窄屏 + 大字号下会被滚出视野，
+                            //    而"想收起来"的时候找不到按钮 = 一个点不到的出口。
+                            //    ⚠️ **只在展开态画它**（收起态本来就已经收起来了）。
+                            //    ⚠️ 2026-09-24 起**抓手自己也收得起来**，这个按钮留着是"看得见的出口"。
+                            IconButton(
+                              tooltip: chatCollapse,
+                              onPressed: () => _setTier(
+                                FloaterTier.collapsed,
+                                auto: false,
                               ),
-                            ],
+                              icon: const Icon(Icons.keyboard_arrow_down),
+                            ),
                           ],
                         ),
                       ),
-                    ),
                     // 收起态：**只画输入条**（时间线不画 —— 免得它被压成一条时还在偷偷布局，
                     // 那正是上一版溢出的来源）。主人 2026-09-22："收缩的时候也有一个输入框。"
                     if (collapsed)
@@ -445,4 +427,97 @@ class ChatFloaterState extends State<ChatFloater> {
       ),
     );
   }
+
+  /// **抓手**（主人 2026-09-24）：上边框正中央**一条杠 + 一个平的小箭头**。
+  ///
+  /// 🔴 三条约束，缺一条都会退回到"上一版那种看不出来的东西"：
+  ///   ① **位置固定在上边框正中**（收起/展开都在同一个位置 ⇒ 他知道戳哪儿）；
+  ///   ② **箭头要平**（浅角 —— 26×7 ≈ 15°，不是那种尖尖的 `keyboard_arrow_up`）；
+  ///   ③ **命中区 ≥44**（D3.6）：外面那颗按钮给的是 **96×44**，图形只占中间一小块。
+  ///
+  /// ⚠️ **单击 = 收起 ⇄ 展开**（不再有双击：两次单击会互相抵消 ⇒ "点了没反应"）。
+  /// ⚠️ 字挂在 `Tooltip`（web 上悬停看得见）+ 无障碍名上（D3.8 的"带字"由 2026-09-24 改掉）。
+  Widget _handle(bool collapsed) {
+    final button = TextButton(
+      key: chatHandleKey,
+      onPressed: () =>
+          _setTier(collapsed ? _lastOpen : FloaterTier.collapsed, auto: false),
+      style: TextButton.styleFrom(
+        minimumSize: const Size(96, 44),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+        foregroundColor: d.muted,
+      ),
+      child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CustomPaint(
+              size: const Size(26, 7),
+              painter: _FlatChevron(color: d.muted, up: collapsed),
+            ),
+            const SizedBox(height: 3),
+          Container(
+            width: 44,
+            height: 4,
+            decoration: BoxDecoration(
+              color: d.line,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ],
+      ),
+    );
+    // ⚠️ tooltip 只在**收起态**挂（那会儿它是唯一的展开入口）。
+    //    展开态**不挂** —— 标题行已经有一个「收起」按钮，两个控件挂同一句话
+    //    会让"屏幕上到底有几个收起"这种判据（和读屏）分不清。
+    //    无障碍名两种状态都给（`Semantics` 那句在下面）。
+    final named = Semantics(
+      button: true,
+      label: collapsed ? '展开' : '收起',
+      child: button,
+    );
+    return Center(
+      child: collapsed ? Tooltip(message: '展开', child: named) : named,
+    );
+  }
+}
+
+/// **一个"平"的小箭头**（浅角的 V 字那一笔）。
+///
+/// ⚠️ 为什么自己画：`Icons.keyboard_arrow_up` 那个角**太尖**，摆在一条杠上显得突兀
+///    （主人原话：*"箭头比较平，所以不会显得那么突兀"*）
+///    ⇒ 26×7 的框、2px 圆头笔画，画出来是很浅的一笔。
+class _FlatChevron extends CustomPainter {
+  const _FlatChevron({required this.color, required this.up});
+
+  final Color color;
+
+  /// 收起态朝上（"往上拉就能展开"），展开态朝下。
+  final bool up;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+    final w = size.width;
+    final h = size.height;
+    final path = Path();
+    if (up) {
+      path.moveTo(0, h);
+      path.lineTo(w / 2, 0);
+      path.lineTo(w, h);
+    } else {
+      path.moveTo(0, 0);
+      path.lineTo(w / 2, h);
+      path.lineTo(w, 0);
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _FlatChevron old) =>
+      old.color != color || old.up != up;
 }

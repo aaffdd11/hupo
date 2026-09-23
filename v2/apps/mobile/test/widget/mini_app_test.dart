@@ -65,7 +65,7 @@ void main() {
     expect(find.byIcon(Icons.chat_bubble_outline), findsNothing);
     // 但聊天**在**（收起那条一直在）
     expect(find.byType(ChatFloater), findsOneWidget);
-    expect(find.text('展开'), findsOneWidget);
+    expect(find.byKey(chatHandleKey), findsOneWidget);
   });
 
   testWidgets('🔴 展开态的「收起」在（而**收起态不该有它** —— 它已经收起来了）', (tester) async {
@@ -73,15 +73,15 @@ void main() {
     // ⚠️ 第一版把这个按钮放在 if/else **之外** ⇒ 收起态那条上也挂着一个"收起"（错的）。
     await _pump(tester); // 默认收起
     expect(find.byTooltip(chatCollapse), findsNothing, reason: '收起态不该再挂一个"收起"');
-    expect(find.text('展开'), findsOneWidget);
+    expect(find.byKey(chatHandleKey), findsOneWidget);
 
-    await tester.tap(find.text('展开'));
+    await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
     expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '★ 展开后必须找得到"收起"');
     // 而且它**不在那条横滚里**（窄屏 + 大字号下也不会被滚出视野）
     await tester.tap(find.byTooltip(chatCollapse));
     await tester.pumpAndSettle();
-    expect(find.text('展开'), findsOneWidget, reason: '点了收起该回到收起态');
+    expect(find.byKey(chatHandleKey), findsOneWidget, reason: '点了收起该回到收起态');
   });
 
   testWidgets('🔴 点「设置」⇒ 设置那一屏开了，而且**聊天自动收起**（§6.4 规则 5）', (tester) async {
@@ -266,7 +266,7 @@ void main() {
     expect(app.width, screen.width, reason: '内容也该全宽');
     // 而**聊天还在底下那一条**（Z1：它永远在最上面）
     expect(find.byType(ChatFloater), findsOneWidget);
-    expect(find.text('展开'), findsOneWidget, reason: '聊天收起那条该还在底下浮着');
+    expect(find.byKey(chatHandleKey), findsOneWidget, reason: '聊天收起那条该还在底下浮着');
   });
 
   testWidgets('🔴 点开小程序**从图标那儿扩开**（不是硬切出现）', (tester) async {
@@ -339,7 +339,7 @@ void main() {
     expect(opacity(), 1.0, reason: '没被盖住时是正常的');
     expect(scale(), 1.0);
 
-    await tester.tap(find.text('展开'));
+    await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
 
     expect(opacity() < 1.0, true, reason: '★ 被盖住要**看得出来**（压暗），不是"悄悄被盖住"');
@@ -351,7 +351,7 @@ void main() {
   testWidgets('🔴 被盖住期间点可见的那一块 ⇒ **只收起聊天**，那一下不传给小程序（规则 3）', (tester) async {
     await _pump(tester);
     await _openSettings(tester);
-    await tester.tap(find.text('展开'));
+    await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
     expect(find.byType(Composer), findsOneWidget);
 

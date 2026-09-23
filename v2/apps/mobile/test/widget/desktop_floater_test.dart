@@ -43,8 +43,12 @@ void main() {
     //    永远在底下。所以聊天不是桌面上的一个小程序。"* ⇒ 聊天没有桌面图标。
     expect(find.text('会话'), findsNothing, reason: '聊天不是桌面上的小程序 ⇒ 它不该有图标');
     expect(find.byIcon(Icons.chat_bubble_outline), findsNothing, reason: '同上');
-    // 收起态：有**带字的**展开入口（D3.8）
-    expect(find.text('展开'), findsOneWidget, reason: '收起态必须有带字的展开入口');
+    // ★ **收起态的展开入口**：主人 2026-09-24 改形状了 ——
+    //   *"展开用一条杠，杠上面有一个小箭头，箭头比较平…放在上边框的正中央"*
+    //   ⇒ 它**不再有可见的字**（D3.8 那条同日改掉），字挂在 tooltip 上；
+    //     但**命中区仍然 ≥44**、而且它就在上边框正中央（下面的判据量的就是这两条）。
+    expect(find.byKey(chatHandleKey), findsOneWidget, reason: '收起态该有那个抓手');
+    expect(find.byTooltip('展开'), findsOneWidget, reason: '收起态抓手要说得出"展开"');
     // ★ **收起态也有输入框**（主人 2026-09-22：*"助手那个聊天窗口，收缩的时候也有一个输入框。"*）
     expect(find.byType(Composer), findsOneWidget, reason: '★ 收起时也该能直接说话');
     // 但**展开态才有的东西一个都不许在**（判档位要看这些，不是看输入条）
@@ -125,7 +129,7 @@ void main() {
     await tester.enterText(find.byType(TextField), '半句话');
     await tester.pump();
 
-    await tester.tap(find.text('展开'));
+    await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
 
     expect(
@@ -157,20 +161,25 @@ void main() {
   testWidgets('🔴 点「展开」⇒ 真的开（时间线那一块出来、多出「收起」）', (tester) async {
     await _pump(tester);
     expect(find.byTooltip(chatCollapse), findsNothing);
-    await tester.tap(find.text('展开'));
+    await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
     expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '开了之后该有「收起」');
     expect(find.byKey(chatBodyKey), findsOneWidget, reason: '开了之后状态条 + 时间线该在');
-    expect(find.text('展开'), findsNothing, reason: '开了之后不该还挂着「展开」');
+    // ⚠️ 抓手**仍然在**（它在上边框正中，收起/展开都在同一个位置）——
+    //    变的是它的朝向与那句 tooltip。
+    expect(find.byKey(chatHandleKey), findsOneWidget, reason: '抓手不该消失');
+    expect(find.byTooltip('展开'), findsNothing, reason: '展开之后它不再是「展开」');
   });
 
   testWidgets('🔴 点桌面空白 ⇒ 收起；点浮窗**内部** ⇒ 无反应（负向对照）', (tester) async {
     await _pump(tester, tier: FloaterTier.full);
     final before = _floaterRect(tester).height;
 
-    // ① 点浮窗内部（中间那块空白）⇒ **不许**收起（§6.3：点浮窗内部无反应）
-    final f = _floaterRect(tester);
-    await tester.tapAt(Offset(f.center.dx, f.top + 12)); // 抓手行上的空白处
+    // ① 点浮窗内部（标题那一行）⇒ **不许**收起（§6.3：点浮窗内部无反应）
+    //    ⚠️ 2026-09-24 改：原来是点"最上面 12px"，而现在那一块**就是抓手**
+    //      （主人要它在上边框正中央）⇒ 再点那儿等于点抓手，判据会红得毫无意义。
+    //      改成点标题那几个字（那儿没有按钮，也在浮窗内部）。
+    await tester.tap(find.text('助手'));
     await tester.pumpAndSettle();
     expect(_floaterRect(tester).height, before, reason: '点浮窗内部不该动它（更不该漏到桌面）');
     expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '还是展开着');
@@ -241,32 +250,41 @@ void main() {
     expect(desk.size, screen.size, reason: '桌面该铺满整屏（实测过它只有 ${desk.size}）');
   });
 
-  testWidgets('🔴 收起态的「展开」命中区 ≥44（D3.6/D3.8）', (tester) async {
+  testWidgets('🔴 抓手的命中区 ≥44，而且**就在上边框正中央**（D3.6 + 主人 2026-09-24）', (tester) async {
     await _pump(tester);
-    // 文字本身可能小，但**它那个按钮**的命中区要够 —— 量按钮（D3.6：视觉可以小）
-    final btn = tester.getRect(
-      find.ancestor(of: find.text('展开'), matching: find.byType(TextButton)),
+    // 图形本身小（26×7 的箭头 + 44×4 的杠），但**它那个按钮**要够大
+    final btn = tester.getRect(find.byKey(chatHandleKey));
+    expect(btn.height >= 44, true, reason: '抓手命中区只有 ${btn.height}');
+    expect(btn.width >= 44, true, reason: '抓手命中区只有 ${btn.width}');
+    // ★ 位置：**上边框的正中央**（主人原话）
+    final f = _floaterRect(tester);
+    expect(
+      (btn.center.dx - f.center.dx).abs() < 1,
+      true,
+      reason: '抓手该在水平正中（差 ${(btn.center.dx - f.center.dx).abs()}）',
     );
-    expect(btn.height >= 44, true, reason: '展开按钮命中区只有 ${btn.height}');
-    expect(btn.width >= 44, true, reason: '展开按钮命中区只有 ${btn.width}');
+    expect(
+      (btn.top - f.top).abs() < 6,
+      true,
+      reason: '抓手该贴着上边框（差 ${(btn.top - f.top).abs()}）',
+    );
   });
 
-  testWidgets('🔴 双击抓手 ⇒ 收起（§6.3 的手势表）', (tester) async {
+  testWidgets('🔴 **单击**抓手 ⇒ 收起（§6.3 的手势表 · 2026-09-24 改）', (tester) async {
     await _pump(tester, tier: FloaterTier.full);
     expect(find.byType(Composer), findsOneWidget);
-    // 双击 = 两次点击落在判定窗内（实现里是 Listener + 时间窗，不是 GestureDetector）
-    await tester.tap(find.text('助手'));
-    await tester.pump(const Duration(milliseconds: 40));
-    await tester.tap(find.text('助手'));
+    // ⚠️ 原来是"双击 = 收起 ⇄ 展开"。2026-09-24 抓手变成**能点的那个展开入口**之后，
+    //    双击 = 两次单击 = 展开又收起（屏幕上就是"点了没反应"）⇒ **双击这套拿掉**。
+    await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
-    expect(find.byTooltip(chatCollapse), findsNothing, reason: '双击抓手该收起');
-    expect(find.text('展开'), findsOneWidget);
+    expect(find.byTooltip(chatCollapse), findsNothing, reason: '单击抓手该收起');
+    expect(find.byKey(chatHandleKey), findsOneWidget, reason: '抓手还在（收起态它就是展开入口）');
   });
 
   testWidgets('🔴 拖抓手行向上 ⇒ 跟手变高，松手吸附到更大的一档', (tester) async {
     await _pump(tester, tier: FloaterTier.collapsed);
     final collapsed = _floaterRect(tester).height;
-    await tester.drag(find.text('助手'), const Offset(0, -260));
+    await tester.drag(find.byKey(chatHandleKey), const Offset(0, -260));
     await tester.pumpAndSettle();
     final after = _floaterRect(tester).height;
     expect(after > collapsed, true, reason: '往上拖该变高（$collapsed → $after）');

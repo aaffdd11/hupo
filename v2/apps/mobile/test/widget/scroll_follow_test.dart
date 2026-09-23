@@ -63,7 +63,7 @@ void main() {
     // 收起档里没有列表（也不该有那一屏）
     expect(find.text('第 80 句'), findsNothing, reason: '收起档本来就不画时间线');
 
-    await tester.tap(find.text('展开'));
+    await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
 
     expect(
