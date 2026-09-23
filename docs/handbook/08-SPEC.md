@@ -187,6 +187,7 @@
 | `app/installed` · `app/update-available` · `app/error` | 小程序生命周期。**每个"进行中"都要有配对收口 + 超时**。✅ **`app/installed` 已实现**（装上之后桌面自己长出来）；另两条还没有 |
 | `miniapp/load-failed` | 容器 hash 校验失败并回退 `last-known-good` |
 | `audit/notice` | **只在开发者通道推**：刚发生一次"改系统"档动作（**不进用户流**） |
+| `plan/updated` | ✅ **已实现**（2026-09-23）：助手**自己的目标 / 任务清单**（harness 的 `todo/write` 快照与 `goal/change`）翻成人话之后那一条 —— `{goal:{text,phase}\|null, todos:[{text,now,done}], doneCount, total, more}`。**持久事件**（有号、会补发）· **每轮开头清空** · 🔴 **工具名 / goalId / callId 一个字节都不许进这条**（`26-PROCESS-LEVELS.md:180`）。界面上那条**没有计划就一个像素都不画**（主人 2026-09-23 定案：浮在屏幕上方，窗口不动）|
 
 > ⚠️ 协议 v2 要加的字段（作用域标识 / 补发标记 / 步骤事件）见 `03-DEVELOPMENT.md` §三。
 

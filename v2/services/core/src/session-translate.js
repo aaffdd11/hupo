@@ -64,6 +64,9 @@ import { isReadOnlyTool } from './tools.js';
 // ★ **失败五类那几句人话只有一处出处**（`notice.js` 的 `FAILED_LINES`）——
 //   这一层要用"外面那条路不通"那一句（账 #33），但**不许在这儿再抄一份字**。
 import { FAILED_LINES } from './notice.js';
+// ★ **计划条**（主人 2026-09-23 要的「目标 / 任务列表」）：把 harness 自己的
+//   `todo/write` 快照与 `goal/change` 翻成**人话**再发出去。**工具名 / 内部 id 不发**。
+import { PLAN_EVENT, goalFromChange, planIsEmpty, todosFromWrite } from './plan.js';
 
 /**
  * 被截断时补的那句话。
@@ -98,8 +101,9 @@ export const INTERRUPTED_LINE = '这条我没说完就断了。';
  */
 export const AUTH_LINE = '你填的那串钥匙它说用不了。刷新一下这一页，就能重新填。';
 
+
 /**
- * 上游那一条失败，是不是"钥匙不对"。
+   * 上游那一条失败，是不是"钥匙不对"。
  *
  * ⚠️ **认不出来就返回 `false`**（退回原来那句含糊的话）——
  *    宁可含糊，也不许把别的失败**说成**"钥匙不对"（那会让人白改一遍钥匙）。
@@ -226,6 +230,8 @@ export class TurnTranslator extends EventEmitter {
   #scopeId;
   #turns = new Map(); // **turn 号** → 这一轮的账
   #lastTitle = null;
+  /** **当前这一轮的计划**（目标 + 任务清单）：`todo/write` 是整表快照，`turn/start` 清空。 */
+  #plan = { goal: null, todos: [], doneCount: 0, total: 0, more: 0 };
   #reasoningSeen = 0;
   /** 已经报过"动过东西"的轮号（一轮只报一次） */
   #mutatedTurns = new Set();
@@ -301,6 +307,11 @@ export class TurnTranslator extends EventEmitter {
 
     switch (type) {
       case 'turn/start':
+        // ⚠️ dsh 的 todo 投影**每轮开头清空**（`turn/start` ⇒ null）⇒ 这里跟着清，
+        //    不然新的一轮上还挂着上一轮的计划（**一句过期的话**）。
+        //    ⚠️ **必须挂在原来这条 case 上**：`switch` 里两个 `case 'turn/start'`
+        //    只有**第一个**会执行，第二个是死代码（判据当场抓到了这个 bug）。
+        this.#onPlanEvent('clear');
         this.#onTurnStart(data, ev);
         break;
       case 'assistant/message':
@@ -316,6 +327,13 @@ export class TurnTranslator extends EventEmitter {
         break;
       case 'tool/call':
         this.#onToolCall(data);
+        break;
+      case 'todo/write':
+        // 整表快照（last-write-wins）—— **不是**增量
+        this.#onPlanEvent('todos', data);
+        break;
+      case 'goal/change':
+        this.#onPlanEvent('goal', data);
         break;
       case 'step/start':
       case 'step/end':
@@ -340,6 +358,37 @@ export class TurnTranslator extends EventEmitter {
    * ⚠️ **一轮只报一次**：第一次碰上"会改东西"的工具就报，之后不再报。
    *    判据是"整轮**有没有**碰过写类工具"，不是"碰了几次"。
    */
+  /**
+   * **计划变了** ⇒ 记下来，并**发一条持久事件**（主人 2026-09-23 要的「目标 / 任务列表」）。
+   *
+   * ⚠️ 三条：
+   *   ① 发的是**内容**（objective / todo 正文），**工具名、goalId、callId 一个字节都不发**
+   *      （`26-PROCESS-LEVELS.md:180`：工具名与 callId 一律不发）；
+   *   ② **只在「变了」的时候发**（本来就没有、现在也没有 ⇒ 一条都不发）——
+   *      但**清空也要发**：客户端靠它把那条收起来（不发就成了「界面上留着旧计划」）；
+   *   ③ 载荷里的 `todos` 已经按上限裁过，`more` 是**如实报的**条数（不静默截断）。
+   */
+  #onPlanEvent(what, data) {
+    const prev = this.#plan;
+    let next = prev;
+    if (what === 'clear') {
+      next = { goal: null, todos: [], doneCount: 0, total: 0, more: 0 };
+    } else if (what === 'todos') {
+      const snap = todosFromWrite(data);
+      if (!snap) return; // 认不出 ⇒ **什么都不做**（不许编一个空计划出来）
+      next = { ...prev, ...snap };
+    } else if (what === 'goal') {
+      const g = goalFromChange(data);
+      if (!g) return;
+      next = { ...prev, goal: g.cleared ? null : g.goal };
+    } else {
+      return;
+    }
+    this.#plan = next;
+    if (planIsEmpty(next) && planIsEmpty(prev)) return; // 一直都没有东西 ⇒ 别刷一条空事件
+    this.#timeline.emit({ type: PLAN_EVENT, ...next, at: Date.now() });
+  }
+
   #onToolCall(data) {
     const turn = data?.turn;
     if (typeof turn !== 'number') return;

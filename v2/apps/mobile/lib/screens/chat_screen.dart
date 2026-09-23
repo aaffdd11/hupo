@@ -34,6 +34,7 @@ import '../services/chat_controller.dart';
 import '../widgets/app_desktop.dart';
 import '../widgets/mini_app_icons.dart';
 import '../widgets/mini_runtime.dart';
+import '../widgets/plan_strip.dart';
 import '../widgets/bubble_menu.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/chat_floater.dart';
@@ -302,6 +303,17 @@ class _ChatScreenState extends State<ChatScreen> {
                       onLogout: _logout(c),
                     ),
             ),
+          ),
+          // ①.8 **计划条**（主人 2026-09-23 定案：*"浮在屏幕上方（窗口不动）"*）
+          //  · 在桌面之上、聊天浮窗之下（两者不重叠：它贴上沿、浮窗贴底）
+          //  · 🔴 `PlanStrip` 里面是 `IgnorePointer` ⇒ 点它**穿透到桌面**，
+          //    所以"点桌面空白 = 收起聊天"在那块**照样有效**（不是死区）
+          //  · 没有计划 ⇒ 它自己画空盒子（`SizedBox.shrink`）
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(bottom: false, child: PlanStrip(plan: c.plan)),
           ),
           // ② 聊天浮窗（贴底、四边 30、永远在最上 —— Z1/Z3/Z4）
           Positioned(

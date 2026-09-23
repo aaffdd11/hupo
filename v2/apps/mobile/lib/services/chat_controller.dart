@@ -13,6 +13,7 @@ import '../models/conn_state.dart';
 import '../models/export.dart';
 import '../models/message_state.dart';
 import '../models/notice.dart';
+import '../models/plan.dart';
 import '../models/process_levels.dart';
 import '../models/timeline.dart';
 import '../models/trash.dart';
@@ -36,11 +37,11 @@ class ChatController extends ChangeNotifier {
     ComposeStore? compose,
     ProcessLevelStore? levels,
     this.onUnauthorized,
-  })  : _token = token,
-        local = local ?? TimelineStore(),
-        drafts = drafts ?? DraftStore(),
-        compose = compose ?? ComposeStore(),
-        levels = levels ?? ProcessLevelStore() {
+  }) : _token = token,
+       local = local ?? TimelineStore(),
+       drafts = drafts ?? DraftStore(),
+       compose = compose ?? ComposeStore(),
+       levels = levels ?? ProcessLevelStore() {
     // ⚠️ 构造时就带令牌的场合（`main.dart` 冷启动那条路）也要先绑好命名空间，
     //    否则第一次 `_restoreLocal()` 读的还是默认那一份（= 上一个人的）。
     _bindNamespace(token);
@@ -166,8 +167,8 @@ class ChatController extends ChangeNotifier {
   ///    （它们下一帧就会被清，但那一帧可能很久才来）。
   List<ProcessStep> get steps =>
       _level == ProcessLevel.steps || _level == ProcessLevel.reasoning
-          ? timeline.steps
-          : const [];
+      ? timeline.steps
+      : const [];
 
   /// 第 ④ 档要看的思考原文 —— **挂在它那条气泡上**（`AssistantMessage.reasoning`）。
   ///
@@ -185,6 +186,21 @@ class ChatController extends ChangeNotifier {
   /// ⚠️ **推理原文不算在内**：它挂在气泡上、由 `_render` 那条路画，
   ///    不在尾巴上（批 3 改过一次，见 `AssistantMessage.reasoning`）。
   bool get hasProcess => agentLine != null || steps.isNotEmpty;
+
+  /// **现在这一份计划**（harness 自己的目标 / 任务清单）—— 没有就 `null`。
+  ///
+  /// ⚠️ 取的是**最后一条** `plan/updated`：它是**整表快照**（last-write-wins），
+  ///    而且新的一轮开始时服务端会发一条"清空"的 ⇒ 倒着找第一条就是现在这份。
+  ///    ⚠️ 冷启动也从 `_facts` 里拿（本机缓存带号事件）——刷新一下计划条不该变空。
+  /// ⚠️ 解不出来（认不出形状 / 空的那份）⇒ `null` ⇒ 界面**一个像素都不画**。
+  Plan? get plan {
+    for (var i = _facts.length - 1; i >= 0; i -= 1) {
+      final e = _facts[i];
+      if (e['type'] != 'plan/updated') continue;
+      return Plan.fromEvent(e); // 空的那份 ⇒ null（不再往后找：清空就是清空）
+    }
+    return null;
+  }
 
   /// 登录后启动：**先画本地一屏**（连用户自己打了一半的话一起），再连流。
   ///
@@ -418,7 +434,10 @@ class ChatController extends ChangeNotifier {
     if (type == 'notice/urgent') {
       _showNotice(Notice.fromEvent(event));
     } else if (type == 'notice' &&
-        shouldPopNotice(catchUp: event['catchUp'] == true, readingHistory: _readingHistory)) {
+        shouldPopNotice(
+          catchUp: event['catchUp'] == true,
+          readingHistory: _readingHistory,
+        )) {
       // ⚠️ **浮窗里的撤销与时间线里那条是同一件事**（约束 3）⇒
       //    两处都渲染 `notice.undo`，都由 `undoNotice()` 走同一条路。
       _showNotice(Notice.fromEvent(event));
@@ -433,7 +452,8 @@ class ChatController extends ChangeNotifier {
     //      ——屏幕上又出现"已经删掉的话"，而服务端那边它已经没了。那就是说假话。
     //   ⚠️ 墓碑事件**自己不许清**：它是"谁被删过"的唯一凭据，
     //      冷启动要靠它把藏起来这件事重新立起来。
-    final forgets = event['type'] == 'turn/deleted' || event['type'] == 'turn/purged';
+    final forgets =
+        event['type'] == 'turn/deleted' || event['type'] == 'turn/purged';
     final ids = Timeline.messageIdsOfEvent(event);
 
     if (TimelineStore.isPersistable(event)) {
@@ -555,7 +575,9 @@ class ChatController extends ChangeNotifier {
     _noticeTimer = null;
     final r = await restoreTurn(ids);
     if (r is! TrashOk<bool>) {
-      _lastError = r is TrashUnauthorized ? trashUnauthorizedLine : trashRestoreFailedLine;
+      _lastError = r is TrashUnauthorized
+          ? trashUnauthorizedLine
+          : trashRestoreFailedLine;
       notifyListeners();
     }
     return r;
@@ -781,7 +803,10 @@ class ChatController extends ChangeNotifier {
   ///
   /// ⚠️ 这两件事必须**一起**做。只藏内存不清缓存 ⇒ 下次开机那一屏又画出来；
   ///    只清缓存不藏内存 ⇒ 这一屏现在还看得见。
-  Future<void> _forgetTurn(List<String> messageIds, {bool purge = false}) async {
+  Future<void> _forgetTurn(
+    List<String> messageIds, {
+    bool purge = false,
+  }) async {
     final ids = messageIds.toSet();
     if (purge) {
       timeline.purgeMessages(messageIds);
