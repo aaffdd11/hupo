@@ -188,5 +188,41 @@ echo "  index.html → $ENTRY_CC"
 echo "$ENTRY_CC" | grep -q 'no-cache' || { echo "  ✗ 入口必须 no-cache"; exit 1; }
 echo "  ✓ 入口 no-cache（老访客每次都会取到新的 HTML，从而指向新名字）"
 
+# ── 部署后**自己用真浏览器走一遍**（账 #64 的实测结论 · 2026-09-23）──
+#
+# ⚠️ **这一步不是为了"预热字体"** —— 那是**原来的理由，实测站不住**：
+#    · 镜像单片：冷 0.22s / 热 0.11s（每片省约 0.1s）；
+#    · 端到端（全新 profile、从导航算起，12 片）：**冷 6.3s / 热 6.6s —— 差在噪声里**。
+#    ⇒ "部署时预热"买不到可测量的东西。**明说砍掉那个理由**（`04-ROADMAP.md` §十一）。
+#
+# 那 6.3 秒本身是真的，而它的**真账不在字体**：第一条字体请求要等 **4.6s** 才发出来
+# （在那之前页面在等 **canvaskit 2.2MB** 过隧道 —— 与这条链 ~3.4Mbps 算出来的 5s 对得上），
+# 然后约 1.7s 把 12 片取齐。⇒ 那是账 **#59**（静态产物每一个字节都要过隧道），不是 #64。
+#
+# ⇒ **这一步留下来的真正价值**：把那条规矩**自动做掉** ——
+#   "改完客户端必须跑浏览器那条路的检查"（`AGENTS.md` §5.1 · 判据 V13）。
+#   它验的是**页面自己**那一侧：页面开得开 · 页面自己那条 WS 通不通 · 字体取不取得到。
+#   顺带把分片焐进 `data/font-cache/`（省 0.1s/片，聊胜于无）。
+# ⚠️ **不许挡住上线**：没浏览器 / 没拿到令牌 ⇒ **如实说一句**，部署照常算成功
+#    （真坏了会在上面那几条**阻塞**检查里先红；这一条是"再确认一眼"，不是闸）。
+# ⚠️ 令牌**只进环境变量、不写任何文件、不打进日志**（`AGENTS.md` §六.1）。
+if [ "${HUPO_SKIP_BROWSER_CHECK:-0}" = "1" ]; then
+  echo "▶ 部署后浏览器自检：跳过（HUPO_SKIP_BROWSER_CHECK=1）"
+else
+  echo "▶ 部署后浏览器自检（真开一个浏览器：页面开得开、WS 通不通、字体取不取得到）"
+  WARM_TOKEN="$(
+    cd "$CORE" && "$NODE_BIN" -e \
+      "import('./src/auth.js').then(m=>{const a=new m.Auth({dataDir:'data'});process.stdout.write(a.issue({sub:'owner'}).token)})" \
+      2>/dev/null || true
+  )"
+  if [ -z "$WARM_TOKEN" ]; then
+    echo "  ⚠️ 没拿到令牌 ⇒ 这一眼没看（页面照常部署）"
+  elif ( cd "$ROOT" && HUPO_TOKEN="$WARM_TOKEN" "$NODE_BIN" scripts/check-web-browser.mjs --wait 20000 >/tmp/hupo-deploy-browser.log 2>&1 ); then
+    echo "  ✓ 页面开得开、那条流通着（详见 /tmp/hupo-deploy-browser.log）"
+  else
+    echo "  ⚠️ 这一眼没过（多半是本机没装浏览器；详见 /tmp/hupo-deploy-browser.log）—— **部署照常完成**"
+  fi
+fi
+
 echo
 echo "✅ 完成：https://w.stalkerai.cn ｜ 入口指纹 $STAMP"

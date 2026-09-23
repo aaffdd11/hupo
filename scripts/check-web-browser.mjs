@@ -253,8 +253,23 @@ async function main() {
   const wsEvents = { created: 0, received: 0, types: new Set(), closed: 0 };
   // ★ **中文字体回退那条路的读数**：引擎会去 `/fonts/…` 要**分片字体**（每片约 25KB）。
   //   ⚠️ 它**不报错** —— 取不到就是"字变方块/空白"，所以判据只能看**请求本身**。
-  const fontReqs = { asked: 0, ok: 0, failed: 0, last: '' };
+  const fontReqs = { asked: 0, ok: 0, failed: 0, last: '', t0: null, tLast: null };
   const fontPending = new Map(); // requestId → url（`loadingFailed` 里不带 url，只能自己记）
+  /**
+   * **这次导航是从什么时候开始的**（用于把"字体到位"换算成**秒**）。
+   *
+   * ⚠️ 为什么值得有（账 #64）：`--shot-after 0` 拍到的永远是**字体还没到**的那一帧
+   *    （那是"第一帧"的定义，跟服务端缓存冷热**无关**）。服务端字体镜像冷热影响的是
+   *    **最后一条字体回来的时间** —— 那才是"头一次访问中文会晚几秒"那句话的**读数**。
+   *    ⇒ 没有这个数，冷/热两件事在截图上是**分不出来**的（我为此白跑过一轮）。
+   */
+  let navAt = 0;
+  const navigate = async () => {
+    navAt = Date.now();
+    fontReqs.t0 = null;
+    fontReqs.tLast = null;
+    await send('Page.navigate', { url: URL_ });
+  };
   const pageErrors = [];
   ws.on('message', (raw) => {
     let m;
@@ -297,6 +312,10 @@ async function main() {
     if (m.method === 'Network.responseReceived') {
       const u = m.params?.response?.url ?? '';
       if (u.includes('/fonts/')) {
+        // ★ **字体到位花了多久**（账 #64 那句话的读数）：从这次导航算起
+        const at = Date.now() - navAt;
+        if (fontReqs.t0 == null) fontReqs.t0 = at;
+        fontReqs.tLast = at;
         const st = m.params.response.status ?? 0;
         if (st >= 200 && st < 300) fontReqs.ok += 1;
         else {
@@ -365,7 +384,7 @@ async function main() {
   const encoded = JSON.stringify(TOKEN); // 这就是 json.encode 的结果
   if (!TOKEN) {
     // `--no-token`：**不灌令牌**，只把页面打开（看首页/登录页那两屏）
-    await send('Page.navigate', { url: URL_ });
+    await navigate();
     console.log('  令牌：没给（--no-token）⇒ 看的是**未登录**那一屏；那条流**不验**。');
   } else {
   await send('Page.addScriptToEvaluateOnNewDocument', {
@@ -374,7 +393,7 @@ async function main() {
       KEYS.map((k) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(encoded)});`).join('') +
       `} } catch (e) {}`,
   });
-  await send('Page.navigate', { url: URL_ });
+  await navigate();
   // 等它真的开始用了（能读到令牌 ⇒ 客户端才会去连那条流）
   let seededOk = false;
   for (let i = 0; i < 40; i += 1) {
@@ -408,7 +427,7 @@ async function main() {
   //   而现象是"页面加载很慢/白屏/字变豆腐"，且**本地一切正常**（这台机器取 gstatic 只要 0.4s）。
   //   ⇒ 判据只能是：**gstatic 整个取不到，页面照样得开、字照样得在**。
   if (BLOCK_GSTATIC) {
-    await send('Page.navigate', { url: URL_ });
+    await navigate();
   }
 
   // ④ 看那条流：等到"收到了帧"或超时
@@ -496,9 +515,13 @@ async function main() {
     }
     // 🔤 字体那条口的读数：**屏幕上有没有字，只能看截图**（canvas 里查不到文本），
     //     但"引擎到底有没有把字体取回来"这里是看得见的 —— 两件对着看才判得准。
+    const secs = (ms) => `${(ms / 1000).toFixed(1)}s`;
     console.log(
       `  🔤 中文字体那条口：问了 ${fontReqs.asked} 次 · 成了 ${fontReqs.ok} · 失败 ${fontReqs.failed}` +
-        (fontReqs.last ? `（最后一次：${fontReqs.last}）` : ''),
+        (fontReqs.t0 != null
+          ? ` · 第一条 ${secs(fontReqs.t0)} · **最后一条 ${secs(fontReqs.tLast)}**（从开始导航算）`
+          : '') +
+        (fontReqs.last ? `（最后一次失败：${fontReqs.last}）` : ''),
     );
     if (fontReqs.asked > 0 && fontReqs.ok === 0) {
       console.log('     🔴 **一次都没取回来** ⇒ 屏幕上的中文多半是方块/空白（看截图确认）');
