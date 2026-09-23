@@ -32,7 +32,17 @@ import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
 /** 只有这三个不需要令牌。加任何一个都要问一句"它真的必须公开吗"。 */
-export const PUBLIC_ROUTES = Object.freeze(['/api/version', '/api/auth', '/api/login']);
+// ★ P1-11（2026-09-24）：**原来这里少了一条** —— `/api/send-code` 真实可达
+//   （`server.js` 那道分支在鉴权之前，登录前就要用它发码），常量里却没有它。
+//   ⇒ 常量在说假话（读它的人会以为三条，实际四条）。判据在 `test/server.test.js`：
+//   ① 这条常量必须含这四条；② **运行期**再验一次"不带令牌真的够得着"。
+export const PUBLIC_ROUTES = Object.freeze([
+  '/api/version',
+  '/api/auth',
+  '/api/login',
+  // 登录前那一步（发验证码）：那时**还没有令牌**，所以它必然是公开的
+  '/api/send-code',
+]);
 
 const SCRYPT_KEYLEN = 64;
 const DEFAULT_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 天（决策：TTL 由 30 天延长）

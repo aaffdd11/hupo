@@ -11,7 +11,7 @@ import nodePath from 'node:path';
 import net from 'node:net';
 import WebSocket from 'ws';
 
-import { Auth } from '../src/auth.js';
+import { Auth, PUBLIC_ROUTES } from '../src/auth.js';
 import { SayService } from '../src/say.js';
 import { Store } from '../src/store.js';
 import { Timeline } from '../src/timeline.js';
@@ -437,5 +437,23 @@ test('★ P1-14：像文件的路径 ⇒ 404；真资源仍 200；页面路由�
   const route = await fetch(`${s.origin}/some/app/route`);
   assert.equal(route.status, 200);
   assert.match(route.headers.get('content-type') ?? '', /html/);
+  await s.close();
+});
+
+// ── P1-11（2026-09-24）：公开面常量与真实路由必须对上 ──────────────
+
+test('★ P1-11：PUBLIC_ROUTES 与"不带令牌真够得着的那几条"必须一致', async () => {
+  // ① 常量本身
+  assert.deepEqual(
+    [...PUBLIC_ROUTES].sort(),
+    ['/api/auth', '/api/login', '/api/send-code', '/api/version'],
+    '常量少一条 ⇒ 读它的人会被骗（2026-09-24 就少了 /api/send-code）',
+  );
+  // ② 运行期：没设口令 ⇒ 受保护路由一律 503，而公开的那条**够得着**
+  const s = await boot();
+  const pub = await post(s.origin, '/api/send-code', { phone: '13800000000' });
+  assert.notEqual(pub.status, 503, 'send-code 在公开名单里，却像受保护路由一样被 503 挡了');
+  const guarded = await fetch(`${s.origin}/api/health`);
+  assert.equal(guarded.status, 503, '负向对照：受保护那条必须仍然被挡');
   await s.close();
 });
