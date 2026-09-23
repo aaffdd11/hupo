@@ -40,7 +40,7 @@
 
 | 层 | 文件 | 干了什么 |
 |---|---|---|
-| 服务 · 平台 | `lib/services/speech{,_web,_stub}.dart`（新） | 网页 = `window.speechSynthesis`（`speakAloud` / `stopSpeaking` / `canSpeak`）；别的平台是桩。**零新依赖**（与 `links.dart` / `mini_runtime.dart` 同一条条件导出） |
+| 服务 · 平台 | `lib/services/speech{,_web,_stub}.dart`（新） | 网页 = `window.speechSynthesis`（`speakAloud` / `stopSpeaking` / `canSpeak`）；别的平台是桩。**零新依赖**（与 `links.dart` / `mini_runtime.dart` 同一条条件导出）。⚠️ **2026-09-24 回填**：`canSpeak` 原来是**写死的 `true`**，现在是**真的问浏览器有没有音色**（`getVoices().isNotEmpty`，问不出来就当念不了）—— 判据 `test/unit/speak_test.dart`（源码级） |
 | 状态 | `lib/services/speech_store.dart`（新） | "自动念"这个偏好（设备级；**默认关**；读不出来不抛） |
 | 状态 | `lib/services/chat_controller.dart` | `autoSpeak` / `speakingId` / `speakMessage` / `stopSpeakingNow` / `loadAutoSpeak`；`ingest()` 里那三条边界；`dispose()` 里停 |
 | 字 | `lib/models/speak_words.dart`（新） | "读一遍 / 别念了" · "读出来 / 不读" · 两句 hint · "这台设备上没法念出来" |
