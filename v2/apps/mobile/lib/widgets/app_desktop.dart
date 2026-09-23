@@ -25,6 +25,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import '../models/space_words.dart';
 
 /// **小程序没给图标时用的那个**（主人 2026-09-22：*"设置要给一个默认 icon"*）。
 ///
@@ -56,8 +57,19 @@ class DesktopApp {
   final int badge;
 }
 
-/// 图标格边长：**≥44** 是 D3.6 的硬要求，这里给得更宽一点（手指好按）。
-const double desktopIconBox = 52;
+/// 图标格边长：**≥44** 是 D3.6 的硬要求。
+///
+/// ★ 2026-09-23（主人：*"先整理整个UI"*）**52 → 64**：目标用户是
+///   "不会拼音 / 视力弱"的人（`01-PROJECT.md`），52 那一档在手机上看着像一粒纽扣。
+///   判据 `test/widget/desktop_test.dart` 钉住"不许再缩回去"。
+const double desktopIconBox = 64;
+
+/// 一格**最多**多宽（名字更长就把字省略，格子不许跟着长胖）。
+/// ⚠️ 原来这个 88 是写死在 `clamp` 里的 —— 提出来，好让"格子和字"一起算。
+const double desktopTileMax = 96;
+
+/// 图标格两边给字留的余量（`tileWidth` 的下限 = 格子 + 它）。
+const double desktopTileSlack = 10;
 
 class AppDesktop extends StatelessWidget {
   const AppDesktop({
@@ -81,6 +93,7 @@ class AppDesktop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     // ⚠️ 宽度从 `MediaQuery` 来（它在 `Stack` 里是 `Positioned.fill` ⇒ 就是屏宽）
     final w = MediaQuery.sizeOf(context).width;
     final spacing = d.gapL - 4;
@@ -88,7 +101,10 @@ class AppDesktop extends StatelessWidget {
     //    而图标本该是**一个小方块**、列宽只决定它在哪儿 ⇒ 两端都夹住：
     //    下限 = 图标格 + 一点余量（不然字挤成一列），上限 = 一个"图标格"该有的宽度。
     final raw = (w - d.gapL * 2 - spacing * (columns - 1)) / columns;
-    final tileWidth = raw.clamp(desktopIconBox + 10, 88.0);
+    final tileWidth = raw.clamp(
+      desktopIconBox + desktopTileSlack,
+      desktopTileMax,
+    );
     return Material(
       color: d.paper,
       child: InkWell(
@@ -122,12 +138,27 @@ class AppDesktop extends StatelessWidget {
                     d.gapL,
                     d.gapL,
                   ),
-                  child: Wrap(
-                    spacing: spacing,
-                    runSpacing: d.gapL,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final a in apps)
-                        _DesktopIcon(app: a, width: tileWidth),
+                      Wrap(
+                        spacing: spacing,
+                        runSpacing: d.gapL,
+                        children: [
+                          for (final a in apps)
+                            _DesktopIcon(app: a, width: tileWidth),
+                        ],
+                      ),
+                      // ★ 2026-09-23：桌面上原来**一句引导都没有** ——
+                      //   第一次进来的人看到的是几个陌生图标 + 一片空白。
+                      //   ⚠️ 只说"点一下会怎样"，**不许承诺任何做不到的事**。
+                      const SizedBox(height: d.gapL),
+                      Text(
+                        desktopHint,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: d.muted,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -212,7 +243,11 @@ class _DesktopIcon extends StatelessWidget {
               // ⚠️ **带字的**（D3.8：图标不许只有图形）
               Text(
                 app.label,
-                style: t.textTheme.bodySmall?.copyWith(color: d.ink),
+                // ★ 2026-09-23：`bodySmall`(≈12) → `bodyMedium`(≈14)；
+                //   **最多两行**：名字长了不许把格子撑破（同 D4.8"界面自己抖"那一族）。
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: t.textTheme.bodyMedium?.copyWith(color: d.ink),
                 textAlign: TextAlign.center,
               ),
             ],
