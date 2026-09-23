@@ -38,6 +38,40 @@ DO_BUILD=1
 
 command -v "$FLUTTER" >/dev/null || { echo "✗ 找不到 flutter（设 FLUTTER_BIN）"; exit 2; }
 
+# ══ P0-8（2026-09-24）：**部署前替跑硬闸** ══════════════════════════
+#
+# 为什么：这个脚本以前**一道闸都不跑**（只 `flutter build web`）—— 意味着
+# "闸是绿的"和"线上跑的东西"之间**没有任何强制关系**：谁都可以绕过闸直接上线
+# （2026-09-24 就真发生过：一个子 agent 写完代码、自己 commit、自己部署）。
+# ⇒ 现在**构建之前**先把两道硬闸跑掉；红 ⇒ **一步都不往下走**（线上仍是上一版）。
+#
+# ⚠️ 两条逃生口（都要明写，不许偷偷用）：
+#   · `HUPO_SKIP_GATES=1` —— 只为"闸本身坏了、而线上正着火"那种时刻；
+#     **用了它会打在输出里**，好让事后查得到。
+#   · `HUPO_GATE_CLIENT` / `HUPO_GATE_SERVER` —— 给 `check-deploy-gate.sh` 做**变异验证**用
+#     （把闸换成 `false`，证明"红了真的会中止"）。
+GATE_CLIENT="${HUPO_GATE_CLIENT:-bash $ROOT/scripts/check-client.sh}"
+GATE_SERVER="${HUPO_GATE_SERVER:-bash -c 'cd $CORE && npm test'}"
+
+if [ "${HUPO_SKIP_GATES:-}" = "1" ]; then
+  echo "⚠️⚠️ HUPO_SKIP_GATES=1 —— **跳过硬闸直接部署**（这一行会留在日志里，事后查得到）"
+else
+  echo "▶ 部署前替跑硬闸（客户端）"
+  if ! eval "$GATE_CLIENT" > /tmp/hupo-gate-client.log 2>&1; then
+    echo "✗ 客户端闸红了 ⇒ **不部署**（线上仍是上一版）。看 /tmp/hupo-gate-client.log："
+    tail -12 /tmp/hupo-gate-client.log | sed 's/^/    /'
+    exit 1
+  fi
+  echo "  ✓ 客户端闸绿（analyze/unit/可访问性/界面四档都跑过了；详见 /tmp/hupo-gate-client.log）"
+  echo "▶ 部署前替跑硬闸（服务端）"
+  if ! eval "$GATE_SERVER" > /tmp/hupo-gate-server.log 2>&1; then
+    echo "✗ 服务端闸红了 ⇒ **不部署**（线上仍是上一版）。看 /tmp/hupo-gate-server.log："
+    tail -12 /tmp/hupo-gate-server.log | sed 's/^/    /'
+    exit 1
+  fi
+  echo "  ✓ 服务端闸绿（$(grep -E '^ℹ (tests|pass|fail)' /tmp/hupo-gate-server.log | tr '\n' ' '）)"
+fi
+
 if [ "$DO_BUILD" = "1" ]; then
   echo "▶ 构建 Web（release，不带 Service Worker）"
   # ⚠️ `--no-web-resources-cdn`（2026-09-23 加）：默认构建会把 CanvasKit 指向
