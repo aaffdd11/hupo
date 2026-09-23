@@ -135,7 +135,11 @@ async function stubUpstream({ code = 0, scripts = [] } = {}) {
         state.frames += 1;
         while (state.scripts.length && state.bytes >= state.scripts[0].at) {
           const s = state.scripts.shift();
-          ws.send(JSON.stringify({ code: 0, result: { slice_type: s.slice, voice_text_str: s.text }, final: 0 }));
+          ws.send(JSON.stringify({
+            code: 0,
+            result: { slice_type: s.slice, voice_text_str: s.text, index: s.index ?? 0 },
+            final: 0,
+          }));
         }
         return;
       }
@@ -361,6 +365,36 @@ test('★ 连上之前推的音频不丢（先攒着，握上手就补发）', a
 });
 
 // ── ⑦ 上游回错 ────────────────────────────────────────────
+
+test('★ `index` 要真的传下去（同一段替换全靠它 —— 少了它屏幕上就是一串重复）', async () => {
+  const stub = await stubUpstream({
+    scripts: [
+      { at: 1600, slice: 1, text: '今天', index: 0 },
+      { at: 3200, slice: 1, text: '今天天气', index: 0 },
+      { at: 4800, slice: 1, text: '挺好的。', index: 1 },
+    ],
+  });
+  const s = await boot({ asrConfig: asrConfigFromEnv({ HUPO_ASR_URL: stub.url }) });
+  const c = await connectAsr(s.wsBase, s.token);
+  c.ws.send(JSON.stringify({ type: 'asr/start' }));
+  await waitFor(c.events, (e) => e.type === 'asr/ready');
+  const seen = [];
+  for (let n = 1; n <= 3; n += 1) {
+    c.ws.send(Buffer.alloc(1600, 7));
+    const ev = await waitFor(c.events, (e) => e.type === 'asr/final' && !seen.includes(e.text));
+    seen.push(ev.text);
+  }
+  const finals = c.events.filter((e) => e.type === 'asr/final');
+  // 三条都到了，而且**每一条都带着段号**（前两条 0、最后一条 1）
+  assert.deepEqual(finals.map((e) => e.text), ['今天', '今天天气', '挺好的。']);
+  assert.deepEqual(finals.map((e) => e.index), [0, 0, 1]);
+  // 收尾那条带上**最后听到的字**（不是空字）
+  c.ws.send(JSON.stringify({ type: 'asr/stop' }));
+  const end = await waitFor(c.events, (e) => e.type === 'asr/end');
+  assert.equal(end.text, '今天天气怎么样');
+  await stub.close();
+  await s.close();
+});
 
 test('★ 上游说"鉴权不过" ⇒ 原话转达，而回话里**没有密钥**', async () => {
   const stub = await stubUpstream({ code: 4001 });

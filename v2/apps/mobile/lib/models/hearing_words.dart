@@ -41,6 +41,11 @@ const String hearFailed = '开不了麦克风，再按一次试试';
 /// ⚠️ 它必须和 [hearFailed] **分开说** —— 混成一句就是页面在说假话。
 const String hearNoEntry = '这条路暂时连不上，等会儿再按一次';
 
+/// **这条路没额度了**（腾讯回 `4004 资源包耗尽`）。
+/// ⚠️ 它和 [hearEngineFailed] **分开说**：没额度是"去开通/买资源包"，
+///    识别出错是"再试一次" —— 混成一句，用户就不知道该干什么。
+const String hearNoQuota = '语音这条路还没开通好（没额度了）';
+
 /// 识别那一头出错了。
 const String hearEngineFailed = '识别那一头出错了，再按一次试试';
 

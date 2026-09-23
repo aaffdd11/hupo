@@ -108,14 +108,14 @@ void main() {
     var tapped = 0;
     final n = await pump(
       tester,
-      start: const Hearing(phase: HearingPhase.listening, live: '今天天气'),
+      start: const Hearing(phase: HearingPhase.listening, segments: {0: '今天天气'}),
       onMicToggle: () => tapped += 1,
     );
     await toVoice(tester);
     expect(find.text(hearListening), findsOneWidget);
     expect(find.text('今天天气'), findsOneWidget); // 实时那几个字必须在屏幕上
     // 来下一句 ⇒ **屏幕上跟着变**（"实时转化语音成文字"）
-    n.value = const Hearing(phase: HearingPhase.listening, live: '今天天气怎么样');
+    n.value = const Hearing(phase: HearingPhase.listening, segments: {0: '今天天气怎么样'});
     await tester.pumpAndSettle();
     expect(find.text('今天天气怎么样'), findsOneWidget);
     await tester.tap(find.text(hearListening));
@@ -151,7 +151,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text(hearListening), findsOneWidget);
     // ② 一句一句来字（实时那一段）
-    n.value = n.value.partial('今天天气');
+    n.value = n.value.partial('今天天气', index: 0);
     await tester.pumpAndSettle();
     expect(find.text('今天天气'), findsOneWidget);
     // ③ 收尾（对面说整段完了）
@@ -176,7 +176,7 @@ void main() {
   testWidgets('放大到 2.0 倍也不溢出（D3.5 那一族的形状）', (tester) async {
     await pump(
       tester,
-      start: const Hearing(phase: HearingPhase.listening, live: '今天天气怎么样'),
+      start: const Hearing(phase: HearingPhase.listening, segments: {0: '今天天气怎么样'}),
       scale: 2.0,
     );
     await toVoice(tester);

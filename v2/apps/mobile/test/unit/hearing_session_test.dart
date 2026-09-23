@@ -59,31 +59,57 @@ void main() {
     expect(h.why, '');
   });
 
-  test('★ 半句覆盖、定稿追加（输入框里永远只有一份字）', () {
+  test('★★ 真实帧序列：同一段连着来 ⇒ **只留最后那条**（腾讯 16k_zh 抓的原样）', () {
+    // 2026-09-23 直连腾讯抓到的真帧（index 全程是 0，字是累积的）：
+    //   slice=0 "" → slice=1 "嗯" → slice=1 "今天" → slice=1 "今天天气"
+    //   → slice=1 "今天天气怎么" → slice=2 "今天天气怎么样？"
+    // 🔴 老规矩（一条条接起来）在这里会拼出"嗯今天今天天气今天天气怎么今天天气怎么样？" ——
+    //    那正是公网真页面上抓到的那串重复（取证当场发现的）。
     var h = const Hearing().tapped();
-    h = h.partial('今天');
-    expect(h.text, '今天');
-    h = h.partial('今天天气');
-    expect(h.text, '今天天气');
-    h = h.finalText('今天天气');
-    expect(h.text, '今天天气');
-    h = h.partial('怎么样');
-    expect(h.text, '今天天气怎么样');
-    h = h.finalText('怎么样');
-    expect(h.text, '今天天气怎么样');
+    for (final e in <Map<String, dynamic>>[
+      {'type': 'asr/partial', 'text': '', 'index': 0},
+      {'type': 'asr/final', 'text': '嗯', 'index': 0},
+      {'type': 'asr/final', 'text': '今天', 'index': 0},
+      {'type': 'asr/final', 'text': '今天天气', 'index': 0},
+      {'type': 'asr/final', 'text': '今天天气怎么', 'index': 0},
+      {'type': 'asr/final', 'text': '今天天气怎么样？', 'index': 0},
+    ]) {
+      h = h.event(e);
+    }
+    expect(h.text, '今天天气怎么样？');
+    // 收尾（`asr/end` 不带字）也不许动它
+    expect(h.event({'type': 'asr/end', 'index': 0}).text, '今天天气怎么样？');
   });
 
-  test('★ 同一句被报两遍（slice 1 与 2）⇒ **不许写两遍**', () {
-    var h = const Hearing().tapped().finalText('今天天气');
-    h = h.finalText('今天天气');
+  test('★ 段号变了 ⇒ 接在后面（多说几句的情形）', () {
+    final h = const Hearing()
+        .tapped()
+        .event({'type': 'asr/final', 'text': '今天天气怎么样？', 'index': 0})
+        .event({'type': 'asr/final', 'text': '挺好的。', 'index': 1});
+    expect(h.text, '今天天气怎么样？挺好的。');
+  });
+
+  test('段号乱序到 ⇒ 按段号从小到大接（不按到达顺序）', () {
+    final h = const Hearing()
+        .tapped()
+        .event({'type': 'asr/final', 'text': '第二句。', 'index': 1})
+        .event({'type': 'asr/final', 'text': '第一句。', 'index': 0});
+    expect(h.text, '第一句。第二句。');
+  });
+
+  test('没有段号（老事件）⇒ 当成同一段：**替换**，不重复', () {
+    final h = const Hearing()
+        .tapped()
+        .partial('今天')
+        .finalText('今天天气');
     expect(h.text, '今天天气');
   });
 
   test('`asr/end` 带着最后一句 ⇒ 停下，字留着', () {
     final h = const Hearing()
         .tapped()
-        .event({'type': 'asr/partial', 'text': '今天天气'})
-        .event({'type': 'asr/end', 'text': '今天天气怎么样'});
+        .event({'type': 'asr/partial', 'text': '今天天气', 'index': 0})
+        .event({'type': 'asr/end', 'text': '今天天气怎么样', 'index': 0});
     expect(h.listening, isFalse);
     expect(h.text, '今天天气怎么样');
   });
@@ -111,27 +137,41 @@ void main() {
     );
   });
 
+  test('★ 「没额度」与「识别出错」必须分开说（腾讯 4004 那条）', () {
+    final h = const Hearing().tapped().event({
+      'type': 'asr/error',
+      'reason': 'engine',
+      'code': 4004,
+      'message': '资源包耗尽，请开通后付费或者购买资源包',
+    });
+    expect(h.why, hearNoQuota);
+    expect(h.why, isNot(hearEngineFailed));
+    // 别的错误码还是"识别出错"
+    final other = const Hearing().tapped().event({'type': 'asr/error', 'reason': 'engine', 'code': 4001});
+    expect(other.why, hearEngineFailed);
+  });
+
   test('★ 到点收手 ⇒ 停下 + 说清为什么（服务端说的，不是我们猜的）', () {
-    final h = const Hearing().tapped().partial('说了很久').capped();
+    final h = const Hearing().tapped().partial('说了很久', index: 0).capped();
     expect(h.listening, isFalse);
     expect(h.why, hearCapped);
     expect(h.text, '说了很久');
   });
 
   test('认不出来的事件 ⇒ **什么都不做**（不猜）', () {
-    final h = const Hearing().tapped().partial('今天');
+    final h = const Hearing().tapped().partial('今天', index: 0);
     expect(h.event({'type': 'asr/whatever', 'text': '别乱写'}).text, '今天');
     expect(h.event({'type': 42}).text, '今天');
   });
 
   test('不在听的时候来半句 ⇒ 不写进框里（别在停了之后冒字）', () {
-    final h = const Hearing().event({'type': 'asr/partial', 'text': '今天'});
+    final h = const Hearing().event({'type': 'asr/partial', 'text': '今天', 'index': 0});
     expect(h.text, '');
   });
 
   test('`hasText` 认得出"有没有字可以发"', () {
     expect(const Hearing().hasText, isFalse);
-    expect(const Hearing().tapped().partial('好').hasText, isTrue);
-    expect(const Hearing().tapped().partial('   ').hasText, isFalse);
+    expect(const Hearing().tapped().partial('好', index: 0).hasText, isTrue);
+    expect(const Hearing().tapped().partial('   ', index: 0).hasText, isFalse);
   });
 }

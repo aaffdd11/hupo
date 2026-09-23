@@ -39,18 +39,24 @@ enum HearingPhase {
 class Hearing {
   const Hearing({
     this.phase = HearingPhase.idle,
-    this.said = '',
-    this.live = '',
+    this.segments = const <int, String>{},
     this.why = '',
   });
 
   final HearingPhase phase;
 
-  /// **已经定稿**的字（好几句接起来）。
-  final String said;
-
-  /// 还在说的**半句**（下一句定稿时会并进 [said]）。
-  final String live;
+  /// **按"段号"存下来的字** —— 这是 2026-09-23 抓腾讯**真帧**之后定下来的形状。
+  ///
+  /// 🔴 为什么不是"一个半句 + 一串定稿"：腾讯**同一段**会连着发好几条，
+  ///    每一条的 `voice_text_str` 都是**这一段到目前为止**的字（累积）。
+  ///    实测（`16k_zh`，一段 3 秒的话）：
+  ///    ```
+  ///    slice=0 index=0 text=""      → slice=1 index=0 text="嗯"
+  ///    slice=1 index=0 text="今天"   → slice=1 index=0 text="今天天气"
+  ///    slice=1 index=0 text="今天天气怎么" → slice=2 index=0 text="今天天气怎么样？"
+  ///    ```
+  ///    ⇒ 这几条**必须按 `index` 替换**；接起来就是"嗯今天今天天气今天天气怎么…"那种重复。
+  final Map<int, String> segments;
 
   /// 出错/没配好时那一句人话（空 = 没什么要说的）。**直接显示，不再翻译。**
   final String why;
@@ -63,27 +69,35 @@ class Hearing {
   bool get busy =>
       phase == HearingPhase.listening || phase == HearingPhase.finishing;
 
-  /// 输入框里该显示的字。
-  String get text => '$said$live';
+  /// 输入框里该显示的字（按段号从小到大接起来）。
+  String get text {
+    if (segments.isEmpty) return '';
+    final keys = segments.keys.toList()..sort();
+    return keys.map((k) => segments[k] ?? '').join();
+  }
 
   /// 有没有字可以发。
   bool get hasText => text.trim().isNotEmpty;
 
   Hearing _copy({
     HearingPhase? phase,
-    String? said,
-    String? live,
+    Map<int, String>? segments,
     String? why,
   }) => Hearing(
     phase: phase ?? this.phase,
-    said: said ?? this.said,
-    live: live ?? this.live,
+    segments: segments ?? this.segments,
     why: why ?? this.why,
   );
 
-  /// **把那半句并进定稿**（停下的时候必须做，否则最后半句会凭空消失）。
-  Hearing _settle() =>
-      live.isEmpty ? _copy(live: '') : _copy(said: '$said$live', live: '');
+  /// **写一段**（同一段号 ⇒ **替换**，新段号 ⇒ 接在后面）。
+  ///
+  /// 🔴 **空字不许覆盖**：腾讯收尾那条 `final:1` 里**没有** `result`，
+  ///    中转出来就是一条**空字**的 `asr/end` —— 照单全收会把刚听到的那一段**擦掉**
+  ///    （2026-09-23 判据当场抓到的就是这个）。
+  Hearing _put(int index, String text) {
+    if (text.isEmpty) return this;
+    return _copy(segments: {...segments, index: text});
+  }
 
   /// **按了一下**（那个唯一的按钮）。
   ///
@@ -102,26 +116,24 @@ class Hearing {
   /// 麦克风真的开起来了（服务端说 `asr/ready`）。
   Hearing ready() => busy ? _copy(why: '') : this;
 
-  /// 半句（还在说）。
-  Hearing partial(String text) => busy ? _copy(live: text) : this;
+  /// 一段的**中间结果**（还在说）。按段号**替换**，不是接上去。
+  Hearing partial(String text, {int index = 0}) =>
+      busy ? _put(index, text) : this;
 
-  /// 一句话定稿了。
-  Hearing finalText(String text) {
-    if (!busy) return this;
-    final t = text.trim();
-    if (t.isEmpty) return _copy(live: '');
-    // ⚠️ **别把同一句记两遍**：对面在"一句话结束"和"整段结束"时
-    //    可能把同一句原样再报一次（`slice_type` 1 与 2）。
-    if (said.endsWith(t)) return _copy(live: '');
-    return _copy(said: '$said$t', live: '');
-  }
+  /// **一段的结果**（`slice_type` 1 或 2）。
+  ///
+  /// ⚠️ 它和 [partial] 做的是**同一件事**（按段号替换）—— 这是照着真帧定的：
+  ///    腾讯**同一段**会连着发好几条 `slice_type=1`，字是累积的；
+  ///    把它们当成"一句一句的新话"接起来，屏幕上就会出现一串重复。
+  ///    ⇒ 段号变了才接新的（多句话的情形），段号没变就是**同一段又准了一点**。
+  Hearing finalText(String text, {int index = 0}) =>
+      busy ? _put(index, text) : this;
 
   /// 整段收尾（服务端说 `asr/end`）⇒ 停下，**字留着**。
-  Hearing done() => _settle()._copy(phase: HearingPhase.idle);
+  Hearing done() => _copy(phase: HearingPhase.idle);
 
   /// 到点了（服务端说 `asr/capped`）：字留着，并说一句为什么。
-  Hearing capped() =>
-      _settle()._copy(phase: HearingPhase.idle, why: hearCapped);
+  Hearing capped() => _copy(phase: HearingPhase.idle, why: hearCapped);
 
   /// 这台部署没配钥匙。
   Hearing unavailable() => const Hearing(
@@ -134,12 +146,18 @@ class Hearing {
       const Hearing(phase: HearingPhase.denied, why: hearDenied);
 
   /// 开麦/识别出错。[reason] 是**机器原因**（`denied` / `failed` / `engine` / …）。
-  Hearing broke(String reason) {
+  /// [code] 是上游那个错误码（腾讯的 `4004` = 资源包耗尽 ⇒ 说成"没额度"）。
+  Hearing broke(String reason, {int? code}) {
     if (reason == 'denied') return noPermission();
     if (reason == 'unsupported') return const Hearing(phase: HearingPhase.denied, why: hearFailed);
     if (reason == 'not-configured') return unavailable();
     if (reason == 'no-entry') {
       return const Hearing(phase: HearingPhase.failed, why: hearNoEntry);
+    }
+    // 🔴 腾讯的 `4004`（资源包耗尽）**不是**"识别出错"，是"这条路没额度" ——
+    //    两句混成一句，用户就不知道该干什么（去开通 vs 再试一次）。
+    if (reason == 'engine' && code == 4004) {
+      return const Hearing(phase: HearingPhase.failed, why: hearNoQuota);
     }
     final why = reason == 'engine' ? hearEngineFailed : hearFailed;
     return Hearing(phase: HearingPhase.failed, why: why);
@@ -152,21 +170,24 @@ class Hearing {
   Hearing event(Map<String, dynamic> e) {
     final type = e['type'];
     final text = (e['text'] as String?) ?? '';
+    final rawIndex = e['index'];
+    final index = rawIndex is int ? rawIndex : 0;
     switch (type) {
       case 'asr/ready':
         return ready();
       case 'asr/partial':
-        return partial(text);
+        return partial(text, index: index);
       case 'asr/final':
-        return finalText(text);
+        return finalText(text, index: index);
       case 'asr/end':
-        return finalText(text).done();
+        return finalText(text, index: index).done();
       case 'asr/capped':
         return capped();
       case 'asr/unavailable':
         return unavailable();
       case 'asr/error':
-        return broke((e['reason'] as String?) ?? 'failed');
+        final c = e['code'];
+        return broke((e['reason'] as String?) ?? 'failed', code: c is int ? c : null);
       default:
         return this;
     }

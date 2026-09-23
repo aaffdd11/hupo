@@ -94,6 +94,8 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
     let ended = false;
     let cap = null;
     let lastText = '';
+    /** 最后见到的段号（收尾那条也带上，客户端好把最后一段收住）。 */
+    let lastIndex = 0;
     /** 上游还没握上手时先攒着（音频不能丢：丢一段就是丢一句话的开头）。 */
     const queue = [];
 
@@ -130,7 +132,7 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
     const finish = (text = lastText) => {
       if (!ended) {
         ended = true;
-        send({ type: 'asr/end', text });
+        send({ type: 'asr/end', text, index: typeof lastIndex === 'number' ? lastIndex : 0 });
       }
       stopUpstream();
       closeClient();
@@ -198,9 +200,18 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
         const text = j.result?.voice_text_str ?? '';
         if (text) lastText = text;
         const slice = j.result?.slice_type;
-        if (slice === 0) send({ type: 'asr/partial', text });
-        else if (slice === 1 || slice === 2) send({ type: 'asr/final', text });
-        if (j.final === 1) finish(text);
+        // 🔴 **`index` 必须传下去**（2026-09-23 抓真帧抓出来的）：
+        //    腾讯**同一段**会连着发好几条，`voice_text_str` 是**那一段逐次累积**的字
+        //    （实测 `嗯` → `今天` → `今天天气` → … → `今天天气怎么样？`，而 `index` 全是 0）。
+        //    ⇒ 客户端要靠它做"**按段替换**"，否则这几条会被接成一串重复的话。
+        const index = typeof j.result?.index === 'number' ? j.result.index : 0;
+        if (typeof j.result?.index === 'number') lastIndex = j.result.index;
+        if (slice === 0) send({ type: 'asr/partial', text, index });
+        else if (slice === 1 || slice === 2) send({ type: 'asr/final', text, index });
+        // ⚠️ **收尾那条要带最后听到的字**：腾讯的 `final:1` 里没有 `result`，
+        //    照抄就是一条空字 —— 客户端那半边虽然也不许被空字擦掉，
+        //    但这条本来就该把"整段最后是什么"说清楚。
+        if (j.final === 1) finish(lastText);
       });
       up.on('error', (err) => {
         // ⚠️ **不许把签名 URL 写进日志/回话**（`safeAsrMessage` 负责）
