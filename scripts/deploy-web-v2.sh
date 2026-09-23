@@ -86,11 +86,31 @@ STAMP="$( { cat "$BUILD_WEB/main.dart.js" "$BOOT_SRC"; } | sha256sum | cut -c1-1
 echo "▶ 入口指纹 $STAMP"
 
 echo "▶ 给入口文件改名并改写引用"
+# ★★ 2026-09-24：**别把旧入口删掉** —— 这是主人手机上"整页空白、一个图标都没有"的根因。
+#
+#   老访客的浏览器里可能还存着**上一版的 `index.html`**（它引用 `main.<旧指纹>.dart.js`）。
+#   而我们原来这一行是 `rm -rf "$WEB"` ⇒ 那个文件**不见了**；更坏的是服务端对未知路径
+#   **回 index.html**（SPA 兜底）⇒ 浏览器把**一段 HTML 当 JS 解析** ⇒ 直接白屏。
+#   ⇒ 保留最近几次的入口文件（它们很小，而且同指纹必然同内容）。
+KEEP_ENTRIES=3
+PREV_ENTRIES="$(mktemp -d)"
+if [ -d "$WEB" ]; then
+  cp -f "$WEB"/main.*.dart.js "$WEB"/flutter_bootstrap.*.js "$PREV_ENTRIES/" 2>/dev/null || true
+fi
+
 rm -rf "$WEB" && mkdir -p "$WEB"
 cp -r "$BUILD_WEB/." "$WEB/"
+# 把上一版那几个入口放回来（只留最近 KEEP_ENTRIES 个，旧的照删）
+cp -f "$PREV_ENTRIES"/main.*.dart.js "$PREV_ENTRIES"/flutter_bootstrap.*.js "$WEB/" 2>/dev/null || true
+rm -rf "$PREV_ENTRIES"
 
 mv "$WEB/main.dart.js" "$WEB/main.$STAMP.dart.js"
 mv "$WEB/flutter_bootstrap.js" "$WEB/flutter_bootstrap.$STAMP.js"
+# 入口文件只留最近 KEEP_ENTRIES 份（再多就没意义了：更老的访客只会拿到更老的资源）
+ls -1t "$WEB"/main.*.dart.js 2>/dev/null | tail -n "+$((KEEP_ENTRIES + 1))" | xargs -r rm -f
+ls -1t "$WEB"/flutter_bootstrap.*.js 2>/dev/null | tail -n "+$((KEEP_ENTRIES + 1))" | xargs -r rm -f
+echo "▶ 手上留着的入口：$(ls -1 "$WEB"/main.*.dart.js 2>/dev/null | wc -l) 份（含这一版；老访客不会白屏）"
+
 # flutter_bootstrap.js 里那几处 `main.dart.js` 是字面量，直接换
 sed -i "s|main\.dart\.js|main.$STAMP.dart.js|g" "$WEB/flutter_bootstrap.$STAMP.js"
 # index.html 里引的是 bootstrap
