@@ -96,6 +96,49 @@
 
 ---
 
+## 四·补、🔴 **`hy-asr-3.0-preview` 这条路查实了**（2026-09-23）
+
+> 主人：*"hy-asr-3.0-preview 这个我开通了"* + 给了一对 `ak-…` / `sk-…`。
+
+**它是什么**（官方文档核过）：**[腾讯云 → 语音识别 → 混元 ASR（内测版）](https://cloud.tencent.com/document/product/1093/135476)**，`engine_model_type` 选 **`Hy-ASR-3.0-preview`**（中英 + 20 种方言的大模型引擎）。
+
+| 项 | 事实 |
+|---|---|
+| 走哪条口 | **只有实时语音识别（WebSocket）**：`wss://asr.cloud.tencent.com/asr/v2/<appid>?{参数}` |
+| 鉴权 | **AppID + SecretID + SecretKey** 三样（[控制台 API 密钥管理](https://console.cloud.tencent.com/cam/capi)），签名 = `Base64(HMAC-SHA1(SecretKey, "asr.cloud.tencent.com/asr/v2/<appid>?<参数按字典序>"))` 再 urlencode |
+| 协议 | 连上 ⇒ 服务端回一条 JSON（`code:0` = 通了）⇒ **持续发 binary**（16k 建议每 200ms 一片 = 6400 字节）⇒ 发 `{"type":"end"}` ⇒ 收到 `final:1` 收尾 |
+| 🔴 内测限制 | **1 分钟以内** · **只收 16k 单声道 PCM** · 不支持话者分离 / VAD / 词汇替换 |
+| 钱 | 走**大模型 2.0** 的计费方案（**按用量花钱**）；内测给的是 **20 路免费并发**（不是免费时长）|
+
+⚠️ **主人给的那一对 `ak-…`/`sk-…` 不是这条路要的凭据**（实测两处）：
+· 拿它签腾讯云 TC3（`tts/asr.tencentcloudapi.com`）⇒ **`AuthFailure.SecretIdNotFound`**（腾讯云不认识这个 SecretId；腾讯那套是 `AKID…`）；
+· 单独拿 `sk-…` 打混元 OpenAI 兼容口 ⇒ **`invalid_api_key`**；而 `/v1/audio/*` 是 **404**（那套口根本没有语音端点）。
+
+**所以我写了一条自测命令**：`scripts/check-asr-tencent.mjs`（**凭据只从环境变量读** —— 不经过助手、不进文件、不进日志；输出里也没有密钥，可以直接贴）：
+
+```bash
+TENCENT_APPID=… TENCENT_SECRET_ID=… TENCENT_SECRET_KEY=… \
+  node scripts/check-asr-tencent.mjs              # 送 200ms 静音走一遍：拿到 final=1 就说明这条链通了
+  node scripts/check-asr-tencent.mjs --pcm a.pcm  # 想用真音频（16k 单声道裸 PCM）
+  node scripts/check-asr-tencent.mjs --selftest   # 不联网，只看签名那一步的形状（8 条）
+```
+
+⚠️ **判据是腾讯那边的回话**（握手 `code:0` + `final:1`），不是我们自己说通就通。
+⚠️ 自测当场抓到我自己一处不纯：`voice_id` 原本在签名函数里随机 ⇒ 同输入两次不同签名。
+   已改成**由调用方给**（每次连接一个新 UUID 是文档要求，但函数本身要纯）。
+
+### 4.5 接进产品是什么形状（等上面那条通了再动）
+
+| 步 | 谁做 | 要点 |
+|---|---|---|
+| 按住说话（`D5.3`） | 壳（网页） | 只在按住时开麦；用 WebAudio 采 **16k 单声道 PCM**（内测只收这个）|
+| 音频送上行 | 壳 → **我们自己的服务端** | 🔴 **SecretKey 绝不许进浏览器** —— 签名只能在服务端做 |
+| 签名 + 连腾讯 | 服务端 | 三样凭据放宿主上一个 **0600** 的文件（不进仓库、不进日志），服务端现签现连 |
+| 识别结果 | 服务端 → 壳 | 增量把**字**推回页面，**进打字框**（`D5.4`：**绝不自动发送**）|
+| 收口/失败 | 两边 | 松手 ⇒ `{"type":"end"}`；认不出**说人话**（`D5.15`：不许拿猜的字顶上）|
+
+⚠️ **先要过的两条**：① `D5.2` 那条决策（"用手机自带的识别器"）—— 走这条路 = **声音出境给腾讯** ⇒ **要主人明确点头**；② 主人得先拿 `check-asr-tencent.mjs` 验通一次（**凭据他自己给**）。
+
 ## 五、我要主人回的那一句话
 
 > **"输入法那个麦克风，够用"** → 我把 #52 从账上划掉（明说砍了本体，形状留着）；
