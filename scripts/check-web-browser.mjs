@@ -27,7 +27,9 @@
 //   HUPO_TOKEN=<令牌> node scripts/check-web-browser.mjs
 //   HUPO_TOKEN=... node scripts/check-web-browser.mjs --shot /tmp/shot.png --wait 60000
 //   看未登录那两屏：加 `--no-token`；点一下再拍：`--click-at X,Y`（`--click-settle` 控制点完等多久）；
-//   看折叠线以下：`--scroll-px <像素>`（页内合成 touch 指针拖一段 —— 鼠标拖在网页上不滚动）
+//   看折叠线以下：`--scroll-px <像素>`（页内合成 touch 指针拖一段 —— 鼠标拖在网页上不滚动）；
+//   截图前等多久：`--shot-after <毫秒>`（默认 6000 —— **中文字体是异步下的，拍早了就是豆腐块**）；
+//   屏掉 gstatic 验自托管：`--block-gstatic`（**在开页面之前**就屏，见 ②.5）
 //   （`--url` 默认打线上；`--chrome` 指定浏览器可执行文件）
 //
 // ⚠️ **它不在硬闸里**：要一个浏览器 + 一个令牌。本机没有浏览器时它就该**跳过**
@@ -56,6 +58,21 @@ const URL_ = valueOf('--url', 'https://w.stalkerai.cn/');
 const BLOCK_GSTATIC = hasFlag('--block-gstatic');
 const WAIT_MS = Number.parseInt(valueOf('--wait', '45000'), 10);
 const SHOT = valueOf('--shot', null);
+/**
+ * **截图前再等多久**（`--shot-after <毫秒>`，默认 6000）。
+ *
+ * ── 为什么要有它（⚠️ 同一类坑第二次咬人）─────────────────────
+ * 🔴 2026-09-23：拿 `--block-gstatic` 验"中文字体自托管"时，**同一条命令一会儿中文好好的、
+ *    一会儿全是豆腐块** —— 排查了好几轮，根因是**截图比字体先到**：
+ *    * 中文用的是**异步下载的分片字体**（引擎遇到缺字才去 `/fonts/…` 要，每片约 25KB）；
+ *    * 这个脚本等到"**收到第一帧**"就往下走 ⇒ 那时字体可能还在路上 ⇒ 拍到的是 `.notdef` 方块；
+ *    * 而**服务端字体缓存是冷的**时（新部署 / 新分片），这段路更久。
+ *    ⇒ 它**不是**"镜子坏了"，是**我拍早了**。
+ *    ⚠️ 这跟上面 `--click-settle` 那条是**同一类**：`CLICK_SETTLE_MS` 太短也会拍到
+ *    "图标在、字全不见"（当时也差点当成真 bug）。**判断"画出来没有"必须给足时间。**
+ *    ⇒ 现在截图前**固定等这么久**，`--shot-after 0` 可关掉（要拍"字还没到"那一帧时用）。
+ */
+const SHOT_AFTER_MS = Number.parseInt(valueOf('--shot-after', '6000'), 10);
 /**
  * **往下滚一段再截图**：`--scroll-px <像素>`（正数 = 看更下面的内容）。
  *
@@ -134,7 +151,7 @@ function findChrome() {
 if (has('--help') || has('-h')) {
   console.log(
     [
-      '用法：HUPO_TOKEN=<令牌> node scripts/check-web-browser.mjs [--url <地址>] [--shot <png>] [--wait <毫秒>]',
+      '用法：HUPO_TOKEN=<令牌> node scripts/check-web-browser.mjs [--url <地址>] [--shot <png>] [--wait <毫秒>] [--shot-after <毫秒>]',
       '',
       '它做什么：开一个真浏览器 → 灌进令牌 → 打开页面 →',
       '          **看那条流到底连上没有、有没有收到帧** → 可选截图。',
@@ -234,6 +251,10 @@ async function main() {
   let msgId = 0;
   const pending = new Map();
   const wsEvents = { created: 0, received: 0, types: new Set(), closed: 0 };
+  // ★ **中文字体回退那条路的读数**：引擎会去 `/fonts/…` 要**分片字体**（每片约 25KB）。
+  //   ⚠️ 它**不报错** —— 取不到就是"字变方块/空白"，所以判据只能看**请求本身**。
+  const fontReqs = { asked: 0, ok: 0, failed: 0, last: '' };
+  const fontPending = new Map(); // requestId → url（`loadingFailed` 里不带 url，只能自己记）
   const pageErrors = [];
   ws.on('message', (raw) => {
     let m;
@@ -265,6 +286,32 @@ async function main() {
         if (p.includes(`"${t}"`)) wsEvents.types.add(t);
       }
     }
+    // ★ 字体那条口：问了没问、成没成（**它决定中文是不是方块**）
+    if (m.method === 'Network.requestWillBeSent') {
+      const u = m.params?.request?.url ?? '';
+      if (u.includes('/fonts/')) {
+        fontReqs.asked += 1;
+        fontPending.set(String(m.params.requestId), u);
+      }
+    }
+    if (m.method === 'Network.responseReceived') {
+      const u = m.params?.response?.url ?? '';
+      if (u.includes('/fonts/')) {
+        const st = m.params.response.status ?? 0;
+        if (st >= 200 && st < 300) fontReqs.ok += 1;
+        else {
+          fontReqs.failed += 1;
+          fontReqs.last = `${st} ${u}`;
+        }
+      }
+    }
+    if (m.method === 'Network.loadingFailed') {
+      const u = fontPending.get(String(m.params?.requestId));
+      if (u) {
+        fontReqs.failed += 1;
+        fontReqs.last = `${m.params?.errorText ?? '失败'} ${u}`;
+      }
+    }
   });
 
   const send = (method, params = {}) =>
@@ -277,6 +324,21 @@ async function main() {
   await send('Network.enable');
   await send('Page.enable');
   await send('Runtime.enable');
+
+  // ②.5 🔴 **屏掉 gstatic —— 必须在第一次导航之前**
+  //
+  //   ⚠️ 原来这段在**第一次导航之后**（见下面 ③.5 的旧址），而那是**一个假判据**：
+  //      第一次导航是**不屏蔽**的真实导航，`fonts.gstatic.com` 与 `www.gstatic.com`
+  //      都被真的拉了一遍、进了同一个 profile 的 HTTP 缓存；第二次导航虽然屏了，
+  //      却**从缓存里拿到了**——于是"页面照样开"**什么都证明不了**。
+  //      **实测代价**：同一条命令一会儿"中文好好的"、一会儿"全是豆腐块"，
+  //      来回排查了好几轮，根因就是这个自热缓存（2026-09-23）。
+  //   ⇒ 判据要成立，屏蔽就得**在页面第一次发出请求之前**生效：这样跑出来的
+  //      "还能开 + 字还在"才是"CanvasKit 与中文回退字体都不是从 gstatic 取的"。
+  if (BLOCK_GSTATIC) {
+    await send('Network.setBlockedURLs', { urls: ['*gstatic.com*', '*gstatic.cn*'] });
+    console.log('  🚫 已屏掉 gstatic（域名级，**开页面之前**就屏）—— 页面还能开、字还在，才算自托管'); 
+  }
 
   // ③ 令牌**在页面自己的脚本跑之前**就位（**不碰口令**：令牌是可撤销的，口令不是）
   //
@@ -337,17 +399,15 @@ async function main() {
   console.log(`  页面现场：${dump.result?.result?.value ?? '(读不到)'}`);
   }
 
-  // ③.5 🔴 **屏掉 gstatic，看页面还能不能开**（`--block-gstatic`）
+  // ③.5 ⚠️ **屏蔽搬走了**：原来在这里（第一次导航**之后**）才 `setBlockedURLs`，
+  //      那会让第一次导航把 gstatic 的东西灌进缓存 ⇒ 判据自欺。**现在在 ②.5**。
   //
-  //   ⚠️ 为什么值得单钉一条：Flutter web 默认把 **CanvasKit** 指向
-  //      `https://www.gstatic.com/flutter-canvaskit/<hash>/` —— **国内经常取不到**，
-  //      而现象是"页面加载很慢/白屏"，且**本地一切正常**（这台机器取 gstatic 只要 0.4s）。
-  //   ⇒ 判据只能是：**把 gstatic 整个屏掉，页面照样得开**。
-  //      开着 ⇒ CanvasKit 是从我们自己的域名取的（自托管生效）。
+  //   这条判据为什么值得单钉：Flutter web 默认把 **CanvasKit** 指向
+  //   `https://www.gstatic.com/flutter-canvaskit/<hash>/`、中文回退字体指向
+  //   `https://fonts.gstatic.com/s/` —— **国内经常取不到**，
+  //   而现象是"页面加载很慢/白屏/字变豆腐"，且**本地一切正常**（这台机器取 gstatic 只要 0.4s）。
+  //   ⇒ 判据只能是：**gstatic 整个取不到，页面照样得开、字照样得在**。
   if (BLOCK_GSTATIC) {
-    await send('Network.enable', {});
-    await send('Network.setBlockedURLs', { urls: ['*gstatic.com*', '*gstatic.cn*'] });
-    console.log('  🚫 已屏掉 gstatic（域名级）—— 页面要是还能开，就说明 CanvasKit 是自托管的');
     await send('Page.navigate', { url: URL_ });
   }
 
@@ -420,6 +480,12 @@ async function main() {
 
   // ⑤ 截图（给"人/助手看一眼"用）
   if (SHOT) {
+    // ⚠️ **先等字体落定再拍**（见 `SHOT_AFTER_MS` 那段）：中文是异步下载的分片字体，
+    //    拍早了就是一片 `.notdef` 方块，而**看起来像"镜子坏了"**。
+    if (SHOT_AFTER_MS > 0) {
+      console.log(`  ⏳ 截图前等 ${SHOT_AFTER_MS}ms（中文字体是异步下的；不等就可能拍到"字还没到"那一帧）`);
+      await sleep(SHOT_AFTER_MS);
+    }
     const shot = await send('Page.captureScreenshot', { format: 'png' });
     const b64 = shot.result?.data;
     if (b64) {
@@ -427,6 +493,15 @@ async function main() {
       console.log(`📷 截图：${SHOT}`);
     } else {
       console.error('⚠️ 截图没拿到');
+    }
+    // 🔤 字体那条口的读数：**屏幕上有没有字，只能看截图**（canvas 里查不到文本），
+    //     但"引擎到底有没有把字体取回来"这里是看得见的 —— 两件对着看才判得准。
+    console.log(
+      `  🔤 中文字体那条口：问了 ${fontReqs.asked} 次 · 成了 ${fontReqs.ok} · 失败 ${fontReqs.failed}` +
+        (fontReqs.last ? `（最后一次：${fontReqs.last}）` : ''),
+    );
+    if (fontReqs.asked > 0 && fontReqs.ok === 0) {
+      console.log('     🔴 **一次都没取回来** ⇒ 屏幕上的中文多半是方块/空白（看截图确认）');
     }
   }
 

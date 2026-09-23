@@ -54,12 +54,35 @@ BUILD_WEB="$APP/build/web"
 [ -f "$BUILD_WEB/main.dart.js" ] || { echo "✗ $BUILD_WEB 里没有 main.dart.js"; exit 2; }
 
 # 指纹按**入口文件的字节**算：内容不变 ⇒ 名字不变 ⇒ 缓存照样命中
-# ⚠️ **补丁也要进指纹**：下面那几处 patch 改的是**部署出去的那一份**，
-#    而入口名字是这里算的 ⇒ 不把补丁算进去的话，改了补丁**文件名不变**，
-#    浏览器（`immutable`）会一直吃缓存里的旧补丁（这次就差点被它骗过一次 A/B）。
 PUBLIC_BASE="${HUPO_PUBLIC_BASE:-https://w.stalkerai.cn}"
-FONT_PATCH_V="font-patch-v1"
-STAMP="$( { cat "$BUILD_WEB/main.dart.js" "$BUILD_WEB/flutter_bootstrap.js"; printf '%s' "$FONT_PATCH_V|$PUBLIC_BASE"; } | sha256sum | cut -c1-12)"
+
+# ── 🔴 字体回退**自托管**：补丁先打进构建产物，**再**算指纹 ──────────
+# 为什么：CanvasKit 遇到**中文**会去 `fonts.gstatic.com` 取**分片字体**（每片约 25KB）。
+# 国内那台经常取不到 ⇒ **页面很慢，甚至一个字都不显示**
+# （实测：屏掉 gstatic 之后图标在、**中文字全空**；判据见 `check-web-browser.mjs --block-gstatic`）。
+# ⇒ 把引擎的 `fontFallbackBaseUrl` 指到我们自己的 `/fonts/`
+#   （服务端那边是个**白名单镜像**：只许 fonts.gstatic.com 的字体路径，见 `server.js`）。
+#
+# ⚠️ **补丁必须打在算指纹之前**（2026-09-23 修）：第一版是"先算指纹、后打补丁"，
+#    拿一个 `FONT_PATCH_V` 字符串当替身 —— 那等于**改了补丁正文而名字不变**，
+#    浏览器（`immutable`）会一直吃缓存里的**旧补丁**。
+#    它已经骗过一次：A/B 两张截图 **sha 一模一样**，因为两次跑的都是旧补丁。
+#    ⇒ 现在按**打过补丁的字节**算，替身字符串取消。
+#
+# ⚠️ **第一版还打错过地方**：塞进 `buildConfig` 的 JSON 里，而生成的尾巴是
+#    `_flutter.loader.load();` —— **不带 config** ⇒ `buildConfig` 里的键
+#    **根本不会被转发给引擎**（引擎只认 `load({config})` 那一份）。
+BOOT_SRC="$BUILD_WEB/flutter_bootstrap.js"
+if grep -q '_flutter.loader.load();' "$BOOT_SRC"; then
+  # 🔴 **必须是绝对 URL**（第一版写的是相对地址 `/fonts/` —— 引擎**取到了字节却对不上号**，
+  #    中文全变成方块；判据是"屏掉 gstatic 看有没有字"，A/B 才把它抓出来）。
+  sed -i "s|_flutter.loader.load();|_flutter.loader.load({config:{fontFallbackBaseUrl:\"$PUBLIC_BASE/fonts/\"}});|" "$BOOT_SRC"
+fi
+grep -q "load({config:{fontFallbackBaseUrl:\"$PUBLIC_BASE/fonts/\"}})" "$BOOT_SRC" || {
+  echo "  ✗ 字体回退没送进引擎（产物形状变了？看 `_flutter.loader.load(...)` 那一句）⇒ 没有部署"; exit 1; }
+echo "  ✓ 字体回退自托管（fontFallbackBaseUrl=$PUBLIC_BASE/fonts/，**已计入指纹**）"
+
+STAMP="$( { cat "$BUILD_WEB/main.dart.js" "$BOOT_SRC"; } | sha256sum | cut -c1-12)"
 echo "▶ 入口指纹 $STAMP"
 
 echo "▶ 给入口文件改名并改写引用"
@@ -93,25 +116,13 @@ if ! grep -q '"useLocalCanvasKit":true' "$WEB/flutter_bootstrap.$STAMP.js"; then
 fi
 echo "  ✓ CanvasKit 自托管（useLocalCanvasKit:true）"
 
-# ── 🔴 字体回退**也自托管**（2026-09-23 加）────────────────────
-# 为什么：CanvasKit 遇到**中文**会去 `fonts.gstatic.com` 取**分片字体**（每片约 25KB）。
-# 国内那台经常取不到 ⇒ **页面很慢，甚至一个字都不显示**
-# （实测：屏掉 gstatic 之后图标在、**中文字全空** —— 那条判据在 `check-web-browser.mjs --block-gstatic`）。
-# ⇒ 把引擎的 `fontFallbackBaseUrl` 指到我们自己的 `/fonts/`
-#   （服务端那边是个**白名单镜像**：只许 fonts.gstatic.com 的字体路径，见 `server.js`）。
+# ── 字体回退那条口：**补丁在算指纹之前就打了**（见上面），这里只复核一遍 ──
+# 复核值得留着：从打补丁到部署出去，中间还有 `cp -r`、两次改名、三处 `sed`，
+# 任何一步把 bootstrap 覆盖了都会**静默**丢掉这个补丁。
 BOOT="$WEB/flutter_bootstrap.$STAMP.js"
-# ⚠️ **第一版打错了地方**（记下来）：我把它塞进 `buildConfig` 的 JSON 里，
-#    而生成的尾巴是 `_flutter.loader.load();` —— **不带 config** ⇒
-#    `buildConfig` 里那些键**根本不会被转发给引擎**（引擎只认 `load({config})` 那一份）。
-#    ⇒ 补丁必须打在那句**调用**上（这也是官方"自定义初始化"的那个口）。
-if grep -q '_flutter.loader.load();' "$BOOT"; then
-  # 🔴 **必须是绝对 URL**（第一版写的是相对地址 `/fonts/` —— 引擎**取到了字节却对不上号**，
-  #    中文全变成方块；判据是"屏掉 gstatic 看有没有字"，A/B 才把它抓出来）。
-  sed -i "s|_flutter.loader.load();|_flutter.loader.load({config:{fontFallbackBaseUrl:\"$PUBLIC_BASE/fonts/\"}});|" "$BOOT"
-fi
 grep -q "load({config:{fontFallbackBaseUrl:\"$PUBLIC_BASE/fonts/\"}})" "$BOOT" || {
-  echo "  ✗ 字体回退没送进引擎（产物形状变了？看 `_flutter.loader.load(...)` 那一句）⇒ 没有部署"; exit 1; }
-echo "  ✓ 字体回退自托管（fontFallbackBaseUrl=$PUBLIC_BASE/fonts/）"
+  echo "  ✗ 复制/改名之后补丁不见了 ⇒ 没有部署"; exit 1; }
+echo "  ✓ 字体回退自托管（复核过：改名后的产物里补丁还在）"
 
 # ── 🔴 预压缩（2026-09-23 加）──────────────────────────────────
 # 实测：这条路的上行只有 ~3.4Mbps，而 main.dart.js 2.7MB / canvaskit.wasm 6.9MB

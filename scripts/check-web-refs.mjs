@@ -191,10 +191,20 @@ if (ckCfg && !isExternal(ckCfg)) {
   }
 } else if (ckCfg) {
   console.log(`    · CanvasKit → ${ckCfg}（bootstrap 的 canvasKitBaseUrl）`);
+} else if (/"useLocalCanvasKit"\s*:\s*true/.test(bootSource)) {
+  // `--no-web-resources-cdn`：加载器**不去 gstatic**，直接从产物里的 `canvaskit/` 取。
+  // ⚠️ 第一版这里打印过"本地产物里的 canvaskit/ **不在取用链上**"—— **2026-09-23 实测那是反的**：
+  //    屏掉 gstatic **冷启动**（`check-web-browser.mjs --block-gstatic`）页面能开，靠的正是它。
+  //    ⇒ 这一支也要**逐个查文件在不在**（跟上面 `canvasKitBaseUrl` 那一支同等对待）。
+  console.log('    · CanvasKit → 本地产物 canvaskit/（bootstrap 里 `useLocalCanvasKit:true`）');
+  for (const f of ['canvaskit.js', 'canvaskit.wasm']) {
+    const rel = `canvaskit/${f}`;
+    check(rel, 'useLocalCanvasKit') ? okLine(rel, 'useLocalCanvasKit') : badLine(rel, 'useLocalCanvasKit');
+  }
 } else {
   const gstatic = bootSource.match(/https:\/\/www\.gstatic\.com\/flutter-canvaskit\/[0-9a-f]+/)?.[0];
   console.log(`    · CanvasKit → ${gstatic ?? 'https://www.gstatic.com/flutter-canvaskit/<engineRevision>'}（引擎默认）`);
-  console.log('      ⇒ 本地产物里的 canvaskit/ **不在页面的取用链上**（它只是 `--no-web-resources-cdn` 时的备份）');
+  console.log('      ⇒ ⚠️ **这是要 gstatic 的那一支**：国内经常取不到（页面会卡着等）—— 见 `61-WEB-PERF.md`');
 }
 
 // ── ⑤ 提示 ─────────────────────────────────────────────────
