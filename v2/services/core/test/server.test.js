@@ -39,7 +39,7 @@ after(async () => {
   openServers.clear();
 });
 
-async function boot({ withWeb = true, password = null } = {}) {
+async function boot({ withWeb = true, password = null, setModelKey = null } = {}) {
   const dataDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-srv-'));
   const store = new Store({ dataDir, fsync: false });
   const timeline = new Timeline({ id: 'main', store });
@@ -56,6 +56,8 @@ async function boot({ withWeb = true, password = null } = {}) {
 
   const { server, listen, close } = createServer({
     timeline, store, auth, say, webRoot, buildId: 'test-build',
+    // P1-9：把"填钥匙"那条路注进来（不注入 ⇒ 这条路由 404）
+    setModelKey,
   });
   const addr = await listen(0);
   const origin = `http://127.0.0.1:${addr.port}`;
@@ -456,4 +458,37 @@ test('★ P1-11：PUBLIC_ROUTES 与"不带令牌真够得着的那几条"必须�
   const guarded = await fetch(`${s.origin}/api/health`);
   assert.equal(guarded.status, 503, '负向对照：受保护那条必须仍然被挡');
   await s.close();
+});
+
+// ── P1-9（2026-09-24）：/api/model-key 的三条路 ────────────────────
+
+test('★ P1-9：/api/model-key（没开⇒404 · 坏值⇒400 · 正常⇒200 且回执不回显钥匙）', async () => {
+  // ① 这台部署没开这条路（`setModelKey` 为空）⇒ 如实 404
+  const s1 = await boot({ password: 'pw-not-a-secret' });
+  const tok1 = s1.auth.issue({ sub: 'owner' }).token;
+  const r1 = await post(s1.origin, '/api/model-key', { key: 'sk-abc' }, { authorization: `Bearer ${tok1}` });
+  assert.equal(r1.status, 404, '没开这条路就该 404（别假装收下了）');
+  await s1.close();
+
+  // ② 开了：空串 / 带非可打印字符 ⇒ 400；正常 ⇒ 200
+  let got = null;
+  const s2 = await boot({
+    password: 'pw-not-a-secret',
+    setModelKey: (sub, key) => {
+      got = { sub, key };
+      return { ok: true, hint: '已交出去' };
+    },
+  });
+  const tok2 = s2.auth.issue({ sub: 'owner' }).token;
+  const h = { authorization: `Bearer ${tok2}` };
+  assert.equal((await post(s2.origin, '/api/model-key', { key: '   ' }, h)).status, 400, '空值要 400');
+  assert.equal((await post(s2.origin, '/api/model-key', { key: 'sk-a\n坏' }, h)).status, 400, '非可打印字符要 400');
+
+  const ok = await post(s2.origin, '/api/model-key', { key: 'sk-abc123' }, h);
+  assert.equal(ok.status, 200);
+  const body = await ok.json();
+  // 🔴 钥匙**不许从回执里回来**（这正是"密钥不进日志/回执"那条纪律）
+  assert.equal(JSON.stringify(body).includes('sk-abc123'), false, '回执里回显了钥匙');
+  assert.deepEqual(got, { sub: 'owner', key: 'sk-abc123' }, '要交给 setModelKey，而且身份只来自令牌');
+  await s2.close();
 });
