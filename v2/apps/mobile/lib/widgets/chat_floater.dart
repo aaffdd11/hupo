@@ -377,7 +377,9 @@ class ChatFloaterState extends State<ChatFloater> {
                             ],
                             Text(
                               widget.title,
-                              style: t.textTheme.titleSmall?.copyWith(
+                              // ★ 2026-09-23：`titleSmall`(≈14) → `titleMedium`(≈16)
+                              //   —— 它是这一屏的名字，原来和旁边那排图标一样大。
+                              style: t.textTheme.titleMedium?.copyWith(
                                 color: d.ink,
                                 fontWeight: FontWeight.w600,
                               ),

@@ -584,8 +584,13 @@ class _ChatScreenState extends State<ChatScreen> {
   List<Widget> _actions(ChatController c) => <Widget>[
     // ⚠️ **回收站**（契约 §二 第 2 条：放顶栏）。删掉的东西先进这儿，
     //    30 天内能拿回来 —— 顶栏这一处就是"我删的东西去哪了"的答案。
-    IconButton(
-      tooltip: trashTooltip,
+    //
+    // ★ 2026-09-23（主人：*"先整理整个UI"*）：这三个原来**只有图标 + tooltip**，
+    //   而手机上没有 hover ⇒ 用户只能瞎点（那排图标在展开态最显眼）。
+    //   ⇒ 改成**图标 + 中文短标签**（D3.8 的同一条道理：不许只有无字图形）。
+    //   ⚠️ 它们在浮窗里是**横向可滚**的（见 `chat_floater.dart`）⇒ 加字也不会把这一行撑高。
+    TextButton.icon(
+      style: _actionStyle,
       onPressed: () => Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) =>
@@ -593,12 +598,13 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
       icon: const Icon(Icons.delete_outline),
+      label: const Text(trashTooltip),
     ),
     // ⚠️ **导出**（契约 `30-EXPORT.md` §四：和删除入口**对称** ——
     //    能删掉，就能拿走）。位置**等主人看过再定，不属于契约**，
     //    所以这一批只保证"有一个能进去的入口"。
-    IconButton(
-      tooltip: exportTooltip,
+    TextButton.icon(
+      style: _actionStyle,
       onPressed: () => Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) =>
@@ -606,15 +612,25 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
       icon: const Icon(Icons.copy_all_outlined),
+      label: const Text(exportTooltip),
     ),
     // ⚠️ **过程四档的入口**（契约 §五：位置等主人看过再定，
     //    所以这一批只做"能切"）。换档要重连（`level` 是连接级的）。
-    IconButton(
-      tooltip: '它说多少过程',
+    TextButton.icon(
+      style: _actionStyle,
       onPressed: () => _pickLevel(c),
       icon: const Icon(Icons.tune),
+      label: const Text(levelActionWords),
     ),
   ];
+
+  /// 顶栏那一排动作的样子（一处定、三个都照它）。
+  ///
+  /// ⚠️ **命中区 ≥44**（D3.6）+ 文字用主题里那一档（**不写死字号**）。
+  static final ButtonStyle _actionStyle = TextButton.styleFrom(
+    minimumSize: const Size(0, 44),
+    padding: const EdgeInsets.symmetric(horizontal: 10),
+  );
 
   /// **聊天区**（状态条 + 时间线）。⚠️ **不含输入条** —— 输入条由 `_composer` 单独给，
   /// 因为**收起态也要有它**（主人 2026-09-22：*"助手那个聊天窗口，收缩的时候也有一个输入框。"*）。

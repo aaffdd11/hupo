@@ -236,6 +236,10 @@ const String chatScopeDesktop = '在桌面上问（全局）';
 /// 进了某个小程序时那一句（`app` = 那个小程序叫什么）。
 String chatScopeInApp(String app) => '在「$app」里问';
 
+/// 顶栏那个「过程多少」的入口（原来只是 `chat_screen` 里一句写死的 tooltip）。
+/// ⚠️ 界面上就写这两个字（用户看得懂），完整那句留给 tooltip。
+const String levelActionWords = '过程';
+
 /// **桌面上那一句引导**（2026-09-23 整理 UI 时加的）。
 /// ⚠️ 只说"点一下会怎样"，**不承诺任何做不到的事**（D7.1：不许承诺）。
 const String desktopHint = '点一下图标，就打开它。';

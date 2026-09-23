@@ -164,14 +164,24 @@ Future<void> _openConfig(WidgetTester tester, double scale) async {
   expect(find.byType(SettingsScreen), findsOneWidget, reason: '★ 没进设置那一屏 ⇒ 这两条判据扫错了屏幕');
 }
 
+
+/// 顶栏那三个入口现在**带字**（2026-09-23 整理 UI：手机上没法 hover，光图标没人敢点）
+/// ⇒ 从"用户看得见的那两个字"进去；窄屏 + 大字号下它们在**横滚条**里，先滚过去。
+Future<void> _tapHeaderAction(WidgetTester tester, String label) async {
+  final f = find.text(label);
+  await tester.ensureVisible(f.first);
+  await tester.pumpAndSettle();
+  await tester.tap(f.first);
+  await tester.pumpAndSettle();
+}
+
 /// **像用户那样**打开过程四档的切换面板（批 3 新加的入口）。
 ///
 /// ⚠️ 和关于页同一条理由：新加的界面**必须也过五档不溢出那道硬闸**，
 ///    不然"五档不溢出"会随时间失效。
 Future<void> _openProcessMenu(WidgetTester tester, double scale) async {
   await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _controller(), onLoggedOut: () {}), scale);
-  await tester.tap(find.byTooltip('它说多少过程'));
-  await tester.pumpAndSettle();
+  await _tapHeaderAction(tester, levelActionWords);
 }
 
 /// 一份"过程那一块拉满"的控制器：步骤流水 + 推理原文都在屏幕上。
@@ -309,8 +319,7 @@ ChatController _sourceController() {
 /// **像用户那样**打开回收站页：从主界面点顶栏那个入口。
 Future<void> _openTrash(WidgetTester tester, double scale) async {
   await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _trashController(), onLoggedOut: () {}), scale);
-  await tester.tap(find.byTooltip(trashTooltip));
-  await tester.pumpAndSettle();
+  await _tapHeaderAction(tester, trashTooltip);
 }
 
 /// 一份"导出页拿得到东西"的假服务端（批 3 欠的最后一件）。
@@ -336,8 +345,7 @@ ChatController _exportController() {
 ///    它没有返回键，命中区扫描会"一个能点的都没扫到"，量的也不是用户真看到的那棵树。
 Future<void> _openExport(WidgetTester tester, double scale) async {
   await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _exportController(), onLoggedOut: () {}), scale);
-  await tester.tap(find.byTooltip(exportTooltip));
-  await tester.pumpAndSettle();
+  await _tapHeaderAction(tester, exportTooltip);
 }
 
 /// **像用户那样**长按一条回答，弹出删除菜单。

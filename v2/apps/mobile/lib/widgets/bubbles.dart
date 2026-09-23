@@ -9,6 +9,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../models/design.dart' as d;
 import '../models/message_state.dart';
 import '../models/notice_words.dart';
 import '../models/source_words.dart';
@@ -226,11 +227,14 @@ class AnswerBubble extends StatelessWidget {
                       onPressed: speaking ? (onStopSpeak ?? onSpeak) : onSpeak,
                       icon: Icon(
                         speaking ? Icons.stop_circle_outlined : Icons.volume_up_outlined,
-                        size: (theme.textTheme.bodySmall?.fontSize ?? 12) + 4,
+                        // ★ 2026-09-23：字号跟着标签那一档走（原来按 bodySmall 算，偏小）
+                        size: (theme.textTheme.labelLarge?.fontSize ?? 14) + 4,
                       ),
                       label: Text(
                         speaking ? speakStopWords : speakOnceWords,
-                        style: theme.textTheme.bodySmall,
+                        // ★ 2026-09-23：`bodySmall`(≈12) → `labelLarge`(≈14) + 淡色
+                        //   （原来又小又淡，主人这一批"整理 UI"里点过它）
+                        style: theme.textTheme.labelLarge?.copyWith(color: d.muted),
                       ),
                       style: TextButton.styleFrom(
                         // D3.6：命中区 ≥44

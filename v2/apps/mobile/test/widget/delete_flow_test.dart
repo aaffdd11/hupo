@@ -241,7 +241,11 @@ void main() {
     addTearDown(c.dispose);
     await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
     await tester.pump();
-    await tester.tap(find.byTooltip(trashTooltip));
+    // ⚠️ 2026-09-23：顶栏那个入口改成**带字按钮**了（手机上没法 hover）
+    //    ⇒ 从"用户看得见的那两个字"进去（窄屏 + 大字号下它可能在横滚条里，先滚过去）
+    await tester.ensureVisible(find.text(trashTooltip).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(trashTooltip).first);
     await tester.pumpAndSettle();
 
     expect(find.text(trashTitle), findsOneWidget);
