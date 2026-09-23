@@ -116,8 +116,15 @@
 
 - **换上游**：环境变量 `HUPO_ASR_URL`（给了它就直接连它，不算签名）。
   它是给**取证**用的：没有钥匙也能把整条链验一遍。⚠️ **生产里不许设**。
-- **凭据**只从环境变量读：`TENCENT_APPID` / `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY`
-  （引擎名可用 `TENCENT_ASR_ENGINE` 覆盖，默认 `Hy-ASR-3.0-preview`）。
+- **凭据按连接现取**（P1-26，2026-09-24 改）：`TENCENT_APPID` / `TENCENT_SECRET_ID` /
+  `TENCENT_SECRET_KEY`（引擎名可用 `TENCENT_ASR_ENGINE` 覆盖，默认 `Hy-ASR-3.0-preview`）。
+  读的顺序是 **`data/asr.env` 现读 → 进程环境变量**（见 `src/asr-creds.js`）：
+  · 🔴 **现读** ⇒ 主人**轮换密钥之后不用重启服务**（B5 那件事要用它）；
+  · 开机横幅会**如实报一行**"语音凭据（来源 file · 引擎 …）：APPID 10 位 · …"——
+    ⚠️ **只有长度与来源，没有一个字符的钥匙**；
+  · ⚠️ **"按人一份"还没有**：`sub`（验过签的身份）已经传进中继了，
+    但"谁用谁的语音钥匙"要先把配置页那几个 tab 的形状定下来（`77-BLOCKERS.md` B1/B2）。
+    ⇒ 今天所有连接用的**都是部署默认那一份**，来源如实写 `default`，**不假装是他的**。
   ⚠️ 多租户下客户端是连**他自己那台容器**的 `/api/asr` ⇒ 容器里也要有这三样。
 
 ---
@@ -225,8 +232,9 @@ VPS 上 `/etc/nginx/conf.d/w-stalkerai.conf` 原来只有 `location = /api/strea
 
 ### 6.2 凭据怎么进服务（**主人自己动手** · 2026-09-23 已把管子接好）
 
-服务从**环境变量**读那三样。而环境由 `scripts/restart-core.sh` 从
-**`v2/services/core/data/asr.env`** 装进去（**照 `data/tenants.env` 那条已有的路**）：
+服务**现读** `v2/services/core/data/asr.env`（P1-26 起：`restart-core.sh` 仍然会把它
+装进环境变量，但服务**不再依赖"开机那一刻"那一份** —— 文件改了，下一条连接就是新的）。
+`restart-core.sh` 那条路照旧在（**照 `data/tenants.env` 那条已有的路**）：
 
 ```bash
 cd /home/deploy/proj/hupo/v2/services/core
@@ -237,6 +245,8 @@ TENCENT_SECRET_ID=你的SecretId
 TENCENT_SECRET_KEY=你的SecretKey
 EOF
 chmod 600 data/asr.env        # 0600
+# ⚠️ P1-26 起：**不重启也生效**（服务现读这个文件）——换钥匙时这一条是省事的，
+#    但要它在**开机横幅**上也看得见（那行会跟着变），还是重启一次最直观。
 cd /home/deploy/proj/hupo && bash scripts/restart-core.sh
 ```
 
@@ -267,7 +277,8 @@ cd /home/deploy/proj/hupo && bash scripts/restart-core.sh
 | **`16k_zh`（标准实时语音识别）** | ✅ **`code=0`** —— 送进去的 3 秒普通话**认出来了**：`今天天气怎么样？` |
 
 ⇒ **线上先用 `16k_zh`**（那一档免费额度还在，**当天就能用**）。
-等混元的资源包/后付费开通了，把 `data/asr.env` 里那一行改掉重启即可（**不用改代码**）：
+等混元的资源包/后付费开通了，把 `data/asr.env` 里那一行改掉即可（**不用改代码**；
+P1-26 起**连重启都不需要**，下一句新连接就用新的引擎）：
 
 ```bash
 # 想切回混元：把 TENCENT_ASR_ENGINE 那行改成这个（或整行删掉 —— 默认就是它）

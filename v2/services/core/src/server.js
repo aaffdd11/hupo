@@ -1253,7 +1253,10 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     }
     if (wantAsr) {
       // 音频那条：身份**同一个来源**（验过签的 `claim`），但帧走另一套。
-      return asrWss.handleUpgrade(req, socket, head, (ws) => onAsr(ws, req));
+      // ⚠️ `claim` 住在**上面那个块里**，`onAsr` 在外面 ⇒ 必须**显式传进去**
+      //    （2026-09-24 踩到：写成闭包里引用 ⇒ `ReferenceError: claim is not defined`，
+      //      而且是**运行到那一条连接时**才炸 —— 判据当场抓住）。
+      return asrWss.handleUpgrade(req, socket, head, (ws) => onAsr(ws, req, claim));
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       onStream(ws, url, claim);
@@ -1267,7 +1270,7 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
    * 而界面就得猜一个理由（本项目最贵的那类毛病：页面在说假话）。
    * ⇒ 接上，然后**如实说一句"没配"**，由客户端原话转达。
    */
-  function onAsr(ws, req = null) {
+  function onAsr(ws, req = null, claim = null) {
     if (!asr) {
       try {
         ws.send(JSON.stringify({ type: 'asr/unavailable', reason: 'not-configured' }));
@@ -1281,8 +1284,10 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
       }
       return;
     }
-    // 把"是哪台设备来的"传下去（只用于日志：某台手机上不行时，这一行是唯一线索）
-    asr.attach(ws, { ua: req?.headers?.['user-agent'] ?? '未知设备' });
+    // 把"是谁、哪台设备"传下去：
+    //   · `sub` = **验过签的身份**（上面那个 `claim`），只用来**选哪份凭据**（P1-26）；
+    //   · `ua` 只用于日志（某台手机上不行时，这一行是唯一线索）。
+    asr.attach(ws, { sub: claim?.sub ?? null, ua: req?.headers?.['user-agent'] ?? '未知设备' });
   }
 
   /**

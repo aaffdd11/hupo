@@ -24,7 +24,8 @@ import { dropTunnel, notifyHost } from './tenant-tunnel-agent.mjs';
 import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
 import { appsBaseOf, createAppServer, loadSignKey } from './app-serve.js';
-import { asrConfigFromEnv, createAsrRelay } from './asr.js';
+import { createAsrRelay } from './asr.js';
+import { describeVoiceCreds, resolveVoiceCreds, voiceCredsFor } from './asr-creds.js';
 import { createServer } from './server.js';
 import { describeAgentIdentity, loadConfig, preflight } from './config.js';
 import { integrityReport, repoRootFor, resolveServiceHome } from './integrity.js';
@@ -597,10 +598,16 @@ const { listen, listenTrusted, close } = createServer({
   auth,
   webRoot,
   buildId: cfg.buildId,
-  // ★ **语音那条**（`/api/asr`）：凭据**只从环境变量读**（`docs/dev/71-MIC-ASR.md`）。
+  // ★ **语音那条**（`/api/asr`）的凭据：**按连接现取**（P1-26 · `src/asr-creds.js`）——
+  //   ① `data/asr.env` 每次现读 ⇒ **换一把钥匙不用重启服务**（B5 那条要用它）；
+  //   ② 身份（`sub`）已经传进来了，"以后按人取"只差那个缝里的一处实现
+  //      （形状要主人先拍 B1/B2）。
   //   ⚠️ 没配钥匙**也照样挂上这条路** —— 它会让浏览器收到一句
   //      "没配"的原话，而不是一个握手失败让界面去猜。
-  asr: createAsrRelay({ config: asrConfigFromEnv(), log: (m) => console.log(`▶ ${m}`) }),
+  asr: createAsrRelay({
+    config: (info) => voiceCredsFor({ sub: info?.sub, dataDir: cfg.dataDir }),
+    log: (m) => console.log(`▶ ${m}`),
+  }),
   // ★ **字体镜像的缓存目录**（`/fonts/…` 那条口）：镜像下来的字体落在这儿
   fontCacheDir: nodePath.join(cfg.dataDir, 'font-cache'),
   // ★ **我的小程序清单**（乙-1）：给了才挂 `/api/apps`
@@ -827,6 +834,10 @@ console.log(
           : '⚠️ **还没启用**（清单不在，见上面那条提示）'
   }`,
 );
+// ★ **语音那一行**（P1-26）：开机就把"有没有配、从哪来"说清楚 ——
+//   它同时也是**密钥轮换**的凭据（`data/asr.env` 是现读的：换了不用重启，这一行会变）。
+//   ⚠️ 只报**长度与来源**，一个字符的钥匙都不进去（见 `describeVoiceCreds`）。
+console.log(`  语音     ${describeVoiceCreds(resolveVoiceCreds({ dataDir: cfg.dataDir }))}`);
 console.log(`  agent    ${cfg.dshBin} --profile ${cfg.agentProfile}（最多 ${cfg.agentMaxProcesses} 个）`);
 // ⚠️ 这一行必须**如实报**"手是谁"：换手没配/换不过去的时候一切看起来都正常，
 //    而它恰好决定决策 ① 那条边界在不在（`39-PERMISSIONS.md` §7.1）。

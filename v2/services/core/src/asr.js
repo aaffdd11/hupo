@@ -64,9 +64,24 @@ export const safeAsrMessage = (err) => {
  */
 export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log = () => {} }) {
   /**
+   * **这一条连接用哪份凭据**（P1-26）。
+   *
+   * ⚠️ 为什么是个函数：凭据**开机那一刻读一次**的话，
+   *    ① 换一把钥匙就得**重启服务**（而重启是主人的动作）；
+   *    ② 连"这是谁"这一维都没有。
+   *    ⇒ `config` 可以是**一份**（老形状，判据里方便），
+   *      也可以是 `(info) => 一份`（服务端走这条：按连接现取，见 `asr-creds.js`）。
+   *
+   * 🔴 `info.sub` 是**验过签的身份**（`server.js` 里从 `claim` 来）——
+   *    它只用来"选哪份凭据"，**不是**从这条连接自己报的东西里读的。
+   */
+  const configFor = (info) => (typeof config === 'function' ? config(info) : config);
+
+  /**
    * @param {import('ws').WebSocket} ws 面向浏览器那条（身份已验）
    */
   function attach(ws, info = {}) {
+    const config = configFor(info) ?? {};
     const send = (o) => {
       try {
         if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(o));
@@ -296,5 +311,11 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
     });
   }
 
-  return { configured: config.configured, path: ASR_PATH, attach };
+  // ⚠️ `config` 是函数时**开机这一刻不知道**有没有配（要等第一条连接）⇒ 如实回 `null`，
+  //    **不许**回 `undefined` 让人以为是"没配"（那就是说假话）。
+  return {
+    configured: typeof config === 'function' ? null : Boolean(config?.configured),
+    path: ASR_PATH,
+    attach,
+  };
 }
