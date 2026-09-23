@@ -107,8 +107,14 @@ rm -rf "$PREV_ENTRIES"
 mv "$WEB/main.dart.js" "$WEB/main.$STAMP.dart.js"
 mv "$WEB/flutter_bootstrap.js" "$WEB/flutter_bootstrap.$STAMP.js"
 # 入口文件只留最近 KEEP_ENTRIES 份（再多就没意义了：更老的访客只会拿到更老的资源）
-ls -1t "$WEB"/main.*.dart.js 2>/dev/null | tail -n "+$((KEEP_ENTRIES + 1))" | xargs -r rm -f
-ls -1t "$WEB"/flutter_bootstrap.*.js 2>/dev/null | tail -n "+$((KEEP_ENTRIES + 1))" | xargs -r rm -f
+# 🔴 **两条护栏，缺一条就会把刚发布的那一版删掉**（2026-09-24 真的这么挂过一次，线上白屏几分钟）：
+#   ① **当前这一版永不删**（按指纹点名排除）；
+#   ② 旧的那几份用 `cp -p` 放回来（**保留各自的 mtime**）—— 否则它们的 mtime 变成"现在"，
+#      `ls -1t` 就会把**刚发布的那一份**排到最旧，正好被 tail 切掉。
+ls -1t "$WEB"/main.*.dart.js 2>/dev/null | grep -v "/main\.$STAMP\.dart\.js$" \
+  | tail -n "+$KEEP_ENTRIES" | xargs -r rm -f
+ls -1t "$WEB"/flutter_bootstrap.*.js 2>/dev/null | grep -v "/flutter_bootstrap\.$STAMP\.js$" \
+  | tail -n "+$KEEP_ENTRIES" | xargs -r rm -f
 echo "▶ 手上留着的入口：$(ls -1 "$WEB"/main.*.dart.js 2>/dev/null | wc -l) 份（含这一版；老访客不会白屏）"
 
 # flutter_bootstrap.js 里那几处 `main.dart.js` 是字面量，直接换
@@ -122,6 +128,14 @@ for f in "main.$STAMP.dart.js" "flutter_bootstrap.$STAMP.js"; do
   [ -f "$WEB/$f" ] || { echo "✗ 改名之后找不到 $f"; exit 1; }
 done
 grep -q "flutter_bootstrap.$STAMP.js" "$WEB/index.html" || { echo "✗ index.html 没改写成功"; exit 1; }
+# 🔴 **发布完必须自检**：index.html 指的那个入口真的在（放这儿 —— 必须在**改写之后**；
+#    2026-09-24 第一版把它放在改写**之前** ⇒ 自检永远不过 ⇒ 把整个发布掐断，线上反而白屏）
+BOOT_REF="$(grep -o 'flutter_bootstrap\.[a-f0-9]*\.js' "$WEB/index.html" | head -1)"
+if [ -z "$BOOT_REF" ] || [ ! -f "$WEB/$BOOT_REF" ]; then
+  echo "  ✗ 自检没过：index.html 指的 ${BOOT_REF:-（没找到）} 不在 —— 页面会白屏"
+  exit 1
+fi
+echo "  ✓ 自检：index.html 指的 $BOOT_REF 在"
 grep -q "main.$STAMP.dart.js" "$WEB/flutter_bootstrap.$STAMP.js" || { echo "✗ bootstrap 没改写成功"; exit 1; }
 echo "  ✓ 改完了"
 

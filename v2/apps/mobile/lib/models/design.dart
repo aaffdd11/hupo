@@ -108,3 +108,11 @@ const double gapL = 24;
 /// ⚠️ **2026-09-22 主人看过之后把它从 320 加到 400**（原话："过渡时间增加到 400ms"）——
 ///    这是**他的观感判断**，不是我们算出来的 ⇒ 别"顺手调回去"。
 const Duration motionPage = Duration(milliseconds: 400);
+
+/// **图标 ⇄ 小程序那一层**扩开/收回用多长（主人 2026-09-24：
+/// *"大概在0.5秒内完成"*）。
+///
+/// ⚠️ 它和 [motionPage]（首页⇄登录页，主人当年定的 400）**是两个东西**：
+///    一个是"换一屏"，一个是"从那个图标长出来"。别为了统一把它们并成一个数。
+/// ⚠️ 曲线不在这儿（`models` 不碰 UI 类型）：见 `widgets/motion.dart` 的 [miniAppOpenCurve]。
+const Duration motionAppOpen = Duration(milliseconds: 500);

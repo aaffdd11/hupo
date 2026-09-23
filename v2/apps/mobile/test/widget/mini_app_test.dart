@@ -294,14 +294,20 @@ void main() {
         reason: '★ 起点该在**那个图标**附近（实测 ${justOpened.topLeft} vs 图标 ${icon.topLeft}）');
 
     // 中途：比刚才大了、还没到全屏
-    await tester.pump(Duration(milliseconds: d.motionPage.inMilliseconds ~/ 2));
+    await tester.pump(Duration(milliseconds: d.motionAppOpen.inMilliseconds ~/ 2));
     final mid = reveal();
     expect(mid.width > justOpened.width, true, reason: '该在长大');
     expect(mid.width < screen.width, true, reason: '中途还没铺满');
+    // ★ 2026-09-24 主人：*"越远越快，越近越慢"* ⇒ **一半时间就该走掉八成以上**
+    //   （线性的话这会儿只有一半；这正是"不是线性的"那句判据）
+    final traveled = (mid.width - justOpened.width) / (screen.width - justOpened.width);
+    expect(traveled, greaterThan(0.8),
+        reason: '一半时间只走了 ${(traveled * 100).round()}% —— 主人要的是"越远越快"');
 
     // 收尾：全屏
     await tester.pumpAndSettle();
     expect(reveal().size, screen.size);
+
   });
 
   testWidgets('🔴 收起那条**压不住**小程序里可点的东西：内容底部内缩（§6.4 规则 1）', (tester) async {

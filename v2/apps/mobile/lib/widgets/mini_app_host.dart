@@ -27,6 +27,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import 'motion.dart';
 import '../models/design.dart' show miniAppSurfaceAt;
 import '../models/space_words.dart';
 
@@ -85,7 +86,8 @@ class _MiniAppHostState extends State<MiniAppHost>
   /// **"扩开/收回"那一下**。0 = 还只有图标那么大；1 = 全屏。
   late final AnimationController _c = AnimationController(
     vsync: this,
-    duration: d.motionPage,
+    // ★ 2026-09-24 主人定案：**0.5 秒**、而且不是线性的（见 `motion.dart`）
+    duration: d.motionAppOpen,
   );
 
   @override
@@ -198,7 +200,12 @@ class _MiniAppHostState extends State<MiniAppHost>
         AnimatedBuilder(
           animation: _c,
           builder: (ctx, _) {
-            final v = Curves.easeOutCubic.transform(_c.value);
+            // ★ "越远越快、越近越慢"（速度 ∝ 剩余距离）—— 见 `widgets/motion.dart`
+            //   ⚠️ **两个方向各算一次**：直接倒放曲线会让"关掉"变成"先不动、最后砸回去"
+            final v = miniAppSurfaceProgress(
+              value: _c.value,
+              closing: _c.status == AnimationStatus.reverse,
+            );
             final rect = Rect.lerp(from, screen, v) ?? screen;
             // 🔴 **起点 = 图标那一格，终点 = 全屏**（主人 2026-09-23：
             //    *"小程序 icon 是有圆角有阴影的。而打开和关闭的时候，那一层效果没有阴影，
@@ -231,11 +238,11 @@ class _MiniAppHostState extends State<MiniAppHost>
                   ignoring: covered,
                   child: AnimatedOpacity(
                     opacity: covered ? 0.55 : 1,
-                    duration: d.motionPage,
+                    duration: d.motionAppOpen,
                     child: AnimatedScale(
                       scale: covered ? 0.98 : 1,
-                      duration: d.motionPage,
-                      curve: Curves.easeOutCubic,
+                      duration: d.motionAppOpen,
+                      curve: miniAppOpenCurve,
                       // ⚠️ 内容**按全屏排版**，只是被上面那块矩形"露出来"
                       //    ⇒ 看起来就是"从那个图标扩开的"（而不是一个小窗被放大）
                       child: OverflowBox(
