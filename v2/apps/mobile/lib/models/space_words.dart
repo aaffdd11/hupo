@@ -117,8 +117,6 @@ const String keyCancelFailed = '没送上去。等会儿再试一次。';
 ///    "以为删了其实没删"和"以为没删其实删了"**都是坏事**。
 const String keyCancelRelogin = '为了确认是你，得先重新登一次。登完再点一遍就好 —— 现在什么都没动。';
 
-/// 聊天那条输入框上的「粘贴」（同一个病，见 `keyPaste` 那段）。
-const String composerPaste = '粘贴';
 const String keyPrivacy = '它只送到你自己那一台，不留在我们这边。';
 
 /// 填钥匙失败的四种说法（**分开说**，别混成一句 —— 混了用户会一直重试）。

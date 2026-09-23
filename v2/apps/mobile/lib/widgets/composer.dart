@@ -12,10 +12,7 @@
 // 另一条：**打字框永远不许锁**（D5.14）。
 // 09 是"网好时打字、出电梯才发"——把他锁住等于毁掉唯一顺畅的用法。
 
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../models/design.dart' as d;
 import '../models/hearing_session.dart';
@@ -173,26 +170,16 @@ class _ComposerState extends State<Composer> {
     super.dispose();
   }
 
-  /// 从剪贴板读一段，**接在光标处**（不是替换 —— 聊天里他可能已经打了一半）。
-  Future<void> _paste() async {
-    String? text;
-    try {
-      final d = await Clipboard.getData(Clipboard.kTextPlain);
-      text = d?.text;
-    } catch (_) {
-      text = null;
-    }
-    if (!mounted || text == null || text.isEmpty) return;
-    // 接在**光标处**（没有光标就接在末尾）—— 顺手把光标挪到粘完的位置
-    final v = _controller.value;
-    final at = v.selection.isValid ? v.selection.end : v.text.length;
-    final next = v.text.substring(0, at) + text + v.text.substring(at);
-    _controller.value = TextEditingValue(
-      text: next,
-      selection: TextSelection.collapsed(offset: at + text.length),
-    );
-    _focus.requestFocus();
-  }
+  // ⛔ **聊天框那个「粘贴」按钮 2026-09-24 砍了**（主人：*"聊天窗口需要去掉粘贴按钮"*）。
+  //
+  //    它当初为什么会有（`2026-09-21` 主人报 *"我无法黏贴，为啥"*）：
+  //    Flutter 把字画在 canvas 上，**长按弹的是它自己的选择菜单**，而空输入框里
+  //    没有可选的文字 ⇒ 菜单不弹 ⇒ 手机（没物理键盘）粘不进来。
+  //
+  //    ⚠️ 但那条理由对**聊天框**弱得多：手机上系统键盘自己带粘贴键，
+  //       而聊天框里通常已经有字。**钥匙那一屏的粘贴按钮留着**（那一屏就是要粘一长串）。
+  //    ⇒ 要恢复就是**一行**：把那块 `IconButton(tooltip: composerPaste, …)` 加回来，
+  //      连同下面的 `_paste()`（`git show c237517:v2/apps/mobile/lib/widgets/composer.dart`）。
 
   /// 框里的字变了 ⇒ 交给上层存下来（**一边打一边存**，刷新回来还在）。
   void _onChanged(String text) {
@@ -275,12 +262,6 @@ class _ComposerState extends State<Composer> {
                   _voice ? Icons.keyboard_alt_outlined : Icons.mic_none,
                 ),
               ),
-              if (!_voice)
-                IconButton(
-                  tooltip: composerPaste,
-                  icon: const Icon(Icons.content_paste),
-                  onPressed: _paste,
-                ),
               if (_voice)
                 Expanded(child: _micBar(theme))
               else
