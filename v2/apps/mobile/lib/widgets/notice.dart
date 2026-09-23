@@ -19,6 +19,8 @@
 
 import 'package:flutter/material.dart';
 
+import '../models/design.dart' as d;
+
 import '../models/notice.dart';
 import '../models/notice_words.dart';
 
@@ -119,10 +121,14 @@ class NoticeCard extends StatelessWidget {
 
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      // ★ 2026-09-23 整理 UI（E）：原来这里用的是 **Material 自带的那两个色**
+      //   （`secondaryContainer` / `outlineVariant`）+ 写死的 12 —— 全站就这一处
+      //   不在我们自己的色板里，混在别的卡片中间一眼能看出不是一套。
+      //   ⇒ 换成 `d.accentTint`（我们那层"很淡的同色"）+ `d.line`，圆角用 token。
       decoration: BoxDecoration(
-        color: theme.colorScheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
+        color: d.accentTint,
+        borderRadius: BorderRadius.circular(d.radiusField),
+        border: Border.all(color: d.line),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -137,7 +143,7 @@ class NoticeCard extends StatelessWidget {
                     ? Icons.warning_amber_outlined
                     : Icons.info_outline,
                 size: iconSize,
-                color: theme.colorScheme.onSecondaryContainer,
+                color: d.accent,
               ),
               const SizedBox(width: 8),
               Expanded(

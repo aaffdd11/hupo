@@ -12,6 +12,8 @@
 // ⚠️ 不写死尺寸：字长多大容器跟到多大；整页是列表，能滚（D3.5 那道硬闸）。
 
 import 'package:flutter/material.dart';
+
+import '../models/design.dart' as d;
 import 'package:flutter/services.dart';
 
 import '../models/export.dart';
@@ -156,8 +158,8 @@ class _ExportScreenState extends State<ExportScreen> {
           width: double.infinity,
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            border: Border.all(color: theme.colorScheme.outlineVariant),
-            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: d.line),
+            borderRadius: BorderRadius.circular(d.radiusField),
           ),
           // 可全选：`SelectableText` 既能长按选，也能整段复制。
           child: SelectableText(doc.text, style: theme.textTheme.bodyLarge),

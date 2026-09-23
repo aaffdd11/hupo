@@ -55,7 +55,8 @@ class UserBubble extends StatelessWidget {
           color: failed ? theme.colorScheme.errorContainer : theme.colorScheme.primaryContainer,
           clipBehavior: Clip.antiAlias,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
+            // ★ 2026-09-23（E）：14 是写死的 —— 气泡用 `radiusField` 那一档
+            borderRadius: BorderRadius.circular(d.radiusField),
             side: failed
                 ? BorderSide(color: theme.colorScheme.error, width: 1.5)
                 : BorderSide.none,
@@ -196,7 +197,9 @@ class AnswerBubble extends StatelessWidget {
         child: Material(
           color: theme.colorScheme.surfaceContainerHighest,
           clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(d.radiusField),
+          ),
           child: InkWell(
             onLongPress: onLongPress,
             child: Padding(
