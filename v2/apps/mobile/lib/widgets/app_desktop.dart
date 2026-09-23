@@ -106,12 +106,22 @@ class AppDesktop extends StatelessWidget {
         //       ② 点桌面空白照旧漏到下面那个 `InkWell`（§6.3 交互表）。
         //    ⇒ "加了一层"不该让任何既有行为变样，这一句就是它不变样的理由。
         Positioned.fill(child: WaterBackground(animate: animate)),
-        // ① 纸底 + 那一整块"点空白"的命中区
+        // ① 那一整块"点空白"的命中区（**不画纸底** —— 见下面那条）
         Positioned.fill(
           child: Material(
-            // ⚠️ 纸底**仍然是它**（水面只是叠在上面的一层淡光）：
-            //    万一水面画不出来 / 被关掉，桌面还是那张纸，不是一个黑洞。
-            color: d.paper,
+            // 🔴🔴 **必须是透明**（2026-09-23 真机上"水纹没生效"就是这个）。
+            //
+            // 形状是这样错的：水面在**最底层**（上面那个孩子），而这一层如果不透明，
+            // 它就是**盖在水面上的另一张纸** —— 涟漪照常在画、帧照常在走，
+            // **但一个像素都透不上来**。而所有既有判据**全是绿的**：
+            // 它们验的是"有没有这一层 / 会不会吃点击 / 会不会拖死 pumpAndSettle"，
+            // **没有一条验过"它画出来的东西真的看得见"**。
+            //
+            // ⇒ 这一层的职责**只有"接住那一整块点击"**，纸底由 `Scaffold` 给
+            //    （`chat_screen.dart` 里那个 `Scaffold(backgroundColor: d.paper)`）。
+            // ⚠️ 谁要把它改成任何**不透明**的颜色，`test/widget/water_bg_test.dart`
+            //    里那条源码级判据会当场红（这是故意的：这个 bug 只有那一处能拦）。
+            color: Colors.transparent,
             child: InkWell(
               // ⚠️ 点空白 = 收起聊天（§六 交互表）。splash 关掉：整屏闪一下不是反馈，是噪声。
               onTap: onTapBlank,

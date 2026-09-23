@@ -11,8 +11,12 @@
 // ⚠️ ② 的写法很关键：**点空白，然后看上层收到没收** ——
 //    只断言"图标还在"是测不出背景吃点击的（背景又不改排布）。
 
+import 'dart:io';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hupo_app/models/design.dart' as d;
 import 'package:hupo_app/widgets/app_desktop.dart';
 import 'package:hupo_app/widgets/water_bg.dart';
 
@@ -112,6 +116,74 @@ void main() {
       _painters(),
       findsOneWidget,
       reason: '★ 关掉动画顺手把画笔也删了 —— 那它就不是"不动"，是"没有"',
+    );
+  });
+
+  // ── 🔴 这两条是 2026-09-23「水纹没有生效」补的 ─────────────────────
+  //
+  // 那次事故的形状：**动画一直在跑（帧一直在走），一个像素都没露出来** ——
+  // 因为水面在 `Stack` 最底层，而它上面那个 `Material` 是**不透明的纸色**。
+  // 上面四条判据**全是绿的**：它们验的是"在不在树上 / 会不会吃点击 /
+  // 会不会拖死 pumpAndSettle"，**没有一条验过"它画出来的东西看得见"**。
+  // ⚠️ 这就是"闸变弱了"的典型形状（`43`/`52`/`54` 都栽过）：
+  //    判的东西是对的，只是**没判到那件会坏的事**。
+  //
+  // ⇒ 补两条，一条管"画家真的出像素"，一条管"没有人再把它盖回去"。
+
+  testWidgets('🔴 画家**真的出像素**：画到画布上必须有一片和纸底不同的点', (tester) async {
+    // ⚠️ 量的是**像素**，不是"有没有那个 widget"。
+    //    这一条能拦住的典型写法：alpha 写成了 0、颜色写成了纸底、尺寸算成了 0。
+    // ⚠️ **必须 `runAsync`**：光栅化（`toImage`）走的是**真异步**，
+    //    而 `testWidgets` 的假时钟里那种 Future **永远不会完成** ——
+    //    我第一次就写成普通的 `await`，结果整条用例**挂到超时**（600 秒）。
+    const size = Size(400, 300);
+    final bytes = await tester.runAsync(() async {
+      final rec = ui.PictureRecorder();
+      final canvas = Canvas(rec);
+      canvas.drawRect(Offset.zero & size, Paint()..color = d.paper);
+      const WaterRipplePainter(seconds: 0).paint(canvas, size);
+      final img = await rec.endRecording().toImage(
+        size.width.toInt(),
+        size.height.toInt(),
+      );
+      return img.toByteData(format: ui.ImageByteFormat.rawRgba);
+    });
+
+    var diff = 0;
+    final px = bytes!.buffer.asUint8List();
+    for (var i = 0; i < px.length; i += 4) {
+      if ((px[i] - 248).abs() + (px[i + 1] - 245).abs() + (px[i + 2] - 238).abs() >
+          0) {
+        diff += 1;
+      }
+    }
+    expect(
+      diff,
+      greaterThan(200),
+      reason: '★ 画家画了半天，和纸底**一模一样的点有 ${400 * 300 - diff} 个**'
+          '（只有 $diff 个不一样）⇒ 它画的要么是纸色、要么 alpha 是 0 —— '
+          '那"加了背景"就是一句假话',
+    );
+  });
+
+  test('🔴 桌面那层"接点击的纸"**必须透明**（不然它会把水面盖住）', () {
+    // ⚠️ 这是**源码级**判据：这个 bug（水面被不透明的纸盖住）在任何渲染判据里
+    //    都表现为"一切正常"（树是对的、点击是对的），只有像素能看出来 ——
+    //    而像素判据在 CI 上不一定稳。⇒ 在这儿把那一处**点名钉死**。
+    //    （同一条纪律的另一个例子：`accessibility_test.dart` 里那条
+    //      "lib 里不许出现裸的 GestureDetector"。）
+    final src = File('lib/widgets/app_desktop.dart').readAsStringSync();
+    expect(
+      src.contains('color: Colors.transparent,'),
+      isTrue,
+      reason: '★ 那层 `Material` 的颜色不是透明 ⇒ 它会盖在水面上，'
+          '用户看到的就是"水纹没生效"（2026-09-23 真栽过）',
+    );
+    expect(
+      // ⚠️ 同时把**旧的错法**钉成负向对照：纸色不许再出现在这一层
+      RegExp(r'Material\(\s*//[^\n]*\n\s*color: d\.paper').hasMatch(src),
+      isFalse,
+      reason: '★ 那层 `Material` 又画成纸色了 —— 纸底归 `Scaffold` 管',
     );
   });
 }
