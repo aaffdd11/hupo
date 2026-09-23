@@ -233,20 +233,20 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (widget.onSendKey != null)
                   DesktopApp(
                     label: settingsAppLabel,
-                    icon: Icons.settings_outlined,
+                    icon: _builtInIcon(builtInSettingsId),
                     // 打开小程序 ⇒ **聊天自动收起**（§6.4 规则 5：把屏幕让给小程序）
                     onOpen: (from) => _openMiniApp(from, builtInSettingsId),
                   ),
                 // ★ 第二个小程序（主人 2026-09-22 点名的"奥数题库" ⇒ 见 `57-MATH.md`）
                 DesktopApp(
                   label: mathAppLabel,
-                  icon: Icons.calculate_outlined,
+                  icon: _builtInIcon(builtInMathId),
                   onOpen: (from) => _openMiniApp(from, builtInMathId),
                 ),
                 // ★ **发现**（乙-3）：别人发出来的（**只读那一屏**；装/发都在对话里）
                 DesktopApp(
                   label: discoverAppLabel,
-                  icon: Icons.travel_explore_outlined,
+                  icon: _builtInIcon(builtInDiscoverId),
                   onOpen: (from) => _openMiniApp(from, builtInDiscoverId),
                 ),
                 // ★ **我的小程序**（乙-1）：他自己/助手造的那一批 ——
@@ -284,13 +284,13 @@ class _ChatScreenState extends State<ChatScreen> {
                       onAsk: (prompt) => _askFor(_mineOpen()!.id, prompt),
                     )
                   : _openApp == builtInDiscoverId
-                      ? DiscoverScreen(
-                          load: _loadDiscover,
-                          refreshToken: _appsRevision,
-                        )
-                      : _openApp == builtInMathId
-                          ? const MathQuizScreen()
-                      : SettingsScreen(
+                  ? DiscoverScreen(
+                      load: _loadDiscover,
+                      refreshToken: _appsRevision,
+                    )
+                  : _openApp == builtInMathId
+                  ? const MathQuizScreen()
+                  : SettingsScreen(
                       hasKey: widget.space.hasKey,
                       keyBad: widget.space.keyBad,
                       localOnly: !widget.space.isTenant,
@@ -314,6 +314,8 @@ class _ChatScreenState extends State<ChatScreen> {
               key: _floaterKey,
               maxHeight: maxH,
               title: '助手',
+              // ★ **最前面那个图标：这句话是在哪儿说的**（桌面 = 家；进了小程序 = 它自己的图标）
+              leading: _scopeBadge(c),
               initialTier: widget.initialTier,
               trailing: _actions(c),
               composer: _composer(c),
@@ -373,6 +375,43 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_openApp == builtInDiscoverId) return discoverTitle;
     return _openApp == builtInMathId ? mathTitle : configTitle;
   }
+
+  /// **一个内置小程序的图标**。
+  ///
+  /// ⚠️ 桌面那个图标与**聊天条前面那个**必须是**同一个**（不然"进去了"这件事
+  ///    在两处长得不一样）⇒ 图标只写在这儿，两处都从这儿取。
+  static IconData _builtInIcon(String which) => switch (which) {
+    builtInMathId => Icons.calculate_outlined,
+    builtInDiscoverId => Icons.travel_explore_outlined,
+    _ => Icons.settings_outlined,
+  };
+
+  /// **现在这句话是在哪儿说的** ⇒ 聊天条最前面那个图标（主人 2026-09-23）。
+  ///
+  /// * 没进任何小程序 = **在桌面上**（也就是全局）⇒ 一个**家**；
+  /// * 进了某个小程序 ⇒ **那个小程序自己的图标**（桌面点开的那个）。
+  ///
+  /// ⚠️ **它只是指示、不是按钮**：点了什么都不做 —— 主人要的是"看得出来现在在哪儿"。
+  ///    真让它可点就等于多一个出口，那要另配一条行为与 ≥44 的命中区（D3.6），不在这一刀里。
+  IconData _scopeIcon() {
+    final id = _openApp;
+    if (id == null) return Icons.home_outlined;
+    if (id.startsWith(_minePrefix)) {
+      final mine = _openMine();
+      // ⚠️ 清单刷新之后那条可能没了（`_openMine()` 为 null）⇒ 给默认的小程序图标，
+      //    **不许**掉进下面那个 switch（那会把"我的某个小程序"画成设置）。
+      return mine == null ? defaultAppIcon : miniAppIconFor(mine.icon);
+    }
+    return _builtInIcon(id);
+  }
+
+  /// 那个图标本身（带说明：长按/读屏听到"这句话是在哪儿说的"）。
+  Widget _scopeBadge(ChatController c) => Tooltip(
+    message: _openApp == null
+        ? chatScopeDesktop
+        : chatScopeInApp(_mineTitle(c)),
+    child: Icon(_scopeIcon(), size: 18, color: d.ink),
+  );
 
   /// 替**现在开着的那一个小程序**问一句（乙-4b）。
   ///

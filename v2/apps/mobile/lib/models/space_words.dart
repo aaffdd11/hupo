@@ -211,6 +211,20 @@ const String composeDraftDiscard = '不用了';
 /// ⚠️ 它**钉在横滚之外**（那条动作横滚会把按钮滚出视野 —— 那就等于没有出口）。
 const String chatCollapse = '收起';
 
+/// ── **聊天条最前面那个图标：这句话是在哪儿说的**（主人 2026-09-23）────
+///
+/// 主人原话：*"底部的聊天窗口，我需要左侧是一个 icon。是一个 home icon，说明聊天作用域
+/// 在桌面也就是全局。当进入某个 app 时，聊天作用域也进入了这个 app。所以聊天窗口前面的
+/// 图标也成了那个 app 的 logo icon。"*
+///
+/// ⚠️ **它不是按钮**（只是"现在在哪儿说话"的指示）⇒ 没有点击行为，也就不需要命中区。
+/// ⚠️ 话要说得像人话：在桌面上说 = 全局；进了某个小程序 = 就着那一个小程序说。
+///    这两个词是给**长按提示与读屏**用的（看得见的人一眼看的是那个图标本身）。
+const String chatScopeDesktop = '在桌面上问（全局）';
+
+/// 进了某个小程序时那一句（`app` = 那个小程序叫什么）。
+String chatScopeInApp(String app) => '在「$app」里问';
+
 /// ── 语音那一边（主人 2026-09-22：*"对话框要学习微信。要能切语音，能切听筒。
 /// 语音和听筒都要实时转文字。"* → 追问后他说 **"先做假的"**）──────────────
 ///
@@ -224,8 +238,10 @@ const String voiceToMic = '语音';
 const String voiceHoldToTalk = '按住 说话';
 const String voiceReleaseToSend = '松手 发送';
 const String voiceDemoChip = '演示';
+
 /// 语音模式顶上那句**实话**（不装"正在听"）。
 const String voiceNotWired = '演示：还没有真的开麦，这些字是假的。';
+
 /// 听筒那一边的实话。
 const String voiceEarpieceNotWired = '演示：读出来也还没做，先看形状。';
 const String voiceEarpieceOn = '听筒';

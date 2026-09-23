@@ -81,6 +81,7 @@ class ChatFloater extends StatefulWidget {
     required this.title,
     required this.child,
     required this.composer,
+    this.leading,
     this.trailing = const <Widget>[],
     this.initialTier = FloaterTier.collapsed,
     this.onTier,
@@ -105,6 +106,12 @@ class ChatFloater extends StatefulWidget {
   /// 抓手行右边的动作（回收站/导出/过程/配置/退出那套）。
   /// ⚠️ **收起态不画它们** —— 收起条只留"带字的展开入口"（D3.8）。
   final List<Widget> trailing;
+
+  /// **标题前面那个东西**（主人 2026-09-23：左边一个图标，说明这句话是在哪儿说的）。
+  ///
+  /// ⚠️ 浮窗自己**不认识"作用域"**：它只负责把上层给的东西画在标题前面
+  ///    （"现在在桌面还是在小程序里"是上层的事 —— 见 `screens/chat_screen.dart` 的 `_scopeBadge`）。
+  final Widget? leading;
 
   /// 一进来是哪一档。**默认收起**（主人 2026-09-22 定：先看见桌面）。
   final FloaterTier initialTier;
@@ -362,6 +369,12 @@ class ChatFloaterState extends State<ChatFloater> {
                               ),
                             ],
                             const SizedBox(width: d.gapS),
+                            // ★ **标题前面那个图标**（在哪儿说话 —— 桌面 / 某个小程序）。
+                            //   ⚠️ 收起态也画它：那句话在收起态照样是要发出去的。
+                            if (widget.leading != null) ...[
+                              widget.leading!,
+                              const SizedBox(width: 6),
+                            ],
                             Text(
                               widget.title,
                               style: t.textTheme.titleSmall?.copyWith(
