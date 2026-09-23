@@ -14,6 +14,8 @@ import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/design.dart' as d;
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
+import 'package:hupo_app/models/math_words.dart';
+import 'package:hupo_app/screens/math_quiz_screen.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -158,6 +160,45 @@ void main() {
       find.descendant(of: find.byType(MiniAppHost), matching: find.byType(ClipRRect)).first,
     );
     expect(reveal.size, screen.size, reason: '而且该是全屏');
+  });
+
+  testWidgets('🔴 退出小程序时**不许先闪到「设置」那一屏**（主人 2026-09-23 报的）', (tester) async {
+    // 主人原话：*"在小程序退出的时候，其他的小程序竟然会先切换页面到设置才缩小隐藏。"*
+    //
+    // 根因：`_openApp` 一置空，"现在开着哪一屏"那一串判断**最后兜底到 `SettingsScreen`**
+    // ⇒ 收回动画那一帧里画的是**设置**。⇒ 这一条就钉在**收回动画中间那一帧**上。
+    await _pump(tester);
+    // 拿「奥数题」当例子（它**不是**设置 —— 缺陷只在"关掉的不是设置"时才看得出来）
+    await tester.tap(find.text(mathAppLabel));
+    await tester.pumpAndSettle();
+    expect(find.byType(MathQuizScreen), findsOneWidget);
+
+    await tester.tap(find.byTooltip(miniAppBack));
+    // ⚠️ **只推进一小段**（正好落在收回动画里）——`pumpAndSettle` 会一口气跑完，看不出这一帧
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(
+      find.byType(SettingsScreen),
+      findsNothing,
+      reason: '★ 收回动画期间**不许**出现"设置"那一屏（那是兜底分支跑出来了）',
+    );
+    expect(
+      find.byType(MathQuizScreen),
+      findsOneWidget,
+      reason: '★ 正在缩回去的应该是**它自己**（不是别的屏）',
+    );
+
+    await tester.pumpAndSettle();
+    expect(find.byType(MathQuizScreen), findsNothing, reason: '收完了就该真的没了');
+    expect(find.byType(SettingsScreen), findsNothing);
+  });
+
+  testWidgets('★ 正对照：设置**真的开着**的时候，那一屏照旧在（别修过头）', (tester) async {
+    await _pump(tester);
+    await _openSettings(tester);
+    expect(find.byType(SettingsScreen), findsOneWidget);
+    await tester.tap(find.byTooltip(miniAppBack));
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(find.byType(SettingsScreen), findsOneWidget, reason: '关它自己的时候，缩回去的当然还是它');
   });
 
   testWidgets('🔴 小程序打开后是**全屏**的 —— 只有聊天还在底下那一条', (tester) async {

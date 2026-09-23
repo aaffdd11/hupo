@@ -107,6 +107,16 @@ class _ChatScreenState extends State<ChatScreen> {
   /// **"我的小程序"在 `_openApp` 里的前缀**（跟内置那两个区分开：`'settings'` / `'math'`）。
   static const _minePrefix = 'mine:';
 
+  /// **收回动画期间接着画的那一屏 + 顶上那行字**。
+  ///
+  /// 🔴 为什么要有它（主人 2026-09-23 报的：*"在小程序退出的时候，其他的小程序竟然会
+  ///    先切换页面到设置才缩小隐藏"*）：关掉 = `_openApp = null`，而"现在开着哪一屏"
+  ///    那一串判断原来**最后兜底到 `SettingsScreen`** ⇒ 收回动画那一帧里画的是**设置**。
+  ///    ⇒ 现在没开就返回 `null`（不再兜底到设置），外面用**上一帧那一屏**把动画播完 ——
+  ///      用户看到的是"它自己缩回图标那儿"，而不是"闪一下设置再缩"。
+  Widget? _lastAppView;
+  String _lastAppTitle = '';
+
   /// **现在开着哪个小程序**（`null` = 没开）。
   ///
   /// ⚠️ 原来是个布尔（只装得下「设置」一个）。主人 2026-09-22 要加「奥数题」⇒ 改成名字。
@@ -232,6 +242,14 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final c = widget.controller;
+    // ★ **记住"上一帧开着的那一屏"**：`_openApp` 一置空，`_appView` 就返回 `null`，
+    //   而收回动画还要把**它自己**缩回图标那儿（不是闪一下设置、也不是空白）。
+    //   ⚠️ 这里只是缓存（不 `setState`），所以不会引起重建循环。
+    final appView = _appView(c);
+    if (appView != null) {
+      _lastAppView = appView.view;
+      _lastAppTitle = appView.title;
+    }
     // ⚠️ **浮窗（通知）与主界面是 `Stack` 的两层，不是 `Column` 的两行。**
     //    约束 1 的判据是 **D4.8：高度变化 = 0px** —— 塞进 `Column` 就当场破掉
     //    （下面整块内容会被那条通知往下推）。有闸钉着：
@@ -296,7 +314,8 @@ class _ChatScreenState extends State<ChatScreen> {
             child: MiniAppHost(
               open: _openApp != null,
               fromRect: _appFrom,
-              title: _mineTitle(c),
+              // ⚠️ 没开的时候用**上一帧那一屏**（收回动画要缩的是它自己，不是别的）
+              title: _appView(c)?.title ?? _lastAppTitle,
               onClose: () => setState(() => _openApp = null),
               covered: _floaterExpanded,
               onCoveredTap: () => _floaterKey.currentState?.collapse(),
@@ -304,33 +323,7 @@ class _ChatScreenState extends State<ChatScreen> {
               bottomInset: _floaterExpanded
                   ? 0
                   : FloaterMetrics.margin + _floaterH,
-              child: _mineOpen() != null
-                  ? buildMiniAppView(
-                      entryUrl: _mineOpen()!.entryUrl,
-                      title: _mineOpen()!.title,
-                      // ★ **那条唯一的回话通道**（乙-4b）：页面说"我要问一句"，
-                      //   壳替它去问 —— **花的是看的人自己的钥匙**（服务端送进他自己的环境里花）。
-                      //   ⚠️ 能不能问由**服务端**说了算（声明 + 授予 + 配额），壳这一侧不判。
-                      onAsk: (prompt) => _askFor(_mineOpen()!.id, prompt),
-                    )
-                  : _openApp == builtInDiscoverId
-                  ? DiscoverScreen(
-                      load: _loadDiscover,
-                      refreshToken: _appsRevision,
-                    )
-                  : _openApp == builtInMathId
-                  ? const MathQuizScreen()
-                  : SettingsScreen(
-                      hasKey: widget.space.hasKey,
-                      keyBad: widget.space.keyBad,
-                      localOnly: !widget.space.isTenant,
-                      onSubmit:
-                          widget.onSendKey ?? ((_) async => KeySend.failed),
-                      onCancel: widget.onCancelMe,
-                      onCancelled: widget.onLoggedOut,
-                      onKeyChanged: widget.onKeyChanged,
-                      onLogout: _logout(c),
-                    ),
+              child: _appView(c)?.view ?? _lastAppView ?? const SizedBox.shrink(),
             ),
           ),
           // ①.8 **计划条**（主人 2026-09-23 定案：*"浮在屏幕上方（窗口不动）"*）
@@ -421,8 +414,55 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// 开着的是"我的小程序"吗（乙-1）。
-  MiniApp? _mineOpen() => _openMine();
+
+  /// **现在开着的那一屏 + 顶上那行字**；`null` = 没开（或者认不出的 id）。
+  ///
+  /// 🔴 **兜底不再是设置**（主人 2026-09-23 报的缺陷）：设置只有在
+  ///    `_openApp == builtInSettingsId` 时才画。⚠️ 有判据钉着这件事。
+  ///
+  /// ⚠️ 这里**顺手把 `mine` 捕获在闭包外**：原来 `onAsk` 里是 `_mineOpen()!.id`，
+  ///    而收回动画期间 `_openApp` 已经是 `null` ⇒ 那一句会**空指针**（潜在崩溃）。
+  ({Widget view, String title})? _appView(ChatController c) {
+    final mine = _openMine();
+    if (mine != null) {
+      return (
+        view: buildMiniAppView(
+          entryUrl: mine.entryUrl,
+          title: mine.title,
+          // ★ **那条唯一的回话通道**（乙-4b）：页面说"我要问一句"，
+          //   壳替它去问 —— **花的是看的人自己的钥匙**（服务端送进他自己的环境里花）。
+          //   ⚠️ 能不能问由**服务端**说了算（声明 + 授予 + 配额），壳这一侧不判。
+          onAsk: (prompt) => _askFor(mine.id, prompt),
+        ),
+        title: mine.title,
+      );
+    }
+    if (_openApp == builtInDiscoverId) {
+      return (
+        view: DiscoverScreen(load: _loadDiscover, refreshToken: _appsRevision),
+        title: discoverTitle,
+      );
+    }
+    if (_openApp == builtInMathId) {
+      return (view: const MathQuizScreen(), title: mathTitle);
+    }
+    if (_openApp == builtInSettingsId) {
+      return (
+        view: SettingsScreen(
+          hasKey: widget.space.hasKey,
+          keyBad: widget.space.keyBad,
+          localOnly: !widget.space.isTenant,
+          onSubmit: widget.onSendKey ?? ((_) async => KeySend.failed),
+          onCancel: widget.onCancelMe,
+          onCancelled: widget.onLoggedOut,
+          onKeyChanged: widget.onKeyChanged,
+          onLogout: _logout(c),
+        ),
+        title: configTitle,
+      );
+    }
+    return null;
+  }
 
   /// 容器顶上那行字：谁开着就写谁。
   String _mineTitle(ChatController c) {
