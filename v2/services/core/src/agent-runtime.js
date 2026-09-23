@@ -158,6 +158,18 @@ export class AgentRuntime extends EventEmitter {
         this.emit('agent-exit', sessionId, info);
       });
       this.#agents.set(sessionId, a);
+      // ★ P1-20（2026-09-24）：**取用这一刻就是该淘汰的时机**。
+      //
+      // 为什么：池子只可能**从这儿**被突破（`maxProcesses` 就是给它设的），
+      // 而在此之前**产品代码一处都没调过** `evictIfNeeded()` ——
+      // 只有 `test/` 在调 ⇒ 那个上限**从来没生效过**（代理会一直攒）。
+      //
+      // ⚠️ 三条安全边界（都是它自己保证的，这里不改）：
+      //   · 只淘汰**空闲**的（`running` 的绝不卸）；
+      //   · **先收口再卸**（`onEvict` 回调，由 dispatcher 把话说圆）；
+      //   · **不 await**：`agent()` 是同步的（调用方一大片），淘汰在后台跑；
+      //     抛错也不影响这次取用（`evictIfNeeded` 自己会 emit `evict-error`）。
+      void this.evictIfNeeded().catch((err) => this.emit('evict-error', sessionId, err));
     }
     this.#touch(sessionId);
     return a;

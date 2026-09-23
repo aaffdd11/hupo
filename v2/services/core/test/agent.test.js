@@ -420,3 +420,24 @@ test('🔴 进程死掉时：一轮开了、一个字没说 ⇒ **必须落一�
     await runtime.shutdown();
   }
 });
+
+test('★ P1-20：取用新 agent 的那一刻**自动**淘汰（上限才真的生效）', async () => {
+  // 在接线之前：产品代码一处都没调过 `evictIfNeeded` ⇒ `maxProcesses` 形同虚设。
+  const calls = [];
+  const rt = new AgentRuntime({
+    cfg: cfg({ agentMaxProcesses: 1 }),
+    spawnFn: fakeSpawn('normal'),
+    onEvict: async (id) => {
+      calls.push(id);
+    },
+  });
+  const one = rt.agent('one');
+  await one.start();
+  const two = rt.agent('two');
+  await two.start();
+  // 淘汰是**后台**跑的（`agent()` 不许被它拖住）⇒ 给它一拍
+  await new Promise((r) => setTimeout(r, 60));
+  assert.ok(rt.count <= 1, `上限是 1，现在 ${rt.count} 个 ⇒ 那个上限没生效`);
+  assert.deepEqual(calls, ['one'], '该淘汰**最久没用**的那个（LRU 那一头）');
+  await rt.shutdown();
+});
