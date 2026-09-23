@@ -27,6 +27,7 @@ import { buildExport } from './export.js';
 import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
 import { SIGNED_TTL_MS, entryUrl } from './app-serve.js';
 import { ASR_PATH } from './asr.js';
+import { isCredField } from './creds.mjs';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -332,6 +333,14 @@ export function createServer({
    * ⚠️ 约定：`setModelKey(userId, key)`，返回值里**不含 key**；调用方**不许**把它写日志。
    */
   setModelKey = null,
+  /**
+   * **用户填了别的几把之一**（图片 / 视频 / 语音那三样 · 契约 `48-SETTINGS-KEY.md`）。
+   *
+   * ⚠️ 约定：`setCred(userId, field, value)`；`field` 是 `creds.mjs` 那张表里的短名。
+   *    返回值里**不含 value**；调用方**不许**把它写日志。
+   * ⚠️ 不传 ⇒ 非 `model` 的 `field` 回 404（老部署逐字不变）。
+   */
+  setCred = null,
 }) {
   /**
    * 🔴 **这一个函数是"我是谁"与服务对象之间唯一的接缝。**
@@ -634,7 +643,14 @@ export function createServer({
         if (key.length === 0) return sendJson(res, 400, { error: 'blank-key' });
         // 能被 HTTP 头带走的字符（和 dsh 那条 `assertUsableApiKey` 同一条规矩）
         if (/[^\x20-\x7e]/.test(key)) return sendJson(res, 400, { error: 'bad-key-chars' });
-        const r = setModelKey(claim.sub, key);
+        // ★ **可选**：这一把是哪一把（契约 `48-SETTINGS-KEY.md` · 2026-09-23 加的多把钥匙）。
+        //   ⚠️ **不给 = `model`**（老客户端逐字不变）；**认不出的名字当场 400** ——
+        //      静默当成 `model` 会把"图片那一把"**覆盖掉语言那一把**（那是最坏的错法）。
+        const field = body?.field === undefined || body?.field === null ? 'model' : body.field;
+        if (!isCredField(field)) return sendJson(res, 400, { error: 'bad-field' });
+        if (field !== 'model' && !setCred) return sendJson(res, 404, { error: 'not-found' });
+        const r =
+          field === 'model' ? setModelKey(claim.sub, key) : setCred(claim.sub, field, key);
         if (!r?.ok) return sendJson(res, 409, { error: r?.why ?? 'cannot-set' });
         return sendJson(res, 200, { ok: true });
       }

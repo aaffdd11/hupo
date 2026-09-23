@@ -21,6 +21,7 @@
 import nodeFs from 'node:fs';
 import nodeNet from 'node:net';
 
+import { credStatus } from './creds.mjs';
 import { keyFileFor } from './key-path.mjs';
 
 /** 容器里那个服务听在哪。 */
@@ -222,24 +223,48 @@ export function runTunnelAgent({
    *    那时候连接**早就连着了** ⇒ 宿主那一屏会一直说"还没有钥匙"（**页面在说假话**）。
    *    ⇒ 钥匙文件**在不在**一变，就再自报一次（见下面那个 `watchKeyPresence`）。
    */
-  /** **最后报给宿主的是"有"还是"没有"** —— 看门拿它当基线（见 `keyPresenceChanged`）。 */
+  /** **最后报给宿主的是"有"还是"没有"**（看门拿它当基线之一，见 `keyPresenceChanged`）。 */
   let announcedKey = null;
+  /**
+   * **看门那条基线：文件在不在**（`keyPresenceChanged` 说的就是这一件事）。
+   *
+   * ⚠️ 为什么和 `announcedKey` 分开（2026-09-23 加的多把钥匙）：
+   *    文件里现在**可以有别的几把**（图片 / 视频 / 语音）——
+   *    "文件在"不再等于"语言那把在"。看门比的是文件，`announcedKey` 报的是语言那把。
+   */
+  let announcedFile = null;
+
+  /**
+   * 现在文件里那四把在不在（短名 → bool）。**读不到 ⇒ 全 false**（不抛）。
+   *
+   * ⚠️ 「有钥匙」**只认语言那一把**（`creds.model`）：`model-proxy` 读的就是它。
+   *    别的几把填了也**还不能**拿来说话 —— 所以**不许**拿"文件存在"冒充"能开口"。
+   */
+  const readCredStatus = () => {
+    try {
+      return credStatus(nodeFs.readFileSync(keyFileFor(), 'utf8'));
+    } catch {
+      return { model: false, image: false, video: false, voice: false };
+    }
+  };
 
   const announce = () => {
-    let hasKey = false;
-    try {
-      hasKey = nodeFs.existsSync(keyFileFor());
-    } catch {
-      /* 读不到就当没有 */
-    }
+    const creds = readCredStatus();
+    const hasKey = creds.model === true;
     const buildId = process.env.HUPO_BUILD_ID ?? 'dev';
-    send({ v: 1, type: 'tunnel-ready', hasKey, buildId });
+    // ★ `creds` 是**新增的可选字段**（协议只许加不许改语义）：老宿主忽略它就好
+    send({ v: 1, type: 'tunnel-ready', hasKey, creds, buildId });
     announcedKey = hasKey;
+    try {
+      announcedFile = nodeFs.existsSync(keyFileFor());
+    } catch {
+      announcedFile = false;
+    }
     return hasKey;
   };
 
   /**
-   * 盯着钥匙文件在不在，**一变就再自报一次**。
+   * 盯着钥匙文件在不在（以及语言那把在不在），**一变就再自报一次**。
    *
    * ⚠️ 为什么是"隔一会儿看一眼"而不是 `fs.watch`：`/data` 是**卷**（可能是
    *    网络文件系统、也可能不支持 inotify），而且这件事**不需要实时** ——
@@ -247,11 +272,13 @@ export function runTunnelAgent({
    */
   const watchKeyPresence = () => {
     const t = setInterval(() => {
-      const saw = keyPresenceChanged({ announced: announcedKey, fs: nodeFs });
-      if (!saw.changed) return;
-      log(saw.now ? '  · 盒子里有人放了一把钥匙 ⇒ 跟宿主说一声' : '  · 钥匙没了 ⇒ 跟宿主说一声');
+      const saw = keyPresenceChanged({ announced: announcedFile, fs: nodeFs });
+      const nowKey = readCredStatus().model === true;
+      // ⚠️ 两个都要比：文件可能在（别的几把），而语言那把**是后来才补上的**
+      if (!saw.changed && nowKey === announcedKey) return;
+      log(nowKey ? '  · 这一台现在有语言那把了 ⇒ 跟宿主说一声' : '  · 这一台现在没有语言那把了 ⇒ 跟宿主说一声');
       announce();
-      log(`    （宿主那边现在知道这一台${saw.now ? '有' : '没有'}钥匙了）`);
+      log(`    （宿主那边现在知道这一台${nowKey ? '有' : '没有'}语言那把了）`);
     }, 5000);
     t.unref?.();
     return { stop: () => clearInterval(t) };

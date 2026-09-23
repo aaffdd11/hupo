@@ -83,9 +83,18 @@ export const DEFAULT_UPSTREAM = 'https://api.deepseek.com';
  *    * 单行、非空 ⇒ 那一行就是 key；
  *    * 像 YAML 那种 `名字: 值` ⇒ 取**名字里带 KEY/TOKEN/SECRET** 的那一条，
  *      没有就取第一行。引号会去掉。
+ *
+ * 🔴 **`want` = "我只要那一个名字的"**（2026-09-24 加）：
+ *    这份文件**从今天起不止一把钥匙**（`creds.yaml` 里还有图片/视频/语音那几把，
+ *    见 `src/creds.mjs`）。原来那条"名字里带 KEY/SECRET 就取它"的规矩
+ *    在这种文件上会**挑错**：只填了图片那把时，它会拿**图片的 key 当语言钥匙**
+ *    发给上游（现象是"模型鉴权失败"，而真正原因是**挑错了钥匙**）。
+ *    ⇒ 给了 `want` 就**只认那一个名字**（大小写不敏感、去引号）；
+ *      **找不到就 `null`** —— 宁可回一句"这一台还没有配好模型凭据"，
+ *      也**绝不猜**。
  * ⚠️ **纯函数**（给 `test/unit` 钉）：它出错的代价是"拿半个 key 去请求"。
  */
-export function parseKey(text) {
+export function parseKey(text, want = null) {
   const lines = String(text ?? '')
     .split('\n')
     .map((l) => l.trim())
@@ -108,15 +117,21 @@ export function parseKey(text) {
     })
     .filter((p) => p && p.value.length > 0);
   if (pairs.length === 0) return null; // 有名字没值 ⇒ **没有 key**，不是"名字就是 key"
+  // ★ 指名要哪一把：**只认那一个名字，找不到就是没有**（绝不退而求其次）
+  if (want) {
+    const w = String(want).trim().toLowerCase();
+    const exact = pairs.find((p) => p.name.toLowerCase() === w);
+    return exact ? exact.value : null;
+  }
   const named = pairs.find((p) => /(KEY|TOKEN|SECRET)/i.test(p.name));
   return (named ?? pairs[0]).value;
 }
 
 /** 读 key 文件；读不到 / 读出来是空的 ⇒ `null`（**不抛**，让调用方回 503）。 */
-export function readKeyFile(file, fs = nodeFs, format = 'hupo') {
+export function readKeyFile(file, fs = nodeFs, format = 'hupo', want = null) {
   try {
     const text = fs.readFileSync(file, 'utf8');
-    const k = format === 'dsh-refs' ? parseDshRefs(text) : parseKey(text);
+    const k = format === 'dsh-refs' ? parseDshRefs(text) : parseKey(text, want);
     return k && k.length > 0 ? k : null;
   } catch {
     return null;
@@ -148,7 +163,9 @@ export function startModelProxy({
 
   const server = nodeHttp.createServer(async (req, res) => {
     // ⚠️ key **每一次请求现读**：这样"还没注入"和"刚注入"都不用重启代理。
-    const key = readKeyFile(keyFile, nodeFs, keyFormat);
+    // 🔴 只认**语言**那一把（`HUPO_MODEL_KEY`）—— 这份文件里还有图片/视频/语音那几把，
+    //    挑错一把的代价是"拿别人的钥匙去请求"（`parseKey` 的 `want` 那条注释）
+    const key = readKeyFile(keyFile, nodeFs, keyFormat, 'HUPO_MODEL_KEY');
     if (!key) {
       // ④ 如实说：不是"模型鉴权失败"，是"我们这边还没有 key"
       res.writeHead(503, { 'content-type': 'application/json' });

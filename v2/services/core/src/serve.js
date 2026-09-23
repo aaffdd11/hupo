@@ -35,6 +35,8 @@ import { createTurnStatus, statusPath } from './turn-status.js';
 import { ROLLOUT_SWEEP_MS, compareTenantBuild, createNagBook, planRollout, readProductLayer } from './product-layer.js';
 import { DEFAULT_DROP_DIR, createKeyDrop, resolveDropName } from './key-drop.js';
 import { keyFileFor } from './key-path.mjs';
+import { readCredsText } from './tenant-shell.mjs';
+import { credValueOk, isCredField, mergeCreds } from './creds.mjs';
 import { keyStateOf } from './key-state.js';
 import { auditPath } from './audit.js';
 import { HUMAN_LINES, installProcessGuard } from './process-guard.js';
@@ -144,6 +146,8 @@ worlds = new Worlds({
     const first = !badKeys.has(userId);
     badKeys.add(userId);
     tenantKeys.delete(userId);
+    // ⚠️ 只摘掉**语言那一把**（别的几把没被上游拒，不该跟着没）
+    tenantCreds.get(userId)?.delete('model');
     if (first) {
       console.log(
         `  🔑 ${userId} 那把钥匙上游说用不了 —— 标成"要重填"（他刷新那一页就能重新填）`,
@@ -162,8 +166,20 @@ worlds = new Worlds({
     if (!told) dropTunnel();
     // ⚠️ 顺手把盒里那一把也删掉：上游已经不认它了，留着只是让它继续被拿去试。
     //    （宿主上没有这个文件，删不到就是删不到，不影响。）
+    // 🔴 **2026-09-23 改成"只删语言那一行"**（不许整文件删）：文件里现在可能有
+    //    图片 / 视频 / 语音那几把 —— 整文件删会把**用户刚填好的**那几把一起带走。
     try {
-      nodeFs.unlinkSync(keyFileFor());
+      const f = keyFileFor();
+      const next = mergeCreds(readCredsText(f), { model: '' });
+      if (next.length === 0) {
+        nodeFs.unlinkSync(f);
+      } else {
+        // ⚠️ 仍然**原子写**（代理每次请求现读，不能读到半个文件）
+        const tmp = `${f}.tmp`;
+        nodeFs.writeFileSync(tmp, next, { mode: 0o600 });
+        nodeFs.chmodSync(tmp, 0o600);
+        nodeFs.renameSync(tmp, f);
+      }
     } catch {
       /* 不在（宿主上就是这样）或者删不掉 —— 都不该把收口带走 */
     }
@@ -301,6 +317,16 @@ turnStatus.start();
 //    这是**刻意的**（"中心不留用户的 key"）。
 // ════════════════════════════════════════════════════════════
 const tenantKeys = new Map(); // userId → key（**只在内存**）
+/**
+ * **这个人在宿主手上存着的所有凭据**（userId → Map(短名 → 值)）。
+ *
+ * ⚠️ 为什么不能只有 `tenantKeys`（2026-09-23 加的多把钥匙）：
+ *    `tenantKeys` 只装**语言那一把**（"他能不能开口说话"就靠它），
+ *    而用户还可能填图片 / 视频 / 语音 —— 那几把在"那台当时没连着"的空档里
+ *    也得**先收在这儿**，等它连上自动补推（`channel.pushKey` 那条路的兜底）。
+ * ⚠️ 它同样**只在内存里**、不进日志（值一个字节都不许出现）。
+ */
+const tenantCreds = new Map(); // userId → Map(field → value)（**只在内存**）
 
 // ⚠️ 下面这一整段（`tenantOf` / `userOfTenant` / 通道）在 2026-09-21 被我**误删过一次** ——
 //    删内联函数时切多了，现象是服务起来就 `ReferenceError: tenantOf is not defined`。
@@ -375,6 +401,17 @@ const channel = new TenantChannel({
     const uid = userOfTenant(tenant);
     return uid ? (tenantKeys.get(uid) ?? null) : null;
   },
+  // ★ **这个人在宿主手上存着的那几把**（多把钥匙 · 2026-09-23）：
+  //   一次连接只送得动一把，所以容器每重连一圈就按字段轮着送一把
+  //   （`tenant-channel.mjs` 的 `#nextCredFrame`）—— 填的时候那台没连着也不会丢。
+  //   ⚠️ 顺序按填进来的先后；反正每重连一圈轮一把，几圈之内全都到位。
+  credsFor: (tenant) => {
+    const uid = userOfTenant(tenant);
+    if (!uid) return [];
+    const m = tenantCreds.get(uid);
+    if (!m || m.size === 0) return [];
+    return [...m.entries()].map(([field, key]) => ({ field, key }));
+  },
   // ★ **容器自报的版本指纹**（契约 `docs/dev/45-TENANT-UPDATE.md`）：
   //   比完**该说话就说话**（`compareTenantBuild` 是纯函数，`test/unit` 里真验），
   //   不一致就**叫它重开**（那一帧不带内容；退不退由它自己定）。
@@ -411,6 +448,8 @@ const channel = new TenantChannel({
     //    混成一种的话，容器每重启一次就会把用户一把**好好的**钥匙标成坏的。
     if (why === 'rejected') badKeys.add(uid);
     tenantKeys.delete(uid);
+    // ⚠️ 容器说"我这儿没有语言那把" ⇒ 宿主这本账跟着清（**别的几把不动**）
+    tenantCreds.get(uid)?.delete('model');
     console.log(
       why === 'rejected'
         ? `  🔑 ${uid} 那把钥匙用不了（他那台说的）—— 他刷新那一页就能重新填`
@@ -503,12 +542,54 @@ function setModelKey(userId, key) {
   // ★ 他又填了一把 ⇒ 上一把"用不了"的账**当场清掉**
   badKeys.delete(userId);
   tenantKeys.set(userId, key);
+  // ⚠️ 也收进"手上那几把"里：那台现在没连着的话，容器连上时轮着补推（`credsFor`）
+  rememberCred(userId, 'model', key);
   const pushed = channel.pushKey(tenant, key);
   // ⚠️ **这句话 2026-09-22 改过**：原来写"**不落盘**"，而钥匙现在会落在他自己那台
   //    容器的**卷**里（`46-KEY-DELIVERY.md` §二）⇒ 那句话当时起就是**假话**了。
   //    中心这一侧仍然不落盘（内存里那份宿主一重启就没了），落盘的是**他那台自己**。
   console.log(
     `  🔑 ${userId} 的模型凭据已收下（送给他那台容器；中心不留，他那台自己存在卷里）` +
+      (pushed > 0 ? '' : '（⚠️ 他那台现在没连着，等他连上会自动推过去）'),
+  );
+  return { ok: true, why: pushed > 0 ? 'pushed' : 'queued', pushed };
+}
+
+/** 把一把凭据收在**宿主内存**里（不进日志）。 */
+function rememberCred(userId, field, value) {
+  const m = tenantCreds.get(userId) ?? new Map();
+  m.set(field, value);
+  tenantCreds.set(userId, m);
+}
+
+/**
+ * **他填了别的几把之一**（图片 / 视频 / 语音那三样）—— 契约 `48-SETTINGS-KEY.md`。
+ *
+ * 🔴 **走的是和 `setModelKey` 同一条推送路**（`channel.pushKey` ⇒ 容器合并进
+ *    `creds.yaml`），所以"填了到底有没有送到"两边是同一套判断。
+ *
+ * ⚠️ 语言那把**仍然走 `setModelKey`**（老调用点、老日志文案一个字不动）。
+ * ⚠️ 返回值与日志里**一个字符的钥匙都没有**。
+ *
+ * @param {string} userId
+ * @param {string} field  短名（`model`/`image`/`video`/`voiceAppId`/`voiceSecretId`/`voiceSecretKey`）
+ * @param {string} value
+ * @returns {{ok:boolean, why:string, pushed?:number}}
+ */
+function setCred(userId, field, value) {
+  if (!isCredField(field)) return { ok: false, why: 'bad-field' };
+  if (field === 'model') return setModelKey(userId, value);
+  const tenant = tenantOf(userId);
+  if (!tenant) return { ok: false, why: 'no-tenant' };
+  const v = typeof value === 'string' ? value.trim() : '';
+  if (v.length === 0) return { ok: false, why: 'blank' };
+  if (!credValueOk(v)) return { ok: false, why: 'bad-chars' };
+  // ★ **先收在内存里**：那台现在没连着也不许丢（它连上时轮着补推，见 `credsFor`）
+  rememberCred(userId, field, v);
+  const pushed = channel.pushKey(tenant, v, field);
+  // ⚠️ **只说"哪一把、送去哪"，一个字符的钥匙都不打**（`AGENTS.md` §六.1）
+  console.log(
+    `  🔑 ${userId} 的「${field}」凭据已收下（送给他那台容器；中心不留，他那台自己存在卷里）` +
       (pushed > 0 ? '' : '（⚠️ 他那台现在没连着，等他连上会自动推过去）'),
   );
   return { ok: true, why: pushed > 0 ? 'pushed' : 'queued', pushed };
@@ -605,6 +686,8 @@ const { listen, listenTrusted, close } = createServer({
   users,
   devCode: cfg.devCode,
   setModelKey,
+  // ★ **别的几把**（图片 / 视频 / 语音那三样）也走同一条推送路（契约 `48-SETTINGS-KEY.md`）
+  setCred,
   tenantOf,
   // ★ **新号登录时替他申请一台**（除了改状态，这是登录路径上唯一新增的动作）
   ensureTenant,
@@ -658,6 +741,7 @@ const { listen, listenTrusted, close } = createServer({
     const inFlight = !mapped && queue.outstanding(userId);
     const up = channel.hasTunnel(tenant);
     if (up) {
+      const reportedCreds = channel.credsStatusFor(tenant);
       return {
         kind: 'tenant',
         state: 'ready',
@@ -672,6 +756,13 @@ const { listen, listenTrusted, close } = createServer({
           hasKeyReported: channel.hasKeyFor(tenant),
           rejected: badKeys.has(userId),
         }),
+        // ★ **那四把现在有没有**（契约 `48-SETTINGS-KEY.md` · 2026-09-23 加的多把钥匙）。
+        //   ⚠️ **权威在容器**（文件在它那儿）：宿主只说"它自报的是这样"。
+        //      它还没报过（老那一版 / 隧道刚断）⇒ **这一格不出现** ——
+        //      界面据此如实说"现在问不到"，**不许**拿宿主内存里那几把去替它回答
+        //      （宿主一重启就忘，那正是 `hasKeyReported` 修过的老 bug）。
+        //   ⚠️ 加字段是安全的（协议纪律：**加不破**，老客户端忽略它）。
+        ...(reportedCreds ? { creds: reportedCreds } : {}),
         // ⚠️ 3 不是 2 —— 就绪时**三步都算走完**（传 2 会自相矛盾：state=ready 而第三步没打勾）
         steps: stepsFor(3),
       };
