@@ -48,8 +48,12 @@ const valueOf = (f, dflt) => {
   const i = argv.indexOf(f);
   return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt;
 };
+/** 有没有这个开关（布尔型的那些用它）。 */
+const hasFlag = (f) => argv.includes(f);
 
 const URL_ = valueOf('--url', 'https://w.stalkerai.cn/');
+/** `--block-gstatic`：把 gstatic 整个屏掉再开页面（验 CanvasKit 自托管）。 */
+const BLOCK_GSTATIC = hasFlag('--block-gstatic');
 const WAIT_MS = Number.parseInt(valueOf('--wait', '45000'), 10);
 const SHOT = valueOf('--shot', null);
 /**
@@ -331,6 +335,20 @@ async function main() {
     returnByValue: true,
   });
   console.log(`  页面现场：${dump.result?.result?.value ?? '(读不到)'}`);
+  }
+
+  // ③.5 🔴 **屏掉 gstatic，看页面还能不能开**（`--block-gstatic`）
+  //
+  //   ⚠️ 为什么值得单钉一条：Flutter web 默认把 **CanvasKit** 指向
+  //      `https://www.gstatic.com/flutter-canvaskit/<hash>/` —— **国内经常取不到**，
+  //      而现象是"页面加载很慢/白屏"，且**本地一切正常**（这台机器取 gstatic 只要 0.4s）。
+  //   ⇒ 判据只能是：**把 gstatic 整个屏掉，页面照样得开**。
+  //      开着 ⇒ CanvasKit 是从我们自己的域名取的（自托管生效）。
+  if (BLOCK_GSTATIC) {
+    await send('Network.enable', {});
+    await send('Network.setBlockedURLs', { urls: ['*gstatic.com*', '*gstatic.cn*'] });
+    console.log('  🚫 已屏掉 gstatic（域名级）—— 页面要是还能开，就说明 CanvasKit 是自托管的');
+    await send('Page.navigate', { url: URL_ });
   }
 
   // ④ 看那条流：等到"收到了帧"或超时

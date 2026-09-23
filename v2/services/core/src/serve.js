@@ -591,6 +591,8 @@ const { listen, listenTrusted, close } = createServer({
   auth,
   webRoot,
   buildId: cfg.buildId,
+  // ★ **字体镜像的缓存目录**（`/fonts/…` 那条口）：镜像下来的字体落在这儿
+  fontCacheDir: nodePath.join(cfg.dataDir, 'font-cache'),
   // ★ **我的小程序清单**（乙-1）：给了才挂 `/api/apps`
   apps: { base: appsBase, key: appsSignKey },
   // ★ **给主人看的那一笔账**（账 #39）：注销/回收那条路上每一件都留一行

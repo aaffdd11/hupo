@@ -189,6 +189,38 @@ export function cacheControlFor(relPath) {
     : 'no-cache';
 }
 
+/**
+ * **字体镜像的路径白名单**（2026-09-23 加）。
+ *
+ * 为什么要有这条口：Flutter web 的 CanvasKit 遇到**中文**会去
+ * `https://fonts.gstatic.com/s/notosanssc/v37/…woff2` 取**分片字体**（每片约 25KB）。
+ * 国内那台经常取不到 ⇒ **页面很慢，甚至一个字都不显示**（实测：屏掉 gstatic 之后
+ * 图标在、**中文字全空**）。⇒ 镜像到自己域名下，并把引擎的 `fontFallbackBaseUrl`
+ * 指到 `/fonts/`（部署脚本打的那处补丁）。
+ *
+ * 🔴 **它是个代理 ⇒ 路径必须过白名单**（不然就是个任意 SSRF 的口）：
+ *    只认"家族名 + v数字 + 文件名"，家族名在白名单里，且**不许有任何 `..`**。
+ *
+ * ⚠️ **文件名长度**：真实那份是 base64 样的一大串（实测 **96** 字符）——
+ *    第一版封了 80 ⇒ **把一个好文件也拒了**（判据里用的是短名字，所以没抓到；
+ *    线上表现是"字体全 404，中文还是不显示"）。⇒ 上限跟着真实值走，判据里**用真名字**。
+ */
+export function fontMirrorRel(pathname) {
+  if (typeof pathname !== 'string' || !pathname.startsWith('/fonts/')) return null;
+  const rel = pathname.slice('/fonts/'.length);
+  if (rel.length > 220 || rel.includes('..') || rel.startsWith('/') || rel.includes('\\')) return null;
+  const m = /^([a-z0-9]+)\/(v\d+)\/([A-Za-z0-9_.-]{1,120}\.(?:woff2|ttf|otf))$/u.exec(rel);
+  if (!m) return null;
+  if (!FONT_FAMILIES.has(m[1])) return null;
+  return rel;
+}
+
+/** 允许镜像的字体家族（**只加认识的**；加错一个就是给代理开了个口子）。 */
+export const FONT_FAMILIES = new Set([
+  'notosanssc', 'notosans', 'notosansmono', 'notosanssymbols', 'notosanssymbols2',
+  'notoemoji', 'notosansjapanese', 'notosanskr', 'roboto',
+]);
+
 export function createServer({
   timeline = null,
   store = null,
@@ -217,6 +249,12 @@ export function createServer({
    * ⚠️ `key` 只在这个进程里用，**不许进日志**。
    */
   apps = null,
+  /**
+   * **字体镜像的磁盘缓存目录**（`/fonts/…` 那条口；`null` = 不落盘，每次去取）。
+   * ⚠️ 它**必须显式传进来**：`createServer` 这一层**没有 `cfg`**
+   *    （第一版在路由里写了 `cfg.dataDir` ⇒ 直接抛 ⇒ 那条口回 500，判据当场抓到）。
+   */
+  fontCacheDir = null,
   webRoot = null,
   buildId = 'dev',
   now = Date.now,
@@ -704,6 +742,15 @@ export function createServer({
     }
 
     // 静态：Flutter web
+    // ★ **字体镜像**（`/fonts/…`）：白名单之外一律 404（它是个代理，路径必须严）
+    if (path.startsWith('/fonts/')) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return sendJson(res, 405, { error: 'method-not-allowed' });
+      }
+      const rel = fontMirrorRel(path);
+      if (!rel) return sendJson(res, 404, { error: 'not-found' });
+      return serveFontMirror(req, res, rel);
+    }
     if (webRoot) return serveStatic(req, res, path);
     return sendJson(res, 404, { error: 'not-found' });
   }
@@ -936,6 +983,39 @@ export function createServer({
 
   // ── 静态文件 ────────────────────────────────────────────
 
+  /** 字体镜像：先看磁盘缓存，没有就去 gstatic 取一次（**服务端这一侧取得到**）。 */
+  async function serveFontMirror(req, res, rel) {
+    const cached = fontCacheDir ? nodePath.join(fontCacheDir, rel) : null;
+    const send = (buf) => {
+      res.writeHead(200, {
+        'content-type': 'font/woff2',
+        // ⚠️ 路径里带版本与内容哈希 ⇒ 可以长缓存（同"带指纹的产物"那条规矩）
+        'cache-control': 'public, max-age=31536000, immutable',
+        'content-length': buf.length,
+        'x-content-type-options': 'nosniff',
+      });
+      res.end(req.method === 'HEAD' ? undefined : buf);
+    };
+    try {
+      if (cached && nodeFs.existsSync(cached)) return send(nodeFs.readFileSync(cached));
+    } catch { /* 读不出来就往下走（去取一份新的） */ }
+    try {
+      const up = await fetch(`https://fonts.gstatic.com/s/${rel}`);
+      if (!up.ok) return sendJson(res, 404, { error: 'not-found' });
+      const buf = Buffer.from(await up.arrayBuffer());
+      try {
+        if (cached) {
+          nodeFs.mkdirSync(nodePath.dirname(cached), { recursive: true, mode: 0o755 });
+          nodeFs.writeFileSync(cached, buf, { mode: 0o644 });
+        }
+      } catch { /* 存不下就每次去取，不算错 */ }
+      return send(buf);
+    } catch (err) {
+      log(`[fonts] 取不到 ${rel}：${err?.message ?? err}`);
+      return sendJson(res, 404, { error: 'not-found' });
+    }
+  }
+
   function serveStatic(req, res, path) {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       return sendJson(res, 405, { error: 'method-not-allowed' });
@@ -960,21 +1040,73 @@ export function createServer({
     // HTTP 的日期只到秒 ⇒ 比较时也要落到秒，否则"同一秒内的改动"会被误判成 304
     const lastModified = new Date(Math.floor(stat.mtimeMs / 1000) * 1000).toUTCString();
 
+    // ★ **预压缩的那一份优先**（2026-09-23 实测加上的）。
+    //   为什么：这条路的上行只有 ~3.4 Mbps，而 `main.dart.js` 2.7MB、`canvaskit.wasm` 6.9MB
+    //   都是**原样发**的 ⇒ 首屏几十秒。预压之后 br 只剩 23%/31%（实测），
+    //   而"现场压"只能 gzip、还白花 CPU ⇒ 部署时压一次（`scripts/precompress.mjs`）。
+    //   ⚠️ 一定要 `vary`：不然中间任何一层缓存都可能把 br 的那份发给不收 br 的客户端。
+    const pick = pickEncoding(req.headers['accept-encoding']);
+    let sendFile = file;
+    let sendStat = stat;
+    let encoding = null;
+    if (pick) {
+      const cand = `${file}.${pick === 'br' ? 'br' : 'gz'}`;
+      try {
+        const st2 = nodeFs.statSync(cand);
+        // ⚠️ 压缩那份比源新才算数（源改了而没重压 ⇒ 宁可发原文）
+        if (st2.isFile() && st2.mtimeMs >= stat.mtimeMs) {
+          sendFile = cand;
+          sendStat = st2;
+          encoding = pick;
+        }
+      } catch {
+        /* 没预压过就用原文 */
+      }
+    }
+
+    const baseHeaders = {
+      'cache-control': cc,
+      'last-modified': lastModified,
+      vary: 'accept-encoding',
+    };
+
     // ★ **回来问一句**的时候，没改就只回 304（不带 body）。
     const ims = Date.parse(req.headers['if-modified-since'] ?? '');
     if (!Number.isNaN(ims) && Math.floor(stat.mtimeMs / 1000) * 1000 <= ims) {
-      res.writeHead(304, { 'cache-control': cc, 'last-modified': lastModified });
+      res.writeHead(304, baseHeaders);
       return res.end();
     }
 
     res.writeHead(200, {
+      ...baseHeaders,
       'content-type': MIME[ext] ?? 'application/octet-stream',
-      'cache-control': cc,
-      'last-modified': lastModified,
+      'content-length': sendStat.size,
+      ...(encoding ? { 'content-encoding': encoding } : {}),
       'x-content-type-options': 'nosniff',
     });
     if (req.method === 'HEAD') return res.end();
-    nodeFs.createReadStream(file).pipe(res);
+    nodeFs.createReadStream(sendFile).pipe(res);
+  }
+
+  /**
+   * 客户端收哪种压缩（**br 优先**：实测比 gz 再小一截）。
+   *
+   * ⚠️ 只做最基本的那点解析：`gzip, deflate, br` 这种；带 `q=0` 的算"不要"。
+   *    复杂的权重排序不值得写 —— 我们要发的那两份是部署时就压好的，二选一而已。
+   */
+  function pickEncoding(header) {
+    const raw = String(header ?? '').toLowerCase();
+    if (!raw) return null;
+    const wanted = new Set();
+    for (const part of raw.split(',')) {
+      const [name, ...params] = part.trim().split(';');
+      const q = params.find((x) => x.trim().startsWith('q='));
+      if (q && Number.parseFloat(q.split('=')[1]) === 0) continue;
+      wanted.add(name.trim());
+    }
+    if (wanted.has('br')) return 'br';
+    if (wanted.has('gzip')) return 'gzip';
+    return null;
   }
 
   // ── WebSocket ───────────────────────────────────────────

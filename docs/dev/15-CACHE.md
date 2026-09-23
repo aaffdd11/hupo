@@ -165,14 +165,23 @@ bash scripts/deploy-web-v2.sh            # 构建 + 部署 + 重启 + 公网验�
 
 ## 六、补 · 欠账 #15 的**实测结论**（2026-09-21）
 
-> 结论：**`canvaskit/` 那半边无账可还；`assets/` 那半边要两处一起改才有效**。
+> ⚠️ **2026-09-23 更正**：上面那句"`canvaskit/` 无账可还"**不再成立** ——
+> 那一批改了构建（`--no-web-resources-cdn`）⇒ **canvaskit 现在就在取用链上**，
+> 而且**已经预压缩**（br：6.9MB → 2.15MB）+ 走 `no-cache`（用前先问）。
+> 见 [`61-WEB-PERF.md`](61-WEB-PERF.md)。
 > 这一轮落地的是**一道自证闸**（下 §6.3），改名那件事**没做**。
 
 ### 6.1 `canvaskit/`：**不在取用链上**
 
-真产物里的加载器：`buildConfig` 有 `engineRevision`、**没有** `useLocalCanvasKit`，
-而 `_flutter.loader.load()` 是空参 ⇒ **永远取 gstatic**。
-本地那份 `canvaskit/`（26M）只是 `--no-web-resources-cdn` 的备份 ⇒ **改了也没人取**。
+⚠️ **这一节记的是"当时为什么没做"，2026-09-23 已经做了**（`61-WEB-PERF.md`）：
+
+* 当时的事实（**这一节的价值就在这儿**）：`buildConfig` 里有 `engineRevision`、**没有**
+  `useLocalCanvasKit`，而 `_flutter.loader.load()` 是**空参** ⇒ 引擎永远取 gstatic。
+  🔴 这条在 2026-09-23 排查"页面很慢"时**被原样验证了一遍**：光把 `useLocalCanvasKit`
+  塞进 `buildConfig` **没用** —— 引擎只认 `load({config})` 那一份（补丁得打在那句**调用**上）。
+* 现在的做法：构建加 `--no-web-resources-cdn`（产物里出现 `"useLocalCanvasKit":true`）⇒
+  **从我们自己的域名取**；本地那份 `canvaskit/` **不再是备份，就是被取的那一份**；
+  并且**预压缩**（br 2.15MB）。
 
 ### 6.2 `assets/`：能改，但要**两处一起**
 

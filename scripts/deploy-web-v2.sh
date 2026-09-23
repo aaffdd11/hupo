@@ -40,7 +40,11 @@ command -v "$FLUTTER" >/dev/null || { echo "✗ 找不到 flutter（设 FLUTTER_
 
 if [ "$DO_BUILD" = "1" ]; then
   echo "▶ 构建 Web（release，不带 Service Worker）"
-  ( cd "$APP" && "$FLUTTER" build web --release --pwa-strategy=none ) || {
+  # ⚠️ `--no-web-resources-cdn`（2026-09-23 加）：默认构建会把 CanvasKit 指向
+  #    `https://www.gstatic.com/flutter-canvaskit/<hash>/` —— 国内经常取不到，
+  #    页面就卡在那儿等（而**我们自己的 `canvaskit/` 明明已经打进产物了**）。
+  #    ⇒ 自托管：从**我们自己的域名**取（配合预压缩，实测 br 后 2.1MB）。
+  ( cd "$APP" && "$FLUTTER" build web --release --pwa-strategy=none --no-web-resources-cdn ) || {
     echo "✗ 构建失败，没有部署（线上仍是上一版：**宁可不变，也不要变坏**）"; exit 1; }
 else
   echo "▶ --no-build：直接用现有的 $APP/build/web"
@@ -50,7 +54,12 @@ BUILD_WEB="$APP/build/web"
 [ -f "$BUILD_WEB/main.dart.js" ] || { echo "✗ $BUILD_WEB 里没有 main.dart.js"; exit 2; }
 
 # 指纹按**入口文件的字节**算：内容不变 ⇒ 名字不变 ⇒ 缓存照样命中
-STAMP="$(cat "$BUILD_WEB/main.dart.js" "$BUILD_WEB/flutter_bootstrap.js" | sha256sum | cut -c1-12)"
+# ⚠️ **补丁也要进指纹**：下面那几处 patch 改的是**部署出去的那一份**，
+#    而入口名字是这里算的 ⇒ 不把补丁算进去的话，改了补丁**文件名不变**，
+#    浏览器（`immutable`）会一直吃缓存里的旧补丁（这次就差点被它骗过一次 A/B）。
+PUBLIC_BASE="${HUPO_PUBLIC_BASE:-https://w.stalkerai.cn}"
+FONT_PATCH_V="font-patch-v1"
+STAMP="$( { cat "$BUILD_WEB/main.dart.js" "$BUILD_WEB/flutter_bootstrap.js"; printf '%s' "$FONT_PATCH_V|$PUBLIC_BASE"; } | sha256sum | cut -c1-12)"
 echo "▶ 入口指纹 $STAMP"
 
 echo "▶ 给入口文件改名并改写引用"
@@ -72,6 +81,48 @@ done
 grep -q "flutter_bootstrap.$STAMP.js" "$WEB/index.html" || { echo "✗ index.html 没改写成功"; exit 1; }
 grep -q "main.$STAMP.dart.js" "$WEB/flutter_bootstrap.$STAMP.js" || { echo "✗ bootstrap 没改写成功"; exit 1; }
 echo "  ✓ 改完了"
+
+# ── 🔴 自托管 CanvasKit：产物里**不许**再出现 gstatic（2026-09-23 加）──
+# 为什么钉在这儿：默认构建会把 CanvasKit 指向 gstatic，**国内经常取不到 ⇒ 页面卡着等**。
+# 而这件事在构建/单测里都看不出来（它们是绿的）⇒ 只能查产物字节。
+# ⚠️ **别拿"产物里有没有 gstatic 那个字符串"当判据**（第一版就是这么写的，误报）：
+#    那个字符串是**加载器里的分支**（`useLocalCanvasKit` 为假时才走），**永远在**。
+#    真正管用的是那面旗：`--no-web-resources-cdn` 会让产物里出现 `"useLocalCanvasKit":true`。
+if ! grep -q '"useLocalCanvasKit":true' "$WEB/flutter_bootstrap.$STAMP.js"; then
+  echo "  ✗ 产物里没有 useLocalCanvasKit:true ⇒ CanvasKit 还会去 gstatic（国内取不到）⇒ 没有部署"; exit 1
+fi
+echo "  ✓ CanvasKit 自托管（useLocalCanvasKit:true）"
+
+# ── 🔴 字体回退**也自托管**（2026-09-23 加）────────────────────
+# 为什么：CanvasKit 遇到**中文**会去 `fonts.gstatic.com` 取**分片字体**（每片约 25KB）。
+# 国内那台经常取不到 ⇒ **页面很慢，甚至一个字都不显示**
+# （实测：屏掉 gstatic 之后图标在、**中文字全空** —— 那条判据在 `check-web-browser.mjs --block-gstatic`）。
+# ⇒ 把引擎的 `fontFallbackBaseUrl` 指到我们自己的 `/fonts/`
+#   （服务端那边是个**白名单镜像**：只许 fonts.gstatic.com 的字体路径，见 `server.js`）。
+BOOT="$WEB/flutter_bootstrap.$STAMP.js"
+# ⚠️ **第一版打错了地方**（记下来）：我把它塞进 `buildConfig` 的 JSON 里，
+#    而生成的尾巴是 `_flutter.loader.load();` —— **不带 config** ⇒
+#    `buildConfig` 里那些键**根本不会被转发给引擎**（引擎只认 `load({config})` 那一份）。
+#    ⇒ 补丁必须打在那句**调用**上（这也是官方"自定义初始化"的那个口）。
+if grep -q '_flutter.loader.load();' "$BOOT"; then
+  # 🔴 **必须是绝对 URL**（第一版写的是相对地址 `/fonts/` —— 引擎**取到了字节却对不上号**，
+  #    中文全变成方块；判据是"屏掉 gstatic 看有没有字"，A/B 才把它抓出来）。
+  sed -i "s|_flutter.loader.load();|_flutter.loader.load({config:{fontFallbackBaseUrl:\"$PUBLIC_BASE/fonts/\"}});|" "$BOOT"
+fi
+grep -q "load({config:{fontFallbackBaseUrl:\"$PUBLIC_BASE/fonts/\"}})" "$BOOT" || {
+  echo "  ✗ 字体回退没送进引擎（产物形状变了？看 `_flutter.loader.load(...)` 那一句）⇒ 没有部署"; exit 1; }
+echo "  ✓ 字体回退自托管（fontFallbackBaseUrl=$PUBLIC_BASE/fonts/）"
+
+# ── 🔴 预压缩（2026-09-23 加）──────────────────────────────────
+# 实测：这条路的上行只有 ~3.4Mbps，而 main.dart.js 2.7MB / canvaskit.wasm 6.9MB
+# 原本是**原样发**的（响应头里没有 content-encoding）⇒ 首屏几十秒。
+# 预压之后 br 只剩 23% / 31%（实测），而且只有预压才用得上 brotli。
+# ⚠️ 必须在**改名之后**压（压的就是改名后那一份）；⚠️ 压不动不许挡住上线。
+NODE_BIN="${NODE_BIN:-$(command -v node)}"
+echo "▶ 预压缩（br + gz，放在原文件旁边）"
+"$NODE_BIN" "$ROOT/scripts/precompress.mjs" "$WEB" | sed 's/^/  /' || {
+  echo "  ⚠️ 预压缩没做成 ⇒ **照常部署**（只是首屏慢一点），不许因为它挡住上线"
+}
 
 # ── 自证：从 index.html 出发，顺着引用把每个文件都找一遍（**一个 404 都不许有**）──
 # 为什么放在**重启之前**：改名是 sed 出来的，漏一处线上就是白屏，而构建/单测都还是绿的。
@@ -97,6 +148,28 @@ for f in "main.$STAMP.dart.js" "flutter_bootstrap.$STAMP.js"; do
   echo "  $f → $CODE ｜ $CC"
   echo "$CC" | grep -q immutable || { echo "  ✗ 带指纹的产物**应该**长缓存"; exit 1; }
 done
+
+# ── 🔴 预压缩到底生效没有（只有**带上 Accept-Encoding 问一句**才看得出来）──
+CE="$(curl -sI -H 'Accept-Encoding: br' https://w.stalkerai.cn/canvaskit/canvaskit.wasm | tr -d '\r' | grep -iE '^(content-encoding|content-length)' | tr '\n' ' ')"
+echo "  canvaskit.wasm（带 br 问）→ $CE"
+echo "$CE" | grep -qi 'content-encoding: br' || { echo "  ✗ 预压缩没生效（线上还是原样发）"; exit 1; }
+CHECK_VARY="$(curl -sI https://w.stalkerai.cn/index.html | tr -d '\r' | grep -i '^vary')"
+echo "  index.html 的 vary → ${CHECK_VARY:-（缺）}"
+echo "$CHECK_VARY" | grep -qi 'accept-encoding' || { echo "  ✗ 缺 vary: accept-encoding（缓存可能发错那一份）"; exit 1; }
+
+# ── 🔴 字体镜像那条口（白名单之外一律 404；它是个代理，必须挡住）──
+FONT_OK="$(curl -s -o /dev/null -w '%{http_code}' 'https://w.stalkerai.cn/fonts/notosanssc/v37/不存在的.woff2')"
+FONT_BAD="$(curl -s -o /dev/null -w '%{http_code}' 'https://w.stalkerai.cn/fonts/evil/v37/x.woff2')"
+echo "  字体镜像：白名单内(不存在)=$FONT_OK ｜ 家族不在白名单=$FONT_BAD"
+[ "$FONT_BAD" = "404" ] || { echo "  ✗ 白名单没挡住（$FONT_BAD）"; exit 1; }
+# ⚠️ 穿越那一条**不能拿状态码判**：nginx 会先把 `..` 规范化掉，请求最后落到
+#    SPA 的 index.html ⇒ 200 是**正常回退**（第一版就是这么误报的）。
+#    该验的是：**它没有被当成字体发出去，也没有把那个文件的内容漏出来**。
+TRAV_CT="$(curl -sI 'https://w.stalkerai.cn/fonts/notosanssc/../../../etc/passwd' | tr -d '\r' | grep -i '^content-type' | head -1)"
+TRAV_BODY="$(curl -s 'https://w.stalkerai.cn/fonts/notosanssc/../../../etc/passwd' | grep -c '^root:' || true)"
+echo "  字体镜像·穿越：$TRAV_CT ｜ body 里 root: 行数=$TRAV_BODY"
+echo "$TRAV_CT" | grep -qi 'font/woff2' && { echo "  ✗ 穿越路径被当成字体发了"; exit 1; }
+[ "$TRAV_BODY" = "0" ] || { echo "  ✗ 那个文件的内容漏出来了"; exit 1; }
 
 # ⚠️ 入口那个 HTML **必须** no-cache —— 这正是这一整套要修的那个 bug
 ENTRY_CC="$(curl -sI https://w.stalkerai.cn/index.html | grep -i '^cache-control' | tr -d '\r')"

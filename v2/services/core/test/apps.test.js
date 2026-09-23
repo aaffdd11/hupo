@@ -23,6 +23,7 @@ import {
 import {
   SIGNED_TTL_MS, appsBaseOf, createAppServer, entryUrl, parseArtifactPath, signEntry, verifyEntry,
 } from '../src/app-serve.js';
+import { fontMirrorRel } from '../src/server.js';
 
 const tmpDirs = [];
 after(() => {
@@ -363,4 +364,46 @@ test('🔴 上线只改配置：对外地址优先，没配才退回本机那个
     key: KEY, sub: 'u1', id: 'dice', version: 1, entry: 'index.html', now: 1,
   });
   assert.match(u, /^https:\/\/apps\.example\/a\/dice\/1\/index\.html\?/);
+});
+
+// ── 字体镜像那条路（2026-09-23）────────────────────────────────
+//
+// 🔴 它是个**代理**（服务端替用户去 gstatic 取字体）⇒ **路径必须过白名单**：
+//    写松一点就是一个任意 SSRF 的口。这一节钉的就是"哪些过得去、哪些过不去"。
+
+test('🔴 字体镜像只认白名单路径（它是个代理，不能变成任意取件的口）', async () => {
+  const { createServer } = await import('../src/server.js');
+  const { listen, close } = createServer({ webRoot: null, buildId: 'font-test', log: () => {} });
+  const addr = await listen(0);
+  const base = `http://127.0.0.1:${addr.port}`;
+  try {
+    // 形状不对 / 家族不在白名单 / 想跑出去 ⇒ 一律 404
+    for (const bad of [
+      '/fonts/',
+      '/fonts/notosanssc/v37/x.woff2',            // 缺一段？不，这是合法形状，下面单独验
+      '/fonts/evil/v37/x.woff2',                  // 家族不在白名单
+      '/fonts/notosanssc/../../etc/passwd',       // 穿越
+      '/fonts/notosanssc/v37/../../../secret.txt',
+      '/fonts//v37/x.woff2',
+      '/fonts/notosanssc/v37/x.exe',              // 后缀不在白名单
+      '/fonts/notosanssc/37/x.woff2',             // 版本号形状不对
+      '/fonts/https://evil.example/x.woff2',
+    ]) {
+      if (bad === '/fonts/notosanssc/v37/x.woff2') continue; // 那个是合法的（下面验 200/404 都行）
+      const r = await fetch(`${base}${bad}`);
+      assert.equal(r.status, 404, `这条该被拒：${bad}`);
+    }
+    // 🔴 **拿真实的名字判**（第一版用一个短假名字 ⇒ 把我自己的长度上限 80 漏过去了，
+    //    而线上真名字是 96 字符 ⇒ 一个都过不去、中文全 404）。
+    const real = 'notosanssc/v37/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_FnYkldv7JjxkkgFsFSSOPMOkySAZ73y9ViAt3acb8NexQ2w.118.woff2';
+    assert.equal(fontMirrorRel(`/fonts/${real}`), real, '★ 真实长度的文件名必须过白名单');
+    // 不存在的文件 ⇒ 上游给 404（**不是**因为我们把路径拒了）
+    const okPath = await fetch(`${base}/fonts/notosanssc/v37/${'a'.repeat(96)}.woff2`);
+    assert.equal(okPath.status, 404);
+    // POST 不许
+    const post = await fetch(`${base}/fonts/notosanssc/v37/x.woff2`, { method: 'POST' });
+    assert.equal(post.status, 405);
+  } finally {
+    await close();
+  }
 });
