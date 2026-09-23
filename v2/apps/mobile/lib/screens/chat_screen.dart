@@ -181,6 +181,31 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _followBottom());
   }
 
+  /// **钉到最新**（`jumpTo`，不带条件）。
+  ///
+  /// ⚠️ 只在"**新的视口刚刚建出来**"时用（展开那一档）——平时的跟随走
+  ///    [`_followBottom`]，那条会尊重"用户自己翻走了没有"。
+  /// ⚠️ 刚建出来那一帧可能还没有布局（`maxScrollExtent` 还是 0）⇒
+  ///    等下一帧再试，最多几次（`hasContentDimensions` 才是"布局过了"的信号）。
+  void _jumpToLatest({int left = 4}) {
+    if (!mounted || !_scroll.hasClients) return;
+    // 🔴 **用户一动过手就立刻收手**（哪怕这几次补帧还没跑完）。
+    //    这一条是**必须**的：4 帧的强制钉底会把用户刚做的上滑又拉回底部 ——
+    //    正在翻旧话的人被拽走，是这个项目一直在挡的那种形状
+    //    （`models/scroll_follow.dart` 的 `userScrolledAway` 就是为它存在的）。
+    //    ⚠️ 实测代价：D3.6 那条判据（先上滑到顶找"重发"）就是这么红的。
+    if (_userScrolledAway) return;
+    final pos = _scroll.position;
+    if (pos.hasContentDimensions) pos.jumpTo(pos.maxScrollExtent);
+    // ⚠️ **一次跳不够，要连补几帧**（2026-09-23 实测栽过）：
+    //    ① 刚建出来那一帧可能还没布局（`hasContentDimensions` 还是假）；
+    //    ② 而且列表是**懒加载**的 —— 跳到底之后，新露出来的条目才被 build，
+    //       `maxScrollExtent` **又长了一截** ⇒ 只跳一次会**差一条**
+    //       （实测：最后那条用户的话被输入条切掉，它的回答还在下面）。
+    //    ⇒ 连补几帧（每帧再钉一次当前的最大值），直到稳定。4 帧 ≈ 66ms，看不出来。
+    if (left > 0) WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToLatest(left: left - 1));
+  }
+
   /// 按纯函数的判定跟到底部（判据与理由见 `models/scroll_follow.dart`）。
   void _followBottom() {
     if (!mounted || !_scroll.hasClients) return;
@@ -340,6 +365,21 @@ class _ChatScreenState extends State<ChatScreen> {
                 final expanded = t != FloaterTier.collapsed;
                 if (expanded != _floaterExpanded) {
                   setState(() => _floaterExpanded = expanded);
+                  // 🔴 **展开 = 时间线刚刚被建出来**（收起档**根本不建它** ——
+                  //    见 `chat_floater.dart` 的 `if (collapsed) … else Expanded(child: widget.child)`）
+                  //    ⇒ 那个新视口的偏移从 **0** 开始 = 屏幕上停在**最早**那一条。
+                  //    ⚠️ 主人 2026-09-23 报的就是这个：*"聊天展开的时候默认显示了最早的聊天。这是不对的。"*
+                  //    ⚠️ 为什么以前的判据没抓住：它们全都从"一上来就展开"的入口进
+                  //       （`initialTier: FloaterTier.full`），而**真应用是从收起档开始的**
+                  //       —— 又一条"闸打在了替代的那一侧"（V13 那一族）。
+                  //
+                  // ⇒ **展开之后立刻钉到最新**，而且这个场合**强制**（不管
+                  //    `_userScrolledAway`）：新视口里没有"他刚才在看哪儿"可言，
+                  //    默认就该是最新的聊天。
+                  if (expanded) {
+                    _userScrolledAway = false;
+                    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToLatest());
+                  }
                 }
               },
               onHeight: (h) {

@@ -48,6 +48,44 @@ void main() {
     expect(find.text('第 1 句'), findsNothing, reason: '★ 最老那条应该在屏幕外面 —— 它还在屏幕上就说明没跟到底');
   });
 
+  // 🔴 **这一条打的是"真应用那条路"**（主人 2026-09-23 报的）：
+  //    真应用**从收起档开始**（默认档），而展开档才会**建出**时间线
+  //    ⇒ 那个新视口从偏移 0 开始 = 停在**最早**那条。
+  //    ⚠️ 上面那两条判据全都从 `initialTier: FloaterTier.full` 进 —— 恰好绕过它。
+  testWidgets('🔴 **展开之后**停在最新（收起档进 ⇒ 点"展开" ⇒ 不许停在最早）', (tester) async {
+    final c = _controller();
+    // ⚠️ 默认档就是收起（`ChatScreen.initialTier` 的默认值）—— 别显式传 full
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})),
+    );
+    _feedHistory(c, 80);
+    await tester.pumpAndSettle();
+    // 收起档里没有列表（也不该有那一屏）
+    expect(find.text('第 80 句'), findsNothing, reason: '收起档本来就不画时间线');
+
+    await tester.tap(find.text('展开'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('第 80 句'),
+      findsOneWidget,
+      reason: '★ 展开之后必须停在**最新**那一条（主人 2026-09-23 报的缺陷）',
+    );
+    // ⚠️ **最后那条回答也要在屏幕上**（不只是最后那句用户的话）：
+    //    列表是懒加载的 —— 只跳一次会**差一条**（实测：最后一句被输入条切掉、
+    //    它的回答还在下面）。多喂一点历史 + 看最后那条回答，才量得出这件事。
+    expect(
+      find.text('第 80 答'),
+      findsOneWidget,
+      reason: '★ 连最后那条回答都得露出来（懒加载会让 maxScrollExtent 跳完又长）',
+    );
+    expect(
+      find.text('第 1 句'),
+      findsNothing,
+      reason: '★ 最老那条不许出现在屏幕上 —— 出现就说明展开时停在了最早',
+    );
+  });
+
   testWidgets('历史短到一屏放得下 ⇒ 全都看得见（跟随不许把内容弄没）', (tester) async {
     final c = _controller();
     await tester.pumpWidget(MaterialApp(home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {})));
