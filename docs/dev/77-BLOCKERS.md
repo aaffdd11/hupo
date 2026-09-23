@@ -14,6 +14,8 @@
 
 ## 已做完的（这一批）
 
+| 🚧 | **P1-10** `stream.dart` 本体判据 | **退避那一半做完**：算式从 `stream.dart` 提成纯函数 `models/retry.dart` 的 `retrySeconds()`（原来是一句写死的 `(_attempt*2).clamp(1,8)`，没人判过）+ 3 条判据（逐档对表 · 永不为 0 · 单调不降 · 乱传参数不许炸）。**还没做**：401 那条（要给它一个可注入的探针）与**续传游标**（`sinceSeq` 的补发顺序）—— 那两条要动 `StreamClient` 的构造，留下一条清晰的接力点 | 无（不是卡点，是还没做到） | 不做的后果：401/游标仍只有集成测试覆盖 |
+| ✅ | **P1-4** 手机壳里"画不画话筒"口径 | 文档 `71-MIC-ASR.md` 那一条**改成与代码一致**：话筒**照画**，点它出一句白话「这里开不了麦（换个浏览器打开就能用）」，**不进语音档也不装开麦**（原文写"界面上不画话筒"是旧口径）；判据在 `test/widget/hearing_test.dart` | 文档闸 ✅ |
 | ✅ | **P1-7** 沙箱三属性**一条判据都没有** | 落源码级判据 `test/unit/mini_sandbox_test.dart`：`sandbox=allow-scripts`（**不给** `allow-same-origin`）· `referrerpolicy=no-referrer` · `allow=''`；**三条负向对照**（给了 allow-same-origin / 不设 sandbox / 放开 allow ⇒ 都必须抓住） | 2 条全过。⚠️ 写它时先被自己判红一次：**注释里**就写着"故意不给 allow-same-origin" ⇒ 先剥注释再扫 |
 | ✅ | **P1-5** Z2「回到可见不许重建」原来只验了「没被销毁」 | 补强成**同一个 Element**：盖住 → 回到可见后，`MiniAppHost` 与小程序的 `Element` 必须 `identical`（重建 ⇒ 用户填了一半的东西会没） | `mini_app_test.dart` 新判据（2 个 identity 断言） |
 | ✅ | **P1-6** 图标⇄内容交接只有纯函数判据 | 补**界面**判据：在那一层的 `Stack` 里读两个 `Opacity` —— 起点（图标 1 / 页面 0）· **半路两层都在且加起来 = 1** · 终点（0 / 1） | `mini_app_test.dart` 新判据（三点各若干断言）。⚠️ 写它时先判错了一次结构（图标层在 `ClipRRect` **外面**，是兄弟不是后代）⇒ 改成从外层 `Stack` 找 |

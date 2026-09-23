@@ -22,6 +22,7 @@ import 'stream_uri.dart';
 
 import 'api.dart';
 import '../models/conn_state.dart';
+import '../models/retry.dart';
 import '../models/process_levels.dart';
 
 class StreamClient {
@@ -217,7 +218,8 @@ class StreamClient {
     _retryState = state;
     _set(state);
     _attempt += 1;
-    final secs = (_attempt * 2).clamp(1, 8);
+    // ★ P1-10（2026-09-24）：算式提到 `models/retry.dart`（纯函数，判据在 test/unit）
+    final secs = retrySeconds(_attempt);
     _retry?.cancel();
     _retry = Timer(Duration(seconds: secs), _connect);
   }
