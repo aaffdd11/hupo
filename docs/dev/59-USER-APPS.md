@@ -273,7 +273,7 @@ keyFormat: 'dsh-refs' })`），只在**宿主**上起（匣子里那份由 `entr
 | **卸载**：`app_uninstall`（**软删**：挪进 `.removed/`，能拿回来）+ 审计 | `apps-chain.test.js`（真链路：撤掉之后清单里没了、盘上还在） |
 | **人格**：直说"它现在还不能问话" | `check-persona.sh` |
 
-⚠️ **授权/撤权的工具故意没挂**：`ask` 那条路还没定，挂了就是给他一个"按了没用"的开关
+✅ **2026-09-23 更正：授权/撤权这两件工具是挂着的、而且在用**（`src/mcp-apps-server.mjs` 的 `app_grant`/`app_revoke` 都在 `TOOLS` 里，判据见 `test/capabilities.test.js`「乙-4b 起九件全做了」）。⚠️ **原文写的是"故意没挂"——那是过期的话，照它做就等于把正在用的能力删掉**
 （`apps-chain.test.js` 与 `capabilities.test.js` 都钉着"这两件不许挂"）。
 
 ---

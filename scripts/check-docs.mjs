@@ -42,7 +42,11 @@ const RATCHET = [
   'docs/dev/58-CREATE-APP.md',
   'docs/dev/59-USER-APPS.md',
   'docs/dev/61-WEB-PERF.md',
-  'docs/dev/61-WEB-PERF.md',
+  // ⚠️ 2026-09-23：新写的分层文档**从出生就进名单**（这一条纪律原来漏了三批：62/63/64）
+  'docs/dev/62-FAILURE-CLASSES.md',
+  'docs/dev/63-OWNER-DECISIONS.md',
+  'docs/dev/64-CHAT-REDESIGN.md',
+  'docs/dev/65-ALIGNMENT-2026-09-23.md',
 ];
 
 /** ② L0 = 路由层：零事实、零数值、零状态 */
