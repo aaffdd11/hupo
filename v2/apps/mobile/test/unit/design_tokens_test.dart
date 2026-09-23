@@ -60,4 +60,82 @@ void main() {
     expect(d.radiusCard, greaterThan(d.radiusField));
     expect(d.radiusField, greaterThan(d.radiusChip));
   });
+
+  // ── P1-8（2026-09-24）：棘轮从「圆角」扩到**间距/尺寸** ──────────────
+  //
+  // ⚠️ **它不是"这些全是缺陷"**：装饰性的留白本来就允许写数字
+  //   （D3/D3.5 管的是**装字的容器** —— 容器跟字算，不许夹住字）。
+  //   这条棘轮管的是**别再涨**：同一屏上"三种卡片外观"那种毛病，
+  //   正是从"顺手写个 12"一处一处攒出来的（本项目第一条纪律：数值只住 design.dart）。
+  //
+  // 基线 = 2026-09-24 实测：**161 处 / 25 个文件**。只许少、不许多。
+  const Map<String, int> dimBaseline = {
+    'lib/screens/about_screen.dart': 4,
+    'lib/screens/app_theme.dart': 2,
+    'lib/screens/chat_screen.dart': 6,
+    'lib/screens/discover_screen.dart': 3,
+    'lib/screens/export_screen.dart': 7,
+    'lib/screens/landing_screen.dart': 36,
+    'lib/screens/login_screen.dart': 7,
+    'lib/screens/math_quiz_screen.dart': 2,
+    'lib/screens/model_key_screen.dart': 4,
+    'lib/screens/settings_screen.dart': 1,
+    'lib/screens/trash_screen.dart': 6,
+    'lib/screens/waiting_screen.dart': 8,
+    'lib/widgets/app_desktop.dart': 1,
+    'lib/widgets/bubble_menu.dart': 2,
+    'lib/widgets/bubbles.dart': 22,
+    'lib/widgets/chat_floater.dart': 4,
+    'lib/widgets/composer.dart': 14,
+    'lib/widgets/key_form.dart': 4,
+    'lib/widgets/mini_app_host.dart': 1,
+    'lib/widgets/notice.dart': 6,
+    'lib/widgets/page_header.dart': 1,
+    'lib/widgets/plan_strip.dart': 4,
+    'lib/widgets/process_level_menu.dart': 1,
+    'lib/widgets/process_view.dart': 5,
+    'lib/widgets/trash_plan_sheet.dart': 10
+  };
+
+  /// 一处"写死的间距/尺寸"长什么样（只数**数字字面量**；`d.gapM` 那种不算）。
+  int hardcodedDims(String src) {
+    final pats = <RegExp>[
+      RegExp(r'EdgeInsets\.all\(\s*[0-9]'),
+      RegExp(r'EdgeInsets\.symmetric\([^)]*?[a-zA-Z]+:\s*[0-9]'),
+      RegExp(r'EdgeInsets\.fromLTRB\(\s*[0-9]'),
+      RegExp(r'EdgeInsets\.only\([^)]*?[a-zA-Z]+:\s*[0-9]'),
+      RegExp(r'SizedBox\(\s*height:\s*[0-9]'),
+      RegExp(r'SizedBox\(\s*width:\s*[0-9]'),
+    ];
+    var n = 0;
+    for (final r in pats) {
+      n += r.allMatches(src).length;
+    }
+    return n;
+  }
+
+  test('★ P1-8 棘轮：写死的间距/尺寸只许少、不许多（基线 161 处）', () {
+    final over = <String>[];
+    var total = 0;
+    for (final e in Directory('lib').listSync(recursive: true)) {
+      if (e is! File || !e.path.endsWith('.dart')) continue;
+      final rel = e.path.startsWith('./') ? e.path.substring(2) : e.path;
+      final n = hardcodedDims(e.readAsStringSync());
+      total += n;
+      final cap = dimBaseline[rel] ?? 0;
+      if (n > cap) over.add('$rel: $n > 上限 $cap');
+    }
+    expect(over, isEmpty,
+        reason: '写死的间距/尺寸涨了：\n${over.join('\n')}\n'
+            '（要用 d.gapS/gapM/gapL 或 design.dart 里那几档；确实该新增一档就先改 token）');
+    expect(total, lessThanOrEqualTo(161),
+        reason: '总处数从 161 涨到 $total —— 棘轮只许往下走');
+  });
+
+  test('P1-8 负向对照：这个计数**真的数得出来**（不是空转）', () {
+    expect(hardcodedDims('padding: EdgeInsets.all(12)'), 1);
+    expect(hardcodedDims('SizedBox(height: 8)'), 1);
+    expect(hardcodedDims('padding: EdgeInsets.all(d.gapM)'), 0);
+    expect(hardcodedDims('SizedBox(height: d.gapS)'), 0);
+  });
 }
