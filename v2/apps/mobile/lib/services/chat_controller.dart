@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/conn_state.dart';
 import '../models/export.dart';
+import '../models/hearing_session.dart';
 import '../models/message_state.dart';
 import '../models/notice.dart';
 import '../models/plan.dart';
@@ -21,10 +22,12 @@ import '../models/trash_words.dart';
 import 'api.dart';
 import 'compose_store.dart';
 import 'draft_store.dart';
+import 'hearing.dart' as hearing_service;
 import 'speech.dart' as speech_service;
 import 'speech_store.dart';
 import 'process_level_store.dart';
 import 'stream.dart';
+import 'stream_uri.dart';
 import '../models/token_sub.dart';
 import 'timeline_store.dart';
 import 'token_store.dart';
@@ -44,6 +47,14 @@ class ChatController extends ChangeNotifier {
     /// ⚠️ 默认就是真的那两个（`services/speech.dart`）；判据注一个记账的进去。
     bool Function(String text, {void Function()? onEnd})? speak,
     void Function()? stop,
+    /// **开麦/收手**那两个动作（可注入 —— 判据要能验"按下去了没有"）。
+    /// ⚠️ 默认就是真的那两个（`services/hearing.dart`）；判据注一个记账的进去。
+    Future<String?> Function({
+      required Uri url,
+      required String token,
+      required void Function(Map<String, dynamic>) onEvent,
+    })? startHear,
+    void Function()? stopHear,
   }) : _token = token,
        local = local ?? TimelineStore(),
        drafts = drafts ?? DraftStore(),
@@ -51,7 +62,9 @@ class ChatController extends ChangeNotifier {
        levels = levels ?? ProcessLevelStore(),
        speech = speech ?? SpeechStore(),
        _speak = speak ?? speech_service.speakAloud,
-       _stopSpeaking = stop ?? speech_service.stopSpeaking {
+       _stopSpeaking = stop ?? speech_service.stopSpeaking,
+       _startHear = startHear ?? hearing_service.startHearing,
+       _stopHear = stopHear ?? hearing_service.stopHearing {
     // ⚠️ 构造时就带令牌的场合（`main.dart` 冷启动那条路）也要先绑好命名空间，
     //    否则第一次 `_restoreLocal()` 读的还是默认那一份（= 上一个人的）。
     _bindNamespace(token);
@@ -113,6 +126,15 @@ class ChatController extends ChangeNotifier {
   final bool Function(String text, {void Function()? onEnd}) _speak;
   final void Function() _stopSpeaking;
 
+  /// 真正去开麦、真正去收手的那两个（注入点见构造函数）。
+  final Future<String?> Function({
+    required Uri url,
+    required String token,
+    required void Function(Map<String, dynamic>) onEvent,
+  })
+  _startHear;
+  final void Function() _stopHear;
+
   /// 收进来的**服务端事实**（只留带号的），存缓存就是从这份存。
   ///
   /// ⚠️ 为什么要单独留一份：`Timeline` 里已经是**画出来的条目**了，
@@ -140,6 +162,13 @@ class ChatController extends ChangeNotifier {
 
   /// **正在念哪一条**（`null` = 没在念）。界面靠它把按钮变成"别念了"。
   String? _speakingId;
+
+  /// **语音那一步现在什么样**（纯状态机，`models/hearing_session.dart`）。
+  ///
+  /// ⚠️ 状态住在这儿（不属于某个 widget）：它要跨这一屏活着，
+  ///    而且收尾那几个字是**在用户按了结束之后**才回来的。
+  Hearing _hearing = const Hearing();
+
 
   /// 浮窗里现在挂着的那一条通知（契约 `29-NOTICE.md` 约束 1）。
   ///
@@ -411,6 +440,61 @@ class ChatController extends ChangeNotifier {
     _stopSpeaking();
     if (_speakingId == null) return;
     _speakingId = null;
+    notifyListeners();
+  }
+
+  /// **语音那一步现在什么样**（界面照它画）。
+  Hearing get hearing => _hearing;
+
+  /// 这台设备/这个页面**开得了麦吗**（`services/hearing.dart`）。
+  /// ⚠️ 假 ⇒ 界面**不画那个话筒**（开不了就别摆在那儿）。
+  bool get canHear => hearing_service.canHear;
+
+  /// **按了一下那个按钮**（开始 / 结束都由当前状态决定 —— 主人 2026-09-23：
+  /// *"是按一下开始语音跟踪…再按一下结束"*）。
+  ///
+  /// ⚠️ 三条：
+  ///  ① **按下去立刻有反馈**（先变成"正在听"，再去开麦）—— 开麦要弹权限框，
+  ///     那一小会儿界面上不能什么都不动；
+  ///  ② 开麦那一步失败 ⇒ **如实说**（权限 / 没配钥匙 / 开不了），
+  ///     绝不用假的字糊过去（这一版把原来那个"演示"砍了）；
+  ///  ③ 结束那一下**只关麦**：最后那几个字是在我们说"结束"之后才回来的，
+  ///     所以状态先停在"听着"，等对面说 `asr/end` 才真的停（见 [Hearing.event]）。
+  Future<void> toggleHearing() async {
+    if (_hearing.listening) {
+      _stopHear();
+      _hearing = _hearing.tapped();
+      notifyListeners();
+      return;
+    }
+    // 收尾中（按了停、还在等最后一句）：按了不算 —— 界面上那颗按钮这期间也不画
+    if (_hearing.phase == HearingPhase.finishing) return;
+    final t = _token;
+    if (t == null) {
+      _hearing = _hearing.broke('failed');
+      notifyListeners();
+      return;
+    }
+    _hearing = _hearing.tapped();
+    notifyListeners();
+    final why = await _startHear(
+      // ⚠️ 地址由 `stream_uri.dart` 那一个函数算（同源看页面协议）——
+      //    语音这条**不许再拼一遍**（那条事故的第二个入口）。
+      url: asrUri(base: '', page: Uri.base),
+      token: t,
+      onEvent: _onHearingEvent,
+    );
+    if (why != null) {
+      _hearing = _hearing.broke(why);
+      notifyListeners();
+    }
+  }
+
+  /// 语音那条回来的事件（**唯一入口** —— 和 `ingest()` 一个道理：
+  /// 状态只在一个地方被改，判据才打得准）。
+  void _onHearingEvent(Map<String, dynamic> e) {
+    _hearing = _hearing.event(e);
+    // ⚠️ 半句也要刷（"实时转文字"就是靠它）；事件很稀（一句一两个），不是热路径
     notifyListeners();
   }
 
@@ -1026,6 +1110,9 @@ class ChatController extends ChangeNotifier {
     _noticeTimer = null;
     // ⚠️ 离开这一屏就**别再念了**（用户走了、声音还在说话 = 这一族最讨嫌的形状）
     _stopSpeaking();
+    // 🔴 离开这一屏也**必须关麦**：麦克风开着而人已经走了，是这一族里最严重的一种
+    //    （浏览器上那个录制标记会一直亮着）。
+    _stopHear();
     _stream?.dispose();
     _stream = null;
     super.dispose();

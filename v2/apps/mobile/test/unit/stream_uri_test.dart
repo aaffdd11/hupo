@@ -128,4 +128,22 @@ void main() {
       expect(u.toString(), 'wss://w.stalkerai.cn/api/stream?sinceSeq=0&level=quiet');
     });
   });
+
+  group('语音那条（/api/asr · 2026-09-23 真开麦）', () {
+    test('★ https 页面上**不许降级**（那次事故的第二个入口）', () {
+      final u = asrUri(base: '', page: page('https://w.stalkerai.cn/'));
+      expect(u.toString(), 'wss://w.stalkerai.cn/api/asr');
+      expect(u.scheme, 'wss', reason: '在 https 页面上拼出 ws:// 会被浏览器直接拦掉');
+    });
+
+    test('同源：看页面自己的协议（http 调试页面 ⇒ ws）', () {
+      final u = asrUri(base: '', page: page('http://127.0.0.1:8020/'));
+      expect(u.toString(), 'ws://127.0.0.1:8020/api/asr');
+    });
+
+    test('跨源：看 base 的协议，端口照带（不是默认端口就不许丢）', () {
+      final u = asrUri(base: 'http://127.0.0.1:8091', page: page('https://w.stalkerai.cn/'));
+      expect(u.toString(), 'ws://127.0.0.1:8091/api/asr');
+    });
+  });
 }

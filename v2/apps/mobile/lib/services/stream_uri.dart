@@ -44,7 +44,21 @@ Uri streamUri({
   required Uri page,
   required int sinceSeq,
   ProcessLevel level = defaultProcessLevel,
-}) {
+}) => Uri.parse(
+  '${_wsOrigin(base: base, page: page)}/api/stream?sinceSeq=$sinceSeq&level=${level.wire}',
+);
+
+/// 算出**语音那条**该往哪儿连：`wss://<host>/api/asr`（主人 2026-09-23：真开麦）。
+///
+/// 🔴 它和上面那条**共用同一个算地址的函数**（[streamUri] 顶上记着那次事故：
+///    "客户端自己算地址、闸却打在另一侧" ⇒ 每道闸都绿、用户那里全黑）。
+///    ⇒ 语音这条**不许再拼一遍**，否则同一个坑会有第二个入口。
+///    判据：`test/unit/stream_uri_test.dart`（含 https 页面**不许降级**的金丝雀）。
+Uri asrUri({required String base, required Uri page}) =>
+    Uri.parse('${_wsOrigin(base: base, page: page)}/api/asr');
+
+/// `wss://<host>`（不带路径）：同源看页面协议，跨源看 `base` 的协议。
+String _wsOrigin({required String base, required Uri page}) {
   final raw = base.trim();
   final origin = raw.isEmpty
       ? page
@@ -57,5 +71,5 @@ Uri streamUri({
   //    拼进 URL 就会变成一个多余的 `:443`。
   final host = '${origin.host}${origin.hasPort ? ':${origin.port}' : ''}';
   final scheme = origin.scheme == 'https' ? 'wss' : 'ws';
-  return Uri.parse('$scheme://$host/api/stream?sinceSeq=$sinceSeq&level=${level.wire}');
+  return '$scheme://$host';
 }

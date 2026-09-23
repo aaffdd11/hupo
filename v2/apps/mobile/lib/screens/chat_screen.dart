@@ -32,6 +32,7 @@ import '../models/trash_words.dart';
 import '../services/api.dart';
 import '../services/chat_controller.dart';
 import '../services/links.dart';
+import '../services/hearing.dart';
 import '../services/speech.dart';
 import '../widgets/app_desktop.dart';
 import '../widgets/mini_app_icons.dart';
@@ -681,6 +682,12 @@ class _ChatScreenState extends State<ChatScreen> {
           autoSpeak: c.autoSpeak,
           onToggleAutoSpeak: (on) => c.setAutoSpeak(on),
           canSpeak: canSpeak,
+          // ★ **真开麦**（主人 2026-09-23：*"你做一下按钮。是按一下开始语音跟踪…
+          //   再按一下结束。然后将文字展示出来。用户可以选择发送。"*）
+          //   ⚠️ 开不了麦（不是网页 / 不是 https）⇒ **不画那个话筒**。
+          canHear: canHear,
+          hearing: c.hearing,
+          onMicToggle: c.toggleHearing,
           // 🔴 **用户按下发送 ⇒ 最大化**（§6.2"发就拉满"）。
           //    ⚠️ 反过来不成立：**状态变化不许动窗口**（D4.8：新增助手消息的高度变化 = 0px）。
           //    ★ 现在**收起态也能发**（那儿也有输入框）⇒ 发出去就拉满，这一步比以前更有用。

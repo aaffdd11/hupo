@@ -44,6 +44,9 @@
 //   滚到底：`--eval "(()=>{const g=document.querySelector('flt-glass-pane');for(let i=0;i<8;i++)g.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:600,clientX:640,clientY:300}));return 'ok'})()"`；
 //   截图前等多久：`--shot-after <毫秒>`（默认 6000 —— **中文字体是异步下的，拍早了就是豆腐块**）；
 //   屏掉 gstatic 验自托管：`--block-gstatic`（**在开页面之前**就屏，见 ②.5）
+//   给浏览器额外参数（可多次）：`--chrome-arg --use-fake-device-for-media-stream`
+//     —— **假麦克风**那一套（`--use-fake-ui-for-media-stream` 自动给权限、
+//     `--use-file-for-fake-audio-capture=<16k 单声道 wav>` 拿一个文件当话筒）
 //   （`--url` 默认打线上；`--chrome` 指定浏览器可执行文件）
 //
 // ⚠️ **它不在硬闸里**：要一个浏览器 + 一个令牌。本机没有浏览器时它就该**跳过**
@@ -136,8 +139,16 @@ const EVAL_SETTLE_MS = Number.parseInt(valueOf('--eval-settle', '600'), 10);
 
 /** `--eval <js>`（可多次）：在页面里跑一段 JS 并把结果打出来（取证用，见下面 ④.4）。 */
 const EVALS = [];
+/** 额外给浏览器的参数（`--chrome-arg`，可多次）。⚠️ **必须声明在下面那个循环之前**
+ *  （第一版写在后面 ⇒ TDZ 报错 ⇒ 脚本一个字都不打、退出码还是 0，白跑一趟）。 */
+const CHROME_ARGS = [];
 for (let i = 0; i < argv.length; i += 1) {
   if (argv[i] === '--eval' && argv[i + 1]) EVALS.push(argv[i + 1]);
+  // 给浏览器加一个参数（可给多次）——例如**假麦克风**那三个：
+  //   `--chrome-arg --use-fake-device-for-media-stream`
+  //   `--chrome-arg --use-fake-ui-for-media-stream`
+  //   `--chrome-arg --use-file-for-fake-audio-capture=/tmp/xx.wav`
+  if (argv[i] === '--chrome-arg' && argv[i + 1]) CHROME_ARGS.push(argv[i + 1]);
 }
 // ⚠️ **CDP 的 `Input.*` 送不到 Flutter**（2026-09-22 实测：鼠标与触摸都试了、
 //    连聚焦模拟也加了，**页面逐字节不变**）；而**页内合成 pointer 事件**可以
@@ -226,6 +237,7 @@ async function main() {
       '--disable-dev-shm-usage',
       `--window-size=${WIDTH},${HEIGHT}`,
       '--hide-scrollbars',
+      ...CHROME_ARGS,
       'about:blank',
     ],
     { stdio: 'ignore' },

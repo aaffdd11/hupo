@@ -21,10 +21,17 @@
 //
 // 退出码：0 通了 · 2 服务端回错（含鉴权失败）· 3 环境不具备（少凭据 / 少依赖 / 音频文件不对）
 
-import nodeCrypto from 'node:crypto';
 import nodeFs from 'node:fs';
 import nodeProcess from 'node:process';
 import WebSocket from '../v2/services/core/node_modules/ws/index.js';
+// ⚠️ **签名那一半不在这份脚本里了**（2026-09-23）：它搬进了
+//    `v2/services/core/src/asr-sign.js` —— 因为**真正转发音频的那条路用的就是那一份**。
+//    脚本自己再写一遍 = **判据打在另一侧**（`docs/dev/16-STREAM.md` · 手册 §13.3 V13）。
+import {
+  DEFAULT_ASR_ENGINE,
+  newVoiceId,
+  signAsrUrl,
+} from '../v2/services/core/src/asr-sign.js';
 
 const argv = nodeProcess.argv.slice(2);
 const has = (f) => argv.includes(f);
@@ -38,7 +45,7 @@ const SECRET_ID = nodeProcess.env.TENCENT_SECRET_ID ?? '';
 const SECRET_KEY = nodeProcess.env.TENCENT_SECRET_KEY ?? '';
 const PCM = valueOf('--pcm');
 /** ⚠️ 内测版：**只支持 16k 单声道 PCM、且不超过 1 分钟**（文档原话）。 */
-const ENGINE = nodeProcess.env.TENCENT_ASR_ENGINE ?? 'Hy-ASR-3.0-preview';
+const ENGINE = nodeProcess.env.TENCENT_ASR_ENGINE ?? DEFAULT_ASR_ENGINE;
 
 /** 掩码（**永不打全**）：只说"有没有、多长"。 */
 const mask = (s) => (s ? `长度 ${s.length}` : '（没设）');
@@ -53,29 +60,8 @@ const mask = (s) => (s ? `长度 ${s.length}` : '（没设）');
  *
  * @returns {{origin: string, signature: string, url: string}}
  */
-export function signAsrUrl({ appid, secretId, secretKey, params, now = Date.now() }) {
-  const all = {
-    engine_model_type: ENGINE,
-    // 有效期：给 60 秒够握手用（文档要求 expired > timestamp）
-    expired: Math.floor(now / 1000) + 60,
-    filter_empty_result: 0,
-    needvad: 1,
-    nonce: Math.floor(now / 1000),
-    secretid: secretId,
-    timestamp: Math.floor(now / 1000),
-    voice_format: 1, // 1 = pcm
-    // ⚠️ `voice_id` **由调用方给**（每次连接必须是一个新的 UUID，文档要求）——
-    //    不放这儿生成，否则这个函数就不纯了：同一个输入两次算出两个不同的签名
-    //    （自测当场抓到过这件事）。
-    voice_id: params?.voice_id ?? nodeCrypto.randomUUID(),
-    ...params,
-  };
-  const sorted = Object.keys(all).sort();
-  const query = sorted.map((k) => `${k}=${all[k]}`).join('&');
-  const origin = `asr.cloud.tencent.com/asr/v2/${appid}?${query}`;
-  const signature = nodeCrypto.createHmac('sha1', secretKey).update(origin).digest('base64');
-  return { origin, signature, url: `wss://${origin}&signature=${encodeURIComponent(signature)}` };
-}
+// ⚠️ 签名那两个函数**不在这里**：`signAsrUrl` / `newVoiceId` 从上面 import
+//    （`src/asr-sign.js`）—— **产品那条路用的就是那一份**。
 
 // ── `--selftest`：不联网，只把签名那一步的形状钉住（判据在 `test/`，这儿是给人看的）──
 if (has('--selftest')) {
@@ -85,7 +71,7 @@ if (has('--selftest')) {
   const a = signAsrUrl(base);
   const b = signAsrUrl(base);
   const c = signAsrUrl({ ...base, secretKey: 'sk-other' });
-  const d = signAsrUrl({ ...base, params: { ...fixed, engine_model_type: '16k_zh' } });
+  const d = signAsrUrl({ ...base, engine: '16k_zh' });
   const checks = [
     ['签名原文不含协议头', !a.origin.startsWith('wss://')],
     ['签名原文参数按字典序', a.origin.includes('engine_model_type=') && a.origin.indexOf('engine_model_type=') < a.origin.indexOf('expired=')],
@@ -133,7 +119,14 @@ if (PCM) {
   console.log('  （没给 --pcm ⇒ 送 200ms 静音走一遍流程：能拿到 final=1 就说明这条链是通的）');
 }
 
-const { url } = signAsrUrl({ appid: APPID, secretId: SECRET_ID, secretKey: SECRET_KEY });
+const { url } = signAsrUrl({
+  appid: APPID,
+  secretId: SECRET_ID,
+  secretKey: SECRET_KEY,
+  engine: ENGINE,
+  // ⚠️ **每次连接换一个新的**（文档要求）；它由调用方给，签名函数才纯
+  params: { voice_id: newVoiceId() },
+});
 const ws = new WebSocket(url);
 let handshake = null;
 let lastText = '';

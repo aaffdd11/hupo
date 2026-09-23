@@ -26,6 +26,7 @@ import { CATCHUP_RENDER, markCatchUp, planBackfill, planResume } from './resume.
 import { buildExport } from './export.js';
 import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
 import { SIGNED_TTL_MS, entryUrl } from './app-serve.js';
+import { ASR_PATH } from './asr.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -229,6 +230,14 @@ export function createServer({
   dispatcher = null,
   /** 回收站（批 3 第二件）。`null` = 这台部署没开这条路（路由一律 404）。 */
   trash = null,
+  /**
+   * **语音那条**（`/api/asr` 的中继，`src/asr.js` 建的）。
+   *
+   * `null` = 这台部署没有这条路 ⇒ 那条 WS **仍然接上**，但**如实回一句"没配"**
+   * （见 `onAsr`）。它跟聊天那条分开，是因为音频要**二进制帧**，
+   * 而聊天那条的协议已经冻结了 —— 不往里面塞新东西。
+   */
+  asr = null,
   /**
    * 多租户：**按 `claim.sub` 取那个人的世界**（`worlds.js`）。
    *
@@ -1164,13 +1173,21 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     handleProtocols: (protocols) => (protocols.has('bearer') ? 'bearer' : false),
   });
 
+  // **`/api/asr` 那条**（语音本体 · 2026-09-23）：另开一条连接、另带一套帧
+  // （**二进制帧 = 音频**），这样聊天那条已经冻结的协议**一个字都不用动**。
+  const asrWss = new WebSocketServer({
+    noServer: true,
+    handleProtocols: (protocols) => (protocols.has('bearer') ? 'bearer' : false),
+  });
+
   /**
    * WS 的握手处理。**抽成函数**是因为它有两条听入口：
    * 普通那条（要令牌）与**可信本地那条**（容器里 · 身份由内核保证 · 选项甲）。
    */
   function handleUpgrade(req, socket, head, trusted) {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
-    if (url.pathname !== '/api/stream') {
+    const wantAsr = url.pathname === ASR_PATH;
+    if (url.pathname !== '/api/stream' && !wantAsr) {
       return rejectUpgrade(socket, 404, 'Not Found', { error: 'not-found' });
     }
     let claim;
@@ -1218,9 +1235,37 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
         return proxyUpgrade(req, socket, head, sock);
       }
     }
+    if (wantAsr) {
+      // 音频那条：身份**同一个来源**（验过签的 `claim`），但帧走另一套。
+      return asrWss.handleUpgrade(req, socket, head, (ws) => onAsr(ws));
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
       onStream(ws, url, claim);
     });
+  }
+
+  /**
+   * **`/api/asr`**：把这条连接交给中继（`src/asr.js`）。
+   *
+   * ⚠️ 这台部署**没配钥匙**也要接上：不接的话浏览器只能看到"握手失败"，
+   * 而界面就得猜一个理由（本项目最贵的那类毛病：页面在说假话）。
+   * ⇒ 接上，然后**如实说一句"没配"**，由客户端原话转达。
+   */
+  function onAsr(ws) {
+    if (!asr) {
+      try {
+        ws.send(JSON.stringify({ type: 'asr/unavailable', reason: 'not-configured' }));
+      } catch {
+        /* 已经没了 */
+      }
+      try {
+        ws.close(1000);
+      } catch {
+        /* 已经没了 */
+      }
+      return;
+    }
+    asr.attach(ws);
   }
 
   /**
@@ -1437,7 +1482,9 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
       // ⚠️ `server.close()` 会等所有连接自己断开。WS 是长连接，
       //    所以必须先**主动**结束它们——否则关闭会一直挂着
       //    （测试里表现为超时，生产里表现为"停不下来"）。
-      for (const client of wss.clients) {
+      //    🔴 **两条 WS 都要终止**：2026-09-23 加 `/api/asr` 时漏了它，
+      //       当场被测试抓住 —— 只要有一个语音连接开着，`restart-core.sh` 就会卡住。
+      for (const client of [...wss.clients, ...asrWss.clients]) {
         try {
           client.terminate();
         } catch {
@@ -1457,6 +1504,7 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
             server.closeIdleConnections?.();
           });
         }),
+        new Promise((resolve) => asrWss.close(() => resolve())),
         closeTrusted,
       ]).then(() => undefined);
     },

@@ -18,6 +18,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/design.dart' as d;
+import '../models/hearing_session.dart';
+import '../models/hearing_words.dart';
 import '../models/speak_words.dart';
 import '../models/space_words.dart';
 
@@ -36,6 +38,9 @@ class Composer extends StatefulWidget {
     this.autoSpeak = false,
     this.onToggleAutoSpeak,
     this.canSpeak = false,
+    this.canHear = false,
+    this.hearing = const Hearing(),
+    this.onMicToggle,
   });
 
   final void Function(String text) onSend;
@@ -67,6 +72,17 @@ class Composer extends StatefulWidget {
   ///    （界面上不许出现按不动的东西）。
   final bool canSpeak;
 
+  /// 这台设备/这个页面**开得了麦吗**（`services/hearing.dart` 的 `canHear`）。
+  /// ⚠️ 假 ⇒ **不画那个话筒**（同一个道理：开不了就别摆在那儿）。
+  final bool canHear;
+
+  /// **语音那一步现在什么样**（纯状态机，`models/hearing_session.dart`）。
+  /// 状态住上层（控制器）：它要跨这一屏活着，也要跟着事件走。
+  final Hearing hearing;
+
+  /// **按了一下那个按钮**（开始 / 结束都由上层按当前状态决定）。
+  final VoidCallback? onMicToggle;
+
   @override
   State<Composer> createState() => _ComposerState();
 }
@@ -78,61 +94,76 @@ class _ComposerState extends State<Composer> {
   /// **现在是语音那一档吗**（微信那个话筒/键盘切换）。
   bool _voice = false;
 
-  /// 手指按着"按住 说话"。
-  bool _holding = false;
+  /// 开麦之前框里已经有那几个字 —— 识别出来的字**接在它们后面**
+  /// （绝不把用户打了一半的字擦掉）。
+  String _prefix = '';
 
-  /// 演示走到的字数（"实时转文字"的**形状**）。
+  /// 上一次**由语音写进框里**的那份字。
+  /// ⚠️ 有了它才敢在"他自己动过手"之后**不再覆盖**（收尾那句字回来得比手慢）。
+  String _mirror = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _mirror = _controller.text;
+  }
+
+  @override
+  void didUpdateWidget(Composer old) {
+    super.didUpdateWidget(old);
+    // 语音那一边变了 ⇒ 把字搬进框里
+    if (widget.hearing.text != old.hearing.text) _pushMirror();
+    // **这一轮真的完了就回到键盘那一档**：字在框里、键盘在、发送钮也在
+    // —— 主人那句"然后将文字展示出来。用户可以选择发送"落在这儿。
+    // ⚠️ 判据是 `busy`（在听 **或** 收尾中）**不是 `listening`**：
+    //    按下"结束"之后还有一句要等，那一句没到就切回去 = 切早了（字会迟到）。
+    if (old.hearing.busy &&
+        !widget.hearing.busy &&
+        widget.hearing.phase == HearingPhase.idle) {
+      setState(() => _voice = false);
+      _focus.requestFocus();
+    }
+  }
+
+  /// 把语音那一边现在的字写进框里。
   ///
-  /// 🔴 **这一整块是假的，所以处处标着「演示」**：
-  ///    没有开麦、没有识别、也不把演示的字当成他说的话（松手只是把它放回打字框，
-  ///    让他自己决定发不发）。⇒ 页面上**一眼看得出这是假的**。
-  int _demoChars = 0;
-  static const _demoLine = '这是一句演示，还没有真的开麦。';
-  static const _demoTick = Duration(milliseconds: 90);
-  Timer? _demoTimer;
+  /// 🔴 两条规矩：
+  ///  ① 开麦前框里那几个字**留着**（接在后面）；
+  ///  ② 一旦用户自己动过手（框里的字≠我上次写进去的那份），
+  ///     **就不再覆盖** —— 收尾那几个字回来得比他的手慢。
+  void _pushMirror() {
+    final text = widget.hearing.text;
+    final next = text.isEmpty ? _prefix : '$_prefix$text';
+    if (next == _mirror) return;
+    if (_controller.text != _mirror && !widget.hearing.busy) return;
+    _mirror = next;
+    _controller.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: next.length),
+    );
+    widget.onDraftChanged?.call(next);
+  }
+
+  /// **按了一下那个按钮**（开始 / 结束）。
+  void _toggleMic() {
+    final was = widget.hearing.busy;
+    if (!was) {
+      // 开麦：记住框里已有的字（识别结果接在它们后面）
+      _prefix = _controller.text;
+      _mirror = _controller.text;
+    } else {
+      // 结束：焦点回框里 —— 字马上要落在那儿，他要发就按发送
+      _focus.requestFocus();
+    }
+    widget.onMicToggle?.call();
+    if (mounted) setState(() {});
+  }
 
   @override
   void dispose() {
-    _demoTimer?.cancel();
     _controller.dispose();
     _focus.dispose();
     super.dispose();
-  }
-
-  /// 按住 ⇒ "实时"往外吐字（**演示**）；松手 ⇒ 停下。
-  void _startDemo() {
-    _demoTimer?.cancel();
-    setState(() {
-      _holding = true;
-      _demoChars = 0;
-    });
-    _demoTimer = Timer.periodic(_demoTick, (t) {
-      if (!mounted) return;
-      setState(() => _demoChars += 1);
-      if (_demoChars >= _demoLine.length) t.cancel();
-    });
-  }
-
-  /// 松手：把演示那句话**放回打字框**（⚠️ **不自动发送** —— 手册 D5.4 点名不许）。
-  void _endDemo() {
-    _demoTimer?.cancel();
-    if (!mounted) return;
-    setState(() {
-      _holding = false;
-      _voice = false; // 回到键盘那一档，让他能改能发
-    });
-    if (_demoChars > 0) {
-      final text = _demoLine.substring(
-        0,
-        _demoChars > _demoLine.length ? _demoLine.length : _demoChars,
-      );
-      _controller.value = TextEditingValue(
-        text: text,
-        selection: TextSelection.collapsed(offset: text.length),
-      );
-      widget.onDraftChanged?.call(text);
-      _focus.requestFocus();
-    }
   }
 
   /// 从剪贴板读一段，**接在光标处**（不是替换 —— 聊天里他可能已经打了一半）。
@@ -195,10 +226,6 @@ class _ComposerState extends State<Composer> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ── **演示提示条**（主人："先做假的"）──────────────────
-          //  🔴 两个作用缺一不可：① 让主人看得到"实时转文字"的形状；
-          //     ② **让任何人一眼看出这是假的** —— 这个项目栽过三次"页面在说假话"。
-          if (_voice) _demoStrip(theme),
           // ── **上面那条草稿**（主人 2026-09-22）──────────────────
           //   规则：**框是空的、而且本机存着一份草稿**时才出现。
           //   ⚠️ 一旦他开始打字（框里有字），这条就收起来 —— 不然同一句话画两遍。
@@ -212,19 +239,17 @@ class _ComposerState extends State<Composer> {
               //    ⇒ 一个按钮按下去就是「用户手势」，能合法读剪贴板。
               //    ⚠️ 命中区 ≥44（`IconButton` 默认 48）。
               // ★ 微信那个**话筒 / 键盘**（主人："要能切语音"）
-              IconButton(
-                tooltip: _voice ? voiceToKeyboard : voiceToMic,
-                onPressed: () {
-                  _demoTimer?.cancel();
-                  setState(() {
-                    _voice = !_voice;
-                    _holding = false;
-                  });
-                },
-                icon: Icon(
-                  _voice ? Icons.keyboard_alt_outlined : Icons.mic_none,
+              //
+              // ⚠️ **开不了麦就不画这个话筒**（`canHear` 假 ⇒ 这一档整个不存在）——
+              //    同一个道理：界面上不许出现按不动的东西（2026-09-23 真开麦那一批）。
+              if (widget.canHear)
+                IconButton(
+                  tooltip: _voice ? voiceToKeyboard : voiceToMic,
+                  onPressed: () => setState(() => _voice = !_voice),
+                  icon: Icon(
+                    _voice ? Icons.keyboard_alt_outlined : Icons.mic_none,
+                  ),
                 ),
-              ),
               if (!_voice)
                 IconButton(
                   tooltip: composerPaste,
@@ -232,7 +257,7 @@ class _ComposerState extends State<Composer> {
                   onPressed: _paste,
                 ),
               if (_voice)
-                Expanded(child: _holdToTalk(theme))
+                Expanded(child: _micBar(theme))
               else
                 Expanded(
                   child: TextField(
@@ -369,102 +394,87 @@ class _ComposerState extends State<Composer> {
     ),
   );
 
-  /// **按住 说话**那一块（微信那个大按钮）。
-  /// ⚠️ 用 `Listener` 不用 `GestureDetector`（`accessibility_test.dart` 有源码级禁令）。
-  Widget _holdToTalk(ThemeData theme) => Listener(
-    behavior: HitTestBehavior.opaque,
-    onPointerDown: (_) => _startDemo(),
-    onPointerUp: (_) => _endDemo(),
-    onPointerCancel: (_) => _endDemo(),
-    child: Container(
-      constraints: const BoxConstraints(minHeight: 44),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: _holding ? d.accentTint : d.card,
-        borderRadius: BorderRadius.circular(d.radiusField),
-        border: Border.all(color: _holding ? d.accent : d.line),
-      ),
-      child: Text(
-        _holding ? voiceReleaseToSend : voiceHoldToTalk,
-        style: theme.textTheme.bodyLarge?.copyWith(
-          color: _holding ? d.accent : d.ink,
-        ),
-      ),
-    ),
-  );
-
-  /// **演示提示条**：左边一个「演示」小标，右边一句实话 + "实时"吐出来的字。
-  Widget _demoStrip(ThemeData theme) {
-    final shown = _demoChars <= 0
-        ? ''
-        : _demoLine.substring(
-            0,
-            _demoChars > _demoLine.length ? _demoLine.length : _demoChars,
-          );
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-        decoration: BoxDecoration(
-          color: d.card,
-          borderRadius: BorderRadius.circular(d.radiusField),
-          border: Border.all(color: d.line),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                // ⚠️ **这个「演示」小标不许去掉**：去掉它，这一条就从"演示"变成"假话"
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: d.accentTint,
-                    borderRadius: BorderRadius.circular(d.radiusChip),
-                  ),
-                  child: Text(
-                    voiceDemoChip,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: d.accent,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // 🔴 **假的每一半都要说出来**：这一条说的是「按住说话」那一半
-                //    （**开麦还没有做** —— 它整个是假的，所以整条标着「演示」）。
-                //    ⚠️ 而"读出来"那一半**已经是真的了**（2026-09-23），
-                //      所以它**不再出现在这条演示里**（说了反而是假话）；
-                //      它现在的落点是那个开关 + 每条回答下面的"读一遍"。
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (_voice)
-                        Text(
-                          voiceNotWired,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: d.muted,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
+  /// **语音那一块**（2026-09-23 主人定案：按一下开始 / 再按一下结束）。
+  ///
+  /// 三件事按顺序摆：
+  ///   ① **为什么停了 / 为什么开不了**那一句（有才画 —— 人话，直接显示）；
+  ///   ② 一个**大按钮**：`按一下 说话` ⇄ `正在听…再按一下 结束`；
+  ///   ③ 闲下来时那句**怎么用**（说完了按一下，字留在这儿，你自己决定发不发）。
+  ///
+  /// 🔴 **"正在听"这三个字只在真的在听时出现**（D5.13：不录音时禁用"听"字）；
+  ///    没配钥匙那一档**连按钮都不画**（按不动的东西不许摆出来）。
+  /// ⚠️ 命中区 ≥44：用 `TextButton`（它就是 `ButtonStyleButton`），
+  ///    显式写 `minimumSize` —— 别用 `Container` 自己画一个"像按钮的东西"。
+  Widget _micBar(ThemeData theme) {
+    final h = widget.hearing;
+    final live = h.listening;
+    final finishing = h.phase == HearingPhase.finishing;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // 听的时候把**正在听到的**那行字摆出来（"实时转化语音成文字"那一半）
+        // ⚠️ **收尾中也要摆**（那半句还在，只是还没定稿）
+        if (h.busy) ...[
+          Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(minHeight: 44),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            decoration: BoxDecoration(
+              color: d.card,
+              borderRadius: BorderRadius.circular(d.radiusField),
+              border: Border.all(color: d.line),
             ),
-            if (shown.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(
-                shown,
-                style: theme.textTheme.bodyMedium?.copyWith(color: d.ink),
+            child: Text(
+              h.text.isEmpty ? hearListeningEmpty : h.text,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: h.text.isEmpty ? d.muted : d.ink,
               ),
-            ],
-          ],
-        ),
-      ),
+            ),
+          ),
+          const SizedBox(height: 6),
+        ],
+        // 收尾中：说清楚这一小会儿在等什么（不然用户以为说丢了）
+        if (finishing) ...[
+          Text(
+            hearFinishing,
+            style: theme.textTheme.bodySmall?.copyWith(color: d.muted),
+          ),
+          const SizedBox(height: 6),
+        ],
+        // 为什么停了 / 为什么开不了（**原话**，不再翻译一遍）
+        if (h.notice.isNotEmpty) ...[
+          Text(
+            h.notice,
+            style: theme.textTheme.bodySmall?.copyWith(color: d.muted),
+          ),
+          const SizedBox(height: 6),
+        ],
+        // 那个按钮：没配钥匙时**不画**（做不了的按钮不许摆出来）；
+        // 收尾中也不画（那会儿按它没有意义 —— 字马上就到）
+        if (h.phase != HearingPhase.unavailable && !finishing)
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              minimumSize: const Size(88, 48),
+              backgroundColor: live ? d.accentTint : d.card,
+              foregroundColor: live ? d.accent : d.ink,
+              side: BorderSide(color: live ? d.accent : d.line),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(d.radiusField),
+              ),
+            ),
+            onPressed: widget.onMicToggle == null ? null : _toggleMic,
+            icon: Icon(live ? Icons.stop_circle_outlined : Icons.mic),
+            label: Text(live ? hearListening : hearStart),
+          ),
+        if (!h.busy && h.notice.isEmpty) ...[
+          const SizedBox(height: 4),
+          Text(
+            hearHint,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(color: d.muted),
+          ),
+        ],
+      ],
     );
   }
 }

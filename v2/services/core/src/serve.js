@@ -25,6 +25,7 @@ import { dropTunnel, notifyHost } from './tenant-tunnel-agent.mjs';
 import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
 import { appsBaseOf, createAppServer, loadSignKey } from './app-serve.js';
+import { asrConfigFromEnv, createAsrRelay } from './asr.js';
 import { createServer } from './server.js';
 import { describeAgentIdentity, loadConfig, preflight } from './config.js';
 import { integrityReport, repoRootFor } from './integrity.js';
@@ -591,6 +592,10 @@ const { listen, listenTrusted, close } = createServer({
   auth,
   webRoot,
   buildId: cfg.buildId,
+  // ★ **语音那条**（`/api/asr`）：凭据**只从环境变量读**（`docs/dev/71-MIC-ASR.md`）。
+  //   ⚠️ 没配钥匙**也照样挂上这条路** —— 它会让浏览器收到一句
+  //      "没配"的原话，而不是一个握手失败让界面去猜。
+  asr: createAsrRelay({ config: asrConfigFromEnv(), log: (m) => console.log(`▶ ${m}`) }),
   // ★ **字体镜像的缓存目录**（`/fonts/…` 那条口）：镜像下来的字体落在这儿
   fontCacheDir: nodePath.join(cfg.dataDir, 'font-cache'),
   // ★ **我的小程序清单**（乙-1）：给了才挂 `/api/apps`
