@@ -170,7 +170,7 @@
 |---|---|---|---|
 | `/api/auth`、`/api/login` | GET / POST | 公开 | 登录；**没设口令时 fail-closed（503）** |
 | `/api/version` | GET | 公开 | `buildId` + `serverNow`（客户端据此判断要不要刷新） |
-| `/api/health` | GET | 需令牌 | 结构化健康：disk / store / agents / memory / upstream / cert |
+| `/api/health` | GET | 需令牌 | 健康：`ok` / `timelineId` / `seq`（**代码事实**，2026-09-24 核）。⏳ **原表写的六项（disk / store / agents / memory / upstream / cert）从来没实现过** —— `grep upstream\|cert server.js` = 0 ⇒ 那一行曾经是「文档在说假话」（P1-12）。要那六项的话是**新功能**，不是修文档 |
 | `/api/say` | POST | 需令牌 | `{messageId, text, clientAt}`；⚠️ 原表里的 `conversationId` **是幽灵字段**（两侧代码都没有，2026-09-23 核）· `source` 早已删掉 |
 | `/api/apps` | GET | 需令牌 | ✅ **已实现**：我的小程序清单：`id` / `title` / `icon` / `version` / `rootHash` / `permissions` / `entryUrl`（**现签**）|
 | `/api/discover` | GET | 需令牌 | ✅ **已实现**：大家发出来的（**只读**；不给作者身份，只给昵称）|
