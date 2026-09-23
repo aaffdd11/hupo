@@ -47,6 +47,7 @@ const RATCHET = [
   'docs/dev/63-OWNER-DECISIONS.md',
   'docs/dev/64-CHAT-REDESIGN.md',
   'docs/dev/65-ALIGNMENT-2026-09-23.md',
+  'docs/dev/66-NEXT-STEPS.md',
 ];
 
 /** ② L0 = 路由层：零事实、零数值、零状态 */

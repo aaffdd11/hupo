@@ -791,7 +791,10 @@ export function createServer({
 const BACKFILL_PAGE = 50;
 const BACKFILL_MAX = 200;
 
-const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '/api/app-ask'];
+// 🔴 **读的是「他自己那一份世界」的路由，必须进这张表**（否则宿主会替他那台盒子答 ——
+//    2026-09-23 真栽过：`/api/timeline` 只写了路由、忘了进表 ⇒ 每一个有容器的用户
+//    「往上翻」永远得到空页 ⇒ 屏幕说「没有更早的了」，而盒子里明明有。见 `test/tenant-routes.test.js`）
+const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '/api/app-ask', '/api/timeline'];
 
   /**
    * 把一条 HTTP 请求**原样**转进那个人的容器，并把响应**流式**带回来。

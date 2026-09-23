@@ -189,7 +189,7 @@
 | `/api/trash/remove` · `/api/trash/purge` | POST | 需令牌 | `remove` = 删进回收站（墓碑 + 到期真删）；`purge` = 立刻真删；都走 `handleTrashWrite` |
 | `/api/stream` | WS | 需令牌（子协议 `['bearer', token]`） | 下行事件；`sinceSeq` 续传；**`dev=1` 是附加通道不是替代** |
 
-> ⚠️ **只有五组会转发进租户容器**（`server.js` 的 `TENANT_ROUTES`：`/api/say` · `/api/health` · `/api/export` · `/api/trash` · `/api/app-ask`）；账号 / 续期 / 审计 / 填 key / 注销 / 空间状态都是**中心**的事 —— 别把"属于他自己那一份"和"中心的事"混进同一张转发名单。
+> ⚠️ **只有六组会转发进租户容器**（`server.js` 的 `TENANT_ROUTES`：`/api/say` · `/api/health` · `/api/export` · `/api/trash` · `/api/app-ask` · **`/api/timeline`** —— ⚠️ 最后这一条**2026-09-23 收尾时才发现漏了**：少了它，宿主会替租户那台盒子答 `GET /api/timeline`，客户端于是说"没有更早的了"，而盒子里明明有；判据 `test/tenant-routes.test.js`）；账号 / 续期 / 审计 / 填 key / 注销 / 空间状态都是**中心**的事 —— 别把"属于他自己那一份"和"中心的事"混进同一张转发名单。
 
 #### ⏳ 下面这几条**今天不存在**（留着是为了让下一个人知道"它们被删过"）
 

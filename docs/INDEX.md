@@ -30,6 +30,7 @@
 | **手册改过什么 · 现在是什么版本** | [`handbook/CHANGELOG.md`](handbook/CHANGELOG.md) | 要改手册之前 |
 | **还有哪些账没还 · 哪几条卡在主人身上** | [`dev/00-PROGRESS.md`](dev/00-PROGRESS.md) §六（还开着的都在那一节；§6.1 是**不是待办**的两条）+ [`dev/63-OWNER-DECISIONS.md`](dev/63-OWNER-DECISIONS.md)（**要主人拍板的那几条**，一句话版） | 想接手 / 想知道"还欠什么"时 |
 | **聊天窗口为什么长这样**（输入条的发送钮与听筒 / 上方那条计划条 / 老消息往上翻着加载） | `dev/64-CHAT-REDESIGN.md`（方案 + **主人逐条定案** + 三批的状态）· 判据在 `test/` 各份 | 动聊天界面之前 |
+| **接下来先做哪一件 · 三位工程师讨论出什么** | [`dev/66-NEXT-STEPS.md`](dev/66-NEXT-STEPS.md)（三份方案 + 一致与分歧 + **带取舍的合成建议**：我做什么 / 你签什么 / 建议砍什么） | 要开工之前 |
 | **失败了该跟用户说哪句话 / 想加一类失败** | [`dev/62-FAILURE-CLASSES.md`](dev/62-FAILURE-CLASSES.md)（五类里**哪两档有判据、凭什么认**，以及**还没有信号**的那三档）+ [`handbook/05-DECISIONS.md`](handbook/05-DECISIONS.md) `D10.3` | 改失败文案 / 加分类器之前 |
 | **已经删掉的旧实现 / 旧文档原文** | `git show f93f296:<路径>` | 手册确实没写到，而你又非要原文时 |
 
