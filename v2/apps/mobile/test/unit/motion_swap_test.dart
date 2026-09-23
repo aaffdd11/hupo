@@ -15,16 +15,25 @@ void main() {
     expect(miniAppContentShare(1), 1);
   });
 
-  test('★ 一半左右真的在换：45% 还是图标、60% 已经是页面', () {
-    expect(miniAppIconShare(0.45), 1, reason: '45% 之前画面该还是那个图标');
-    expect(miniAppContentShare(0.6), 1, reason: '60% 之后该已经是页面了');
+  test('★ 全程按透明度交叉（**不是**到点切换）：任意一点两边加起来都是 1', () {
+    for (var i = 0; i <= 10; i++) {
+      final p = i / 10;
+      expect(miniAppIconShare(p) + miniAppContentShare(p), closeTo(1, 1e-9));
+    }
+    // 交叉点自然落在 50%（算出来的，不是"切换"）
+    expect(miniAppContentShare(0.5), closeTo(0.5, 1e-9));
+    expect(miniAppIconShare(0.5), closeTo(0.5, 1e-9));
+    // 而且**一路上都在变**（不是前 45% 一动不动）
+    expect(miniAppContentShare(0.2), closeTo(0.2, 1e-9));
+    expect(miniAppContentShare(0.8), closeTo(0.8, 1e-9));
   });
 
-  test('★ 交接是"半路"的：0.5 处两边各占一半（不是硬切）', () {
-    final c = miniAppContentShare(0.5);
-    expect(c, greaterThan(0.05));
-    expect(c, lessThan(0.95));
-    expect(miniAppIconShare(0.5) + c, closeTo(1, 1e-9));
+  test('收回：同一个函数走回去（100% → 0）', () {
+    // 收回时 p 从 1 往 0 走 ⇒ 内容 1→0、图标 0→1
+    expect(miniAppContentShare(1), 1);
+    expect(miniAppContentShare(0), 0);
+    expect(miniAppIconShare(1), 0);
+    expect(miniAppIconShare(0), 1);
   });
 
   test('单调（只许一路换过去，不许来回闪）', () {

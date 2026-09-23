@@ -73,14 +73,15 @@ double miniAppSurfaceProgress({required double value, required bool closing}) {
 //
 // 交接带：从 [_swapFrom] 开始淡、到 [_swapTo] 淡完（各 45% → 60%）。
 
-const double _swapFrom = 0.45;
-const double _swapTo = 0.60;
-
-double _smooth(double t) => t <= 0 ? 0 : (t >= 1 ? 1 : t * t * (3 - 2 * t));
+// 🔴 **2026-09-24 改过一次**：原来是"到 45%~60% 之间切换"（换一下），
+//    主人看过之后说：*"应该让内容按照透明度来…这样的话我们也不要到达一半更换了。"*
+//    ⇒ 现在是**全程交叉**：内容 0→100%、图标 100%→0（两个加起来恒为 1）。
+//    ⚠️ 交叉点自然落在 50% 那一点，但那是**算出来的**，不是"到点切换"。
 
 /// **页面内容那一层**的不透明度（0 = 只有图标，1 = 只有页面）。
-double miniAppContentShare(double p) =>
-    _smooth((p - _swapFrom) / (_swapTo - _swapFrom));
+///
+/// 直接跟着位置进度走：打开时 0→1、收回时 1→0（收回是同一个函数，因为 p 自己会往回走）。
+double miniAppContentShare(double p) => p.clamp(0.0, 1.0);
 
 /// **大图标那一层**的不透明度（和 [miniAppContentShare] 互补，加起来是 1）。
 double miniAppIconShare(double p) => 1 - miniAppContentShare(p);
