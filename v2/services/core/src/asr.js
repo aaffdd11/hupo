@@ -134,7 +134,13 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
       if (!ended) {
         ended = true;
         log(`asr：会话结束 · 收到 ${bytes} 字节 ≈ ${(bytes / 32000).toFixed(1)} 秒 · 原因：${why}`);
-        send({ type: 'asr/end', text, index: typeof lastIndex === 'number' ? lastIndex : 0 });
+        send({
+          type: 'asr/end',
+          text,
+          index: typeof lastIndex === 'number' ? lastIndex : 0,
+          // ★ P1-3：**为什么收的尾**（客户端据此决定"留字并说明白"还是"正常切回键盘"）
+          reason,
+        });
       }
       stopUpstream();
       closeClient();
@@ -144,6 +150,10 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
     let bytes = 0;
     /** 这次会话是怎么结束的（日志里要能看出"为什么"）。 */
     let why = '（还在跑）';
+    /// **收尾原因**（机器可读，给客户端用）：`user-stop` / `upstream` / `engine` / `capped`。
+    /// ⚠️ P1-3（2026-09-24）：客户端要靠它区分"用户自己按停"与"半路断了" ——
+    ///    后者要**留着字、说明白、别切走**，让用户能"接着刚才那句说"。
+    let reason = 'user-stop';
 
     /** 客户端说"开始"（或者直接推了音频）⇒ 去连上游。 */
     const start = () => {
@@ -161,6 +171,7 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
       up = new WebSocket(url);
       cap = setTimeout(() => {
         why = '到点收手（上游一次连接的上限）';
+        reason = 'capped';
         // 内测版上限 ⇒ 我们提前收手，并**告诉客户端为什么**
         send({ type: 'asr/capped' });
         try {
@@ -196,6 +207,7 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
             send({ type: 'asr/ready', engine: config.engine });
           } else {
             why = `上游不成（code ${j.code}）`;
+            reason = 'engine';
             // ⚠️ 只说服务端那句原话（鉴权 / 没开通 / 参数）——**不带密钥、不带 URL**
             send({
               type: 'asr/error',
@@ -225,11 +237,13 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
         //    但这条本来就该把"整段最后是什么"说清楚。
         if (j.final === 1) {
           why = '上游说整段说完了';
+          reason = 'upstream';
           finish(lastText);
         }
       });
       up.on('error', (err) => {
         why = '上游出错';
+        reason = 'engine';
         // ⚠️ **不许把签名 URL 写进日志/回话**（`safeAsrMessage` 负责）
         log(`asr 上游出错：${safeAsrMessage(err)}`);
         send({ type: 'asr/error', reason: 'upstream', message: safeAsrMessage(err) });
@@ -241,6 +255,7 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
         // 上游自己断了（没走到 final）⇒ 也算收尾，别让界面挂在那儿
         if (!ended) {
           why = why === '（还在跑）' ? '上游把连接关了' : why;
+          if (reason === 'user-stop') reason = 'upstream';
           finish();
         }
       });

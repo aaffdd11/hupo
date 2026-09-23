@@ -451,3 +451,18 @@ test('默认上限比腾讯那个 1 分钟**小**（提前收手，不让它半�
   assert.ok(ASR_MAX_MS < 60_000);
   assert.ok(ASR_MAX_MS > 15_000);
 });
+
+test('★ P1-3：收尾那条要带 "为什么收的尾"（客户端靠它区分"按停"与"半路断了"）', async () => {
+  const stub = await stubUpstream();
+  const s = await boot({ asrConfig: asrConfigFromEnv({ HUPO_ASR_URL: stub.url }) });
+  const c = await connectAsr(s.wsBase, s.token);
+  c.ws.send(JSON.stringify({ type: 'asr/start' }));
+  await waitFor(c.events, (e) => e.type === 'asr/ready');
+  c.ws.send(Buffer.alloc(1600, 7));
+  c.ws.send(JSON.stringify({ type: 'asr/stop' }));
+  const end = await waitFor(c.events, (e) => e.type === 'asr/end');
+  assert.equal(typeof end.reason, 'string', '没收尾原因 ⇒ 客户端分不清"按停"和"断了"');
+  assert.ok(['user-stop', 'upstream', 'engine', 'capped'].includes(end.reason), `原因不认识：${end.reason}`);
+  await stub.close();
+  await s.close();
+});

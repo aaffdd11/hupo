@@ -184,4 +184,39 @@ void main() {
     expect(const Hearing().tapped().partial('好', index: 0).hasText, isTrue);
     expect(const Hearing().tapped().partial('   ', index: 0).hasText, isFalse);
   });
+
+  // ── P1-3（2026-09-24）：**半路断了 ⇒ 接着刚才那句说** ────────────────
+  test('★ P1-3：用户按停（reason=user-stop）⇒ 正常收尾（切回键盘那档）', () {
+    final h = const Hearing()
+        .tapped()
+        .event({'type': 'asr/final', 'text': '今天天气', 'index': 0})
+        .event({'type': 'asr/end', 'text': '今天天气', 'index': 0, 'reason': 'user-stop'});
+    expect(h.phase, HearingPhase.idle);
+    expect(h.why, '', reason: '用户自己停的，不该报"断了"');
+    expect(h.text, '今天天气');
+  });
+
+  test('★ P1-3：半路断了（reason=upstream）⇒ 字留着 + 说明白 + **不切走**', () {
+    final h = const Hearing()
+        .tapped()
+        .event({'type': 'asr/final', 'text': '今天天气', 'index': 0})
+        .event({'type': 'asr/end', 'text': '今天天气', 'index': 0, 'reason': 'upstream'});
+    expect(h.text, '今天天气', reason: '断了也要把他说出来的那半句留住');
+    expect(h.why, hearCutOff, reason: '要说明白"断了、可以接着说"');
+    expect(h.phase, HearingPhase.failed, reason: '停在失败这一档 ⇒ 界面不切回键盘（他按一下就能接着说）');
+  });
+
+  test('★ P1-3：到点收手（reason=capped）⇒ 用"一分钟"那句，不跟"断了"抢', () {
+    final h = const Hearing()
+        .tapped()
+        .event({'type': 'asr/capped'})
+        .event({'type': 'asr/end', 'text': '说了很久', 'index': 0, 'reason': 'capped'});
+    expect(h.why, hearCapped);
+    expect(h.text, '说了很久');
+  });
+
+  test('★ P1-3：断了但**一个字都没有** ⇒ 还是"什么都没听到"那句（不冒充"断了"）', () {
+    final h = const Hearing().tapped().event({'type': 'asr/end', 'index': 0, 'reason': 'upstream'});
+    expect(h.why, hearNothing);
+  });
 }

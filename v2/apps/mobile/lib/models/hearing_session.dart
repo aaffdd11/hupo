@@ -126,8 +126,16 @@ class Hearing {
   ///    腾讯**同一段**会连着发好几条 `slice_type=1`，字是累积的；
   ///    把它们当成"一句一句的新话"接起来，屏幕上就会出现一串重复。
   ///    ⇒ 段号变了才接新的（多句话的情形），段号没变就是**同一段又准了一点**。
-  Hearing finalText(String text, {int index = 0}) =>
-      busy ? _put(index, text) : this;
+  Hearing finalText(String text, {int index = 0}) {
+    // 🔴 2026-09-24（P1-3 写判据时抓到的）：**只要这一轮真听过，迟到的定稿就要收下**。
+    //    原来只在 `busy`（在听/收尾中）才收 ⇒ `asr/capped` 先把我们挪出 busy，
+    //    而服务端那条 `asr/end` **1.5 秒后才到**，于是"最后一句"被丢掉。
+    //    ⇒ 只有"从没听过"的那两档（没配钥匙 / 没权限）才拒收。
+    if (phase == HearingPhase.unavailable || phase == HearingPhase.denied) {
+      return this;
+    }
+    return _put(index, text);
+  }
 
   /// 整段收尾（服务端说 `asr/end`）⇒ 停下，**字留着**。
   ///
@@ -157,6 +165,10 @@ class Hearing {
     if (reason == 'denied') return noPermission();
     if (reason == 'unsupported') return const Hearing(phase: HearingPhase.denied, why: hearFailed);
     if (reason == 'not-configured') return unavailable();
+    if (reason == 'cut') {
+      // ⚠️ **留住字**（判据当场抓到的：原来这里 new 了一个空 Hearing ⇒ 他刚说的话没了）
+      return _copy(phase: HearingPhase.failed, why: hearCutOff);
+    }
     if (reason == 'no-entry') {
       return const Hearing(phase: HearingPhase.failed, why: hearNoEntry);
     }
@@ -186,7 +198,16 @@ class Hearing {
       case 'asr/final':
         return finalText(text, index: index);
       case 'asr/end':
-        return finalText(text, index: index).done();
+        // ★ P1-3（2026-09-24）：**收尾带原因**时，分两种走法 ——
+        //   · 用户自己按停（`user-stop` / 没给原因）⇒ 正常收尾（切回键盘档，字落进框里）；
+        //   · 半路**断了**（上游断了 / 引擎出错）⇒ **字留着、说明白、别切走**
+        //     （停留在语音档 ⇒ 他再按一下就是"接着刚才那句说"）。
+        //   ⚠️ `capped` 有它自己那句（"一次最多说一分钟"），不跟这条抢。
+        final why = e['reason'];
+        final cut = why == 'upstream' || why == 'engine';
+        final h = finalText(text, index: index);
+        if (!cut) return h.done();
+        return h.segments.isEmpty ? h.done() : h.broke('cut');
       case 'asr/capped':
         return capped();
       case 'asr/unavailable':
