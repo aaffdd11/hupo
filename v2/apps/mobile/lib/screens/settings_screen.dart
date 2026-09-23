@@ -24,6 +24,28 @@ import '../services/api.dart';
 import '../widgets/key_form.dart';
 import 'about_screen.dart';
 
+/// **分区标题**（设置页这一层就两三个，形状只有一种）。
+///
+/// 🔴 为什么不用强调色：它原来用 `d.accent`，屏幕上读起来像**警告** ——
+///    而它只是"这一块叫什么"。分区名要**稳**，要让红色的意思留给"退出登录"这类事。
+/// ⚠️ 字号不写死（跟主题那一档走）；什么时候全站统一，见 `72-UI-PASS.md` 的 E。
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context);
+    return Text(
+      text,
+      style: t.textTheme.titleSmall?.copyWith(
+        color: d.ink,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+}
+
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({
     super.key,
@@ -72,11 +94,11 @@ class SettingsScreen extends StatelessWidget {
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: d.gapL, vertical: d.gapL),
               children: [
-                // ── 钥匙那一段：**小标 + 白卡**（首页那套语言）──
-                Text(
-                  configKeySection,
-                  style: t.textTheme.labelLarge?.copyWith(color: d.accent, letterSpacing: 1.2),
-                ),
+                // ── 钥匙那一段：**分区标题 + 白卡** ──
+                // ★ 2026-09-23（主人：*"先整理整个UI"*）：标题原来是**强调色 + 加宽字距**，
+                //   在屏幕上读起来像一条**警告**（它是分区名，不是告警）。
+                //   ⇒ 改成"黑 + 加粗"的普通分区标题；什么时候统一到全站，见 E。
+                const _SectionTitle(configKeySection),
                 const SizedBox(height: d.gapS + 2),
                 Card(
                   child: Padding(
@@ -123,30 +145,46 @@ class SettingsScreen extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(height: d.gapM),
-                // ⚠️ **关于搬进来了**（见 `space_words.dart` 那段）：
-                //    顶栏再加一个图标就是 7 个 —— 手机上那一条会挤成一团。
+                const SizedBox(height: d.gapL),
+                // ── 第二个分区：**这个助手**（关于 / 退出登录）──
+                // ★ 2026-09-23：原来这两条**光秃秃挂在最下面**（一页三块读不出结构）
+                //   ⇒ 加分区标题，并把两条收进**同一张卡**（中间一条分隔线）。
+                const _SectionTitle(settingsAboutSection),
+                const SizedBox(height: d.gapS + 2),
                 Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.info_outline),
-                    title: const Text('关于'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(builder: (_) => const AboutScreen()),
-                    ),
+                  child: Column(
+                    children: [
+                      // ⚠️ **关于搬进来了**（见 `space_words.dart` 那段）：
+                      //    顶栏再加一个图标就是 7 个 —— 手机上那一条会挤成一团。
+                      ListTile(
+                        leading: const Icon(Icons.info_outline),
+                        title: const Text('关于'),
+                        // ★ 加一句小字：光"关于"两个字，读不出这一页管什么
+                        subtitle: Text(
+                          aboutEntryHint,
+                          style: t.textTheme.bodySmall?.copyWith(color: d.muted),
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(builder: (_) => const AboutScreen()),
+                        ),
+                      ),
+                      // ── **退出登录**（主人 2026-09-22：设置里管"退出登录 / 注销账号 / 改钥匙"）──
+                      // ⚠️ 它原来挂在**聊天抓手行**上 —— 那一行是"聊天"的地方，退出登录不是聊天的事。
+                      if (onLogout != null) ...[
+                        Divider(height: 1, color: d.line),
+                        ListTile(
+                          leading: Icon(Icons.logout, color: d.accent),
+                          title: Text(
+                            settingsLogout,
+                            style: t.textTheme.bodyLarge?.copyWith(color: d.ink),
+                          ),
+                          onTap: onLogout,
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-                const SizedBox(height: d.gapM),
-                // ── **退出登录**（主人 2026-09-22：设置里管"退出登录 / 注销账号 / 改钥匙"）──
-                // ⚠️ 它原来挂在**聊天抓手行**上 —— 那一行是"聊天"的地方，退出登录不是聊天的事。
-                if (onLogout != null)
-                  Card(
-                    child: ListTile(
-                      leading: Icon(Icons.logout, color: d.accent),
-                      title: Text(settingsLogout, style: t.textTheme.bodyLarge?.copyWith(color: d.ink)),
-                      onTap: onLogout,
-                    ),
-                  ),
               ],
             ),
           ),

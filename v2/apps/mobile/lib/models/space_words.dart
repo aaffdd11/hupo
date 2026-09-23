@@ -153,6 +153,13 @@ const String settingsAppLabel = '设置';
 /// 小程序容器顶栏那个返回箭头（读屏用）。
 const String miniAppBack = '返回';
 
+/// 设置页的**第二个分区**：关于 / 退出登录这一组（2026-09-23 整理 UI 时加的）。
+/// ⚠️ 原来这两条**光秃秃挂在最下面**，没有分区标题 ⇒ 一页里三块东西读不出结构。
+const String settingsAboutSection = '这个助手';
+
+/// 「关于」那一条下面的小字说明（**不写内容概要的承诺**，只说这一页管什么）。
+const String aboutEntryHint = '它的能力、记忆和边界';
+
 /// 设置里那一条：退出登录（原来挂在聊天抓手行上）。
 const String settingsLogout = '退出登录';
 
