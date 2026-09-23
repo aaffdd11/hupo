@@ -21,6 +21,8 @@ import '../models/trash_words.dart';
 import 'api.dart';
 import 'compose_store.dart';
 import 'draft_store.dart';
+import 'speech.dart' as speech_service;
+import 'speech_store.dart';
 import 'process_level_store.dart';
 import 'stream.dart';
 import '../models/token_sub.dart';
@@ -36,12 +38,20 @@ class ChatController extends ChangeNotifier {
     DraftStore? drafts,
     ComposeStore? compose,
     ProcessLevelStore? levels,
+    SpeechStore? speech,
     this.onUnauthorized,
+    /// **念出来**那两个动作（可注入 —— 判据要能验"该念的时候调了没有"）。
+    /// ⚠️ 默认就是真的那两个（`services/speech.dart`）；判据注一个记账的进去。
+    bool Function(String text, {void Function()? onEnd})? speak,
+    void Function()? stop,
   }) : _token = token,
        local = local ?? TimelineStore(),
        drafts = drafts ?? DraftStore(),
        compose = compose ?? ComposeStore(),
-       levels = levels ?? ProcessLevelStore() {
+       levels = levels ?? ProcessLevelStore(),
+       speech = speech ?? SpeechStore(),
+       _speak = speak ?? speech_service.speakAloud,
+       _stopSpeaking = stop ?? speech_service.stopSpeaking {
     // ⚠️ 构造时就带令牌的场合（`main.dart` 冷启动那条路）也要先绑好命名空间，
     //    否则第一次 `_restoreLocal()` 读的还是默认那一份（= 上一个人的）。
     _bindNamespace(token);
@@ -96,6 +106,13 @@ class ChatController extends ChangeNotifier {
   /// 过程四档存在哪（契约 §三）。**按设备存、按账号不存**。
   final ProcessLevelStore levels;
 
+  /// "自动念"那个开关住哪（设备级偏好，见 `speech_store.dart`）。
+  final SpeechStore speech;
+
+  /// 真正去念、真正去停的那两个（注入点见构造函数）。
+  final bool Function(String text, {void Function()? onEnd}) _speak;
+  final void Function() _stopSpeaking;
+
   /// 收进来的**服务端事实**（只留带号的），存缓存就是从这份存。
   ///
   /// ⚠️ 为什么要单独留一份：`Timeline` 里已经是**画出来的条目**了，
@@ -115,6 +132,14 @@ class ChatController extends ChangeNotifier {
 
   /// 现在这一幕给用户看多少过程（契约 §三）。**开档前是默认档 `doing`**。
   ProcessLevel _level = defaultProcessLevel;
+
+  /// **自动念**：打开之后，它**新说的话**会被念出来（默认关）。
+  ///
+  /// ⚠️ 默认关是有意的：突然出声会吓人，而且"安静"要可预期（契约 §三）。
+  bool _autoSpeak = false;
+
+  /// **正在念哪一条**（`null` = 没在念）。界面靠它把按钮变成"别念了"。
+  String? _speakingId;
 
   /// 浮窗里现在挂着的那一条通知（契约 `29-NOTICE.md` 约束 1）。
   ///
@@ -341,6 +366,64 @@ class ChatController extends ChangeNotifier {
     _ensureStream();
   }
 
+  /// **自动念开着吗**。
+  bool get autoSpeak => _autoSpeak;
+
+  /// **正在念哪一条**（`null` = 没在念）。
+  String? get speakingId => _speakingId;
+
+  /// 开机时读一次这个偏好（设备级；读不出来当关 —— 见 `speech_store.dart`）。
+  Future<void> loadAutoSpeak() async {
+    _autoSpeak = await speech.read();
+    notifyListeners();
+  }
+
+  /// 开关自动念。
+  ///
+  /// ⚠️ **关掉的时候要立刻停下正在念的那一段**：不然用户关了它还听见声音，
+  ///    那就是"按钮说关、它还在念"（这一族的毛病这个项目栽过好几次）。
+  Future<void> setAutoSpeak(bool on) async {
+    if (on == _autoSpeak) return;
+    _autoSpeak = on;
+    await speech.write(on);
+    if (!on) stopSpeakingNow();
+    notifyListeners();
+  }
+
+  /// **念这一条**（用户点了"读一遍"）。
+  ///
+  /// ⚠️ 一次只念一段：真的"停下上一段"由 `speech.dart` 那一层做（它 `speak()` 里先 `cancel()`）；
+  ///    这里先把状态摘掉，免得**上一段的回调**把这一条的状态清掉。
+  void speakMessage(String messageId, String text) {
+    _speakingId = null;
+    final started = _speak(text, onEnd: () {
+      // ⚠️ 只有"还是这一条在念"的时候才复位（用户可能已经点了别的一段）
+      if (_speakingId != messageId) return;
+      _speakingId = null;
+      notifyListeners();
+    });
+    _speakingId = started ? messageId : null;
+    notifyListeners();
+  }
+
+  /// **别念了**（用户点了同一个按钮的第二下，或者关了开关）。
+  void stopSpeakingNow() {
+    _stopSpeaking();
+    if (_speakingId == null) return;
+    _speakingId = null;
+    notifyListeners();
+  }
+
+  /// 时间线里那一条助手的话（自动念要它的原文）。
+  ///
+  /// ⚠️ 找不到就返回空串 ⇒ **不念**（绝不念一个猜出来的东西）。
+  String textOfMessage(String messageId) {
+    for (final it in timeline.items) {
+      if (it is AssistantMessage && it.messageId == messageId) return it.displayText;
+    }
+    return '';
+  }
+
   /// 续一次。**成功就用新的；401 才清；网的问题什么都不清。**
   ///
   /// 返回值：`true` = 可以照常往下走（拿到新令牌、或者拿旧令牌继续）；
@@ -531,6 +614,22 @@ class ChatController extends ChangeNotifier {
       _showNotice(Notice.fromEvent(event));
     }
     timeline.apply(event);
+
+    // ★ **自动念**（主人 2026-09-23 定案）：开着开关时，它**新说的话**念出来。
+    //
+    // ⚠️ 三条边界，每条都有判据：
+    //   · **不念首屏那段历史**（`_readingHistory`）—— 一登录就把它以前说过的话全念一遍，
+    //     那是骚扰，而且用户根本没在等这一句；
+    //   · **只念说完了的**（`reason == 'completed'`）—— 半句 /"没说完"/"卡住了"不念
+    //     （那几句是给眼睛看的交代，念出来会让人以为事情做完了）；
+    //   · **空的不念**（`speakAloud` 自己也会挡一层）。
+    if (_autoSpeak && !_readingHistory && event['type'] == 'message/end' && event['reason'] == 'completed') {
+      final id = event['messageId'];
+      if (id is String) {
+        final text = textOfMessage(id);
+        if (text.trim().isNotEmpty) speakMessage(id, text);
+      }
+    }
 
     // ★ **删掉 / 恢复 / 真删**（契约 §8.1、§8.3）：模型那一层已经把条目
     //   藏起来 / 取消藏 / 丢掉了；这里补的是**本机那两份**（契约 §四 🔴）：
@@ -925,6 +1024,8 @@ class ChatController extends ChangeNotifier {
     //    通知器（而且在测试里**留一个没走完的定时器本身就是一种失败**）。
     _noticeTimer?.cancel();
     _noticeTimer = null;
+    // ⚠️ 离开这一屏就**别再念了**（用户走了、声音还在说话 = 这一族最讨嫌的形状）
+    _stopSpeaking();
     _stream?.dispose();
     _stream = null;
     super.dispose();

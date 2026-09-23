@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/design.dart' as d;
+import '../models/speak_words.dart';
 import '../models/space_words.dart';
 
 class Composer extends StatefulWidget {
@@ -32,6 +33,9 @@ class Composer extends StatefulWidget {
     this.onDraftChanged,
     this.onDraftCleared,
     this.onFocused,
+    this.autoSpeak = false,
+    this.onToggleAutoSpeak,
+    this.canSpeak = false,
   });
 
   final void Function(String text) onSend;
@@ -52,6 +56,17 @@ class Composer extends StatefulWidget {
   /// 只有一行的缝里打字（而上面那一大块明明在）。
   final VoidCallback? onFocused;
 
+  /// **"读出来"这个开关现在是开还是关**（主人 2026-09-23 定案：它替换了原来那个
+  /// 演示用的「听筒 / 扬声器」 —— 网页上没有"听筒"这个出口，那套语义**明说砍掉**）。
+  final bool autoSpeak;
+
+  /// 拨这个开关（状态住上层：它是**设备级偏好**，要存盘、也要跨这一屏活着）。
+  final ValueChanged<bool>? onToggleAutoSpeak;
+
+  /// 这个平台能不能念出来（网页可以）。⚠️ 假 ⇒ **不画那个开关**
+  ///    （界面上不许出现按不动的东西）。
+  final bool canSpeak;
+
   @override
   State<Composer> createState() => _ComposerState();
 }
@@ -65,9 +80,6 @@ class _ComposerState extends State<Composer> {
 
   /// 手指按着"按住 说话"。
   bool _holding = false;
-
-  /// **听筒**那一档（微信那个听筒/扬声器切换）。
-  bool _earpiece = false;
 
   /// 演示走到的字数（"实时转文字"的**形状**）。
   ///
@@ -186,7 +198,7 @@ class _ComposerState extends State<Composer> {
           // ── **演示提示条**（主人："先做假的"）──────────────────
           //  🔴 两个作用缺一不可：① 让主人看得到"实时转文字"的形状；
           //     ② **让任何人一眼看出这是假的** —— 这个项目栽过三次"页面在说假话"。
-          if (_voice || _earpiece) _demoStrip(theme),
+          if (_voice) _demoStrip(theme),
           // ── **上面那条草稿**（主人 2026-09-22）──────────────────
           //   规则：**框是空的、而且本机存着一份草稿**时才出现。
           //   ⚠️ 一旦他开始打字（框里有字），这条就收起来 —— 不然同一句话画两遍。
@@ -207,11 +219,6 @@ class _ComposerState extends State<Composer> {
                   setState(() {
                     _voice = !_voice;
                     _holding = false;
-                    // ⚠️ **回键盘档 ⇒ 听筒那一档跟着关**（2026-09-23 重设计）：
-                    //    听筒只在语音档有意义（它现在也只在语音档画 —— 见下面）。
-                    //    不关的话，"演示"那条会留在一个**已经没有听筒按钮**的界面上，
-                    //    而用户找不到地方把它关掉。
-                    if (!_voice) _earpiece = false;
                   });
                 },
                 icon: Icon(
@@ -251,16 +258,22 @@ class _ComposerState extends State<Composer> {
                     ),
                   ),
                 ),
-              // ★ 微信那个**听筒 / 扬声器**（主人："要能切听筒"）
-              // ⚠️ **只在语音档画它**（2026-09-23 重设计，主人拍板）：键盘档用不着听筒，
-              //    而它常驻要占掉一格 48px —— 那一格给输入框更值。
-              //    配套那条：回键盘档时 `_earpiece` 跟着关（见上面话筒那个 handler）。
-              if (_voice)
+              // ★ **读出来**（主人 2026-09-23 定案：**替掉**原来那个演示用的「听筒 / 扬声器」）。
+              //
+              // 🔴 为什么替掉：网页上**没有"听筒"这个出口**（浏览器只有扬声器/耳机，
+              //    `setSinkId` 在 iOS 上无效 —— 手册 §3.2 自己写着）⇒ 留着它就是
+              //    假装有一个做不到的东西。**"从哪儿出声"那套语义明说砍掉**，
+              //    留下真做得到的那半：**让它念出来**。契约 `docs/dev/68-SPEAK.md`。
+              //
+              // ⚠️ **只在语音档画**（与话筒/键盘同一档 —— 主人 2026-09-23 定案里就是这么定的）：
+              //    键盘档那一格留给输入框。
+              // ⚠️ **念不了就不画**（`canSpeak` 假）—— 界面上不许出现按不动的东西。
+              if (_voice && widget.canSpeak)
                 IconButton(
-                  tooltip: _earpiece ? voiceEarpieceOn : voiceEarpieceOff,
-                  onPressed: () => setState(() => _earpiece = !_earpiece),
+                  tooltip: widget.autoSpeak ? speakAutoHintOn : speakAutoHintOff,
+                  onPressed: () => widget.onToggleAutoSpeak?.call(!widget.autoSpeak),
                   icon: Icon(
-                    _earpiece ? Icons.hearing : Icons.volume_up_outlined,
+                    widget.autoSpeak ? Icons.volume_up : Icons.volume_off_outlined,
                   ),
                 ),
               const SizedBox(width: 4),
@@ -421,11 +434,11 @@ class _ComposerState extends State<Composer> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                // 🔴 **假的每一半都要说出来**（2026-09-23 重设计配套改）：
-                //    听筒现在**只在语音档**能开 ⇒ 原来那种"二选一"会让
-                //    "读出来也还没做"这句**永远看不见** —— 那等于**少说一句真话**，
-                //    与 D5.13 那一族规矩（不录音时禁用"听"字 / 假的一眼看得出）同源。
-                //    ⇒ 两句**各自一行**（各自一个 `Text`，读屏与判据都能逐句找到）。
+                // 🔴 **假的每一半都要说出来**：这一条说的是「按住说话」那一半
+                //    （**开麦还没有做** —— 它整个是假的，所以整条标着「演示」）。
+                //    ⚠️ 而"读出来"那一半**已经是真的了**（2026-09-23），
+                //      所以它**不再出现在这条演示里**（说了反而是假话）；
+                //      它现在的落点是那个开关 + 每条回答下面的"读一遍"。
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -433,13 +446,6 @@ class _ComposerState extends State<Composer> {
                       if (_voice)
                         Text(
                           voiceNotWired,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: d.muted,
-                          ),
-                        ),
-                      if (_earpiece)
-                        Text(
-                          voiceEarpieceNotWired,
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: d.muted,
                           ),

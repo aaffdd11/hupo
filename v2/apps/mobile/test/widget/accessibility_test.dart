@@ -28,6 +28,7 @@ import 'package:hupo_app/models/message_state.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/source_words.dart';
+import 'package:hupo_app/models/speak_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/timeline.dart';
 import 'package:hupo_app/models/trash_words.dart';
@@ -491,6 +492,30 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '出处那几行在 ${s}x 溢出了');
       });
 
+      testWidgets('主界面 @ ${s}x（回答下面那条"读一遍" —— 2026-09-23 新加的）', (tester) async {
+        // ⚠️ 测试环境里 `canSpeak` 是假（`services/speech_stub.dart`）⇒ **从真入口进去
+        //    这条路画不出那个按钮**。所以这里直接搭气泡、把回调注入进去 ——
+        //    它照样要过"五档不溢出"（那几行是**跟着字算**的）。
+        for (final onSpeak in [true]) {
+          final m = AssistantMessage(messageId: 'm_speak', seq: 9)
+            ..quick = '北京今天多云，19 度。'
+            ..ended = true
+            ..reason = 'completed';
+          await _pump(
+            tester,
+            Scaffold(
+              body: SingleChildScrollView(
+                child: AnswerBubble(message: m, onSpeak: () {}),
+              ),
+            ),
+            s,
+          );
+          await tester.pumpAndSettle();
+          expect(find.text(speakOnceWords), findsOneWidget, reason: '★ 那个按钮没进这棵树（onSpeak=$onSpeak）');
+          expect(_drain(tester), isEmpty, reason: '"读一遍"在 ${s}x 溢出了');
+        }
+      });
+
       testWidgets('配置页（从真入口进）@ ${s}x', (tester) async {
         // ⚠️ 新加的界面**必须也过这道闸** —— 不然"五档不溢出"会随时间失效。
         await _openConfig(tester, s);
@@ -790,6 +815,28 @@ void main() {
         await sweep(tester, '主界面 @${s}x');
       });
     }
+
+    testWidgets('"读一遍"（能念时）的命中区 ≥44 —— 五档都量', (tester) async {
+      // ⚠️ 同一个理由：测试环境里念不了（`speech_stub`），真入口画不出它 ⇒
+      //    把回调**注入**进气泡直接量。
+      for (final s in scales) {
+        final m = AssistantMessage(messageId: 'm_speak', seq: 9)
+          ..quick = '北京今天多云，19 度。'
+          ..ended = true
+          ..reason = 'completed';
+        await _pump(
+          tester,
+          Scaffold(
+            body: SingleChildScrollView(
+              child: AnswerBubble(message: m, onSpeak: () {}, onStopSpeak: () {}),
+            ),
+          ),
+          s,
+        );
+        await tester.pumpAndSettle();
+        await sweep(tester, '"读一遍" @${s}x');
+      }
+    });
 
     testWidgets('出处那几行（能点开时）的命中区 ≥44 —— 五档都量', (tester) async {
       // ⚠️ 为什么要单独一条：**测试环境里 `canOpenLinks` 是假**（`services/links_stub.dart`）

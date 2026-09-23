@@ -32,6 +32,7 @@ import '../models/trash_words.dart';
 import '../services/api.dart';
 import '../services/chat_controller.dart';
 import '../services/links.dart';
+import '../services/speech.dart';
 import '../widgets/app_desktop.dart';
 import '../widgets/mini_app_icons.dart';
 import '../widgets/mini_runtime.dart';
@@ -151,6 +152,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     widget.controller.addListener(_onChanged);
+    // ★ **"读出来"这个开关**存盘读过一次（设备级偏好；读不出来当关）。
+    unawaited(widget.controller.loadAutoSpeak());
     // ★ **我的小程序**（乙-1）：登录之后拉一次。⚠️ 拉不到就是空清单，**不许**因此把界面弄坏。
     unawaited(_loadMyApps());
     // ⚠️ **首屏也要跟一次**：本机缓存那一屏（`17-LOCAL-FIRST.md`）可能
@@ -594,6 +597,10 @@ class _ChatScreenState extends State<ChatScreen> {
           //   ⚠️ 收起态那条里也有这个框。展开**不会丢字**：两态用的是**同一个 Composer 实例**，
           //      Flutter 认得出它、把它**挪过去**（不是重建）—— 有判据钉着。
           onFocused: () => _floaterKey.currentState?.expand(),
+          // ★ **读出来那个开关**（替掉原来演示用的"听筒/扬声器"）
+          autoSpeak: c.autoSpeak,
+          onToggleAutoSpeak: (on) => c.setAutoSpeak(on),
+          canSpeak: canSpeak,
           // 🔴 **用户按下发送 ⇒ 最大化**（§6.2"发就拉满"）。
           //    ⚠️ 反过来不成立：**状态变化不许动窗口**（D4.8：新增助手消息的高度变化 = 0px）。
           //    ★ 现在**收起态也能发**（那儿也有输入框）⇒ 发出去就拉满，这一步比以前更有用。
@@ -809,6 +816,10 @@ class _ChatScreenState extends State<ChatScreen> {
           onLongPress: () => _onBubbleLongPress(c, m),
           // ⚠️ 开不了外面的地址就传 `null` ⇒ 出处只当文字（**不画按不动的按钮**）
           onOpenSource: canOpenLinks ? openExternal : null,
+          // ★ **读一遍**（每条都能念；念不了就传 `null` —— 同一条规矩）
+          onSpeak: canSpeak ? () => c.speakMessage(m.messageId, m.displayText) : null,
+          onStopSpeak: c.stopSpeakingNow,
+          speaking: c.speakingId == m.messageId,
         ),
         if (reasoning.isNotEmpty) ReasoningBlock(text: reasoning),
       ],

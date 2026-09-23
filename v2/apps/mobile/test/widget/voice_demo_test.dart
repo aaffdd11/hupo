@@ -11,13 +11,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
+import 'package:hupo_app/models/speak_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/widgets/composer.dart';
 
-Future<void> _pump(WidgetTester tester) async {
+Future<void> _pump(
+  WidgetTester tester, {
+  bool autoSpeak = false,
+  bool canSpeak = false,
+  ValueChanged<bool>? onToggleAutoSpeak,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
-      home: Scaffold(body: Composer(onSend: (_) {})),
+      home: Scaffold(
+        body: Composer(
+          onSend: (_) {},
+          autoSpeak: autoSpeak,
+          canSpeak: canSpeak,
+          onToggleAutoSpeak: onToggleAutoSpeak,
+        ),
+      ),
     ),
   );
   await tester.pump();
@@ -35,9 +48,6 @@ void main() {
       voiceReleaseToSend,
       voiceDemoChip,
       voiceNotWired,
-      voiceEarpieceNotWired,
-      voiceEarpieceOn,
-      voiceEarpieceOff,
     ]) {
       expect(hasForbidden(s), false, reason: '「$s」命中了禁用词');
     }
@@ -45,7 +55,7 @@ void main() {
 
   test('🔴 不出现"正在听"这类假动作的字（D5.13）', () {
     // 我们这一版**根本没开麦** ⇒ 任何"正在听"都是假话。
-    for (final s in [voiceNotWired, voiceEarpieceNotWired, voiceHoldToTalk]) {
+    for (final s in [voiceNotWired, voiceHoldToTalk]) {
       expect(s.contains('正在听'), false, reason: '「$s」不许说"正在听" —— 它没在听');
     }
   });
@@ -110,36 +120,43 @@ void main() {
     expect(text.contains('演示'), true, reason: '★ 那句字里自带"演示" —— 万一被发出去也不会被当成真话');
   });
 
-  testWidgets('🔴 点听筒 ⇒ 也有「演示」小标 + 一句实话（读出来还没做）', (tester) async {
+  // ── **"读出来"那个开关**（2026-09-23 主人定案：它**替掉**演示用的「听筒/扬声器」）──
+  //
+  // ⚠️ 测试环境里 `canSpeak` 是**假**（`services/speech_stub.dart`）⇒ 默认**不画**。
+  //    所以这里显式把它打开、并把 `autoSpeak` / 回调注入进去 ——
+  //    那两样在**真应用**里是控制器的状态（判据在 `test/unit/speak_test.dart`）。
+
+  testWidgets('🔴 念不了（canSpeak 假）⇒ **不画那个开关**（界面上不许有按不动的东西）', (tester) async {
     await _pump(tester);
-    // ⚠️ **2026-09-23 改了这一步**（主人拍板的重设计）：听筒**只在语音档**画了 ——
-    //    键盘档用不着它，那一格 48px 给输入框更值。⇒ 先切到语音档再点它。
-    expect(find.byTooltip(voiceEarpieceOff), findsNothing, reason: '键盘档不该有听筒');
     await tester.tap(find.byTooltip(voiceToMic));
     await tester.pump();
-    expect(find.byTooltip(voiceEarpieceOff), findsOneWidget, reason: '语音档才画听筒');
-
-    await tester.tap(find.byTooltip(voiceEarpieceOff));
-    await tester.pump();
-
-    expect(find.byTooltip(voiceEarpieceOn), findsOneWidget, reason: '切到听筒那一档了');
-    expect(_chip, findsOneWidget, reason: '★ 听筒这一半同样是假的，也得标出来');
-    expect(find.text(voiceEarpieceNotWired), findsOneWidget);
+    expect(find.byTooltip(speakAutoHintOff), findsNothing);
+    expect(find.byTooltip(speakAutoHintOn), findsNothing);
   });
 
-  testWidgets('🔴 回键盘档 ⇒ 听筒那一档**跟着关**（不然演示那条留在没有开关的界面上）', (tester) async {
-    await _pump(tester);
+  testWidgets('★ 点「读出来」⇒ 把新状态交给上层（并且只在语音档画）', (tester) async {
+    final asked = <bool>[];
+    await _pump(tester, canSpeak: true, onToggleAutoSpeak: asked.add);
+    // 键盘档不画（那一格留给输入框）
+    expect(find.byTooltip(speakAutoHintOff), findsNothing, reason: '键盘档不画它');
     await tester.tap(find.byTooltip(voiceToMic));
     await tester.pump();
-    await tester.tap(find.byTooltip(voiceEarpieceOff));
-    await tester.pump();
-    expect(_chip, findsOneWidget, reason: '这时演示小标在');
+    expect(find.byTooltip(speakAutoHintOff), findsOneWidget, reason: '语音档才画');
 
-    // 切回键盘档
-    await tester.tap(find.byTooltip(voiceToKeyboard));
+    await tester.tap(find.byTooltip(speakAutoHintOff));
     await tester.pump();
-    expect(find.byTooltip(voiceEarpieceOn), findsNothing, reason: '听筒该关了');
-    expect(find.byTooltip(voiceEarpieceOff), findsNothing, reason: '键盘档不画听筒');
-    expect(_chip, findsNothing, reason: '★ 听筒关了 ⇒ 演示小标也该没（它已经没有任何开关在界面上）');
+    expect(asked, [true], reason: '★ 点一下要真的把"打开"交出去');
+  });
+
+  testWidgets('★ 开着的时候：开关说的是"会念出来"，而且**不再说"还没做"**', (tester) async {
+    await _pump(tester, autoSpeak: true, canSpeak: true, onToggleAutoSpeak: (_) {});
+    await tester.tap(find.byTooltip(voiceToMic));
+    await tester.pump();
+    expect(find.byTooltip(speakAutoHintOn), findsOneWidget);
+    // 🔴 这一条是这个功能的**要害**：它现在是**真的**了 ⇒ 那句"演示：读出来也还没做"
+    //    必须从界面上消失（留着就是假话）。
+    expect(find.textContaining('读出来也还没做'), findsNothing);
+    expect(_chip, findsOneWidget, reason: '「按住说话」那一半还是假的 ⇒ 演示小标照旧');
+    expect(find.text(voiceNotWired), findsOneWidget, reason: '开麦那一句实话照旧');
   });
 }

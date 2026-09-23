@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import '../models/message_state.dart';
 import '../models/notice_words.dart';
 import '../models/source_words.dart';
+import '../models/speak_words.dart';
 import '../models/timeline.dart';
 
 /// 四态的视觉。**图标 + 文字**双通道，不靠颜色单独承载信息。
@@ -105,6 +106,9 @@ class AnswerBubble extends StatelessWidget {
     required this.message,
     this.onLongPress,
     this.onOpenSource,
+    this.onSpeak,
+    this.onStopSpeak,
+    this.speaking = false,
   });
 
   final AssistantMessage message;
@@ -118,6 +122,17 @@ class AnswerBubble extends StatelessWidget {
   ///    出处**只当文字显示**，**不画一个按不动的按钮**
   ///    （界面上不许出现做不到的东西 —— `AGENTS.md` §六 第 4 条那一族）。
   final void Function(String url)? onOpenSource;
+
+  /// **把这一条念出来**（`null` = 这个平台念不了 ⇒ 不画那个按钮）。
+  ///
+  /// ⚠️ 与出处那条同一条规矩：**界面上不许出现按不动的东西**。
+  final VoidCallback? onSpeak;
+
+  /// 正在念这一条时，同一个按钮变成"别念了"。
+  final VoidCallback? onStopSpeak;
+
+  /// **这一条正在被念**（按钮的字与图标跟着变）。
+  final bool speaking;
 
   /// **出处那几行**（「它替你查过的东西是哪来的」）。
   ///
@@ -198,6 +213,32 @@ class AnswerBubble extends StatelessWidget {
                     Text(sourcesHeadWords, style: theme.textTheme.bodySmall),
                     const SizedBox(height: 2),
                     ..._sourceRows(theme),
+                  ],
+                  // ★ **读一遍**（主人 2026-09-23 定案：每条都能念）
+                  //
+                  // ⚠️ 位置：**答案正文与出处之后**（它们是这一条的"内容"，
+                  //    这个按钮是"怎么用这一条"）。
+                  // ⚠️ 说完了才画：半句 / "没说完"的话念出来是**替它把话说圆**，
+                  //    那是假话（D5.15 那一族：认识不到就说人话，不许拿猜的顶上）。
+                  if (onSpeak != null && message.ended && message.reason == 'completed') ...[
+                    const SizedBox(height: 2),
+                    TextButton.icon(
+                      onPressed: speaking ? (onStopSpeak ?? onSpeak) : onSpeak,
+                      icon: Icon(
+                        speaking ? Icons.stop_circle_outlined : Icons.volume_up_outlined,
+                        size: (theme.textTheme.bodySmall?.fontSize ?? 12) + 4,
+                      ),
+                      label: Text(
+                        speaking ? speakStopWords : speakOnceWords,
+                        style: theme.textTheme.bodySmall,
+                      ),
+                      style: TextButton.styleFrom(
+                        // D3.6：命中区 ≥44
+                        minimumSize: const Size(0, 44),
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        alignment: Alignment.centerLeft,
+                      ),
+                    ),
                   ],
                   if (message.ended && message.reason != null && message.reason != 'completed')
                     Padding(

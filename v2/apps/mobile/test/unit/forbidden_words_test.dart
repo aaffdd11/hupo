@@ -12,6 +12,7 @@ import 'package:hupo_app/models/notice_words.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/process_words.dart';
 import 'package:hupo_app/models/source_words.dart';
+import 'package:hupo_app/models/speak_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
 
 void main() {
@@ -160,6 +161,14 @@ void main() {
       // ⚠️ 出处（`67-SOURCES.md`）：抬头与"还有 N 处" —— **直接引数据源**（手抄会漂）
       sourcesHeadWords,
       sourcesMoreWords(2),
+      // ⚠️ "读出来"那一半（`68-SPEAK.md`）：开关与每条按钮的字 + 那句"这台设备上念不出来"
+      speakOnceWords,
+      speakStopWords,
+      speakAutoOnWords,
+      speakAutoOffWords,
+      speakAutoHintOn,
+      speakAutoHintOff,
+      speakCannotWords,
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

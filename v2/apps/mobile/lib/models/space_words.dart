@@ -253,7 +253,9 @@ const String voiceDemoChip = '演示';
 /// 语音模式顶上那句**实话**（不装"正在听"）。
 const String voiceNotWired = '演示：还没有真的开麦，这些字是假的。';
 
-/// 听筒那一边的实话。
-const String voiceEarpieceNotWired = '演示：读出来也还没做，先看形状。';
-const String voiceEarpieceOn = '听筒';
-const String voiceEarpieceOff = '扬声器';
+// ⛔ **"听筒 / 扬声器"那三个词砍了**（2026-09-23 主人定案）：
+//    · 那套语义是"微信里声音从哪儿出"（听筒 ⇄ 外放），而**网页上没有"听筒"这个出口**
+//      （浏览器只有扬声器/耳机，`setSinkId` 在 iOS 上无效 —— 手册 §3.2 自己写着）
+//      ⇒ 留着它就是**假装有一个做不到的东西**；
+//    · 真做得到的那半（**让它念出来**）现在**是真的**了，词在 `speak_words.dart`
+//      （开关"读出来 / 不读"、每条按钮"读一遍 / 别念了"），契约 `docs/dev/68-SPEAK.md`。
