@@ -97,6 +97,48 @@ void main() {
     expect(long.width, lessThanOrEqualTo(desktopTileMax));
   });
 
+  testWidgets('★ 正在动的那一格：**只藏图标**，格子和标签还在（位置一个像素不动）', (tester) async {
+    // 主人 2026-09-24：*"appicon 应该是动效结束后出现…打开的时候 appicon 应该是瞬间消失掉"*
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AppDesktop(
+            apps: [
+              DesktopApp(
+                label: '设置',
+                id: 'settings',
+                icon: Icons.star_outline,
+                onOpen: (_) {},
+              ),
+              DesktopApp(
+                label: '奥数题',
+                id: 'math',
+                icon: Icons.star_outline,
+                onOpen: (_) {},
+              ),
+            ],
+            hideIconId: 'settings',
+            onTapBlank: _noop,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final ops = tester
+        .widgetList<Opacity>(
+          find.ancestor(
+            of: find.byIcon(Icons.star_outline),
+            matching: find.byType(Opacity),
+          ),
+        )
+        .map((o) => o.opacity)
+        .toList();
+    expect(ops, contains(0.0), reason: '正在动的那一格图标要藏起来');
+    expect(ops, contains(1.0), reason: '别的格子照常画');
+    expect(find.text('设置'), findsOneWidget, reason: '标签留着（只藏图标）');
+    expect(find.text('奥数题'), findsOneWidget);
+  });
+
   testWidgets('放大到 2.0 倍也不溢出（D3.5 那一族的形状）', (tester) async {
     await pump(
       tester,

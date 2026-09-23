@@ -282,6 +282,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (widget.onSendKey != null)
                   DesktopApp(
                     label: settingsAppLabel,
+                    id: builtInSettingsId,
                     icon: _builtInIcon(builtInSettingsId),
                     // 打开小程序 ⇒ **聊天自动收起**（§6.4 规则 5：把屏幕让给小程序）
                     onOpen: (from) => _openMiniApp(from, builtInSettingsId),
@@ -289,12 +290,14 @@ class _ChatScreenState extends State<ChatScreen> {
                 // ★ 第二个小程序（主人 2026-09-22 点名的"奥数题库" ⇒ 见 `57-MATH.md`）
                 DesktopApp(
                   label: mathAppLabel,
+                  id: builtInMathId,
                   icon: _builtInIcon(builtInMathId),
                   onOpen: (from) => _openMiniApp(from, builtInMathId),
                 ),
                 // ★ **发现**（乙-3）：别人发出来的（**只读那一屏**；装/发都在对话里）
                 DesktopApp(
                   label: discoverAppLabel,
+                  id: builtInDiscoverId,
                   icon: _builtInIcon(builtInDiscoverId),
                   onOpen: (from) => _openMiniApp(from, builtInDiscoverId),
                 ),
@@ -303,10 +306,14 @@ class _ChatScreenState extends State<ChatScreen> {
                 for (final a in _myApps)
                   DesktopApp(
                     label: a.title,
+                    id: '$_minePrefix${a.id}',
                     icon: miniAppIconFor(a.icon),
                     onOpen: (from) => _openMiniApp(from, '$_minePrefix${a.id}'),
                   ),
               ],
+              // ★ 2026-09-24：正在扩开/收回的那一格，**图标先消失**（打开那一瞬间就藏；
+              //   收回时**藏到动画结束**才放回来 —— 主人原话："appicon 应该是动效结束后出现"）
+              hideIconId: _openApp ?? (_appSettled ? null : _hideIdCache),
               onTapBlank: () => _floaterKey.currentState?.collapse(),
             ),
           ),
@@ -319,7 +326,13 @@ class _ChatScreenState extends State<ChatScreen> {
               title: _appView(c)?.title ?? _lastAppTitle,
               // ★ 2026-09-24 主人定案：前半程要看到"**图标自己在长大**"
               icon: _appIconFor(),
-              onClose: () => setState(() => _openApp = null),
+              onClose: () => setState(() {
+                _openApp = null;
+                _appSettled = false; // 收回动效开始 ⇒ 图标先别回来
+              }),
+              onSettled: () {
+                if (mounted) setState(() => _appSettled = true);
+              },
               covered: _floaterExpanded,
               onCoveredTap: () => _floaterKey.currentState?.collapse(),
               // 收起那条压住多少 ⇒ 内容底部内缩（规则 1：不是简单覆盖，否则最后一行永远点不到）
@@ -429,7 +442,14 @@ class _ChatScreenState extends State<ChatScreen> {
   ///    （跟 `_lastAppView` / `_lastAppTitle` 同一个道理：动画要缩的是**它自己**）。
   IconData? _lastAppIcon;
 
+  /// 扩开/收回**落定了吗**（落定 ⇒ 桌面那一格的图标可以回来了）。
+  bool _appSettled = true;
+
+  /// 刚才在动的是哪一格（收回时 `_openApp` 已经是 null，只能自己记）。
+  String? _hideIdCache;
+
   IconData? _appIconFor() {
+    if (_openApp != null) _hideIdCache = _openApp; // 打开这一瞬间就记下来（收回要用）
     final mine = _openMine();
     // ⚠️ `mine.icon` 是**名字**（服务器给的那个），要过同一张表变成 `IconData`
     //   （和桌面那一格用的是同一个函数 ⇒ 两处永远一致）

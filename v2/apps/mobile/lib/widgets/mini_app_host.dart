@@ -48,6 +48,7 @@ class MiniAppHost extends StatefulWidget {
     required this.child,
     this.fromRect,
     this.icon,
+    this.onSettled,
   });
 
   /// 现在有 app 开着吗。
@@ -80,6 +81,10 @@ class MiniAppHost extends StatefulWidget {
   /// `null` = 没给 ⇒ 这一层不画（老行为：一上来就是页面被裁出的一小块）。
   final IconData? icon;
 
+  /// **动画落定了**（扩开铺满 / 收回到底）—— 上层拿它决定"桌面那一格的图标什么时候回来"。
+  /// ⚠️ 只在**状态变化**时叫一次，不是每帧叫。
+  final VoidCallback? onSettled;
+
   @override
   State<MiniAppHost> createState() => _MiniAppHostState();
 }
@@ -99,6 +104,11 @@ class _MiniAppHostState extends State<MiniAppHost>
   void initState() {
     super.initState();
     if (widget.open) _c.value = 1;
+    _c.addStatusListener((st) {
+      if (st == AnimationStatus.completed || st == AnimationStatus.dismissed) {
+        widget.onSettled?.call();
+      }
+    });
     // 🔴 **收回动画走完的那一刻必须重建一次**（2026-09-22 主人报"退出小程序有个小bug"）。
     //    原来只在 `build()` 里写了一句"没开而且收回去了 ⇒ 什么都不画"——
     //    而**动画结束不会触发外层 `build()`**（只有里面那个 `AnimatedBuilder` 会重建）

@@ -43,10 +43,15 @@ class DesktopApp {
     required this.onOpen,
     this.icon = defaultAppIcon,
     this.badge = 0,
+    this.id,
   });
 
   final String label;
   final IconData icon;
+
+  /// **它是谁**（可选）。给"图标要临时藏起来"用：扩开/收回那一格在动的时候，
+  /// 桌面上这个图标必须**先消失**（不然两层图标叠在一起，看着像两个）。
+  final String? id;
 
   /// **打开**。参数 = **这个图标在屏幕上的位置**（"从哪里打开，就从哪里扩开"）。
   /// ⚠️ 由图标自己量、自己报 —— 上层不用去猜它在哪儿（猜的话换个排布就错了）。
@@ -78,6 +83,9 @@ class AppDesktop extends StatelessWidget {
     required this.onTapBlank,
     this.header,
     this.columns = 4,
+    // ★ 2026-09-24 主人：*"appicon 应该是动效结束后出现。所以打开的时候 appicon 应该是
+    //   瞬间消失掉…退回到 app 的时候应该是动效结束的时候 appicon 出现。"*
+    this.hideIconId,
   });
 
   final List<DesktopApp> apps;
@@ -90,6 +98,9 @@ class AppDesktop extends StatelessWidget {
 
   /// 一屏放几列。
   final int columns;
+
+  /// **哪一格的图标现在要藏起来**（`null` = 都正常画）。
+  final String? hideIconId;
 
   @override
   Widget build(BuildContext context) {
@@ -146,7 +157,12 @@ class AppDesktop extends StatelessWidget {
                         runSpacing: d.gapL,
                         children: [
                           for (final a in apps)
-                            _DesktopIcon(app: a, width: tileWidth),
+                            _DesktopIcon(
+                              app: a,
+                              width: tileWidth,
+                              // 正在扩开/收回的那一格：**图标先消失**（占位留着，界面不跳）
+                              hideIcon: a.id != null && a.id == hideIconId,
+                            ),
                         ],
                       ),
                       // ★ 2026-09-23：桌面上原来**一句引导都没有** ——
@@ -172,10 +188,17 @@ class AppDesktop extends StatelessWidget {
 }
 
 class _DesktopIcon extends StatelessWidget {
-  const _DesktopIcon({required this.app, required this.width});
+  const _DesktopIcon({
+    required this.app,
+    required this.width,
+    this.hideIcon = false,
+  });
 
   final DesktopApp app;
   final double width;
+
+  /// 图标藏起来（**只藏图标**：格子、阴影、标签都留着 —— 位置一个像素都不动）。
+  final bool hideIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -222,7 +245,12 @@ class _DesktopIcon extends StatelessWidget {
                 ),
                 child: Stack(
                   children: [
-                    Center(child: Icon(app.icon, color: d.ink)),
+                    Center(
+                      child: Opacity(
+                        opacity: hideIcon ? 0 : 1,
+                        child: Icon(app.icon, color: d.ink),
+                      ),
+                    ),
                     if (app.badge > 0)
                       Positioned(
                         top: d.gapS,
