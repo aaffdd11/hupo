@@ -28,6 +28,11 @@ import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
 import { SIGNED_TTL_MS, entryUrl } from './app-serve.js';
 import { ASR_PATH } from './asr.js';
 
+/// **看起来像"一个文件"的路径**（P1-14）：这些后缀一律**不回 SPA 兜底**，
+/// 而是如实 404 —— 拿 HTML 冒充 JS/CSS/字体/wasm，是把"缺文件"变成"白屏"。
+const LOOKS_LIKE_ASSET =
+  /\.(js|mjs|css|json|wasm|map|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|txt|webmanifest)$/i;
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -1064,7 +1069,18 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     let file = target;
     let stat = nodeFs.existsSync(file) ? nodeFs.statSync(file) : null;
     if (!stat || stat.isDirectory()) {
-      // SPA 回退：不认识的路径交回 index.html
+      // ★ P1-14（2026-09-24）：**"看起来像文件"的路径不许回 index.html**。
+      //
+      // 为什么：SPA 回退对**任何**不认识的路径都回 index.html（200）。
+      // 于是一个坏掉的/旧的入口请求（`/main.<旧指纹>.dart.js`）会拿到**一段 HTML**，
+      // 浏览器把它当 JS 解析 ⇒ **整页白屏**，而服务器日志里一片 200 ——
+      // 把"缺个文件"变成了"白屏"，**把病因藏起来了**。
+      // （2026-09-24 那场白屏就是这么被藏住的：`curl /main.deadbeef0000.dart.js` 回 **200**。）
+      // ⇒ 带"资源扩展名"的路径**如实回 404**（负向对照：真入口仍然 200）。
+      if (LOOKS_LIKE_ASSET.test(path)) {
+        return sendJson(res, 404, { error: 'not-found', text: '这个文件不在了' });
+      }
+      // SPA 回退：不认识的路径交回 index.html（**只有页面路由**走这条）
       file = nodePath.join(webRoot, 'index.html');
       stat = nodeFs.existsSync(file) ? nodeFs.statSync(file) : null;
       if (!stat) return sendJson(res, 404, { error: 'not-found' });

@@ -12,6 +12,8 @@
 //
 // ⚠️ 全程**注入一个假的合成器**（记账用）：判据不依赖真浏览器有没有音色。
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -186,5 +188,18 @@ void main() {
     c.speakMessage('m1', '   ');
     expect(sp.spoken, ['   '], reason: '空文本由 speech.dart 那一层挡（界面上不会有这种调用）');
     c.dispose();
+  });
+
+  // ★ P1-2（2026-09-24）：`canSpeak` **不许再写死**。
+  //   VM 上跑的是 `speech_stub.dart`（本来就 false），所以这条判据扫的是
+  //   **Web 那一份源码**：它必须真的去问浏览器有没有音色。
+  test('P1-2：speech_web 的 canSpeak 必须查音色（不许写死 true）', () {
+    final src = File('lib/services/speech_web.dart').readAsStringSync();
+    expect(src.contains('getVoices'), isTrue, reason: '要真的问浏览器有没有音色');
+    expect(
+      RegExp(r'const bool canSpeak = true').hasMatch(src),
+      isFalse,
+      reason: '写死 true ⇒ 没音色的浏览器上会画出一个按不动的开关（2026-09-23 实测到过）',
+    );
   });
 }

@@ -11,8 +11,25 @@
 // ignore: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'dart:html' as html;
 
-/// 网页上可以（浏览器自带）。
-const bool canSpeak = true;
+/// 网页上**能不能念**：光有 `speechSynthesis` 不够，还得**真有音色**。
+///
+/// ★ P1-2（2026-09-24）：原来是写死的 `true` ⇒ 哪怕浏览器**一个音色都没有**
+///   （实测：无头 Chrome 里 `getVoices().length == 0`，一按就回 `err:not-allowed`），
+///   那个「读出来」开关照样画出来 —— 按下去什么都不会发生（"按不动的东西"）。
+///   ⇒ 改成**真的问浏览器**。
+///
+/// ⚠️ 已知的取舍：音色是**异步**加载的，某些平台第一次读会拿到空表。
+///   那种情况下这个开关会**暂时不画**（按 D5.16"念不了就不画"那条走）；
+///   页面每次重建都会重读一次，音色到位后它自己会出现。
+bool get canSpeak {
+  final synth = html.window.speechSynthesis;
+  if (synth == null) return false;
+  try {
+    return synth.getVoices().isNotEmpty;
+  } catch (_) {
+    return false; // 问不出来 ⇒ 当作念不了（不画比画一个假的强）
+  }
+}
 
 /// 正在念的那一段（用来在"新的开念"和"停"的时候认得出它）。
 html.SpeechSynthesisUtterance? _current;

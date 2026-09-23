@@ -13,6 +13,8 @@
 
 ## 已做完的（这一批）
 
+| ✅ | **P1-14** 像文件的路径不许回 index.html | `serveStatic` 里加一条：带资源后缀（js/css/json/wasm/字体/图…）的路径**如实 404**，只有**页面路由**才走 SPA 兜底 | 新判据 3 断言：假入口(`/main.deadbeef0000.dart.js`) ⇒ **404** · 真资源 ⇒ **200**（负向对照）· 页面路由 ⇒ 200 HTML |
+| ✅ | **P1-2** `canSpeak` 写死 `true` | `speech_web.dart` 改成**真的问浏览器有没有音色**（`getVoices().isNotEmpty`）；问不出来就当念不了 | `source` 级判据：不许再出现 `const bool canSpeak = true`、必须有 `getVoices`；speak 测试 **10 条全过** |
 | ✅ | **P0-8** 部署脚本不跑硬闸 | 构建**之前**先替跑两道硬闸；红 ⇒ **一步都不往下走**（线上仍是上一版）。逃生口 `HUPO_SKIP_GATES=1`（会大字打在输出里，事后查得到）；`HUPO_GATE_CLIENT/SERVER` 给变异验证用 | **变异验证** `scripts/check-deploy-gate.sh`：把客户端闸换成 `false` ⇒ 非零退出 + 明说"不部署" + index.html/入口文件**一个字节没动**（4/4 过） |
 | ✅ | **P0-1** 收尾那批的闸（上一轮一道都没跑） | 走**新的部署前闸**跑了两道 + 部署脚本自己的浏览器自检（真 Chrome：页面开、那条流通、字体取得到） | 客户端 **354/181/199** · 服务端 **769 全过** · 线上 `901e0b843bcb` · 浏览器自检 ✅ |
 

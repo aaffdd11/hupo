@@ -421,3 +421,21 @@ test('★ 落盘失败时，WS 上不会收到那条（先落盘再推）', asyn
   assert.ok(!frames.some((f) => f.messageId === 'u_bad'), '★ 没落盘就不许推');
   await s.close();
 });
+
+// ── P1-14（2026-09-24）：像文件的路径不许拿 HTML 冒充 ────────────────
+
+test('★ P1-14：像文件的路径 ⇒ 404；真资源仍 200；页面路由仍回 HTML', async () => {
+  const s = await boot();
+  // ① 假入口（就是 2026-09-24 那场白屏的形态）⇒ 必须如实 404
+  const fake = await fetch(`${s.origin}/main.deadbeef0000.dart.js`);
+  assert.equal(fake.status, 404, '假入口回了 200 ⇒ 浏览器会把 HTML 当 JS 解析 ⇒ 白屏');
+  assert.match(fake.headers.get('content-type') ?? '', /json/);
+  // ② 负向对照：真资源不许被这条分支挡掉
+  const real = await fetch(`${s.origin}/flutter_service_worker.js`);
+  assert.equal(real.status, 200);
+  // ③ 页面路由（不像文件）照旧回 index.html —— SPA 那条路要留着
+  const route = await fetch(`${s.origin}/some/app/route`);
+  assert.equal(route.status, 200);
+  assert.match(route.headers.get('content-type') ?? '', /html/);
+  await s.close();
+});
