@@ -188,4 +188,24 @@ void main() {
       expect(line.contains('服务器'), isFalse, reason: '内部词不许上屏：$line');
     }
   });
+
+  // ★ P0-5（2026-09-24）：「正在听」**收窄**了 —— 不再是一刀切禁掉，而是
+  //   "只在真的在录音时才可以"（D5.13）。这条把**唯一的合法落点**钉死：
+  //   整棵 `lib/` 里，字符串字面量 `'正在听'` 只许出现在 `models/hearing_words.dart`。
+  test('P0-5：「正在听」只许出现在 hearing_words.dart（且只在真在听时画）', () {
+    final hits = <String>[];
+    for (final e in Directory('lib').listSync(recursive: true)) {
+      if (e is! File || !e.path.endsWith('.dart')) continue;
+      // ⚠️ 词表自己当然含这个词（它就是"哪些词不许用"那张表）⇒ 排除它
+      if (e.path.endsWith('models/forbidden_words.dart')) continue;
+      final src = e.readAsStringSync();
+      // 只看**字符串字面量**（注释里提到不算）
+      if (RegExp(r"'正在听'").hasMatch(src)) hits.add(e.path);
+    }
+    expect(
+      hits,
+      ['lib/models/hearing_words.dart'],
+      reason: '「正在听」的合法落点只有一个；别处出现就是"不录音还说在听"（D5.13）',
+    );
+  });
 }
