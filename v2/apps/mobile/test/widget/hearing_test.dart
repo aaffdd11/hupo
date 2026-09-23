@@ -87,10 +87,15 @@ Future<void> toVoice(WidgetTester tester) async {
 Finder micButton() => find.byWidgetPredicate((w) => w is TextButton);
 
 void main() {
-  testWidgets('★ 开不了麦 ⇒ 连那个话筒都不画', (tester) async {
+  testWidgets('★ 开不了麦 ⇒ 话筒**还在**，点它只说明白话（不装开麦）', (tester) async {
+    // 🔴 2026-09-23 改的：原来这一档是**把话筒藏起来**，而主人看到的就是
+    //    "为什么录音的 icon 没有？" —— 藏起来等于让用户自己猜。
     await pump(tester, canHear: false);
-    expect(find.byIcon(Icons.mic_none), findsNothing);
-    expect(find.text(hearStart), findsNothing);
+    expect(find.byIcon(Icons.mic_none), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.pumpAndSettle();
+    expect(find.text(hearCantHere), findsOneWidget); // 说一句白话
+    expect(find.text(hearStart), findsNothing); // 但**不进语音档**（不装开麦）
   });
 
   testWidgets('★ 闲的时候：写「按一下 说话」，点一下真的交出去', (tester) async {
@@ -112,13 +117,16 @@ void main() {
       onMicToggle: () => tapped += 1,
     );
     await toVoice(tester);
-    expect(find.text(hearListening), findsOneWidget);
+    expect(find.text(hearListening), findsOneWidget); // ● 正在听（录音标记）
+    expect(find.text(hearStop), findsOneWidget); // 按钮上：再按一下 结束
     expect(find.text('今天天气'), findsOneWidget); // 实时那几个字必须在屏幕上
+    // 🔴 **正在听的时候不许出现发送钮**（半句话不许被发出去）
+    expect(find.byIcon(Icons.arrow_upward), findsNothing);
     // 来下一句 ⇒ **屏幕上跟着变**（"实时转化语音成文字"）
     n.value = const Hearing(phase: HearingPhase.listening, segments: {0: '今天天气怎么样'});
     await tester.pumpAndSettle();
     expect(find.text('今天天气怎么样'), findsOneWidget);
-    await tester.tap(find.text(hearListening));
+    await tester.tap(find.text(hearStop));
     await tester.pumpAndSettle();
     expect(tapped, 1);
   });
@@ -150,6 +158,7 @@ void main() {
     n.value = const Hearing().tapped();
     await tester.pumpAndSettle();
     expect(find.text(hearListening), findsOneWidget);
+    expect(find.text(hearStop), findsOneWidget);
     // ② 一句一句来字（实时那一段）
     n.value = n.value.partial('今天天气', index: 0);
     await tester.pumpAndSettle();

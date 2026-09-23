@@ -98,6 +98,9 @@ class _ComposerState extends State<Composer> {
   /// （绝不把用户打了一半的字擦掉）。
   String _prefix = '';
 
+  /// 一句要说给用户的白话（例如"这里开不了麦"）。空 = 没什么要说的。
+  String _notice = '';
+
   /// 上一次**由语音写进框里**的那份字。
   /// ⚠️ 有了它才敢在"他自己动过手"之后**不再覆盖**（收尾那句字回来得比手慢）。
   String _mirror = '';
@@ -194,7 +197,10 @@ class _ComposerState extends State<Composer> {
   /// 框里的字变了 ⇒ 交给上层存下来（**一边打一边存**，刷新回来还在）。
   void _onChanged(String text) {
     widget.onDraftChanged?.call(text);
-    setState(() {}); // 草稿条要跟着"框是不是空的"变
+    setState(() {
+      // 他开始打字 ⇒ 那句说明收起来（它是一次性的）
+      _notice = '';
+    }); // 草稿条要跟着"框是不是空的"变
   }
 
   /// **把上面那条草稿放回框里**（"接着写"）。
@@ -234,6 +240,8 @@ class _ComposerState extends State<Composer> {
           //   规则：**框是空的、而且本机存着一份草稿**时才出现。
           //   ⚠️ 一旦他开始打字（框里有字），这条就收起来 —— 不然同一句话画两遍。
           if (showDraft) _draftStrip(theme),
+          // 一句白话（有才画）——例如"这里开不了麦"
+          if (_notice.isNotEmpty) _noticeStrip(theme),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
@@ -246,14 +254,27 @@ class _ComposerState extends State<Composer> {
               //
               // ⚠️ **开不了麦就不画这个话筒**（`canHear` 假 ⇒ 这一档整个不存在）——
               //    同一个道理：界面上不许出现按不动的东西（2026-09-23 真开麦那一批）。
-              if (widget.canHear)
-                IconButton(
-                  tooltip: _voice ? voiceToKeyboard : voiceToMic,
-                  onPressed: () => setState(() => _voice = !_voice),
-                  icon: Icon(
-                    _voice ? Icons.keyboard_alt_outlined : Icons.mic_none,
-                  ),
+              // ★ **话筒一直在**（2026-09-23 主人问"为什么录音的 icon 没有"之后改的）。
+              //   ⚠️ 原来这一档是"开不了麦就把话筒藏起来" —— 那个决定是**坏的**：
+              //      用户看到的是"功能没了"，而不是"这里用不了"（他自己就来问了）。
+              //      ⇒ 现在：**摆着**，点下去**说一句白话**（`hearCantHere`）。
+              //   ⚠️ 它仍然**不装开麦**（不进语音档、不开麦、不出假字）。
+              IconButton(
+                tooltip: _voice ? voiceToKeyboard : voiceToMic,
+                onPressed: () {
+                  if (!widget.canHear) {
+                    setState(() => _notice = hearCantHere);
+                    return;
+                  }
+                  setState(() {
+                    _notice = '';
+                    _voice = !_voice;
+                  });
+                },
+                icon: Icon(
+                  _voice ? Icons.keyboard_alt_outlined : Icons.mic_none,
                 ),
+              ),
               if (!_voice)
                 IconButton(
                   tooltip: composerPaste,
@@ -320,7 +341,10 @@ class _ComposerState extends State<Composer> {
                 child: ValueListenableBuilder<TextEditingValue>(
                   valueListenable: _controller,
                   builder: (context, value, _) {
-                    final canSend = value.text.trim().isNotEmpty;
+                    // ⚠️ **正在听/收尾中不画发送**：那会儿框里的字是"还在长"的半句，
+                    //    发出去就是替他做了决定（而且主人要的是"停下之后再决定发不发"）。
+                    final canSend =
+                        value.text.trim().isNotEmpty && !widget.hearing.busy;
                     // 没话要说 ⇒ 那个位置**什么都不画**（不是禁用态；位置由外面那个
                     // 固定 48×48 的盒子占着，所以界面不跳）
                     if (!canSend) return const SizedBox.shrink();
@@ -398,6 +422,23 @@ class _ComposerState extends State<Composer> {
     ),
   );
 
+  /// **一句白话**（例如"这里开不了麦"）：一行、淡色、不占地方。
+  Widget _noticeStrip(ThemeData theme) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      decoration: BoxDecoration(
+        color: d.accentTint,
+        borderRadius: BorderRadius.circular(d.radiusField),
+      ),
+      child: Text(
+        _notice,
+        style: theme.textTheme.bodySmall?.copyWith(color: d.accent),
+      ),
+    ),
+  );
+
   /// **语音那一块**（2026-09-23 主人定案：按一下开始 / 再按一下结束）。
   ///
   /// 三件事按顺序摆：
@@ -418,30 +459,51 @@ class _ComposerState extends State<Composer> {
       children: [
         // 听的时候把**正在听到的**那行字摆出来（"实时转化语音成文字"那一半）
         // ⚠️ **收尾中也要摆**（那半句还在，只是还没定稿）
+        //
+        // ★ 2026-09-23 重排：上面加一个**一眼看得见的录音标记**
+        //   （`● 正在听` —— 那一点是文字画出来的，不是写死的尺寸；
+        //     红点用 `●` 加主题色，跟着字号缩放）。
+        //   原来只有按钮上那行字，主人看了问"为什么录音的 icon 没有"。
         if (h.busy) ...[
           Container(
             width: double.infinity,
-            constraints: const BoxConstraints(minHeight: 44),
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
             decoration: BoxDecoration(
               color: d.card,
               borderRadius: BorderRadius.circular(d.radiusField),
-              border: Border.all(color: d.line),
+              border: Border.all(color: live ? d.accent : d.line),
             ),
-            child: Text(
-              h.text.isEmpty ? hearListeningEmpty : h.text,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: h.text.isEmpty ? d.muted : d.ink,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      '●',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: live ? d.accent : d.muted,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      live ? hearListening : hearFinishing,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: live ? d.accent : d.muted,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  h.text.isEmpty ? hearListeningEmpty : h.text,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    color: h.text.isEmpty ? d.muted : d.ink,
+                  ),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 6),
-        ],
-        // 收尾中：说清楚这一小会儿在等什么（不然用户以为说丢了）
-        if (finishing) ...[
-          Text(
-            hearFinishing,
-            style: theme.textTheme.bodySmall?.copyWith(color: d.muted),
           ),
           const SizedBox(height: 6),
         ],
@@ -468,7 +530,7 @@ class _ComposerState extends State<Composer> {
             ),
             onPressed: widget.onMicToggle == null ? null : _toggleMic,
             icon: Icon(live ? Icons.stop_circle_outlined : Icons.mic),
-            label: Text(live ? hearListening : hearStart),
+            label: Text(live ? hearStop : hearStart),
           ),
         if (!h.busy && h.notice.isEmpty) ...[
           const SizedBox(height: 4),
