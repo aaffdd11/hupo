@@ -28,6 +28,7 @@
 | **小程序怎么造、怎么发、怎么装、"用谁的钥匙"** | [`dev/59-USER-APPS.md`](dev/59-USER-APPS.md)（契约）+ [`handbook/08-SPEC.md`](handbook/08-SPEC.md) §7.3 / §十四 | 动小程序那一块之前 |
 | **用户创造小程序这件事当初为什么这么做** | [`dev/58-CREATE-APP.md`](dev/58-CREATE-APP.md) | 想改小程序的形状之前 |
 | **手册改过什么 · 现在是什么版本** | [`handbook/CHANGELOG.md`](handbook/CHANGELOG.md) | 要改手册之前 |
+| **失败了该跟用户说哪句话 / 想加一类失败** | [`dev/62-FAILURE-CLASSES.md`](dev/62-FAILURE-CLASSES.md)（五类里**哪两档有判据、凭什么认**，以及**还没有信号**的那三档）+ [`handbook/05-DECISIONS.md`](handbook/05-DECISIONS.md) `D10.3` | 改失败文案 / 加分类器之前 |
 | **已经删掉的旧实现 / 旧文档原文** | `git show f93f296:<路径>` | 手册确实没写到，而你又非要原文时 |
 
 ---

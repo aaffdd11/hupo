@@ -61,6 +61,9 @@ import { EventEmitter } from 'node:events';
 
 import { MessageWriter } from './message-writer.js';
 import { isReadOnlyTool } from './tools.js';
+// ★ **失败五类那几句人话只有一处出处**（`notice.js` 的 `FAILED_LINES`）——
+//   这一层要用"外面那条路不通"那一句（账 #33），但**不许在这儿再抄一份字**。
+import { FAILED_LINES } from './notice.js';
 
 /**
  * 被截断时补的那句话。
@@ -107,6 +110,54 @@ export function isAuthFailure(data) {
   if (!err || typeof err !== 'object') return false;
   if (String(err.code ?? '').toUpperCase() === 'AUTH') return true;
   return Number(err.status) === 401;
+}
+
+/**
+ * 🔴 **外面那条路不通**（账 #33 的前半 · 2026-09-23）。
+ *
+ * 为什么它是第二要紧的一档：用户**最可能撞上的就是它**（上游连不上 / 被限流 / 人家那边 5xx），
+ * 而原来它跟"我们这边出毛病"、"你话说一半断了"**长得一模一样** ——
+ * 都是一句"这条我没说完就断了"，于是用户只能一遍遍重试。
+ *
+ * ⚠️ **用词从 `notice.js` 来**（`FAILED_LINES.upstream`）—— 一处出处，别在这儿抄第二份。
+ * ⚠️ **判据必须保守**：只认下面这些**明确表示"对面不通"**的标记；认不出 ⇒ `false`
+ *    （退回那句含糊的话）。把"我们自己的错"说成"外面不通"同样是假话，只是方向相反。
+ */
+export const UPSTREAM_LINE = FAILED_LINES.upstream;
+
+/** 网络 / 上游那几种**明确**的错（大小写都算）。 */
+const UPSTREAM_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENETDOWN',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UPSTREAM',
+  'UPSTREAM_UNAVAILABLE',
+  'UPSTREAM_ERROR',
+  'PROVIDER_ERROR',
+]);
+
+/** 上游那边"现在没法给你干活"的状态码。 */
+const UPSTREAM_STATUS = new Set([408, 425, 429, 500, 502, 503, 504, 522, 524]);
+
+/**
+ * 这一轮失败，是不是"外面那条路不通"。
+ * @param {object} data `turn/end` 的 `data`
+ */
+export function isUpstreamFailure(data) {
+  const err = data?.reason?.error ?? data?.reason?.failure ?? null;
+  if (!err || typeof err !== 'object') return false;
+  // ⚠️ **钥匙不对是另一档**（那一档要用户回去改钥匙）⇒ 先让位给它，别抢。
+  if (isAuthFailure(data)) return false;
+  if (UPSTREAM_CODES.has(String(err.code ?? '').toUpperCase())) return true;
+  return UPSTREAM_STATUS.has(Number(err.status));
 }
 export const EMPTY_LINE = '这次我没能给出结论，你再说一次。';
 
@@ -454,7 +505,15 @@ export class TurnTranslator extends EventEmitter {
     const kind = data?.reason?.kind ?? 'completed';
     // 🔴 **"钥匙不对"要说成"钥匙不对"**（见 `AUTH_LINE` 顶上那段）。
     //    它在两种情形下都要用：一句话都没说、以及只说了半句。
-    const stuckLine = isAuthFailure(data) ? AUTH_LINE : INTERRUPTED_LINE;
+    // ★ 同样地，**"外面那条路不通"要说成"外面那条路不通"**（账 #33 · 2026-09-23）：
+    //   那是用户**最可能撞上**的一档，而它原来和"我们这边出毛病"长得一模一样。
+    //   ⚠️ 顺序有意：**先问钥匙**（那一档要用户回去改钥匙，改完就好），再问上游。
+    //   ⚠️ 两个都认不出 ⇒ 还是那句含糊的 `INTERRUPTED_LINE`（N10：宁可少说，不许猜）。
+    const stuckLine = isAuthFailure(data)
+      ? AUTH_LINE
+      : isUpstreamFailure(data)
+        ? UPSTREAM_LINE
+        : INTERRUPTED_LINE;
     const writer = rec.writer;
 
     if (!writer) {

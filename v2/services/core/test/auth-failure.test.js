@@ -17,6 +17,8 @@ import assert from 'node:assert/strict';
 
 import {
   AUTH_LINE,
+  UPSTREAM_LINE,
+  isUpstreamFailure,
   EMPTY_LINE,
   INTERRUPTED_LINE,
   TRUNCATED_LINE,
@@ -109,7 +111,9 @@ test('🔴 钥匙不对 ⇒ 屏幕上就是"钥匙不对"（不是那句含糊�
 test('负向对照：别的失败 ⇒ 还是原来那句（这次改动没有波及它们）', () => {
   // ⚠️ 对着**同一份出处**比（`session-translate.js` 里那几个常量），
   //    不在这里手抄一遍 —— 抄一遍就是"两处数字"，它们一定会漂。
-  assert.equal(sayOnce({ kind: 'error', error: { code: 'UPSTREAM', status: 502 } }), INTERRUPTED_LINE);
+  // ⚠️ **2026-09-23 改了这一条**（账 #33）：原来这里拿 `UPSTREAM/502` 当"别的失败"的例子，
+  //    而**它现在自己成了一档**（上游不通）⇒ 它不再走那句含糊的话。
+  //    这一档的正向判据在下面那条 `🔴 外面那条路不通 ⇒ 屏幕上就是那一句`。
   // ⚠️ `max-tokens` 且**一句话都没说**时走的是"没说完"那句，不是"被截断"那句 ——
   //    因为"截断"是**给已经说了半句的那种**用的（见 `#onTurnEnd` 两个分支）。
   //    这是既有行为，这次改动**没有碰它**（负向对照要如实反映现状，不是我希望的样子）。
@@ -121,6 +125,67 @@ test('负向对照：别的失败 ⇒ 还是原来那句（这次改动没有波
   assert.match(TRUNCATED_LINE, /接着说/, '🔴 必须告诉他回哪句话能接着讲（只说"没说完"= 把他晾在那儿）');
   assert.ok(!/文件/.test(TRUNCATED_LINE), '⚠️ 不许往"文件"上引 —— 他没有打开那台机器上文件的路');
   assert.equal(sayOnce({ kind: 'completed' }), EMPTY_LINE);
+});
+
+// ══ ②b 上游不通那一档（账 #33 的前半 · 2026-09-23）════════════
+
+test('🔴 外面那条路不通 ⇒ 屏幕上就是那一句（不是"我没说完"、更不是"钥匙不对"）', () => {
+  // ⚠️ 这一档为什么值得单钉：它是**用户最可能撞上**的失败（上游连不上 / 被限流 / 人家 5xx），
+  //    而原来它和"我们这边出毛病"长得一模一样 ⇒ 用户只能一遍遍重试。
+  const text = sayOnce({ kind: 'error', error: { code: 'UPSTREAM', status: 502 } });
+  assert.equal(text, UPSTREAM_LINE);
+  assert.notEqual(text, INTERRUPTED_LINE, '🔴 含糊那句不许再出现');
+  assert.notEqual(text, AUTH_LINE, '🔴 更不许说成"钥匙不对"（那会让人白改一遍钥匙）');
+});
+
+test('🔴 认得出那几种**明确**的"对面不通"（状态码 / 网络错码，大小写都算）', () => {
+  for (const status of [408, 425, 429, 500, 502, 503, 504]) {
+    assert.equal(
+      isUpstreamFailure({ reason: { kind: 'error', error: { status } } }),
+      true,
+      `status ${status} 该被认成"外面那条路不通"`,
+    );
+  }
+  for (const code of ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'UPSTREAM']) {
+    assert.equal(
+      isUpstreamFailure({ reason: { kind: 'error', error: { code } } }),
+      true,
+      `${code} 该被认成"外面那条路不通"`,
+    );
+    assert.equal(
+      isUpstreamFailure({ reason: { kind: 'error', error: { code: code.toLowerCase() } } }),
+      true,
+      `${code} 小写也算（大小写不该决定用户看到什么）`,
+    );
+  }
+});
+
+test('🔴 负向对照：**不许抢**"钥匙不对"那一档，也不许把认不出的说成"外面不通"', () => {
+  // ⚠️ 抢了钥匙那一档的代价：用户以为"外面不通"，于是**不去重填那把坏掉的钥匙**（改不动）。
+  assert.equal(
+    isUpstreamFailure({ reason: { kind: 'error', error: { code: 'AUTH', status: 401 } } }),
+    false,
+    '401 / AUTH 是"钥匙不对"那一档',
+  );
+  // ⚠️ 反过来也一样：认不出的**不许**说成"外面不通"（那是替上游背锅，方向反的假话）。
+  for (const d of [
+    { reason: { kind: 'completed' } },
+    { reason: { kind: 'error', error: { status: 400 } } },
+    { reason: { kind: 'error', error: { status: 404 } } },
+    { reason: { kind: 'error', error: { code: 'BAD_REQUEST' } } },
+    { reason: { kind: 'error', error: 'a string' } },
+    { reason: { error: 42 } },
+    {},
+    undefined,
+  ]) {
+    assert.equal(isUpstreamFailure(d), false, `${JSON.stringify(d)} 不该被认成"外面不通"`);
+  }
+});
+
+test('🔴 "外面不通"那句里也不许有内部词', () => {
+  for (const w of ['模型', '上游', 'API', '服务', '连接', '超时', '调度器', '时间线', '工作区', '口令', '客户端', '云端']) {
+    assert.ok(!UPSTREAM_LINE.includes(w), `界面上出现了内部词「${w}」：${UPSTREAM_LINE}`);
+  }
 });
 
 test('🔴 那句"钥匙不对"里不许有内部词（尤其 `模型`）', () => {

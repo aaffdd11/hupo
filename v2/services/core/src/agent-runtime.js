@@ -23,6 +23,10 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import nodeFs from 'node:fs';
 import { EventEmitter } from 'node:events';
 
+// ★ **"它是不是被挤掉的"要有证据**（账 #33 的后半）：拿内核那个 cgroup 计数当证据，
+//   而不是拿 `SIGKILL` 当 OOM（那是猜）。见 `oom.js` 顶上那三条纪律。
+import { createOomWatcher } from './oom.js';
+
 /** 默认的 dsh 可执行文件。 */
 export function resolveDshBin() {
   return process.env.HUPO_DSH_BIN ?? 'dsh';
@@ -318,8 +322,11 @@ export class DshAgent extends EventEmitter {
       );
     }
 
-    const child = this.#spawnFn(cfg.dshBin, args, {
-      cwd: cfg.agentCwd,
+    // ★ 起它之前先记一笔 cgroup 的 OOM 计数（它没了之后再看涨没涨 —— 见 `oom.js`）
+    const oom = createOomWatcher();
+    oom.markStart();
+
+    const child = this.#spawnFn(cfg.dshBin, args, {      cwd: cfg.agentCwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       // ★ **换手**（多租户 ②-2 · `39-PERMISSIONS.md` §5.2/§7.1）：
       //   容器里的服务是 root，而 root 带着 `CAP_DAC_OVERRIDE`
@@ -398,6 +405,11 @@ export class DshAgent extends EventEmitter {
         code,
         signal,
         wasReady,
+        // 🔴 **"被挤掉的"只在这一种情况下才敢说**（账 #33）：这个 cgroup 在那段时间里
+        //    **真的 OOM 过**（内核计数涨了）。读不到 / 没涨 ⇒ `false` ⇒ 上层用那句含糊的。
+        //    ⚠️ 本机这条 scope `memory.max` 是 `max` ⇒ 它在这儿**永远不会**是 `true`；
+        //       带 `--memory=768m` 的租户容器里才会。
+        oom: oom.changed(),
         reason: `进程退出 code=${code}${tail ? `；它最后说的话：${tail}` : ''}`,
       });
     });

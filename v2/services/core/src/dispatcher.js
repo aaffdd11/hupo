@@ -24,6 +24,11 @@ import { TurnTranslator, isAuthFailure } from './session-translate.js';
  *    瞬态那条留着，是给"盘满了、落不下盘"的场合兜底的。
  */
 const AGENT_LOST_LINE = '刚才我断了，这条没做完。再说一次吧。';
+
+// ★ **"被挤掉的"那一句从 `notice.js` 来**（账 #33 · 一处出处，别抄第二份字）。
+//   ⚠️ 它只在**有证据**时才用：`exit` 那一帧里 `oom === true`（内核 cgroup 计数真涨过）。
+//      拿 `SIGKILL` 当 OOM 是猜 —— 而"猜"在这个项目里等于说假话（N10）。
+import { FAILED_LINES as _FAILED_LINES } from './notice.js';
 const AGENT_UNAVAILABLE_LINE = '我现在接不上活。你这句话我记下了，等我缓过来再说。';
 
 /**
@@ -399,7 +404,11 @@ export class Dispatcher {
       //   ⚠️ `line` 是"这一轮一个字都还没说"时说的那句：**它落盘**，
       //      所以用户**看得见**。（`emitTransient` 那条 `error` 客户端今天不渲染，
       //      它留着是给盘满那种"落不了盘"的场合兜底的。）
-      this.#translator.forceClose('failed', { line: AGENT_LOST_LINE });
+      this.#translator.forceClose('failed', {
+        // ⚠️ 有证据才换说法：`info.oom === true` 是"内核说这个 cgroup 真的 OOM 过"。
+        //    没证据 ⇒ 还是原来那句（"刚才我断了"）—— 宁可含糊，不许猜。
+        line: info?.oom === true ? _FAILED_LINES.oom : AGENT_LOST_LINE,
+      });
       this.#clearAllDeadlines();
       // 排队里那些话也跟着这个进程一起没了 —— 逐条收口（和超时那条路同一个道理）
       this.#closeUndelivered('failed');
