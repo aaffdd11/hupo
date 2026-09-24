@@ -7,6 +7,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/about_facts.dart';
+import 'package:hupo_app/models/dev_harness.dart';
+import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
 import 'package:hupo_app/models/harness_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
@@ -218,6 +220,19 @@ void main() {
       harnessSplicedLine(2),
       harnessRunStatusLine(true),
       harnessRunStatusLine(false),
+      // ★ 2026-09-24（契约 `docs/dev/82-DEV-MODE.md` §四 / §五）：那一层里
+      //    **新加的那个次要入口**（「在浏览器里打开」）的每一句 —— **直接引数据源**。
+      //    ⚠️ 文案纪律没松：这几句一个内部词都不许有
+      //       （尤其不许把"开发者 / 盒子 / 域名"那类实现细节写到屏幕上）。
+      devOpenLead,
+      devOpenAction,
+      devOpenAsking,
+      devOpenNotMarked,
+      devOpenUnreachable,
+      devOpenCannotHere,
+      devOpenFailed,
+      // ⚠️ 每一档实际画出来的那一句也扫（`devEntryWords` 就是屏幕上的那句）
+      for (final v in DevEntryView.values) devEntryWords(v),
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

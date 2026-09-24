@@ -6,6 +6,22 @@
 > 为什么要有这一页：这套手册的价值全在"**它是唯一说法**"。
 > 一旦同一个问题在两处有不同答案，它就退化成又一份参考文档。
 
+> ## v1.71 · **接口表补三条"从常量来"的路由 ＋ 把防漂闸扩到常量**（2026-09-24 · 助手执行 76 计划）
+>
+> **改了什么**：① `08-SPEC.md` **§2.1 接口表补三条在跑的路由** —— `WS /api/harness`、
+> `GET /api/dev-harness`、`POST /api/dev-mode`（各带契约指针与"公网口/可信口"的边界）。
+> ② `v2/services/core/test/route-shape.test.js` 的**代码侧**从"只扫 `server.js` 字面量"
+> **扩成也认常量**：`ASR_PATH` · `HARNESS_PATH` · `DEV_MODE_PATH` · `DEV_HARNESS_PATH`
+> —— **取不到常量名就当场红**（改名/删掉时不许静默漏掉）。
+>
+> **为什么**：这三条路是最近两批加的，**路径只住在常量模块里**（`src/harness-session.mjs` /
+> `src/dev-mode.js`），而那条闸只扫 `server.js` 的字面量 ⇒ 它们**既没进手册、也没被闸盖住**：
+> **闸是绿的，却漏了三条** —— 正是"看起来有闸、其实没有"的形状（同族：V13）。
+>
+> **判据**：`cd v2/services/core && npm test`（含 `route-shape.test.js`）。
+> **变异验证**：临时把手册里 `/api/dev-mode` 那一行删掉 ⇒ 闸当场红并点名 `missing: /api/dev-mode`
+> （还原后复绿）；另把 `harness-session.mjs` 里 `HARNESS_PATH` 改名 ⇒ 闸在"取不到常量"那一句红。
+
 > ## v1.70 · 配置页**四个 tab** 落进手册 ＋ 接口表补三条 ＋ 画图那一支拆出来（2026-09-24 · 助手执行 76 计划）
 >
 > **改了什么**：① `05-DECISIONS.md` **D3.9·补** —— 主人 2026-09-24 定的形状写进决策记录：

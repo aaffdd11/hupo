@@ -15,6 +15,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../models/dev_harness.dart';
 import '../models/export.dart';
 import '../models/app_spec.dart';
 import '../models/space.dart';
@@ -261,6 +262,25 @@ class Api {
       return out;
     } catch (_) {
       return const [];
+    }
+  }
+
+  /// 问一次「在浏览器里打开那一台」的短时效链接
+  /// （契约 `docs/dev/82-DEV-MODE.md` §五 · `GET /api/dev-harness`，**要琥珀登录**）。
+  ///
+  /// ⚠️ 这不是"判断谁是开发者"：服务端说了算。客户端只把回执如实分成四种
+  ///    （[devHarnessOutcomeOf]）—— 🔴 **非 200 就是"没被标"**，界面据此**不画按钮**
+  ///    （画一个按不动的按钮 = 界面上出现做不到的东西）。
+  /// ⚠️ 那条 `url` **原样**带回（服务端现签的入口；我们不许自己拼、不许改参数）。
+  Future<DevHarnessOutcome> devHarness(String token) async {
+    try {
+      final r = await _c
+          .get(_u('/api/dev-harness'), headers: {'authorization': 'Bearer $token'})
+          .timeout(const Duration(seconds: 8));
+      return devHarnessOutcomeOf(r.statusCode, r.body);
+    } catch (e) {
+      // 网的问题 ⇒ 值得再问一次（**不是**"这台没被标"）
+      return DevHarnessUnreachable('$e');
     }
   }
 

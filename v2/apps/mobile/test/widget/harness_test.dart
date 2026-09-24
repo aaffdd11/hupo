@@ -15,6 +15,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:hupo_app/models/dev_harness.dart';
+import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/harness.dart';
 import 'package:hupo_app/models/harness_words.dart';
 import 'package:hupo_app/models/space_words.dart' show miniAppBack;
@@ -79,16 +81,77 @@ class _FakeFeed implements HarnessFeed {
 }
 
 /// 只泵那一层（注入一条假通道）。
-Future<_FakeFeed> _pumpPane(WidgetTester tester, {HarnessStatus? initial}) async {
+Future<_FakeFeed> _pumpPane(
+  WidgetTester tester, {
+  HarnessStatus? initial,
+  DevHarnessEntry? devEntry,
+}) async {
   final feed = _FakeFeed(initial: initial);
   await tester.pumpWidget(
-    MaterialApp(home: Scaffold(body: HarnessPane(feed: feed))),
+    MaterialApp(home: Scaffold(body: HarnessPane(feed: feed, devEntry: devEntry))),
   );
   await tester.pump();
   return feed;
 }
 
 const _ready = HarnessStatus(HarnessState.ready);
+
+/// ★ 那个次要入口（契约 `docs/dev/82-DEV-MODE.md` §五）用的假来源：
+/// **那条链接从哪来**在 VM 上演不了（要服务端现签）⇒ 注入一个，把
+/// "拿到就有按钮 / 没被标就没有 / 点了真原样交出去"这几件钉住。
+class _FakeDevSource implements DevHarnessSource {
+  _FakeDevSource(this.outcome);
+
+  static const _devUrl =
+      'https://dsh19145526557.stalkerai.cn/__enter?u=u-1&e=1789000000000&s=abc';
+
+  DevHarnessOutcome outcome;
+  int fetches = 0;
+  int forgets = 0;
+
+  @override
+  Future<DevHarnessOutcome> link() async {
+    fetches += 1;
+    return outcome;
+  }
+
+  @override
+  void forget() => forgets += 1;
+}
+
+/// 一个"拿到了"的那种来源。
+_FakeDevSource _devReady() => _FakeDevSource(
+  DevHarnessReady(
+    const DevHarnessLink(url: _FakeDevSource._devUrl, expiresAt: 0),
+  ),
+);
+
+/// 从**真入口**（桌面磁贴）进那一层，而且那条次要入口接的是注入的那一个。
+Future<void> _openHarnessWithDev(
+  WidgetTester tester,
+  _FakeDevSource src, {
+  required bool canOpen,
+  required bool Function(String url) openExternal,
+}) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      home: ChatScreen(
+        controller: _controller(),
+        onLoggedOut: () {},
+        harnessFeed: () => _FakeFeed(initial: _ready),
+        devHarnessEntry: DevHarnessEntry(
+          source: src,
+          canOpen: canOpen,
+          openExternal: openExternal,
+        ),
+      ),
+    ),
+  );
+  await tester.pump();
+  await tester.tap(find.text(harnessAppLabel));
+  await tester.pumpAndSettle();
+  expect(find.byType(HarnessPane), findsOneWidget, reason: '★ 没进那一层 ⇒ 判据扫错了屏幕');
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -229,5 +292,72 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(feed.closes, greaterThanOrEqualTo(1), reason: '★ 走了就要把这一头收掉');
+  });
+
+  // ── ★ 那个次要入口（契约 `82-DEV-MODE.md` §四 / §五）────────
+
+  testWidgets('★ 拿到了那条链接 ⇒ 一句普通话 + 一个按钮，点了**原样**交出去', (tester) async {
+    final src = _devReady();
+    final opened = <String>[];
+    await _openHarnessWithDev(
+      tester,
+      src,
+      canOpen: true,
+      openExternal: (u) {
+        opened.add(u);
+        return true;
+      },
+    );
+
+    // 负向对照：那个按钮真的在屏幕上（不在的话下面那句断言扫的是别的东西）
+    expect(find.text(devOpenAction), findsOneWidget, reason: '★ 那个按钮没进这棵树');
+    expect(find.text(devOpenLead), findsOneWidget, reason: '★ 还要有一句普通话');
+
+    await tester.tap(find.text(devOpenAction));
+    await tester.pumpAndSettle();
+    expect(
+      opened,
+      [_FakeDevSource._devUrl],
+      reason: '★ 那条地址必须**原样**交出去（不许自己拼、不许改参数）',
+    );
+  });
+
+  testWidgets('🔴 没被标（非 200）⇒ 只有一句普通话，**一个按钮都没有**', (tester) async {
+    final src = _FakeDevSource(const DevHarnessNotMarked(403));
+    await _openHarnessWithDev(tester, src, canOpen: true, openExternal: (_) => true);
+
+    expect(find.text(devOpenNotMarked), findsOneWidget, reason: '★ 要如实说一句');
+    expect(find.text(devOpenAction), findsNothing, reason: '★ 没被标就**不许**画按钮');
+    // 负向对照：确实问过一趟（不是"忘了问"才没有按钮）
+    expect(src.fetches, greaterThanOrEqualTo(1));
+  });
+
+  testWidgets('🔴 这个平台打不开 ⇒ 如实说一句、没有按钮，而且**连问都不问**', (tester) async {
+    final src = _devReady();
+    await _openHarnessWithDev(tester, src, canOpen: false, openExternal: (_) => true);
+
+    expect(find.text(devOpenCannotHere), findsOneWidget, reason: '★ 要如实说打不开');
+    expect(find.text(devOpenAction), findsNothing);
+    expect(src.fetches, 0, reason: '★ 打不开就别去要那条链接');
+  });
+
+  testWidgets('🔴 点了没打开 ⇒ 如实说一句，而且**重取**（下次不再用那一条）', (tester) async {
+    final src = _devReady();
+    await _openHarnessWithDev(tester, src, canOpen: true, openExternal: (_) => false);
+
+    await tester.tap(find.text(devOpenAction));
+    await tester.pumpAndSettle();
+
+    expect(find.text(devOpenFailed), findsOneWidget, reason: '★ 没打开也要说一句普通话');
+    expect(find.text(devOpenAction), findsOneWidget, reason: '★ 按钮留着，让他再点一下');
+    expect(src.forgets, 1, reason: '★ 点了失败 ⇒ 缓存要丢（契约 §五：短时效）');
+  });
+
+  testWidgets('🔴 问不到（网的问题）⇒ 一句普通话，没有按钮', (tester) async {
+    final src = _FakeDevSource(const DevHarnessUnreachable('网断了'));
+    await _openHarnessWithDev(tester, src, canOpen: true, openExternal: (_) => true);
+
+    expect(find.text(devOpenUnreachable), findsOneWidget);
+    expect(find.text(devOpenAction), findsNothing);
   });
 }

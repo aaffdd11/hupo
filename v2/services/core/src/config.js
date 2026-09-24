@@ -164,6 +164,21 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      */
     ownerPhone: env.HUPO_OWNER_PHONE ?? '',
 
+    /**
+     * **开发者模式的域名后缀**（契约 `docs/dev/82-DEV-MODE.md` §四）。
+     *
+     * 被标成开发者的那个人，盒子里那台 `dsh web` 露在 `dsh<手机号>.<devBase>` 上
+     * （DNS 走泛解析、证书按人单签；盒子**不开任何端口**）。
+     * 🔴 **只有标了 `dev` 的人才走这条路**，别人连这个域名都进不去。
+     */
+    devBase: env.HUPO_DEV_BASE ?? 'stalkerai.cn',
+
+    /**
+     * 那个域名对外是什么 scheme。生产是 `https`（nginx 上有证书）；
+     * 本机验收（直连 8020）可以改成 `http` —— 只影响**签出来的链接**长什么样。
+     */
+    devScheme: env.HUPO_DEV_SCHEME ?? 'https',
+
     /** MCP 服务器那支脚本（绝对路径：spawn 时经环境变量递给 dsh）。 */
     ledgerServerPath: env.HUPO_LEDGER_SERVER ?? nodePath.resolve(cwd, 'src/mcp-ledger-server.mjs'),
 

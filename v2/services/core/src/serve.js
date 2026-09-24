@@ -26,6 +26,7 @@ import { RESUMED_EVENT } from './resume-plan.js';
 import { appsBaseOf, createAppServer, loadSignKey } from './app-serve.js';
 import { createAsrRelay } from './asr.js';
 import { createHarnessRelay } from './harness-session.mjs';
+import { createDevWebRelay } from './dev-mode.js';
 import { readUserCreds, writeUserCreds } from './creds-store.js';
 import { makeDrawImage } from './image-use.js';
 import { OWNER_KEY_REF, writeOwnerKey } from './owner-creds.js';
@@ -724,6 +725,21 @@ const { listen, listenTrusted, close } = createServer({
     cfg,
     log: (m) => console.log(`▶ ${m}`),
   }),
+  /**
+   * ★ **开发者模式**（契约 `docs/dev/82-DEV-MODE.md` · 2026-09-24）—— 两侧分开给：
+   *
+   *   · **宿主这一侧**（`dev`）：按 `Host` 认出 `dsh<手机号>.<HUPO_DEV_BASE>` ⇒ 走开发者中继。
+   *     签名用**制品那条同一个密钥**，但**分域**（payload `d|…`）。
+   *   · **盒子这一侧**（`devContainer`）：只在**容器里**建 —— 它懒起回环上那台 `dsh web`
+   *     并反代 `/h…`。宿主上不建（宿主那条公开口永远不接 `/h`）。
+   *     ⚠️ 判据 D7：盒子**不开任何宿主端口**，`dsh web` 只听回环。
+   */
+  dev: isHostSide
+    ? { key: appsSignKey, base: cfg.devBase, scheme: cfg.devScheme }
+    : null,
+  devContainer: cfg.trustedSocketPath
+    ? createDevWebRelay({ cfg, log: (m) => console.log(`  ${m}`) })
+    : null,
   // ★ **字体镜像的缓存目录**（`/fonts/…` 那条口）：镜像下来的字体落在这儿
   fontCacheDir: nodePath.join(cfg.dataDir, 'font-cache'),
   // ★ **我的小程序清单**（乙-1）：给了才挂 `/api/apps`
@@ -1058,6 +1074,12 @@ if (isHostSide) {
     `  投递     ${dropDir}${
       nodeFs.existsSync(dropDir) ? '' : '（还没有这个目录，服务会自己建）'
     } · 放 <租户名|编号|手机号>.key，我替你送进那台容器`,
+  );
+  console.log(
+    // ★ **开发者模式**（契约 `docs/dev/82-DEV-MODE.md`）：露的是
+    //   `dsh<手机号>.<后缀>` —— **只有标了 `dev` 的人**那个域名才接得进来。
+    //   ⚠️ 后缀要写出来：它是"链接长什么样"的唯一线索（证书按人单签也是照它签的）。
+    `  开发者   ${cfg.devBase}（dsh<手机号>.${cfg.devBase}；只有标了 dev 的人能进，别人一律拒）`,
   );
 }
 console.log(

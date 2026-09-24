@@ -105,7 +105,13 @@ export class Users {
     for (const [other, rec] of this.#byPhone) {
       if (other !== p && rec.id === id) throw new Error(`id ${id} 已经被另一个手机号占着`);
     }
-    const rec = { id, createdAt: had?.createdAt ?? now() };
+    // ⚠️ **重新绑定时要保住 `dev`**（开发者模式那个开关，契约 `docs/dev/82-DEV-MODE.md` §三）：
+    //    丢了它 = 主人一绑号就把某个人的开发者入口**静默关掉**。
+    const rec = {
+      id,
+      createdAt: had?.createdAt ?? now(),
+      ...(had?.dev === true ? { dev: true } : {}),
+    };
     this.#byPhone.set(p, rec);
     this.#save();
     return { ...rec, changed: true };
@@ -124,6 +130,49 @@ export class Users {
       if (rec?.id === id) return phone;
     }
     return null;
+  }
+
+  /**
+   * **这个用户是不是开发者**（契约 `docs/dev/82-DEV-MODE.md` §三）。
+   *
+   * 🔴 **调用方必须每个请求现查**，不许在启动时查一次存起来 ——
+   *    "开关一关就当场进不去"（判据 D4）全靠这一条。
+   * ⚠️ 内存里查（`setDev` 写的是同一份），所以同进程翻开关**当场生效**。
+   *
+   * @param {string} id 用户 id（令牌里的 `sub`）
+   * @returns {boolean}
+   */
+  isDev(id) {
+    if (typeof id !== 'string' || id === '') return false;
+    for (const rec of this.#byPhone.values()) {
+      if (rec?.id === id) return rec.dev === true;
+    }
+    return false;
+  }
+
+  /**
+   * **翻开发者开关**（只有主人能调 —— 那是 `server.js` 那道闸的事）。
+   *
+   * 写盘照本文件现有那套（先 `.tmp` 再 `rename`，`0600`）：**要么看到旧的、要么看到新的**。
+   * ⚠️ 关掉时是**删掉那个字段**（不是写 `dev:false`）—— 记录形状与"没标过"逐字一致，
+   *    下一个人不用去猜两种"没开"有什么区别。
+   *
+   * @param {string} phone
+   * @param {boolean} on
+   * @returns {{ok:boolean, why?:string, id?:string, changed?:boolean, on?:boolean}}
+   */
+  setDev(phone, on) {
+    const p = normalizePhone(phone);
+    if (!p) return { ok: false, why: 'bad-phone' };
+    const rec = this.#byPhone.get(p);
+    if (!rec) return { ok: false, why: 'no-user' };
+    const want = on === true;
+    const had = rec.dev === true;
+    if (want === had) return { ok: true, id: rec.id, changed: false, on: want };
+    if (want) rec.dev = true;
+    else delete rec.dev;
+    this.#save();
+    return { ok: true, id: rec.id, changed: true, on: want };
   }
 
   /** 按**用户 id** 删（注销用）。@returns {boolean} 真删掉了才 true */

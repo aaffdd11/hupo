@@ -12,7 +12,7 @@
 
 import http from 'node:http';
 import { reauthOk } from './reauth.js';
-import { appendAudit, auditLine } from './audit.js';
+import { appendAudit, auditLine, maskPhone } from './audit.js';
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 import { WebSocketServer } from 'ws';
@@ -28,6 +28,7 @@ import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
 import { SIGNED_TTL_MS, entryUrl } from './app-serve.js';
 import { ASR_PATH } from './asr.js';
 import { HARNESS_PATH } from './harness-session.mjs';
+import { DEV_HARNESS_PATH, DEV_MODE_PATH, DEV_PATH_PREFIX, createDevHostRelay, devEntryLink, devHostFor } from './dev-mode.js';
 import { isCredField } from './creds.mjs';
 
 /// **看起来像"一个文件"的路径**（P1-14）：这些后缀一律**不回 SPA 兜底**，
@@ -257,6 +258,25 @@ export function createServer({
    */
   harness = null,
   /**
+   * **开发者模式 · 宿主这一侧**（契约 `docs/dev/82-DEV-MODE.md`）。
+   *
+   * `{ key, base, scheme, linkTtlMs?, cookieTtlMs? }`；`null` = 这条路关着
+   * （**别的 Host 一律照旧走站点** —— 判据里有一条钉着"不许影响站点"）。
+   *
+   * 🔴 **只有被标成 `dev` 的用户**那个域名才接得进来；没标的一律拒（判据 D1）。
+   * 🔴 **每个请求现查标记**（`users.isDev`）—— 关掉当场生效（判据 D4）。
+   * ⚠️ `key` 与制品那条**同一个密钥**，但签名**分域**（payload `d|<sub>|<exp>`，判据 D5）。
+   */
+  dev = null,
+  /**
+   * **开发者模式 · 盒子这一侧**（`createDevWebRelay` 建的那个）。
+   *
+   * 🔴 只有在 `trusted === true`（容器里那条 `0600` UDS）的请求上才轮到它 ——
+   *    公网口上的 `/h…` **什么都不做**。它把请求反代到容器内**回环**上那台 `dsh web`
+   *    （盒子**不开任何宿主端口** —— 判据 D7）。
+   */
+  devContainer = null,
+  /**
    * 多租户：**按 `claim.sub` 取那个人的世界**（`worlds.js`）。
    *
    * ⚠️ 它和上面那几个单例**只能给一边**：
@@ -412,9 +432,52 @@ export function createServer({
     });
   };
 
+  /**
+   * **开发者模式那条域名**（`dsh<手机号>.<HUPO_DEV_BASE>` · 契约 `docs/dev/82-DEV-MODE.md`）。
+   *
+   * ⚠️ **只在宿主那一侧建**（`serve.js` 只在 `isHostSide` 时给 `dev`）——
+   *    盒子里没有这个对象 ⇒ 它自己那个公网口不会服务开发者域名。
+   * ⚠️ 转发那一步**复用** `proxyToTenant`（多传一个 `path` 与 `dropCookie`），
+   *    免得"代理"这件事有两份实现、慢慢分叉。
+   */
+  const devHost = dev
+    ? createDevHostRelay({
+        key: dev.key,
+        base: dev.base,
+        scheme: dev.scheme ?? 'https',
+        users,
+        tenantOf,
+        proxyFor,
+        now,
+        ...(dev.linkTtlMs ? { linkTtlMs: dev.linkTtlMs } : {}),
+        ...(dev.cookieTtlMs ? { cookieTtlMs: dev.cookieTtlMs } : {}),
+        forward: (sock, req, res, path) => proxyToTenant(sock, req, res, { path, dropCookie: true }),
+        log: (m) => log(m),
+      })
+    : null;
+
   async function handleRequest(req, res, trusted = false) {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
+
+    // ── ★ **开发者域名**（宿主那一侧）────────────────────────────
+    // ⚠️ 放在**最前面**：这个域名上的**一切**都归它 —— 不许漏一条路由给站点
+    //    （"没通过外层 ⇒ 拒，不许先给界面"，判据 D3）。
+    if (devHost && devHost.match(req.headers?.host)) {
+      return devHost.handle(req, res, url);
+    }
+
+    // ── ★ **盒子这一侧**：`/h…` ⇒ 反代到容器内回环上的 `dsh web` ──────
+    // 🔴 **只在 `trusted === true`**（容器里那条 `0600` UDS）——公网口不接这条路。
+    if (
+      devContainer &&
+      trusted &&
+      (path === DEV_PATH_PREFIX || path.startsWith(`${DEV_PATH_PREFIX}/`))
+    ) {
+      // 前缀剥掉（`/h/api/x?y=1` → `/api/x?y=1`、`/h/` → `/`）
+      const rel = req.url.slice(DEV_PATH_PREFIX.length) || '/';
+      return devContainer.handle(req, res, rel);
+    }
 
     // 公开路由：**只有这三个**
     if (path === '/api/version' && req.method === 'GET') {
@@ -477,6 +540,85 @@ export function createServer({
         const r = auth.renew(tokenFromRequest(req));
         if (!r) return sendJson(res, 401, { error: 'expired' });
         return sendJson(res, 200, { token: r.token, expiresAt: r.expiresAt });
+      }
+
+      // ── ★ **开发者模式：翻开关**（契约 `docs/dev/82-DEV-MODE.md` §三/§六 D6）──
+      // 🔴 **只有 `owner` 能翻**（别人 ⇒ 403）；翻一次**记一笔**（谁、什么时候、开了谁）。
+      // ⚠️ 它**不是**公开路由，也**不在**容器里答（`trusted` 那条口没有令牌语义）。
+      if (path === DEV_MODE_PATH && req.method === 'POST') {
+        if (trusted) return sendJson(res, 404, { error: 'not-found' });
+        if (claim.sub !== 'owner') {
+          audit('拒了', claim.sub, { detail: '想翻开发者模式（不是主人）' });
+          return sendJson(res, 403, { error: 'forbidden', text: '只有主人能改这个。' });
+        }
+        if (!users || typeof users.setDev !== 'function') {
+          return sendJson(res, 404, { error: 'not-found' });
+        }
+        let body;
+        try {
+          body = await readJson(req, 4 * 1024);
+        } catch {
+          return sendJson(res, 400, { error: 'bad-json' });
+        }
+        const phone = typeof body?.phone === 'string' ? body.phone.trim() : '';
+        const on = body?.on === true;
+        const r = users.setDev(phone, on);
+        if (!r?.ok) {
+          return sendJson(res, r.why === 'bad-phone' ? 400 : 404, {
+            error: r.why,
+            text: r.why === 'bad-phone' ? '那个号看起来不像手机号。' : '这个号我这儿还没有。',
+          });
+        }
+        // ★ **翻一次记一笔**（掩码手机号；谁翻的进 `userId` 那一格）
+        audit('开发者模式', claim.sub, { detail: `${on ? '开' : '关'} ${maskPhone(phone)}` });
+        log(`[dev] 开发者模式 ${on ? '开' : '关'}：${maskPhone(phone)}（by ${claim.sub}）`);
+        return sendJson(res, 200, { ok: true, id: r.id, on, changed: r.changed });
+      }
+
+      // ── ★ **开发者模式：要一条签名链接**（§五/§六 D6）────────────────
+      //   · 是这个用户自己 ⇒ 回他自己的签名链接 `{url, expiresAt}`；
+      //   · 是 `owner` ⇒ 可以带 `?phone=` 点名别人；
+      //   · 别人 ⇒ 403。
+      // ⚠️ **没标 `dev` ⇒ 不给链接**（如实说"还没被标成开发者"）。
+      if (path === DEV_HARNESS_PATH && req.method === 'GET') {
+        if (trusted) return sendJson(res, 404, { error: 'not-found' });
+        if (!devHost) return sendJson(res, 404, { error: 'not-found' });
+        const q = new URL(req.url, 'http://x').searchParams;
+        const wanted = (q.get('phone') ?? '').trim();
+        const isOwner = claim.sub === 'owner';
+        if (wanted && !isOwner) {
+          audit('拒了', claim.sub, { detail: '想点名别人的开发者入口' });
+          return sendJson(res, 403, { error: 'forbidden', text: '只有主人能看别人的。' });
+        }
+        let target = claim.sub;
+        if (wanted) {
+          const who = users?.get?.(wanted) ?? null;
+          if (!who?.id) return sendJson(res, 404, { error: 'no-user', text: '那个号我这儿还没有。' });
+          target = who.id;
+        }
+        if (!users?.isDev?.(target)) {
+          // ⚠️ **`404` 不是 `200`**（2026-09-24 收尾时改的）：客户端那条约定是
+          //    "**非 200 ⇒ 这个人没被标**"，它据此画「这台还没被标成能这样打开。」；
+          //    而 `200` + 没有 `url` 会被它那道解析判成**坏回执** ⇒ 屏幕上会写成
+          //    「这会儿问不到，过会儿再看。」—— **把"你没被标"说成"网络问题"**，
+          //    正是这个仓库最恨的那种假话。`text` 留着给别处的调用方看。
+          return sendJson(res, 404, {
+            ok: false,
+            dev: false,
+            text: '这个人还没被标成开发者，所以没有入口。',
+          });
+        }
+        const phone = users.phoneOf(target);
+        if (!phone) {
+          return sendJson(res, 404, {
+            ok: false,
+            dev: false,
+            text: '这个人还没绑手机号，所以没有入口。',
+          });
+        }
+        const origin = `${devHost.scheme}://${devHostFor(phone, devHost.base)}`;
+        const link = devEntryLink({ origin, key: dev.key, sub: target, now: now() });
+        return sendJson(res, 200, { ok: true, dev: true, url: link.url, expiresAt: link.expiresAt });
       }
       // ── ★ **数据面**：这个人在容器里 ⇒ 请求**转发进他的容器** ──────────
       // ⚠️ **只转发"属于他自己那一份"的路由**：账号/续期/审计/填 key 都是**中心**的事
@@ -920,12 +1062,15 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
    * ⚠️ 用 `createConnection` 把"通道那条隧道"当成 socket 塞给 `http.request`
    *    ⇒ HTTP 的序列化/解析**不用自己写**（也就少一整类"自己写解析器写错"的事）。
    */
-  function proxyToTenant(sock, req, res, { body = null } = {}) {
+  function proxyToTenant(sock, req, res, { body = null, path = null, dropCookie = false } = {}) {
     const headers = { ...req.headers };
     // hop-by-hop 的头不许原样带过去
     for (const h of ['host', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade']) {
       delete headers[h];
     }
+    // ★ **开发者模式那条路**：浏览器那份 cookie **剥掉**
+    //   （外层那把锁是我们自己的；里层那把 DSH 的锁由盒子里的壳替它拿着）
+    if (dropCookie) delete headers.cookie;
     // ⚠️ **必须有上限**（2026-09-21 实测）：隧道那头要是没回话，
     //    这个请求会**一直挂着**，而客户端看到的是"转圈"或空响应 ——
     //    那是本项目最忌的"看起来在跑"。到点**如实说"它没应"**。
@@ -945,7 +1090,9 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
       {
         createConnection: () => sock,
         method: req.method,
-        path: req.url,
+        // ⚠️ 默认原样进（站点那条老路一字不变）；开发者模式要给一个**改写过的**路径
+        //    （`/api/x` → `/h/api/x`），见 `devHost` 那一段。
+        path: path ?? req.url,
         headers,
       },
       (upRes) => {
@@ -1314,6 +1461,11 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
    */
   function handleUpgrade(req, socket, head, trusted) {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
+    // 🔴 **开发者域名上不接任何升级**（那台界面全走普通 HTTP，契约 §四）——
+    //    这个域名上的**一切**都归开发者中继（同 `handleRequest` 顶上那一条）。
+    if (devHost && devHost.match(req.headers?.host)) {
+      return rejectUpgrade(socket, 404, 'Not Found', { error: 'not-found' });
+    }
     const wantAsr = url.pathname === ASR_PATH;
     const wantHarness = url.pathname === HARNESS_PATH;
     if (url.pathname !== '/api/stream' && !wantAsr && !wantHarness) {
@@ -1655,6 +1807,9 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
       //       那条路上每条连接背后是**一个真子进程**，光断连接不够（端到端的 `bye` 会杀，
       //       但这里再兜一次 —— "不许留孤儿"）。
       harness?.shutdown?.();
+      // ⚠️ 开发者模式那条路背后**也是一个真子进程**（盒里那台 `dsh web`）——
+      //    光断连接不够，要把它收干净（"不许留孤儿"）。
+      devContainer?.shutdown?.();
       for (const client of [...wss.clients, ...asrWss.clients, ...harnessWss.clients]) {
         try {
           client.terminate();

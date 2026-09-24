@@ -24,6 +24,8 @@ const REPO = nodePath.resolve(import.meta.dirname, '../../../..');
 const SPEC = nodePath.join(REPO, 'docs/handbook/08-SPEC.md');
 const SERVER = nodePath.join(REPO, 'v2/services/core/src/server.js');
 const ASR = nodePath.join(REPO, 'v2/services/core/src/asr.js');
+const HARNESS = nodePath.join(REPO, 'v2/services/core/src/harness-session.mjs');
+const DEV_MODE = nodePath.join(REPO, 'v2/services/core/src/dev-mode.js');
 
 /** 手册 §2.1 那一节（从它的标题到下一个同级/更高级标题）。 */
 function interfaceSection() {
@@ -37,16 +39,37 @@ function interfaceSection() {
   return lines.slice(start, end);
 }
 
-/** 代码里真实存在的 `/api/…`（server.js 的字面量 ＋ `ASR_PATH` 那个常量）。 */
+/**
+ * **路径只住在常量里**的那几条路（`server.js` 里只有常量名，没有字面量）。
+ *
+ * ⚠️ 为什么单列一张表：这三条（`/api/harness`、`/api/dev-harness`、`/api/dev-mode`）
+ *    是从常量模块加进来的，而这条闸原先**只扫 `server.js` 的字面量** ⇒
+ *    它们**既没进手册、也没被闸盖住**（闸全绿，却漏了三条）。
+ * ⇒ 现在逐条认常量，而且**取不到就红**：常量被改名/删掉时不许静默漏掉。
+ */
+const PATH_CONSTANTS = [
+  { file: ASR, name: 'ASR_PATH' }, // /api/asr
+  { file: HARNESS, name: 'HARNESS_PATH' }, // /api/harness
+  { file: DEV_MODE, name: 'DEV_MODE_PATH' }, // /api/dev-mode
+  { file: DEV_MODE, name: 'DEV_HARNESS_PATH' }, // /api/dev-harness
+];
+
+/** 代码里真实存在的 `/api/…`（`server.js` 的字面量 ＋ 上表那几个常量）。 */
 function routesInCode() {
   const src = nodeFs.readFileSync(SERVER, 'utf8');
   const out = new Set();
   for (const m of src.matchAll(/'(\/api\/[a-z0-9/_-]+)'/g)) out.add(m[1]);
-  // ⚠️ `/api/asr` 是**常量**（`ASR_PATH`），不是字面量 ⇒ 单独认它（并核对常量值）
-  const asr = nodeFs.readFileSync(ASR, 'utf8');
-  const m = /ASR_PATH\s*=\s*'([^']+)'/.exec(asr);
-  assert.ok(m, 'asr.js 里找不到 ASR_PATH（那条 WS 的路径就没人核对了）');
-  out.add(m[1]);
+  for (const { file, name } of PATH_CONSTANTS) {
+    const text = nodeFs.readFileSync(file, 'utf8');
+    // ⚠️ `\b` 保证 `HARNESS_PATH` **不会**匹配到 `DEV_HARNESS_PATH` 里面那一段。
+    const m = new RegExp(`\\b${name}\\s*=\\s*'([^']+)'`, 'u').exec(text);
+    assert.ok(
+      m,
+      `${nodePath.basename(file)} 里找不到 \`${name}\` —— 这条路的路径就没人核对了` +
+        '（常量被改名/删掉时，这条闸必须当场红，不许静默漏掉）',
+    );
+    out.add(m[1]);
+  }
   return out;
 }
 

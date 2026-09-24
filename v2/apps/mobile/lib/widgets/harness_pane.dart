@@ -22,17 +22,27 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import '../models/dev_harness.dart';
+import '../models/dev_harness_words.dart';
 import '../models/harness.dart';
 import '../models/harness_words.dart';
 import '../models/scroll_follow.dart';
 
 /// 那一层（**不 push 新页面**，它就是 `MiniAppHost` 里的一个孩子）。
 class HarnessPane extends StatefulWidget {
-  const HarnessPane({super.key, required this.feed});
+  const HarnessPane({super.key, required this.feed, this.devEntry});
 
   /// 那条通道（生产上注入 `services/harness_client.dart` 的实现；
   /// 判据里注入一个假的 —— 界面只认这个形状）。
   final HarnessFeed feed;
+
+  /// ★ **那个次要入口**（契约 `docs/dev/82-DEV-MODE.md` §四 / §五）：
+  /// 「在浏览器里打开」那一句普通话 + 一个按钮。
+  ///
+  /// ⚠️ 形状在 `models/dev_harness.dart`（`widgets` 只许看 `models` —— 楼层闸），
+  ///    真实现（要那条链接、真去开浏览器）由 `screens` 一层接上。
+  /// ⚠️ `null` = 这条路没接上 ⇒ 那个入口**一个字都不画**（单看这一层的判据可以不传）。
+  final DevHarnessEntry? devEntry;
 
   @override
   State<HarnessPane> createState() => _HarnessPaneState();
@@ -54,6 +64,18 @@ class _HarnessPaneState extends State<HarnessPane> {
   StreamSubscription<HarnessLine>? _lsub;
   StreamSubscription<HarnessStatus>? _ssub;
 
+  /// **那个次要入口**现在什么状态。
+  ///
+  /// `null` = 还没问过（界面画「正在准备…」）；**非 200 的档由 [devEntryViewOf] 定**，
+  /// 这一层不认识状态码（它是 `models` 的纯函数说了算）。
+  DevHarnessOutcome? _dev;
+
+  /// 刚才那一下**没打开**（点了失败 ⇒ 下次重取；按钮留着让他再点）。
+  bool _devOpenFailed = false;
+
+  /// 正在问那条链接（防手快的第二下）。
+  bool _devBusy = false;
+
   @override
   void initState() {
     super.initState();
@@ -62,6 +84,9 @@ class _HarnessPaneState extends State<HarnessPane> {
     _status = widget.feed.current;
     _listen();
     WidgetsBinding.instance.addPostFrameCallback((_) => _follow());
+    // ★ **次要入口**（契约 `82-DEV-MODE.md` §五）：一挂上就问一次
+    //   （这个平台打不开浏览器的话**不去问** —— 要一条用不上的链接没有意义）。
+    unawaited(_askDev());
   }
 
   void _listen() {
@@ -146,6 +171,87 @@ class _HarnessPaneState extends State<HarnessPane> {
     _input.clear();
   }
 
+  // ── ★ 那个次要入口（契约 `82-DEV-MODE.md` §四 / §五）──────────
+
+  /// 问一次那条链接（**只在该问的时候问**：这个平台打不开就不去要）。
+  Future<void> _askDev() async {
+    final e = widget.devEntry;
+    if (e == null || !e.canOpen || _devBusy) return;
+    _devBusy = true;
+    final got = await e.source.link();
+    if (!mounted) return;
+    setState(() {
+      _devBusy = false;
+      _dev = got;
+    });
+  }
+
+  /// 点「在浏览器里打开」：拿到那条链接 ⇒ **原样**交给外面那套打开。
+  ///
+  /// ⚠️ 过期/点了失败 ⇒ **重取**（`source.forget()`；契约 §五：那条链接短时效）。
+  Future<void> _openDev() async {
+    final e = widget.devEntry;
+    if (e == null || _devBusy) return;
+    _devBusy = true;
+    setState(() => _devOpenFailed = false);
+    final got = await e.source.link();
+    if (!mounted) return;
+    if (got is! DevHarnessReady) {
+      // 这几档**都没有按钮**（回执自己变了：没被标 / 这会儿问不到）
+      setState(() {
+        _devBusy = false;
+        _dev = got;
+      });
+      return;
+    }
+    setState(() {
+      _devBusy = false;
+      _dev = got;
+    });
+    final opened = e.openExternal(got.link.url);
+    if (!mounted) return;
+    if (!opened) {
+      // 没打开 ⇒ 下一下重取（并如实说一句）
+      e.source.forget();
+      setState(() => _devOpenFailed = true);
+    }
+  }
+
+  /// 那一条：一句普通话（+ 能开的时候一个按钮）。
+  ///
+  /// 🔴 **不给按钮的那几档只有一个字：那几句普通话** ——
+  ///    画一个按不动的按钮就是"界面上出现做不到的东西"（`AGENTS.md` §六·4）。
+  /// ⚠️ 用 `Wrap` 不用 `Row`：字放大到 3.1 倍时它会**换行**，而不是把这一行挤爆（D3.5）。
+  Widget _devBar(ThemeData t) {
+    final e = widget.devEntry!;
+    final view = devEntryViewOf(
+      canOpen: e.canOpen,
+      outcome: _dev,
+      openFailed: _devOpenFailed,
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(d.gapS, d.gapS, d.gapS, 0),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: d.gapS,
+        runSpacing: d.gapXs,
+        children: [
+          Text(
+            devEntryWords(view),
+            style: (t.textTheme.bodySmall ?? const TextStyle()).copyWith(color: d.muted),
+          ),
+          if (devEntryHasButton(view))
+            TextButton(
+              // D3.6：命中区 ≥44
+              style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
+              onPressed: _devBusy ? null : _openDev,
+              child: const Text(devOpenAction),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
@@ -175,6 +281,8 @@ class _HarnessPaneState extends State<HarnessPane> {
             ),
           ),
         ),
+        // ★ 那个次要入口（没接上这条路 ⇒ 一个字都不画）
+        if (widget.devEntry != null) _devBar(t),
         Divider(height: 1, color: d.line),
         _composer(t, ready: ready, gone: gone),
       ],

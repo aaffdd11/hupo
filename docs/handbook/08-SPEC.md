@@ -192,6 +192,9 @@
 | `/api/trash/remove` · `/api/trash/purge` | POST | 需令牌 | `remove` = 删进回收站（墓碑 + 到期真删）；`purge` = 立刻真删；都走 `handleTrashWrite` |
 | `/api/stream` | WS | 需令牌（子协议 `['bearer', token]`） | 下行事件；`sinceSeq` 续传；**`dev=1` 是附加通道不是替代** |
 | `/api/asr` | WS | 需令牌（**同一个子协议 `['bearer', token]`**） | **语音那条**（主人 2026-09-23）：上行**二进制帧 = 16k 单声道 16bit PCM**，文本帧只是 `asr/start` / `asr/stop`；下行 `asr/ready` · `asr/partial{text}` · `asr/final{text}` · `asr/end{text}` · `asr/capped` · `asr/error{reason,message,code?}` · `asr/unavailable{reason}`。🔴 **另开一条、不动已冻结的 `/api/stream`**；🔴 **SecretKey 只在服务端**（音频经这台机转给上游，绝不把签名下发给浏览器）；**没配钥匙时接上就如实回 `asr/unavailable`**。契约 `docs/dev/71-MIC-ASR.md` |
+| `/api/harness` | WS | 需令牌（**同一个子协议 `['bearer', token]`**） | **"那台 DSH 本人"那条路**（主人 2026-09-24）：一个 WS 连接 = 一个 DSH 进程；线上消息只有 `say` / `stop` / `state` / `raw` —— 容器**不做任何投影**（`raw` = DSH stdout 原样转发，"什么意思"全在客户端解）。🔴 **不挂人格、不挂能力层**（`--profile sdk` + 模型那条 patch）；🔴 **公网口（`trusted === false`）一律拒**，只有容器里那条 UDS 接得上。契约 `docs/dev/81-HARNESS-ENTRY.md` §5.1 |
+| `/api/dev-harness` | GET | 需令牌 | **要一条开发者入口的签名链接**（契约 `docs/dev/82-DEV-MODE.md` §六 D6）：回 `{ok, dev, url, expiresAt}`，`url` 是短时效的 `https://dsh<手机号>.<base>/__enter?…`。只给**自己**，`owner` 可带 `?phone=` 点名别人（别人 403）；**没被标成开发者 ⇒ 如实回"还没有入口"**（不是 403）。⚠️ 可信口（容器里）404 |
+| `/api/dev-mode` | POST | 需令牌 | **翻"开发者"那个标记**（契约 `docs/dev/82-DEV-MODE.md` §三）：`{phone, on}` ⇒ `{ok, id, on, changed}`。🔴 **只有 `owner` 能翻**（别人 403）；翻一次**记一笔**审计（手机号是掩码形态）。⚠️ 可信口（容器里）404 |
 
 > ⚠️ **只有六组会转发进租户容器**（`server.js` 的 `TENANT_ROUTES`：`/api/say` · `/api/health` · `/api/export` · `/api/trash` · `/api/app-ask` · **`/api/timeline`** —— ⚠️ 最后这一条**2026-09-23 收尾时才发现漏了**：少了它，宿主会替租户那台盒子答 `GET /api/timeline`，客户端于是说"没有更早的了"，而盒子里明明有；判据 `test/tenant-routes.test.js`）；账号 / 续期 / 审计 / 填 key / 注销 / 空间状态都是**中心**的事 —— 别把"属于他自己那一份"和"中心的事"混进同一张转发名单。
 

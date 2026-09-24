@@ -18,6 +18,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/dev_harness.dart';
 import '../models/image_outcome.dart';
 import '../models/conn_state.dart';
 import '../models/design.dart' as d;
@@ -34,6 +35,7 @@ import '../models/timeline.dart';
 import '../models/trash_words.dart';
 import '../services/api.dart';
 import '../services/chat_controller.dart';
+import '../services/dev_harness_client.dart';
 import '../services/harness_client.dart';
 import '../services/links.dart';
 import '../services/hearing.dart';
@@ -78,6 +80,7 @@ class ChatScreen extends StatefulWidget {
     this.onKeyChanged,
     this.initialTier = FloaterTier.collapsed,
     this.harnessFeed,
+    this.devHarnessEntry,
   });
 
   final ChatController controller;
@@ -115,6 +118,14 @@ class ChatScreen extends StatefulWidget {
   /// `null` = 生产那一条（`HarnessClient` → `/api/harness`）；
   /// 判据里注入一个假的 ⇒ "磁贴点开真的进去了"这件事**不用真连一个口**也验得了。
   final HarnessFeed Function()? harnessFeed;
+
+  /// ★ **那个次要入口怎么接**（契约 `docs/dev/82-DEV-MODE.md` §四 / §五）：
+  /// 「在浏览器里打开」那一句普通话 + 一个按钮。
+  ///
+  /// `null` = 生产那一条（`DevHarnessClient` → `/api/dev-harness`，再由
+  /// `services/links.dart` 的 `canOpenLinks` / `openExternal` 去开）；
+  /// 判据里注入一个 ⇒ "拿到链接真有按钮 / 没被标真没按钮"不用真开浏览器也验得了。
+  final DevHarnessEntry? devHarnessEntry;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -525,7 +536,15 @@ class _ChatScreenState extends State<ChatScreen> {
     //   里面是那台 DSH 自己的原始流（`HarnessPane` 只认 `models` 里那条通道的形状）。
     //   ⚠️ **不 push 新页面** —— 它就是 `MiniAppHost` 里的一个孩子（和别的小程序一样）。
     if (_openApp == builtInHarnessId) {
-      return (view: HarnessPane(feed: _ensureHarness()), title: harnessAppLabel);
+      return (
+        view: HarnessPane(
+          feed: _ensureHarness(),
+          // ★ 那个**次要入口**（契约 `82-DEV-MODE.md` §五）：形状在 `models/`，
+          //   实现是 `services/` + `links.dart` —— 这一层负责接上。
+          devEntry: widget.devHarnessEntry ?? _devHarnessEntry(),
+        ),
+        title: harnessAppLabel,
+      );
     }
     if (_openApp == builtInSettingsId) {
       return (
@@ -661,6 +680,25 @@ class _ChatScreenState extends State<ChatScreen> {
     _harness = null;
     unawaited(h.close());
   }
+
+  /// **那个次要入口**那三样（契约 `docs/dev/82-DEV-MODE.md` §五）。
+  ///
+  /// ⚠️ **取回来那条链接要缓存住**（有过期时间）⇒ 这条来源只造一次
+  ///    （造两次 = 两个缓存 = 来回问）。
+  /// ⚠️ 令牌**现取**（`DevHarnessClient` 拿的是个 getter）：登录是异步的。
+  DevHarnessEntry? _devEntry;
+
+  DevHarnessEntry _devHarnessEntry() =>
+      _devEntry ??= DevHarnessEntry(
+        source: DevHarnessClient(
+          api: widget.controller.api,
+          token: () => widget.controller.token ?? '',
+        ),
+        // ⚠️ 能不能开由**平台那一份**说（`services/links.dart` 的条件导出）；
+        //    非网页那一侧它是 `false` ⇒ 那个入口**如实说打不开**，不去问也不要按钮。
+        canOpen: canOpenLinks,
+        openExternal: openExternal,
+      );
 
   /// **打开一个小程序**：先把聊天收起（§6.4 规则 5），再记下"从哪儿开的"（那个图标的矩形）。
   ///

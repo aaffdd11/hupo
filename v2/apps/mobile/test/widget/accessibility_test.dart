@@ -24,6 +24,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:hupo_app/models/export_words.dart';
+import 'package:hupo_app/models/dev_harness.dart';
+import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/harness.dart';
 import 'package:hupo_app/models/message_state.dart';
 import 'package:hupo_app/models/process_levels.dart';
@@ -125,17 +127,59 @@ Future<void> _openHarness(
   WidgetTester tester,
   double scale, {
   HarnessStatus? state,
+  DevHarnessEntry? dev,
 }) async {
   final feed = _FakeHarnessFeed(state ?? const HarnessStatus(HarnessState.ready));
   await _pump(
     tester,
-    ChatScreen(controller: _controller(), onLoggedOut: () {}, harnessFeed: () => feed),
+    ChatScreen(
+      controller: _controller(),
+      onLoggedOut: () {},
+      harnessFeed: () => feed,
+      devHarnessEntry: dev,
+    ),
     scale,
   );
   await tester.tap(find.text(harnessAppLabel));
   await tester.pumpAndSettle();
   expect(find.byType(HarnessPane), findsOneWidget, reason: '★ 没进那一层 ⇒ 判据扫错了屏幕');
 }
+
+/// ★ 那个**次要入口**（契约 `docs/dev/82-DEV-MODE.md` §五）用的假来源。
+///
+/// ⚠️ 真那条要服务端现签（VM 上要不到）⇒ 注入一个结果，
+///    把"标题 + 按钮"这一排在**五档字号**下真的过一遍闸。
+class _FakeDevSource implements DevHarnessSource {
+  _FakeDevSource(this.outcome);
+  final DevHarnessOutcome outcome;
+
+  @override
+  Future<DevHarnessOutcome> link() async => outcome;
+
+  @override
+  void forget() {}
+}
+
+/// 拿到了那条链接 ⇒ 那一档**有按钮**（D3.6 要量的就是它）。
+DevHarnessEntry _devReady() => DevHarnessEntry(
+  source: _FakeDevSource(
+    const DevHarnessReady(
+      DevHarnessLink(
+        url: 'https://dsh19145526557.stalkerai.cn/__enter?u=u-1&e=1789000000000&s=abc',
+        expiresAt: 0,
+      ),
+    ),
+  ),
+  canOpen: true,
+  openExternal: (_) => true,
+);
+
+/// 没被标（非 200）⇒ 那一档**只有一句普通话**（也量一遍：它一样不能溢出）。
+DevHarnessEntry _devNotMarked() => DevHarnessEntry(
+  source: _FakeDevSource(const DevHarnessNotMarked(403)),
+  canOpen: true,
+  openExternal: (_) => true,
+);
 
 /// 一条**假的**通道：那一层的两种状态在 VM 上没法靠真连一个口演出来。
 ///
@@ -657,6 +701,24 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '那一层（停了）在 ${s}x 溢出了');
       });
 
+      testWidgets('我自己那台·浏览器那个入口（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-24 新加的**次要入口**（契约 `82-DEV-MODE.md` §五）⇒
+        //    多了一行字 + 一个按钮，必须也过五档。
+        await _openHarness(tester, s, dev: _devReady());
+        // 负向对照：那个按钮真的在屏幕上（不在的话这条闸量的是别的东西）
+        expect(find.text(devOpenAction), findsOneWidget, reason: '★ 那个按钮没进这棵树');
+        expect(_drain(tester), isEmpty, reason: '那个入口在 ${s}x 溢出了');
+      });
+
+      testWidgets('我自己那台·没被标那一档（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ **非 200 那一档只有一句普通话**（没有按钮）—— 它一样是屏幕上的一行字，
+        //    字放大到 3.1 倍时也不许把那一层挤爆。
+        await _openHarness(tester, s, dev: _devNotMarked());
+        expect(find.text(devOpenAction), findsNothing, reason: '★ 没被标就不许有按钮');
+        expect(find.text(devOpenNotMarked), findsOneWidget, reason: '★ 那句普通话没进这棵树');
+        expect(_drain(tester), isEmpty, reason: '没被标那一档在 ${s}x 溢出了');
+      });
+
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
         // ⚠️ 新加的界面**必须也过这道闸** —— 不然"五档不溢出"会随时间失效。
         await _openAbout(tester, s);
@@ -876,6 +938,14 @@ void main() {
         // 负向对照：那个「重来」真的在屏幕上（不在的话这条扫描量的是别的按钮）
         expect(find.text(harnessRestart), findsOneWidget, reason: '★「重来」没进这棵树');
         await sweep(tester, '我自己那台（停了）@${s}x');
+      });
+
+      testWidgets('我自己那台·浏览器那个入口（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 新加的那个按钮（「在浏览器里打开」）也得进这份扫描 ——
+        //    不单独泵一次的话，它的命中区没有任何东西守着（D3.6 就是"命中区 ≥44"）。
+        await _openHarness(tester, s, dev: _devReady());
+        expect(find.text(devOpenAction), findsOneWidget, reason: '★ 那个按钮没进这棵树');
+        await sweep(tester, '我自己那台·浏览器入口 @${s}x');
       });
 
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
