@@ -19,6 +19,7 @@ import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
 import { AppsError } from './apps.js';
+import { assertOutboundAllowed } from './outbound.js';
 
 /** 共享库放在数据目录下的哪个子目录。 */
 export const PUBLISHED_DIR = 'published-apps';
@@ -98,16 +99,28 @@ export class Published {
   /**
    * **发布**：把 `apps` 里那个 app 的当前版本复制进共享库。
    *
-   * ⚠️ 三道必须的：
-   *   ① 那个 app 得**真的在作者自己那儿**（不然发布一件不存在的东西）；
-   *   ② **id 重名** ⇒ 拒（除非是同一个作者在更新自己那条）；
-   *   ③ 复制过去之后**逐字节核对 hash**（发布 = 承诺"别人拿到的是我看到的这一版"）。
+   * ⚠️ 四道必须的：
+   *   ① 🔴 **出界那一条独木桥**（92 §③ 阶段 2）：带 `share:true` 的申报若是**没有锚**
+   *      （或锚核不出来、血缘指不回它）⇒ **拒**，而且**在碰任何盘之前**就拒；
+   *   ② 那个 app 得**真的在作者自己那儿**（不然发布一件不存在的东西）；
+   *   ③ **id 重名** ⇒ 拒（除非是同一个作者在更新自己那条）；
+   *   ④ 复制过去之后**逐字节核对 hash**（发布 = 承诺"别人拿到的是我看到的这一版"）。
    *
+   * 🔴 **它是共享库（`published-apps/`）唯一的写入者** ⇒ 出界的裁决也只有这一处
+   *    （`outbound.assertOutboundAllowed`；另开一条出去的路会被 `test/outbound-gate.test.js`
+   *    的「第二出口」判据扫出来）。
+   *
+   * @param {object} o
+   * @param {object} [o.workspaces] `AppWorkspaces`（读 `<scope>/.exp/` 那些申报要用它；
+   *   不给就按默认布局 `<apps.dir>/workspaces/<id>/` 找 —— **默认也要读**，不许留旁路）
    * @returns {{id:string,version:number,title:string,icon:string,permissions:string[],publishedAt:number}}
    */
-  publish(apps, { id, authorSub, authorName = '一位用户' }) {
+  publish(apps, { id, authorSub, authorName = '一位用户', workspaces = null }) {
     const mine = apps.list().find((a) => a.id === id);
     if (!mine) throw new PublishedError('你自己这儿还没有这个，先做出来再发');
+    // 🔴 **出界的唯一裁决**（92 §③ 阶段 2）：无锚的 `share:true` ⇒ 拒。
+    //    顺序刻意：它在**重名判、复制、写 index 之前** —— 拒的时候共享库一个字节都不动。
+    assertOutboundAllowed({ route: 'publish', apps, workspaces, id, version: mine.version });
     const authorHash = authorHashOf(authorSub);
     const prev = this.index(id);
     if (prev && prev.authorHash !== authorHash) {

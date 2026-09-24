@@ -65,6 +65,10 @@ const RATCHET = [
   //    指针一断就等于规矩读不到 ⇒ 必须拦。
   'docs/dev/90-APP-CONTRACT.md',
   'docs/dev/91-TRIPLE-CONTRACT.md',
+  // ⚠️ 2026-09-26：92/93 **出生就进名单**（92 §⑦ 点名"92 出生即进 RATCHET"；
+  //    93 照同一条纪律）。它们定的是"出界只许一条路""外联要申报"这些**要承重**的规矩。
+  'docs/dev/92-TRIPLE-PLAN.md',
+  'docs/dev/93-OUTBOUND-USAGE.md',
 ];
 
 /** ② L0 = 路由层：零事实、零数值、零状态 */

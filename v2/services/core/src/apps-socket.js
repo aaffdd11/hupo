@@ -20,6 +20,7 @@ import nodePath from 'node:path';
 import { AppsError } from './apps.js';
 import { NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
 import { NEEDS_ASK_IMAGE, asksToDrawImage } from './image.js';
+import { OutboundError } from './outbound.js';
 import { PublishedError, authorHashOf } from './published.js';
 import { handSocketToAgent } from './socket-owner.mjs';
 import { mirrorArtifactIntoWorkspace, snapshotBeforeInstall, snapshotWorkspace } from './workspace.js';
@@ -144,10 +145,14 @@ export async function handleAppsOp(apps, req, ctx = {}) {
       // ── 发布 / 下架 / 装上 / 看共享库（乙-3）────────────────
       case 'publish': {
         if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
+        // 🔴 **出界那一条独木桥**（92 §③ 阶段 2）：`published.publish` 是共享库唯一的写入者，
+        //    而它第一件事就是过 `outbound.assertOutboundAllowed`。这里把**这一间房**递过去
+        //    （申报住 `<scope>/.exp/`）—— 少了它，出界检查就只能按默认布局找了。
         const r = ctx.published.publish(apps, {
           id: req.id,
           authorSub: ctx.sub,
           authorName: ctx.authorName,
+          workspaces: ctx.workspace ?? null,
         });
         return { ok: true, id: r.id, version: r.version, title: r.title };
       }
@@ -285,7 +290,9 @@ export async function handleAppsOp(apps, req, ctx = {}) {
         return { ok: false, error: `认不出这条请求：${op}` };
     }
   } catch (err) {
-    if (err instanceof AppsError || err instanceof PublishedError) return { ok: false, error: err.message };
+    if (err instanceof AppsError || err instanceof PublishedError || err instanceof OutboundError) {
+      return { ok: false, error: err.message };
+    }
     return { ok: false, error: `没做成：${err?.message ?? err}` };
   }
 }
