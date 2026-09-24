@@ -3,8 +3,9 @@
 // 这一份是**硬闸**（`test/unit`）：房间里那几件事全是"错了看起来也像对的"——
 //
 //   ① **房间怎么算**（纯函数）：桌面上 = `main`、打开"我的小程序" = 那个 app 的 id、
-//      关掉 = 回 `main`；内置那几个（设置 / 奥数题 / 发现 / 「我自己那台」）**不在**
-//      `/api/apps` 里 ⇒ 它们那期间仍然是 `main`（理由见 `models/scope.dart`）。
+//      关掉 = 回 `main`；★ **内置那四个也各回自己的 id**（主人 2026-09-25：「要分家」，
+//      见 `77-BLOCKERS.md` 的 B16 与 `models/scope.dart` 顶上那段）——
+//      服务端 `worlds.js` 的 `BUILTIN_SCOPES` 把那四个名字登记成了合法房间。
 //   ② **地址上带没带对**：那条流（`?scope=…`，还不许带令牌）、那一次 say（body）、
 //      那一问老消息（`/api/timeline?scope=…`）。
 //   ③ 🔴 **切房间不许把主线弄丢**（判据 A4）：这一条最贵 ——
@@ -142,19 +143,36 @@ void main() {
       expect('mine:dice'.startsWith(mineAppPrefix), true);
     });
 
-    test('★ 内置那几个 ⇒ 仍然是 `main`（它们**不在** `/api/apps` 里，没有自己的 id）', () {
-      for (final id in [
-        builtInSettingsId,
-        builtInMathId,
-        builtInDiscoverId,
-        builtInHarnessId,
-      ]) {
+    test('★ B16-4：内置那四个 ⇒ **各回自己的 id**（每个图标一间房，不再落回主线）', () {
+      // 🔴 与客户端 `app_spec.dart` 的 `builtIn*Id` 逐字对齐，也与服务端
+      //    `worlds.js` 的 `BUILTIN_SCOPES` 逐字对齐。
+      final expected = <String, String>{
+        builtInSettingsId: 'settings',
+        builtInMathId: 'math',
+        builtInDiscoverId: 'discover',
+        builtInHarnessId: 'harness',
+      };
+      expect(expected.length, 4, reason: '四个内置 id 不许有重的（重了 = 两个图标一间房）');
+      expected.forEach((open, scope) {
+        expect(scopeOfOpenApp(open), scope, reason: '★ 内置的「$open」就是它自己的房间');
+        expect(scope, isNot(mainScope), reason: '★ 内置那四个**不再**落回主线');
+        // 它必须是**服务端认得的形状**（小写字母数字与短横，`safeScope` 那条）
         expect(
-          scopeOfOpenApp(id),
-          mainScope,
-          reason: '★ 内置的「$id」不许拿壳里的目录名去冒充一个服务端认识的 scope',
+          RegExp(r'^[a-z0-9][a-z0-9-]*$').hasMatch(scope),
+          true,
+          reason: '★ "$scope" 得是个合法 scope 的形状（不然服务端 404）',
         );
-      }
+      });
+      // **反例的正身**：把两间串起来就会红（比如设置映射成了奥数题）
+      expect(
+        scopeOfOpenApp(builtInSettingsId),
+        isNot(scopeOfOpenApp(builtInMathId)),
+        reason: '🔴 两间内置房间必须不同（串了 = 在设置里说的话跑到奥数题去）',
+      );
+      // **负向对照**："我的小程序"照旧回那个 app 的 id；认不出的写法回主线（不许现编）
+      expect(scopeOfOpenApp('mine:dice'), 'dice');
+      expect(scopeOfOpenApp(null), mainScope);
+      expect(scopeOfOpenApp('whatever'), mainScope, reason: '★ 认不出 ⇒ 主线（宁回主线，也不许编一个房间名）');
     });
 
     test('★ 半截 id（`mine:` 后面空的）⇒ 回 `main`（不许造一个没有名字的房间）', () {

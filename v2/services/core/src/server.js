@@ -30,6 +30,12 @@ import { CATCHUP_RENDER, markCatchUp, planBackfill, planResume } from './resume.
 import { buildExport } from './export.js';
 import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
 import { SIGNED_TTL_MS, entryUrl } from './app-serve.js';
+// ★ **盒子那三条内部口**（B15 · `docs/dev/77-BLOCKERS.md`）：小程序库以**盒子为准**。
+//   ⚠️ 它们**只在 `trusted === true`**（容器里那条 `0600` UDS）上接 —— 公网口一律 404。
+import { INTERNAL_PREFIX, parseArtifactQuery, parseInternalPath } from './apps-box.js';
+// ⚠️ 只用它的**错误类型**（内部写入那条路要把"校验不过"如实回给宿主，而不是 500）
+//    与那个总量上限（内部口的身体上限由它推出来，**不另写一个数**）。
+import { AppsError, MAX_TOTAL_BYTES } from './apps.js';
 import { ASR_PATH } from './asr.js';
 import { HARNESS_PATH } from './harness-session.mjs';
 import { DEV_HARNESS_PATH, DEV_MODE_PATH, DEV_PATH_PREFIX, createDevHostRelay, devEntryLink, devHostFor } from './dev-mode.js';
@@ -39,6 +45,15 @@ import { isCredField } from './creds.mjs';
 /// 而是如实 404 —— 拿 HTML 冒充 JS/CSS/字体/wasm，是把"缺文件"变成"白屏"。
 const LOOKS_LIKE_ASSET =
   /\.(js|mjs|css|json|wasm|map|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|txt|webmanifest)$/i;
+
+/**
+ * 内部写入口**一条请求最大多少字节**（B15 迁移那条）。
+ *
+ * ⚠️ 从制品库那个**总量上限**推出来（base64 是 4/3，再加 JSON 那点壳），
+ *    **不另写一个数** —— 否则上限一改，这里就悄悄变成"迁移大一点的 app 就失败"。
+ * ⚠️ 它只是防呆：真正的限额判断在 `Apps.create()` 里（一处出处）。
+ */
+const INTERNAL_MAX_BODY = Math.ceil((MAX_TOTAL_BYTES * 4) / 3) + 64 * 1024;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -301,6 +316,19 @@ export function createServer({
    */
   apps = null,
   /**
+   * **这个人的小程序库在哪**（B15：以**盒子**为准）。
+   *
+   * `appsOf(sub)` ⇒ 一个"像 `Apps` 的东西"（要 `list()`，制品口还要 `read()`），
+   * 或者 `null`（那格不存在）。**租户那一条由 `serve.js` 给**：他盒子里那份，
+   * 经现有隧道去读；主人 / 单租户仍然走本机那份。
+   *
+   * ⚠️ 不给就退回老路（`worldFor(sub).apps`）—— 老测试一个字都不用改。
+   * ⚠️ 两个方法都可能是**异步**的（要过隧道）⇒ 调用方必须 `await`。
+   * 🔴 **绝不许在这里退回宿主那份**：盒子不通就**如实说 503**，
+   *    拿旧的顶替正是"页面在说假话"（B15 要修的那件事）。
+   */
+  appsOf = null,
+  /**
    * **字体镜像的磁盘缓存目录**（`/fonts/…` 那条口；`null` = 不落盘，每次去取）。
    * ⚠️ 它**必须显式传进来**：`createServer` 这一层**没有 `cfg`**
    *    （第一版在路由里写了 `cfg.dataDir` ⇒ 直接抛 ⇒ 那条口回 500，判据当场抓到）。
@@ -397,6 +425,23 @@ export function createServer({
    */
   const shared = { timeline, store, say, dispatcher, trash };
   const worldFor = worlds ? (sub) => worlds.worldFor(sub) : () => shared;
+
+  /**
+   * **取这个人的小程序库**（B15：以盒子为准）。
+   *
+   * ⚠️ 给了 `appsOf` 就**只认它**（`serve.js` 在租户那一条上给的是"他盒子里那份"）；
+   *    没给就退回老路（本机那份）—— 单租户与老测试逐字不变。
+   * ⚠️ `worldFor` 会抛（例如 userId 不能当目录名）⇒ 包一层，**别让一条坏身份
+   *    把请求变成 500**（该回的是 404/503）。
+   */
+  const appsFor = (sub) => {
+    if (typeof appsOf === 'function') return appsOf(sub);
+    try {
+      return worldFor(sub)?.apps ?? null;
+    } catch {
+      return null;
+    }
+  };
 
   /**
    * **按 scope 取房间**（契约 `83-APP-WORKSPACE.md` §三·3）。
@@ -533,6 +578,16 @@ export function createServer({
         error: 'no-sms',
         text: '还没接短信，现在拿不到码。接上就能用了。',
       });
+    }
+
+    // ── ★ **盒子那三条内部口**（B15 · 以盒子为准）──────────────────────
+    // 🔴 **顺序是刻意的**：`trusted` 这一道先判、判不过**立刻 404 走人** ——
+    //    公网口上的 `/internal/…` **一次都不碰库**（判据 B15-3 的反例就钉在这儿）。
+    //    它**不在** `/api/` 那套令牌语义里：身份就是"你从哪条 UDS 进来的"
+    //    （`0600` + `0700` 父目录，由内核保证 —— 同 `listenTrusted` 那条）。
+    if (path.startsWith(INTERNAL_PREFIX)) {
+      if (!trusted) return sendJson(res, 404, { error: 'not-found' });
+      return handleInternal(req, res, url);
     }
 
     // 其余 /api/* 一律要令牌；**没设口令时 fail-closed**
@@ -783,13 +838,36 @@ export function createServer({
       // 🔴 **按 `claim.sub` 取那个人自己的那一格**（同 timeline 那条规矩）：
       //    身份只能从令牌来，**不许从 URL / body / 头里读**。
       if (path === '/api/apps' && req.method === 'GET') {
-        const w = worldFor(claim.sub);
-        if (!apps || !w?.apps) return sendJson(res, 404, { error: '这台部署还没开小程序' });
+        if (!apps) return sendJson(res, 404, { error: '这台部署还没开小程序' });
+        // ★ **库从哪儿来**（B15）：租户 ⇒ 经隧道读**他盒子里**那份；主人/单租户 ⇒ 本机那份。
+        let src = null;
+        try {
+          src = appsFor(claim.sub);
+        } catch (err) {
+          log(`小程序库取不到（${claim.sub}）：${err?.message ?? err}`);
+        }
+        if (!src) {
+          // 🔴 租户的库**只在他盒子里** ⇒ 不通就**如实说 503**。
+          //    拿宿主那份旧的顶替，正是 B15 要修的那句假话（"桌面上看得见、其实不是他的"）。
+          if (tenant) {
+            return sendJson(res, 503, {
+              error: 'tenant-not-ready',
+              text: '你那台还在准备，稍等一下再试。',
+            });
+          }
+          return sendJson(res, 404, { error: '这台部署还没开小程序' });
+        }
         let items = [];
         try {
-          items = w.apps.list();
+          items = await src.list();
         } catch (err) {
           log(`清单读不出来（${claim.sub}）：${err?.message ?? err}`);
+          if (tenant) {
+            return sendJson(res, 503, {
+              error: 'tenant-not-ready',
+              text: '你那台刚才没应，等会儿再试。',
+            });
+          }
           return sendJson(res, 500, { error: '清单读不出来' });
         }
         // ⚠️ **入口 URL 现签**（绑人 + 绑版本 + 短时效），清单里存的不是它 ——
@@ -1848,6 +1926,99 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
       });
       req.on('error', reject);
     });
+  }
+
+  /**
+   * **盒子那三条内部口**（B15 · 以盒子为准）。
+   *
+   * 只有 `handleRequest` 在 `trusted === true` 上会调到它（公网口那一条在那边就 404 了）。
+   * 三个动作都**极小**，而且**不认识令牌、不验签**（验签在宿主那侧，顺序不许反）：
+   *   · `GET  /internal/apps`            ⇒ 这个盒子里的清单（宿主据此 + 自己的签名键组回执）
+   *   · `GET  /internal/artifact?…`      ⇒ 一版制品里一个文件的**字节**
+   *   · `POST /internal/app`             ⇒ 收一版制品（**迁移用**；落在 `Apps.create()` 上）
+   *
+   * ⚠️ 身份**只有一个来源**：`trustedSub`（盒子里那个租户就是 `owner`）。
+   *    请求里报谁都不算数 —— 和 `/api` 那条一样的规矩。
+   */
+  async function handleInternal(req, res, url) {
+    const hit = parseInternalPath(url.pathname);
+    if (!hit) return sendJson(res, 404, { error: 'not-found' });
+
+    // 清单先建对象（`appsFor` 本身**不碰隧道/盘**；真正取数在下面那两行）
+    const src = appsFor(trustedSub);
+    if (!src) return sendJson(res, 404, { error: '这台还没开小程序' });
+
+    if (hit.kind === 'list') {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: 'method' });
+      let items = [];
+      try {
+        items = await src.list();
+      } catch (err) {
+        log(`[internal] 清单读不出来：${err?.message ?? err}`);
+        return sendJson(res, 500, { error: '清单读不出来' });
+      }
+      return sendJson(res, 200, { apps: items });
+    }
+
+    if (hit.kind === 'artifact') {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: 'method' });
+      const q = parseArtifactQuery(url.search);
+      if (!q) return sendJson(res, 400, { error: 'bad-request' });
+      let got;
+      try {
+        got = await src.read(q.id, q.version, q.rel);
+      } catch (err) {
+        // ⚠️ 签名这一层在宿主已经过了 ⇒ 这儿读不出来就是**真没有**（404）
+        log(`[internal] 取字节读不出来（${q.id}）：${err?.message ?? err}`);
+        return sendJson(res, 404, { error: 'not-found' });
+      }
+      const buf = Buffer.from(got.content ?? '');
+      res.writeHead(200, {
+        'content-type': got.contentType ?? 'application/octet-stream',
+        'content-length': buf.length,
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+      });
+      return res.end(buf);
+    }
+
+    // ── `POST /internal/app`：收一版制品（**迁移那一条唯一的写口**）────────
+    // 🔴 它调的是 `Apps.create()`：版本号、清单、权限、审计全都是**盒子自己那条路**，
+    //    不是"往卷里撒文件"（那会让两边的语义慢慢分叉）。
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'method' });
+    let body;
+    try {
+      body = await readJson(req, INTERNAL_MAX_BODY);
+    } catch {
+      return sendJson(res, 400, { ok: false, error: '这一条看不懂' });
+    }
+    const raw = body?.files;
+    if (!raw || typeof raw !== 'object') return sendJson(res, 400, { ok: false, error: '制品里一个文件都没有' });
+    const files = {};
+    for (const [rel, b64] of Object.entries(raw)) {
+      if (typeof b64 !== 'string') {
+        return sendJson(res, 400, { ok: false, error: `制品里那个文件看不懂：${String(rel).slice(0, 60)}` });
+      }
+      files[rel] = Buffer.from(b64, 'base64');
+    }
+    try {
+      const manifest = src.create({
+        id: body?.id,
+        title: body?.title,
+        icon: body?.icon,
+        entry: body?.entry,
+        files,
+        permissions: body?.permissions ?? [],
+        createdBy: body?.createdBy === 'agent' ? 'agent' : 'user',
+        createdTurn: Number.isInteger(body?.createdTurn) ? body.createdTurn : null,
+      });
+      return sendJson(res, 200, { ok: true, manifest });
+    } catch (err) {
+      // 校验不过要**说清是哪一条**（人话），而不是回一个笼统的 500
+      const msg = err instanceof AppsError ? err.message : `没做成：${err?.message ?? err}`;
+      log(`[internal] 收制品没过（${String(body?.id).slice(0, 60)}）：${msg}`);
+      return sendJson(res, 400, { ok: false, error: msg });
+    }
   }
 
   /**

@@ -36,9 +36,12 @@ import { createServer } from '../src/server.js';
 import { groupSlugFor } from '../src/prune.js';
 import { OWNER_ID } from '../src/tenants.js';
 import {
+  BUILTIN_SCOPES,
   MAIN_SCOPE,
+  RESERVED_APP_SCOPES,
   Worlds,
   agentKeyFor,
+  isBuiltinScope,
   parseScope,
   scopeTimelineId,
 } from '../src/worlds.js';
@@ -1063,4 +1066,235 @@ test('🔴 A1·补（反例三·失败）：一轮**中途失败**（进程没�
   );
   await h.close();
 });
+
+// ════════════════════════════════════════════════════════════════
+// B16 · **桌面上的每个图标都有自己的房间**（`docs/dev/77-BLOCKERS.md` 的 B16 ·
+//       主人 2026-09-25 原话：*"要分家"*）
+//
+// 原来只给 `/api/apps` 里那些"我的小程序"分房间；桌面上的内置那四个
+// （设置 / 奥数题 / 发现 /「我自己那台」）**不在**那份清单里、服务端没有它们的 id
+// ⇒ 在它们那几屏里说的话落进**主线**。主人把这件事定成**要分家**：
+// 桌面上的**每个**图标都是自己的房间，而且与小程序的房间**同一套不变量**。
+//
+// 四条判据（每条都带反例）：
+//   B16-1 四个内置 id 各自一个 scope：**在 A 房里说的话，B 房里看不到**（主线也不受影响）
+//         ⚠️ 判的是"看不看得见"，**不是**"每个 scope 一份日志文件 / 各有一套编号"——
+//            手册 `05-DECISIONS.md` P-l：**一条可见时间线 = 一条日志，scope 只是事件上的标签**。
+//   B16-2 内置房间的 cwd = `<dir>/workspaces/<id>/`，第一次用到时建、**交给 agent 的 uid**
+//   B16-3 app **不许占用**这些保留 id（人话拒）；主线与既有小程序房间**行为不变**
+//   B16-4 客户端纯逻辑那一条在 `v2/apps/mobile/test/unit/scope_test.dart`
+// ════════════════════════════════════════════════════════════════
+
+test('★ B16：内置那四个**是合法房间**，但**不许被 app 占用**（纯规则，含反例）', () => {
+  // 🔴 与客户端 `lib/models/app_spec.dart` 的 `builtIn*Id` **逐字一致**
+  //    （对不上 ⇒ 客户端拿着一个服务端不认识的 scope 去连 = 404）
+  assert.deepEqual([...BUILTIN_SCOPES], ['settings', 'math', 'discover', 'harness']);
+  for (const id of BUILTIN_SCOPES) {
+    assert.equal(isBuiltinScope(id), true);
+    assert.equal(safeScope(id), id, `内置 id 本身就得是合法 scope：${id}`);
+    assert.equal(checkScope(id), id, `★ ${id} 过得了 checkScope —— 它是**房间**，不是保留名`);
+  }
+  // 保留名单 = 主线 ＋ 四个内置（app 一个都不许占）
+  assert.deepEqual([...RESERVED_APP_SCOPES], ['main', 'settings', 'math', 'discover', 'harness']);
+
+  // **反例**：不是内置的照旧不是；认不出的一律 `false`（不许猜）
+  for (const bad of ['Setting', 'dice', 'main', '', null, 'settings-x']) {
+    assert.equal(isBuiltinScope(bad), false, `这不该被当成内置：${String(bad)}`);
+  }
+  // 而 `main` 仍然由 `checkScope` 拦（老规矩一个字没动）
+  assert.throws(() => checkScope('main'), /主线/);
+});
+
+test('🔴 B16-1：四个内置房间各自一个 scope（A 房的话 B 房看不到；主线不受影响）', async () => {
+  const h = await boot();
+  const w = h.worlds.worldFor('u1');
+
+  // 每间各说一句（走真 HTTP、真落盘）＋ 主线一句
+  for (const id of BUILTIN_SCOPES) {
+    const r = await post(h, '/api/say', { messageId: `m-${id}`, text: `暗号-${id}`, scope: id }, 'u1');
+    assert.equal(r.status, 200, `★ ${id} 那一间必须能说话（它现在是合法房间）：${await r.text()}`);
+  }
+  assert.equal((await post(h, '/api/say', { messageId: 'm-main', text: '暗号-main' }, 'u1')).status, 200);
+
+  const page = async (scope) => {
+    const q = new URLSearchParams({ before: '9999', limit: '200' });
+    if (scope) q.set('scope', scope);
+    const r = await get(h, `/api/timeline?${q}`, 'u1');
+    assert.equal(r.status, 200, `翻 ${scope ?? 'main'} 那一间`);
+    return (await r.json()).frames;
+  };
+  const textOf = (frames) => frames.map((f) => f.text ?? '').join('\n');
+
+  for (const id of BUILTIN_SCOPES) {
+    const mine = await page(id);
+    assert.match(textOf(mine), new RegExp(`暗号-${id}`), `★ ${id} 那一间必须有自己那句话`);
+    for (const other of BUILTIN_SCOPES) {
+      if (other === id) continue;
+      assert.doesNotMatch(
+        textOf(mine), new RegExp(`暗号-${other}`),
+        `🔴 ${id} 那一间不许出现 ${other} 的话（反例：共用一条 timeline ⇒ 红）`,
+      );
+    }
+    assert.doesNotMatch(textOf(mine), /暗号-main/, `🔴 ${id} 那一间不许出现主线的话`);
+    // ★ 事件里带的是**真的** scopeId（不是恒 'main'）—— 这就是"分家"落在盘上的那个标签
+    //   ⚠️ 只判标签，**不判**它住在哪个文件里（P-l：一条日志，scope 只是标签）
+    const echo = mine.find((f) => f.type === 'user/echo' && f.text === `暗号-${id}`);
+    assert.equal(echo.scopeId, id, '★ 事件里的 scopeId 必须是那个内置 id');
+  }
+
+  // **主线**：自己那句在、四间的话一句都没漏进来
+  const main = textOf(await page(null));
+  assert.match(main, /暗号-main/);
+  for (const id of BUILTIN_SCOPES) {
+    assert.doesNotMatch(main, new RegExp(`暗号-${id}`), `🔴 主线里不许出现 ${id} 那一间的话`);
+  }
+  // **主线本身**的身份一个字都没动
+  assert.equal(w.scopeId, 'main');
+  assert.equal(w.agentKey, 'u1/main');
+  assert.equal(w.timeline.id, 'main');
+
+  // **反例的正身**：四间共用一个 scope（今天之前那种）= 上面那几条"看不到"会一起红
+  assert.equal(new Set(BUILTIN_SCOPES).size, BUILTIN_SCOPES.length, '四个内置 id 不许有重的');
+  await h.close();
+});
+
+test('🔴 B16-2：内置房间的 cwd 就是它自己的工作区（第一次用到时建、交给 agent 的 uid）', async () => {
+  const h = await boot();
+  const w = h.worlds.worldFor('u1');
+  const mainDir = w.cfg.agentCwd;
+  const root = workspacesRoot(w.dir);
+
+  for (const id of BUILTIN_SCOPES) {
+    assert.equal(nodeFs.existsSync(nodePath.join(root, id)), false, `（起点：${id} 的工作区还没建）`);
+    const p = h.worlds.pathsFor('u1', id);
+    assert.equal(p.agentCwd, nodePath.join(root, id), `★ ${id} 的 cwd 必须是 <dir>/workspaces/<id>`);
+    assert.equal(p.agentCwd.startsWith(`${mainDir}${nodePath.sep}`), false, '🔴 不许落在主目录里面');
+    // ⚠️ **不许做成"没有工作区"的特例**：DSH_HOME / 本地通道还是这个人那一份
+    assert.equal(p.dshHome, w.cfg.dshHome, '★ DSH_HOME 还是每人一份（不是每间一份）');
+    assert.equal(p.appsSocketPath, w.cfg.appsSocketPath, '★ 那条本地通道也是每人一份');
+  }
+
+  // 走真那一刀：第一次用到（`/api/say`）⇒ **建目录 ＋ 交给 agent**
+  const handed = [];
+  const orig = w.workspaces.hand.bind(w.workspaces);
+  w.workspaces.hand = (id) => { handed.push(id); return orig(id); };
+  assert.equal(
+    (await post(h, '/api/say', { messageId: 's1', text: '在设置这一间说一句', scope: 'settings' }, 'u1')).status,
+    200,
+  );
+  assert.equal(nodeFs.existsSync(nodePath.join(root, 'settings')), true, '★ 第一次用到时要把工作区建出来');
+  assert.ok(
+    handed.includes('settings'),
+    `★ 必须走 workspace.js 那条唯一规则交给 agent；实际=${JSON.stringify(handed)}`,
+  );
+
+  // ★ **真 spawn 出去的那一下**：cwd 必须是那个内置房间的工作区
+  //   （只比 `pathsFor` 是抓不到"接线断了"的 —— 与 A2 同一条纪律）
+  await waitForCount(h, 1);
+  const roomCwd = nodePath.join(root, 'settings');
+  assert.ok(
+    h.spawned.some((s) => s.cwd === roomCwd),
+    `★ 真 spawn 出去的 cwd 必须是 <dir>/workspaces/settings；实际=${JSON.stringify(h.spawned.map((s) => s.cwd))}`,
+  );
+  assert.ok(
+    h.spawned.filter((s) => s.cwd === roomCwd).every((s) => s.dshHome === w.cfg.dshHome),
+    '★ DSH_HOME 还是这个人那一份（会话靠 cwd 分组，不是每间一份 home）',
+  );
+  // ★ **自己的 agentKey**：进程池的键里带 scope ⇒ 一间一个 agent 窗口
+  assert.equal(agentKeyFor('u1', 'settings'), 'u1/settings');
+  assert.equal(h.worlds.roomFor('u1', 'settings').agentKey, 'u1/settings');
+  assert.equal(h.worlds.roomFor('u1', 'settings').scopeId, 'settings');
+
+  // **盒子里的形状**：服务是 root、agent 是 1000 ⇒ 刚建的那一格要 chown 给 1000
+  //   （宿主上没有 `HUPO_AGENT_UID` ⇒ 这一步是空操作，所以只能注入着验）
+  const dir = tmp('hupo-ws-builtin-hand-');
+  const calls = [];
+  const boxed = new AppWorkspaces({
+    dir,
+    fs: { ...nodeFs, chownSync: (p, u, g) => calls.push([p, u, g]) },
+    env: { HUPO_AGENT_UID: '1000', HUPO_AGENT_GID: '1000' },
+    uid: 0,
+    log: () => {},
+  });
+  // ⚠️ 照 `roomFor` 那一刀的形状建（mkdir ＋ `hand`）——
+  //    不走 `ensure`：那一条是"造 app"，内置 id 在那儿是**被拒**的（B16-3）
+  nodeFs.mkdirSync(boxed.dirFor('settings'), { recursive: true, mode: 0o700 });
+  assert.equal(boxed.hand('settings').hand, true, '盒子形状下必须要交');
+  assert.ok(calls.length > 0, '★ 盒子里内置那一格也要交给 agent');
+  assert.ok(calls.every(([, u, g]) => u === 1000 && g === 1000), JSON.stringify(calls));
+  assert.ok(
+    calls.some(([p]) => p.endsWith(nodePath.join('workspaces', 'settings'))),
+    '★ 目录本身要交出去（不然 agent 连进都进不去）',
+  );
+
+  // **宿主上一步都不做**（没配那两条 env ⇒ `hand` 是空操作）
+  let touched = 0;
+  const host = new AppWorkspaces({
+    dir,
+    fs: { ...nodeFs, chownSync: () => { touched += 1; } },
+    env: {},
+    uid: 501,
+  });
+  nodeFs.mkdirSync(host.dirFor('discover'), { recursive: true, mode: 0o700 });
+  assert.equal(host.hand('discover').hand, false, '★ 宿主上没有"交给谁"这回事');
+  assert.equal(touched, 0, '★ 宿主上不许 chown（那会把文件交给一个不相干的人）');
+
+  await h.close();
+});
+
+test('🔴 B16-3：内置 id 不许当小程序（人话拒）；主线与既有小程序房间行为不变', async () => {
+  const h = await boot({ scenario: 'hang', turnDeadlineMs: 60_000 });
+  const w = h.worlds.worldFor('u1');
+  const root = workspacesRoot(w.dir);
+  await w.appsSocket.ready();
+
+  // 他明说了 ⇒ "他明说才许写"那条闸放行 —— 这一次要卡的**是保留 id 那一条**
+  w.dispatcher.deliver('帮我做一个小程序：设置一个闹钟', { messageId: null }).catch(() => {});
+  await waitFor(() => w.dispatcher.turnInput !== '', '这一轮还没起来（turn-start 没到）');
+
+  for (const id of BUILTIN_SCOPES) {
+    const r = await askApps(w.appsSocket.path, {
+      op: 'create',
+      app: { id, title: '假的', files: { 'index.html': '<p>不该存在</p>' } },
+    });
+    assert.equal(r.ok, false, `🔴 "${id}" 是保留 id，必须被拒：${JSON.stringify(r)}`);
+    assert.match(String(r.error), /桌面上/, `★ 拒的话必须是**人话**（说得出为什么）：${JSON.stringify(r)}`);
+    // 拒了 ⇒ 盘上一点东西都不许有（与"他明说才许写"那条同一个方向：fail-closed）
+    assert.equal(w.apps.current(id), null, `🔴 ${id}：拒了就不许登记进制品库`);
+    assert.equal(nodeFs.existsSync(nodePath.join(root, id)), false, `🔴 ${id}：拒了就不许给它建工作区`);
+  }
+
+  // **负向对照**：不是保留 id 的照旧能造（证明这道闸没把整条路关掉）
+  const ok = await askApps(w.appsSocket.path, {
+    op: 'create',
+    app: { id: 'dice', title: '掷硬币', entry: 'index.html', files: { 'index.html': '<p>正</p>' } },
+  });
+  assert.equal(ok.ok, true, `★ 普通 id 必须照旧能造：${JSON.stringify(ok)}`);
+  assert.equal(nodeFs.existsSync(nodePath.join(root, 'dice', 'index.html')), true);
+
+  // **回归：主线一个字都没变**
+  assert.equal(w.agentKey, 'u1/main');
+  assert.equal(w.scopeId, 'main');
+  assert.equal(w.timeline.id, 'main');
+  assert.equal(w.cfg.agentCwd, h.worlds.pathsFor('u1').agentCwd);
+  assert.throws(() => w.workspaces.ensure('main'), /主线/, '★ `main` 还是原来那条规矩（照旧拒）');
+  assert.equal((await post(h, '/api/say', { messageId: 'mn', text: '主线照旧' }, 'u1')).status, 200);
+
+  // **回归：既有小程序房间一个字都没变**（A1–A3 那一套照旧）
+  makeScope(h, 'u1', 'alpha');
+  assert.equal((await post(h, '/api/say', { messageId: 'a1', text: '甲房暗号', scope: 'alpha' }, 'u1')).status, 200);
+  const alpha = await get(h, '/api/timeline?before=9999&limit=100&scope=alpha', 'u1');
+  assert.match(
+    ((await alpha.json()).frames).map((f) => f.text ?? '').join('\n'),
+    /甲房暗号/,
+    '★ 既有小程序房间照旧能说、能翻',
+  );
+
+  // 内置那四个**从头到尾没被当成房间用过** ⇒ 不该凭空多出目录
+  for (const id of BUILTIN_SCOPES) {
+    assert.equal(nodeFs.existsSync(nodePath.join(root, id)), false, `（${id} 没被用到，就不该有目录）`);
+  }
+  await h.close();
+});
+
 

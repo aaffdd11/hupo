@@ -196,30 +196,55 @@ export function createAppServer({ resolveApps, key, frameAncestors, log = () => 
       deny(res, 403);
       return;
     }
-    const apps = resolveApps(sub);
+    let apps = null;
+    try {
+      apps = resolveApps(sub);
+    } catch (e) {
+      // ⚠️ **取库那一步不许把进程带走**（`worldFor` / `tenantOf` 都可能对一个怪身份抛）：
+      //    这里拒掉这一条请求就够了 —— 一个未捕获异常会让整个服务下去。
+      log(`制品口：取库那一步出错（${sub}）${e?.message ?? e}`);
+      deny(res, 403);
+      return;
+    }
     if (!apps) {
       // 那格不存在（或者这个人还没建世界）⇒ 拒，不建目录
       deny(res, 403);
       return;
     }
-    let got;
+    let pending;
     try {
-      got = apps.read(hit.id, hit.version, hit.rel);
+      pending = apps.read(hit.id, hit.version, hit.rel);
     } catch (e) {
       log(`制品口：读不出来（${hit.id}）${e instanceof AppsError ? e.message : '未知错'}`);
       deny(res, 404);
       return;
     }
-    res.writeHead(200, {
-      'content-type': got.contentType,
-      'content-length': got.content.length,
-      // 🔴 **不许发 X-Frame-Options**（壳里要嵌它）；只让壳嵌 ⇒ 用 CSP 的 frame-ancestors
-      'content-security-policy': csp,
-      // 制品是"凭签名取一次"的东西：**别让浏览器缓存**（缓存了就没法验签了）
-      'cache-control': 'no-store',
-      'x-content-type-options': 'nosniff',
-      'referrer-policy': 'no-referrer',
-    });
-    res.end(req.method === 'HEAD' ? undefined : got.content);
+    /**
+     * ★ **B15**：租户的那份字节在**他的盒子里** ⇒ `read()` 要过隧道，
+     * 所以它可能是**异步**的（主人 / 单租户仍然是同步的）。
+     *
+     * 🔴 **顺序一个字都没动**：验签（上面那一步）→ 取库 → 读字节。
+     *    没签名的请求**连库都不会碰**（反例钉在 `test/apps-box.test.js`）。
+     */
+    Promise.resolve(pending).then(
+      (got) => {
+        res.writeHead(200, {
+          'content-type': got.contentType,
+          'content-length': got.content.length,
+          // 🔴 **不许发 X-Frame-Options**（壳里要嵌它）；只让壳嵌 ⇒ 用 CSP 的 frame-ancestors
+          'content-security-policy': csp,
+          // 制品是"凭签名取一次"的东西：**别让浏览器缓存**（缓存了就没法验签了）
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
+          'referrer-policy': 'no-referrer',
+        });
+        res.end(req.method === 'HEAD' ? undefined : got.content);
+      },
+      (e) => {
+        log(`制品口：读不出来（${hit.id}）${e instanceof AppsError ? e.message : (e?.message ?? '未知错')}`);
+        if (!res.headersSent) deny(res, 404);
+        else res.destroy();
+      },
+    );
   });
 }

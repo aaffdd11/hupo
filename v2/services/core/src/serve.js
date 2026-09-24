@@ -24,6 +24,10 @@ import { dropTunnel, notifyHost } from './tenant-tunnel-agent.mjs';
 import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
 import { appsBaseOf, createAppServer, loadSignKey } from './app-serve.js';
+// ★ **B15 · 小程序库以盒子为准**：宿主这一侧只借它"把盒子那份当成一个 Apps 来用"。
+import { createBoxApps } from './apps-box.js';
+// ★ **B15 存量迁移**：宿主那份旧库经**现有隧道**推进他自己的盒子（维护口 + 核心逻辑）。
+import { createAppsMigrateServer, migrateSocketPath } from './apps-migrate.js';
 import { createAsrRelay } from './asr.js';
 import { createHarnessRelay } from './harness-session.mjs';
 import { createDevWebRelay } from './dev-mode.js';
@@ -688,6 +692,32 @@ if (process.env.HUPO_ROLE !== 'tenant') {
   }
 }
 
+/**
+ * ★ **这个人的小程序库在哪**（B15 · 主人 2026-09-25 拍板：**以盒子为准**）。
+ *
+ *   · **租户** ⇒ 经**现有隧道**读**他盒子里**那份（`createBoxApps`）；隧道不通 ⇒
+ *     `list()` / `read()` 抛，调用方**如实回 503/403** ——
+ *     **绝不许**退回宿主这份旧的（那正是这次要修的那句假话）。
+ *   · **主人 / 单租户** ⇒ 本机那份（**逐字不变**）。
+ *
+ * ⚠️ **签名与公开基址仍然在宿主**：这一层只换"库从哪儿取"，
+ *    `entryUrl` 由宿主用它自己的 `appsSignKey` / `appsBase` 现签 ——
+ *    这就是**不**把 `/api/apps` 塞进 `TENANT_ROUTES` 的理由（塞进去 = 让盒子去签名，
+ *    而盒子的公开基址 / 签名键不一定对）。
+ * ⚠️ 造这个对象**不碰隧道**（`dial` 是懒的）⇒ 判据 B15-2 的反例才有意义。
+ */
+function appsForSub(sub) {
+  // 🔴 **"经隧道去问盒子"这件事只在宿主那侧成立**：盒子那头没有别的盒子可问
+  //    （`channel` 上根本没人连），而**它自己那份就是权威** ⇒ 盒子里一律走本机。
+  const tenant = isHostSide ? tenantOf(sub) : null;
+  if (!tenant) return worlds.worldFor(sub)?.apps ?? null;
+  return createBoxApps({
+    sub,
+    dial: () => channel.openSocket(tenant),
+    log: (m) => console.warn(`  ⚠️ ${m}`),
+  });
+}
+
 // ★ **制品那第二个原点**（乙-1 · 契约 `docs/dev/59-USER-APPS.md` §五）。
 //   🔴 手册 N1：执行第三方代码的东西**绝不与持有令牌的原点同源** ⇒ 它听**另一个端口**。
 //   ⚠️ 分成两个进程更干净（共享不到任何东西），但那要再维护一条常驻进程
@@ -700,7 +730,9 @@ const appsSignKey = loadSignKey(cfg.appsSignKeyPath);
 //    （规则本身在 `appsBaseOf()` 里，有判据钉着。）
 const appsBase = appsBaseOf(cfg);
 const appsOrigin = createAppServer({
-  resolveApps: (sub) => worlds.worldFor(sub)?.apps ?? null,
+  // ★ **B15**：租户的制品字节在**他的盒子里** ⇒ 这一句让"验完签之后去哪儿读"跟着人走
+  //   （签名那一关一个字没动，顺序仍是"先验签、再碰库"）。
+  resolveApps: (sub) => appsForSub(sub),
   key: appsSignKey,
   frameAncestors: cfg.appsFrameAncestors,
   log: (m) => console.warn(`  ⚠️ ${m}`),
@@ -755,6 +787,8 @@ const { listen, listenTrusted, close } = createServer({
   fontCacheDir: nodePath.join(cfg.dataDir, 'font-cache'),
   // ★ **我的小程序清单**（乙-1）：给了才挂 `/api/apps`
   apps: { base: appsBase, key: appsSignKey },
+  // ★ **库从哪儿取**（B15）：租户 ⇒ 他盒子里那份（经隧道）；主人 / 单租户 ⇒ 本机那份。
+  appsOf: appsForSub,
   // ★ **给主人看的那一笔账**（账 #39）：注销/回收那条路上每一件都留一行
   auditFile: auditPath(cfg.dataDir),
   users,
@@ -959,6 +993,29 @@ if (cfg.trustedSocketPath) {
   }
 }
 
+// ★ **存量迁移那条维护口**（B15 · `apps-migrate.sock`）。
+//   🔴 **为什么非要有它**：隧道只有**这个进程**手上有（容器是连到宿主这条通道上的），
+//      而宿主**看不到**盒子的卷 ⇒ "把旧库推进盒子"这件事只能由**服务代做**。
+//      `scripts/migrate-apps-to-box.mjs` 连上这条 `0600` 的口递一条作业、拿回一份报告。
+//   ⚠️ **只在宿主那侧起**（盒子里没有别人的库要搬）；起不来只影响迁移，不许拖垮壳。
+const appsMigrate = isHostSide
+  ? createAppsMigrateServer({
+      socketPath: migrateSocketPath(cfg.dataDir),
+      hostAppsFor: (user) => worlds.worldFor(user)?.apps ?? null,
+      tenantOf,
+      dialFor: (tenant) => channel.openSocket(tenant),
+      log: (m) => console.warn(m),
+    })
+  : null;
+if (appsMigrate) {
+  try {
+    appsMigrate.listen();
+    await appsMigrate.ready();
+  } catch (err) {
+    console.warn(`  ⚠️ 迁移口没起来：${err?.message ?? err}（宿主那份旧库搬不动）`);
+  }
+}
+
 // 启动横幅**报告状态**，不喊口号（手册 §11.4）
 console.log('── 琥珀 · 调度器（v2）────────────────────────');
 console.log(
@@ -1087,6 +1144,11 @@ if (isHostSide) {
     } · 放 <租户名|编号|手机号>.key，我替你送进那台容器`,
   );
   console.log(
+    // ★ **存量迁移那条口要写在横幅上**（B15）：不然"旧库搬不动"只表现为一句
+    //   "刷新之后什么都没有"（那就是这次要修的那句假话）。
+    `  迁移     ${nodeFs.existsSync(migrateSocketPath(cfg.dataDir)) ? migrateSocketPath(cfg.dataDir) : '⚠️ 没起来'} · 跑 scripts/migrate-apps-to-box.mjs`,
+  );
+  console.log(
     // ★ **开发者模式**（契约 `docs/dev/82-DEV-MODE.md`）：露的是
     //   `dsh<手机号>.<后缀>` —— **只有标了 `dev` 的人**那个域名才接得进来。
     //   ⚠️ 后缀要写出来：它是"链接长什么样"的唯一线索（证书按人单签也是照它签的）。
@@ -1120,6 +1182,13 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     //    `listen()` 会撞上 `EADDRINUSE`，而那句话看起来像"端口被占"。
     worlds.closeSockets();
     channel.close();
+    // ⚠️ 迁移那条维护口也要关掉**并把套接字文件删掉**（同上面那几条的理由）
+    try {
+      await appsMigrate?.close();
+      nodeFs.unlinkSync(migrateSocketPath(cfg.dataDir));
+    } catch {
+      /* 已经没了 */
+    }
     // ★ 每个人各留一个"这次是好好走的"标记 ⇒ 下次开机才知道上一次是不是被硬杀的
     worlds.markCleanExitAll();
     process.exit(0);

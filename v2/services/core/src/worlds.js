@@ -25,7 +25,7 @@
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
-import { Apps } from './apps.js';
+import { Apps, AppsError } from './apps.js';
 import { AppWorkspaces, checkScope, scopeDirFor, safeScope, workspacesRoot } from './workspace.js';
 import { AppsSocket, appsSocketPath } from './apps-socket.js';
 import { appendAudit, auditLine, auditPath } from './audit.js';
@@ -55,6 +55,71 @@ import { reconcileOnBoot } from './reconcile.js';
  *    动它等于动历史字节（协议字段一旦上线就冻结）。
  */
 export const MAIN_SCOPE = 'main';
+
+/**
+ * **桌面上的内置磁贴**（设置 / 奥数题 / 发现 /「我自己那台」）。
+ *
+ * 🔴 这几个字符串与客户端 `v2/apps/mobile/lib/models/app_spec.dart` 的
+ *    `builtInSettingsId` / `builtInMathId` / `builtInDiscoverId` / `builtInHarnessId`
+ *    **逐字一致**（一个字对不上 = 客户端拿着一个服务端不认识的 scope 去连 ⇒ 404）。
+ *
+ * ★ 主人 2026-09-25 定的（`docs/dev/77-BLOCKERS.md` 的 **B16**）：
+ *   原来按"内置磁贴是界面、不是他做的 app ⇒ 不单独分房间"办，主人回的是
+ *   **「要分家」** ⇒ **桌面上的每个图标都要有自己的房间**。
+ *   ⇒ 这四家和 `/api/apps` 里那些小程序**同一套不变量**：
+ *     自己一条 timeline、自己的 `agentKey`、自己的 cwd `<dir>/workspaces/<id>/`；
+ *   ⇒ **但不许被 app 占用**（与 `main` 同一条规矩：它们已经是别人的房间了）。
+ */
+export const BUILTIN_SCOPES = Object.freeze(['settings', 'math', 'discover', 'harness']);
+
+/** 这是不是桌面上的内置那一格（**认不出 ⇒ `false`**，不许猜）。 */
+export function isBuiltinScope(raw) {
+  const s = safeScope(raw);
+  return s !== null && BUILTIN_SCOPES.includes(s);
+}
+
+/**
+ * **app 不许占用的那些 id**：`main`（主线那个房间）＋ 内置那四个。
+ *
+ * ⚠️ 与 `main` 的唯一区别：内置那几个**本身是合法房间**（桌面上就有那个图标），
+ *    而 `main` 不是"另一个房间"，它就是主线本身。
+ * ⚠️ 名单的**唯一出处**是这里（客户端那张表在 `app_spec.dart`，两边按契约对齐）。
+ */
+export const RESERVED_APP_SCOPES = Object.freeze([MAIN_SCOPE, ...BUILTIN_SCOPES]);
+
+/**
+ * 拿保留 id 当 app ⇒ **人话拒掉**（`main` 那条在 `workspace.js` 的 `checkScope` 里，
+ * 这里是它同款的第二条 —— 内置那四个**是房间**，所以不能进 `checkScope` 的保留名单）。
+ *
+ * 🔴 它只拦"当 app"，**不拦"当房间"**：`/api/say` / `/api/timeline` / 那条流
+ *    拿这些 id 来开门时，走的是 `roomFor`（那里对内置是**放行**的）。
+ */
+function refuseBuiltinAsApp(raw) {
+  const s = safeScope(raw);
+  if (s === null || !BUILTIN_SCOPES.includes(s)) return;
+  throw new AppsError(`"${s}" 是桌面上本来就有的那一格，不能再拿它当小程序的名字`);
+}
+
+/**
+ * 这个人的工作区（`AppWorkspaces`）＋ **一条**：内置那四个 id 不许当 app。
+ *
+ * ⚠️ 为什么要在这一层加：`workspace.js` 的 `checkScope` 只认 `main`
+ *    （那一条是"谁都不许占"的老规矩），而内置那四个**同时是房间**⇒
+ *    只能在"当 app 用"的那个入口区分。这个入口就是它 ——
+ *    `app_create` / 装一个 app / 直接 `w.workspaces.ensure(...)` 都要过它。
+ * ⚠️ 读 / `has` / `hand` **一个字都没改**（房间那一边照旧用它们）。
+ */
+class UserWorkspaces extends AppWorkspaces {
+  ensure(scope, opts) {
+    refuseBuiltinAsApp(scope);
+    return super.ensure(scope, opts);
+  }
+
+  write(scope, files) {
+    refuseBuiltinAsApp(scope);
+    return super.write(scope, files);
+  }
+}
 
 /**
  * agent 那个**进程池的键**：`<userId>/<scope>`（主线是 `<userId>/main`）。
@@ -358,7 +423,9 @@ export class Worlds {
     // ★ **子工作区**（契约 `83-APP-WORKSPACE.md` §三·1）：**按人一份**，
     //   落在 `<dir>/workspaces/`（**与主目录平行** —— 手册 §2.2 第二条）。
     //   ⚠️ 这里是"服务端那一刀"的落点：造 app 时**服务端**建目录，不靠模型记得。
-    const workspaces = new AppWorkspaces({ dir: t.dir, log: (m) => this.#warn(m) });
+    //   ⚠️ 用 `UserWorkspaces`（不是裸的）：内置那四个 id **是房间，不许当 app**
+    //      （B16-3）—— 那道闸就加在这一层。
+    const workspaces = new UserWorkspaces({ dir: t.dir, log: (m) => this.#warn(m) });
     // ⚠️ **调度器建在这下面**（它要 timeline 那几样），而"造东西那条闸"（P1-22）
     //   要看**这一轮他说了什么** —— 那句话住在调度器里。
     //   ⇒ 先空着，等它建好再指过来（`ctx.turnInput` 是个**取值函数**，调的时候才读）。
@@ -502,6 +569,8 @@ export class Worlds {
    *
    * ⚠️ **scope 必须已经存在**（工作区目录在，或者制品库里有这个 app）：
    *    不然一个随手的字符串就能在盘上拉出一条日志来。
+   *    ★ **唯一的例外是内置那四个**（`BUILTIN_SCOPES`，B16）：它们**本来就存在**
+   *      —— 桌面上就有那个图标；工作区目录由这里第一次用到时建（B16-2）。
    * @returns {object} 世界（`main`）或房间
    */
   roomFor(userId, scope) {
@@ -513,7 +582,14 @@ export class Worlds {
     if (had) return had;
 
     const world = this.worldFor(userId);
-    if (!world.workspaces.has(id) && world.apps.current(id) === null) {
+    // ★ **内置那四个也是合法房间**（B16「要分家」）：它们**不在** `/api/apps` 里、
+    //   盘上也可能还没有工作区，但**桌面上就有那个图标** ⇒ 不许拿
+    //   "没有这个工作区"把人挡回去 —— 那样客户端一打开设置就会 404。
+    //   ⚠️ 别的 scope 仍然必须**已经存在**（工作区目录在，或者制品库里有这个 app）：
+    //      不然一个随手的字符串就能在盘上拉出一条日志来。
+    //   ⚠️ 它们**不是"没有工作区"的特例**：下面照样 mkdir ＋ `hand()`（B16-2）。
+    const builtin = isBuiltinScope(id);
+    if (!builtin && !world.workspaces.has(id) && world.apps.current(id) === null) {
       throw new Error(`没有这个工作区：${id}`);
     }
     const paths = this.pathsFor(userId, id);

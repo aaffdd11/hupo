@@ -9,19 +9,19 @@
 //   打开一个"我的小程序" ⇒ 房间 = **那个 app 的 id**（`/api/apps` 里那个 `id`）；
 //   关掉 / 退回桌面 ⇒ 回 `main`。
 //
-// ── 为什么只有"我的小程序"有房间（这是照着契约读的，不是省事）──────
-// 契约 `83-APP-WORKSPACE.md` §三 第 1 条写着：`scope = 那个 app 的 id`，
-// 而**那个 id 是 `/api/apps` 里的那个**（`59-USER-APPS.md` 的制品库）。
-// 桌面上另外那几个磁贴（设置 / 奥数题 / 发现 / 「我自己那台」）**不在**
-// `/api/apps` 的清单里（`app_spec.dart` 的 `MiniApp.isBuiltIn`）——
-// 它们是壳自己写死的屏，**没有**服务端认识的 id，也就**没有**它自己的工作区。
+// ── 内置那四个**也有自己的房间**（主人 2026-09-25：「要分家」）──────────
+// 桌面上除了"我的小程序"还有四个**壳自己写死的磁贴**（设置 / 奥数题 / 发现 /
+// 「我自己那台」）。它们**不在** `/api/apps` 的清单里，但**服务端也认得它们**：
+// `services/core/src/worlds.js` 的 `BUILTIN_SCOPES` 把四个 id 登记成**合法房间**
+// （它们是服务端认得的名字，不是壳里现编的）。
 //
-// ⇒ 它们开着的期间，房间**仍然是 `main`**（不许拿 `'settings'` 这种壳里的
-//   目录名去冒充一个 scope：服务端那边根本没有它，等于把话丢进一个不存在的房间）。
-//   ⚠️ 这是个**判断**，不是事实保证：接上服务端那一期（`83` §六·1/2）之后，
-//      如果内置那几个也登记成了 app，这一条要跟着改（改这一处 + 它的判据）。
+// ⚠️ 两边那四个字符串**必须逐字一致**（服务端 `BUILTIN_SCOPES` ↔ 这里
+//    `app_spec.dart` 的 `builtIn*Id`）：对不上就是"客户端拿着一个服务端不认识的
+//    名字去开门" ⇒ 那几屏里说的话会打不开（而界面上看起来什么都没发生）。
 //
 // ⚠️ 纯逻辑，不许 import flutter/material（`test/unit/import_rules_test.dart` 那道楼层闸）。
+
+import 'app_spec.dart';
 
 /// **主对话**的房间名。桌面上没打开任何小程序时就是它。
 ///
@@ -32,7 +32,7 @@ const String mainScope = 'main';
 
 /// "我的小程序"在桌面那一份 id 里的前缀（`'mine:<appId>'`）。
 ///
-/// ⚠️ 它把"我的小程序"和内置那几个（`'settings'` / `'math'` / …）分开。
+/// ⚠️ 它把"我的小程序"和内置那四个（`'settings'` / `'math'` / …）分开。
 ///    这一层**只认前缀**，不查清单：清单会刷新、会有拿不到的时候，
 ///    而"我现在开着的是哪个 app"**不能**因为一次刷新失败就变。
 const String mineAppPrefix = 'mine:';
@@ -48,9 +48,17 @@ String? mineAppIdOf(String? openApp) {
 /// **现在这个开着的东西是哪个房间**。纯函数（判据在 `test/unit/scope_test.dart`）。
 ///
 /// * `null`（桌面上，没开任何小程序）⇒ [mainScope]；
-/// * 内置那几个 ⇒ [mainScope]（理由见文件顶上那段）；
-/// * `'mine:<appId>'` ⇒ **那个 app 的 id**。
-String scopeOfOpenApp(String? openApp) => mineAppIdOf(openApp) ?? mainScope;
+/// * 内置那四个 ⇒ **它自己的 id**（设置那屏 = `'settings'`、奥数题 = `'math'`…）；
+/// * `'mine:<appId>'` ⇒ **那个 app 的 id**；
+/// * 别的认不出的写法 ⇒ [mainScope]（**宁回主线，也不许现编一个房间名**）。
+///
+/// ⚠️ 内置那四个用 `MiniApp.isBuiltIn` 判（四个 id 只有那一份清单）——
+///    在这一层重抄一遍的话，将来加一个磁贴就会漂成两处。
+String scopeOfOpenApp(String? openApp) {
+  if (openApp == null) return mainScope;
+  if (MiniApp.isBuiltIn(openApp)) return openApp;
+  return mineAppIdOf(openApp) ?? mainScope;
+}
 
 /// 本机缓存该用哪个命名空间（`TimelineStore` / `DraftStore` / `ComposeStore`）。
 ///
