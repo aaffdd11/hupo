@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "fingerprint": "",
+  "rulesHash": "1c601852abcb16094d0d6554c138885ef6788842c83f81d7cfbc3d28bcad53e7",
+  "rules": {
+    "version": "审核规则 v1",
+    "checks": [
+      "declaration",
+      "outbound-scan",
+      "private-leak",
+      "injection",
+      "usage"
+    ],
+    "autoPassMaxRisk": 2,
+    "thresholdSource": "src/review.js#REVIEW_AUTO_PASS_MAX_RISK（数值只住代码；这份规则只许更严，不许更松）",
+    "reviewer": "运营方保存的那个 agent 读整份源码（制品里每个文件都逐字节核过 rootHash）＋ 制品内那份 outbound.json，不是作者自报为准",
+    "categories": [
+      {
+        "id": "declaration",
+        "title": "外联申报对照",
+        "ask": "逐个出网点与申报对得上吗：去哪儿、带哪些字段、走不走我们的中转",
+        "failClosed": true
+      },
+      {
+        "id": "outbound-scan",
+        "title": "代码扫描的判定",
+        "ask": "扫出来的出网点是否全在申报里；申报说\"不用外网\"而代码里真有出网点 ⇒ 拒",
+        "failClosed": true
+      },
+      {
+        "id": "private-leak",
+        "title": "私密带出",
+        "ask": "工作区／制品／日志／错误原文／缓存／提交摘要里，有没有他的私密内容被带出去",
+        "failClosed": true
+      },
+      {
+        "id": "injection",
+        "title": "注入安全",
+        "ask": "有没有把外部内容当指令、有没有绕开闸的路径（拼接、动态执行、隐写、借第三方域带数据）",
+        "failClosed": true
+      },
+      {
+        "id": "usage",
+        "title": "用量对照",
+        "ask": "盒里记的日均与申报的量级是否严重偏离；以运营方实测为准，偏差只报警、不静默",
+        "failClosed": false
+      }
+    ],
+    "rating": {
+      "scale": {
+        "min": 0,
+        "max": 5
+      },
+      "meaning": "整数：0 = 没看到风险；5 = 必须拦下来",
+      "autoPass": "评级 ≤ rules.autoPassMaxRisk ⇒ 低风险，可自动放行",
+      "escalate": "评级超过那一档，或任何一项说不清／审不了 ⇒ 找主人，不静默放行",
+      "reject": "申报不可核、扫到未申报的出网点、或评审明说不能上架 ⇒ 拒"
+    },
+    "onUnreadable": "escalate"
+  }
+}

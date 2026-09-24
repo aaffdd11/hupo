@@ -54,8 +54,21 @@ export const REVIEW_POLICY_FILENAME = 'review-policy.json';
  */
 export const REVIEW_AUTO_PASS_MAX_RISK = 2;
 
-/** 预审必须包含的检查项（规则里少一项 ⇒ 认不出 ⇒ fail-closed）。 */
-export const REVIEW_REQUIRED_CHECKS = Object.freeze(['declaration', 'outbound-scan', 'usage']);
+/**
+ * 预审必须包含的检查项（规则里少一项 ⇒ 认不出 ⇒ fail-closed）。
+ *
+ * 这五类就是主人点名要审的（93 §三 R1–R4 ／ 96 第 3 条）：
+ *   `declaration` 外联申报对照 · `outbound-scan` 代码扫描的判定 · `usage` 用量对照 ·
+ *   `private-leak` 私密带出 · `injection` 注入安全。
+ * 🔴 名单一变，**所有**旧规则都认不出（少一项就拒）⇒ 这正是"规则升级要被发现"。
+ */
+export const REVIEW_REQUIRED_CHECKS = Object.freeze([
+  'declaration',
+  'outbound-scan',
+  'private-leak',
+  'injection',
+  'usage',
+]);
 
 /** 两份结论（预审 vs 运营方复评）评级差多少算"对不上"（96 · 我自定的第 4 条）。 */
 export const REVIEW_AGREEMENT_MAX_DELTA = 1;
@@ -109,11 +122,29 @@ export function assertReviewPolicy(policy) {
   return { ...policy, rules: { ...rules, autoPassMaxRisk: max }, autoPassMaxRisk: max };
 }
 
-/** `rules` 正文的 sha256（键排序后拼 —— 与"同一份内容同一个 hash"同一条规矩）。 */
+/**
+ * **深度**稳定序列化：每一层的键都排序后拼（数组顺序保持 —— 它是内容）。
+ *
+ * 🔴 为什么不能用 `JSON.stringify(v, sortedTopKeys)`：那个数组是**对所有层**的键的
+ *    白名单 ⇒ 嵌套对象里没有跟顶层重名的键**会被整个丢掉**。
+ *    实测：`{checks:['a'], autoPassMaxRisk:2, categories:[{id:'x',ask:'…'}], rating:{meaning:'…'}}`
+ *    序列化出来是 `{"autoPassMaxRisk":2,"categories":[{}],"checks":["a"],"rating":{}}` ——
+ *    于是**规则正文（要审哪几类、评级怎么给）改一个字节，`rulesHash` 纹丝不动**。
+ *    那正是"改规则要被发现"这条机制的反面。⇒ 必须深度规范化。
+ */
+export function canonicalRulesJson(v) {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return `[${v.map(canonicalRulesJson).join(',')}]`;
+  if (typeof v === 'object') {
+    const keys = Object.keys(v).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalRulesJson(v[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v) ?? 'null';
+}
+
+/** `rules` 正文的 sha256（**逐字节**：嵌套的键序也定死 —— 同一份内容同一个 hash）。 */
 export function rulesHashOf(rules) {
-  const keys = Object.keys(rules ?? {}).sort();
-  const text = JSON.stringify(rules, keys);
-  return nodeCrypto.createHash('sha256').update(text).digest('hex');
+  return nodeCrypto.createHash('sha256').update(canonicalRulesJson(rules ?? null)).digest('hex');
 }
 
 /**
@@ -273,7 +304,19 @@ export async function preReview({
   const v = version === null || version === undefined ? apps.current(id) : Number.parseInt(version, 10);
   const man = Number.isInteger(v) && v >= 1 ? apps.manifest(id, v) : null;
   const rootHash = man?.rootHash ?? null;
-  const base = { at: now, what: 'outbound-review', scope: 'pre', id, version: Number.isInteger(v) ? v : null, rootHash, by, turn };
+  const base = {
+    at: now,
+    what: 'outbound-review',
+    scope: 'pre',
+    id,
+    version: Number.isInteger(v) ? v : null,
+    rootHash,
+    by,
+    turn,
+    // ★ **这一条评级是按哪份规则给的**（`rulesHash`）。改规则 ⇒ 旧评级失效
+    //   （`judgeRatingsByPolicy()`）—— 没有它就分不清"这条评级还算不算数"。
+    rulesHash: null,
+  };
 
   const finish = (verdict, refused, words, extra = {}) => {
     const { reasons: extraReasons = [], ...rest } = extra;
@@ -306,6 +349,8 @@ export async function preReview({
   if (policy) {
     try {
       rules = assertReviewPolicy(policy);
+      // 规则认下来了 ⇒ 从现在起每条结论都绑着它的指纹（改了规则，旧评级立刻失效）
+      base.rulesHash = rules.rulesHash;
     } catch (err) {
       return finish('escalate', 'bad-policy', `预审规则不可用（${err?.message ?? err}）—— 这次不自动放行，请主人看一眼`);
     }
@@ -443,10 +488,19 @@ export async function preReview({
  * ⚠️ 它和预审**用同一个 agent 接口**、落**同一条流**（`scope:'operator'`），
  *    只是 `by` 不同；这样两份结论指得到同一个 `rootHash`（R5）。
  */
-export async function operatorReview({ apps, id, version = null, agent = null, now = Date.now, turn = null } = {}) {
+export async function operatorReview({ apps, id, version = null, agent = null, policy = null, now = Date.now, turn = null } = {}) {
   const v = version === null || version === undefined ? apps.current(id) : Number.parseInt(version, 10);
   const man = Number.isInteger(v) && v >= 1 ? apps.manifest(id, v) : null;
   if (!man) throw new ReviewError('要复评的那一版读不出来');
+  // 复评也要绑规则指纹 —— 否则"两份评级哪一份是现在这份规则给的"就答不出来。
+  let rulesHash = null;
+  if (policy) {
+    try {
+      rulesHash = assertReviewPolicy(policy).rulesHash;
+    } catch {
+      rulesHash = null; // 规则认不出 ⇒ 结论照落（事实不能静默），但**不算数**
+    }
+  }
   const files = {};
   for (const f of man.files ?? []) files[f.path] = apps.read(id, v, f.path).content;
   const raw = typeof agent === 'function' ? await agent({ id, version: v, rootHash: man.rootHash, files }) : null;
@@ -465,9 +519,45 @@ export async function operatorReview({ apps, id, version = null, agent = null, n
     summary: got.summary,
     by: 'operator-agent',
     turn,
+    rulesHash,
   };
   appendReview(apps, id, review);
   return review;
+}
+
+/**
+ * 🔴 **改了规则 ⇒ 所有旧评级失效**（96 第 3b 条 · 93 §八 阶段 2.5）。
+ *
+ * 每条评级都记着它**当时是按哪份规则**给的（`rulesHash`）。现在这份规则的指纹与它不同
+ * ⇒ 那一条**不算数** —— 不许拿"旧规则说它低风险"去自动放行。
+ * 🔴 现在这份规则读不出来 ⇒ **一条都不算数**（fail-closed）。
+ *
+ * @param {object} o
+ * @param {Array<object>} o.rows      `reviewRows()` 读出来的结论
+ * @param {object|string|null} o.policy 产品层那份规则（或直接给 `rulesHash`）
+ * @returns {{hash:string|null, valid:Array<object>, stale:Array<object>, why:string}}
+ */
+export function judgeRatingsByPolicy({ rows = [], policy = null } = {}) {
+  const hash = typeof policy === 'string' && policy !== ''
+    ? policy
+    : (typeof policy?.rulesHash === 'string' && policy.rulesHash !== '' ? policy.rulesHash : null);
+  if (hash === null) {
+    return {
+      hash: null,
+      valid: [],
+      stale: [...(rows ?? [])],
+      why: '现在这份规则读不出来 —— 旧评级一条都不算数（fail-closed）',
+    };
+  }
+  const valid = [];
+  const stale = [];
+  for (const r of rows ?? []) (r && r.rulesHash === hash ? valid : stale).push(r);
+  return {
+    hash,
+    valid,
+    stale,
+    why: stale.length === 0 ? '旧评级都还是按现在这份规则给的' : `${stale.length} 条旧评级是别的规则给的 —— 失效`,
+  };
 }
 
 /**

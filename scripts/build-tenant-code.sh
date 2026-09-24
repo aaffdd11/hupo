@@ -24,6 +24,9 @@
 #      主人拍板"归 deploy、可以自己翻转"时点名的就是这一条。
 #   ③ **指纹只由内容决定**：同一份内容两次算出来必须**一模一样**；
 #      改一个字节必须变。算它的地方**只有这一处**。
+#      ⚠️ 唯一例外：`review-policy.json` 里的 `fingerprint` 字段是**自指的**
+#      （它记的就是这一版的指纹）⇒ 算指纹时把它当空串看；其余字节照旧进指纹。
+#      ⇒ **改规则一个字节 = 换一版**（"母体升级"＋"旧评级失效"都靠它）。
 #   ④ **回滚用的旧版本不许顺手删**（删是显式的 `--prune`）——
 #      删掉的那一刻，"翻回去"这条路就没了。
 set -uo pipefail
@@ -40,7 +43,10 @@ NODE="${NODE_BIN:-$(command -v node || true)}"
 # ⚠️ **产品层要装哪几样**：只有这一处名单。
 #    加东西要同时想清楚"它是不是按人不同的" —— 按人不同的东西**不许**放进来
 #    （那会把"改一次"变成"改 N 次"，而且没有一处能看全）。契约 §四。
-INPUTS=(src package.json hupo-persona.yml hupo-capabilities.yml hupo-model-proxy.yml)
+#    ★ `review-policy.json` = **预审规则本体**（96 第 3b 条：住产品层、只读挂载＋指纹、
+#      用户改不了）。它是**一份**（不按人不同）⇒ 放这儿。⚠️ 它的 `fingerprint` 字段是
+#      **自指的**：算指纹时当空串看（`fp_calc` 的 `canonBytes`），构建这一刻才盖上。
+INPUTS=(src package.json hupo-persona.yml hupo-capabilities.yml hupo-model-proxy.yml review-policy.json)
 
 say()  { echo "  $1"; }
 plan() { echo "▶ $1"; }
@@ -108,10 +114,27 @@ for (const i of inputs) {
 files.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
 // ⚠️ **每个文件先算 32 字节摘要，再把摘要串起来** —— 不是"路径+内容直接拼"：
 //    后者在内容里出现 `\0` 时理论上能撞（"两个不同的输入同一个指纹"）。
+// 🔴 **一个自指字段必须排掉**：`review-policy.json` 里那个 `fingerprint` 记的就是
+//    "这一版产品层的指纹" —— 算指纹时把它当**空串**看，否则它取决于它自己（无解）。
+//    ⚠️ 只排这**一个字段**：规则正文（`rules`）照旧逐字节进指纹
+//    ⇒ **改规则一个字节 = 换一版**（96 第 3b 条的"母体升级"就靠这一条）。
+const canonBytes = (rel, buf) => {
+  if (rel !== 'review-policy.json') return buf;
+  try {
+    const j = JSON.parse(buf.toString('utf8'));
+    if (j && typeof j === 'object' && !Array.isArray(j)) {
+      j.fingerprint = '';
+      return Buffer.from(JSON.stringify(j), 'utf8');
+    }
+  } catch {
+    // 认不出 ⇒ 按原字节算（那一版本来也会被 `review.js` 拒 —— 不在这里替它兜底）
+  }
+  return buf;
+};
 const h = nodeCrypto.createHash('sha256');
 for (const [rel, p] of files) {
   h.update(Buffer.from(rel, 'utf8'));
-  h.update(nodeCrypto.createHash('sha256').update(nodeFs.readFileSync(p)).digest());
+  h.update(nodeCrypto.createHash('sha256').update(canonBytes(rel, nodeFs.readFileSync(p))).digest());
 }
 process.stdout.write(JSON.stringify({ fingerprint: h.digest('hex').slice(0, 12), files: files.map((f) => f[0]) }));
 JS
@@ -136,6 +159,20 @@ if [ "$MODE" = "build" ]; then
       [ -e "$CORE/$i" ] || { bad "缺 $CORE/$i"; rm -rf "$DEST"; exit 3; }
       cp -r "$CORE/$i" "$DEST/$i"
     done
+    # 🔴 **预审规则那份要盖上这一版的指纹**（96 第 3b 条 · 93 §八 阶段 2.5）：
+    #    仓库里那份的 `fingerprint` 是**空串**（自指字段）；构建这一刻才盖上，
+    #    而算指纹时它被当空串看（见上面 `canonBytes`）。
+    #    ⇒ 规则正文改一个字节 = 换一版；改了正文又不同步 `rulesHash` ⇒
+    #      `review.js` 当场认出来（fail-closed，绝不静默放行）。
+    if [ -f "$DEST/review-policy.json" ]; then
+      "$NODE" -e '
+        const fs = require("node:fs");
+        const [f, fp] = process.argv.slice(1);
+        const j = JSON.parse(fs.readFileSync(f, "utf8"));
+        j.fingerprint = fp;
+        fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
+      ' "$DEST/review-policy.json" "$FP"
+    fi
     # 🔴 **agent（uid 1000）必须读得到**（2026-09-21 真机栽过：`cp` 把 600 带进去 ⇒
     #    dsh 开机读 `--patch` 那两份 yml 直接 EACCES 退掉，现象只是"它不理我"）。
     #    ⚠️ 这里没有秘密：key 是运行时才进容器 tmpfs 的，**不在产品层**。

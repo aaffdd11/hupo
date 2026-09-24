@@ -57,7 +57,7 @@ portable_part() {
   # 造一份仓库副本（判据不许为了测"内容变了"去动真仓库）
   FAKE="$T/core"
   mkdir -p "$FAKE"
-  for i in src package.json hupo-persona.yml hupo-capabilities.yml hupo-model-proxy.yml; do
+  for i in src package.json hupo-persona.yml hupo-capabilities.yml hupo-model-proxy.yml review-policy.json; do
     cp -r "$CORE/$i" "$FAKE/$i"
   done
   ROOTDIR="$T/root"
@@ -99,11 +99,11 @@ portable_part() {
   # ══════════════════════════════════════════════════════════════════
   DEST="$ROOTDIR/$FP1"
   missing=""
-  for f in src/serve.js src/tenant-reload.mjs hupo-persona.yml hupo-capabilities.yml hupo-model-proxy.yml manifest.json; do
+  for f in src/serve.js src/tenant-reload.mjs hupo-persona.yml hupo-capabilities.yml hupo-model-proxy.yml review-policy.json manifest.json; do
     [ -f "$DEST/$f" ] || missing="$missing $f"
   done
   if [ -z "$missing" ]; then
-    ok "该在的都在（src/ + 人格 + 能力 + 代理 patch + manifest）"
+    ok "该在的都在（src/ + 人格 + 能力 + 代理 patch + 预审规则 + manifest）"
   else
     bad "🔴 产品层里缺：$missing"
   fi
@@ -378,7 +378,7 @@ portable_part() {
   fi
   MUT="$T/core-mut"
   mkdir -p "$MUT"
-  for i in src package.json hupo-persona.yml hupo-capabilities.yml hupo-model-proxy.yml; do cp -r "$CORE/$i" "$MUT/$i"; done
+  for i in src package.json hupo-persona.yml hupo-capabilities.yml hupo-model-proxy.yml review-policy.json; do cp -r "$CORE/$i" "$MUT/$i"; done
   printf '\n// 判据加的\n' >> "$MUT/src/product-layer.js"
   MUT_FP="$(HUPO_CORE="$MUT" bash "$ROOT/scripts/build-tenant-code.sh" --fingerprint 2>/dev/null || true)"
   if [ -n "$MUT_FP" ] && [ "$MUT_FP" != "$PUB_FP" ]; then
