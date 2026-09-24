@@ -27,6 +27,23 @@ const MCP_SERVER = nodePath.resolve(HERE, '..', 'src', 'mcp-apps-server.mjs');
 const FAKE = nodePath.join(HERE, 'fake-agent.mjs');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * **等一件事真的发生**（而不是"睡 200 毫秒赌它发生了"）。
+ *
+ * ⚠️ 为什么非要它（2026-09-24 并发跑两套全量时抓到的）：这条端到端判据原来
+ *    在 `deliver()` 之后**睡 200 毫秒**就往下走 —— 机器一忙（两套测试并排跑），
+ *    假 agent 起来得比那久 ⇒ `turn-start` 还没来 ⇒ 闸按"他没说话"拒了 ⇒ **假红**。
+ *    ⇒ 改成"**等到当轮输入真的认领了**"，超时才算失败（超时也给足 10 秒）。
+ */
+async function waitFor(pred, why, ms = 10000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    if (pred()) return;
+    await sleep(50);
+  }
+  throw new Error(`等不到：${why}（等了 ${ms}ms）`);
+}
+
 const tmpDirs = [];
 function tmp() {
   const d = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-consent-'));
@@ -229,7 +246,8 @@ test('🔴 真接线：`worlds` 里那句话说了算 —— 没说就拒 / 说�
 
     // ② 他真的说了 ⇒ 成
     world.dispatcher.deliver('帮我做一个掷骰子的小程序', { messageId: null }).catch(() => {});
-    await sleep(200);
+    // ⚠️ **等"这一轮真的起来了"**（`turn-start` 认领了当轮输入），**不是睡一觉赌它起来了**
+    await waitFor(() => world.dispatcher.turnInput !== '', '这一轮还没起来（turn-start 没到）');
     const ok = await c.call('tools/call', { name: 'app_create', arguments: APP });
     assert.equal(ok.result.isError, false,
       `★ 接线断了（worlds 没把当轮输入递给这条通道）：${JSON.stringify(ok.result)}`);
@@ -238,7 +256,8 @@ test('🔴 真接线：`worlds` 里那句话说了算 —— 没说就拒 / 说�
     //    正在跑的**这一轮**仍然是"帮我做一个小程序"引起来的 ⇒ **照样许造**。
     //    ⚠️ 这一条判的是"读的是**哪一轮**那句话"：读成"最后投递的那句"就会在这里误拒。
     world.dispatcher.deliver('今天天气怎么样', { messageId: null }).catch(() => {});
-    await sleep(150);
+    // ⚠️ 等"第二句真的排上队了"（那才是这条要判的状态），同样不睡固定时间
+    await waitFor(() => world.dispatcher.pendingDeliveries >= 1, '第二句没排上队');
     const still = await c.call('tools/call', {
       name: 'app_create', arguments: { ...APP, id: 'dice2', title: '又一个' },
     });
