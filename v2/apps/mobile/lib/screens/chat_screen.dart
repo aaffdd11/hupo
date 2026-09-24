@@ -18,6 +18,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/image_outcome.dart';
 import '../models/conn_state.dart';
 import '../models/design.dart' as d;
 import '../models/export_words.dart';
@@ -68,6 +69,7 @@ class ChatScreen extends StatefulWidget {
     this.space = const SpaceInfo(),
     this.onSendKey,
     this.onSendCreds,
+    this.onDrawImage,
     this.onCancelMe,
     this.onKeyChanged,
     this.initialTier = FloaterTier.collapsed,
@@ -82,6 +84,9 @@ class ChatScreen extends StatefulWidget {
   /// 把钥匙交上去（和第一次那一屏**同一个入口**）。`null` ⇒ 抓手行不显示「配置」
   /// （单看这一屏的测试可以不传）。
   final Future<KeySend> Function(String key)? onSendKey;
+
+  /// **画一张图**（P1-27）：配置页「图片」那一屏的「试一张」用它。
+  final Future<ImageOutcome> Function(String prompt)? onDrawImage;
 
   /// **配置页那四样**（主人 2026-09-24）：某一屏填好了 ⇒ 一次送出去。
   /// ⚠️ `tab` 就是那四个 tab 的名字（`space_words.dart` 里那四个常量）。
@@ -497,6 +502,7 @@ class _ChatScreenState extends State<ChatScreen> {
           onSubmit: widget.onSendKey ?? ((_) async => KeySend.failed),
           creds: widget.space.creds,
           onSubmitCreds: widget.onSendCreds,
+          onDrawImage: widget.onDrawImage,
           onCancel: widget.onCancelMe,
           onCancelled: widget.onLoggedOut,
           onKeyChanged: widget.onKeyChanged,

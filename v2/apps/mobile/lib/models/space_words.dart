@@ -200,9 +200,32 @@ String credTabWhat(String tab) {
 ///
 /// ⚠️ 为什么非说不可：不说的话，他填完图/视频那两把，以为什么都能干了 ——
 ///    而这两条路**还没接上**。那句"填上了"就成了他自己脑补出来的假承诺。
-const String credBoundaryImage = '先收在你自己的名下。画图这条路还没接上，接上就自动用它。';
+/// 🔴 **图片那一句也跟事实走**（P1-27 接通之后 · 2026-09-24）：
+///   · 主人这一份填了 ⇒ **当场就能画**（这一屏下面有「试一张」）；
+///   · 没填 ⇒ 说清"填上它才能画"；
+///   · 租户那台**还没接**（和他的语音同一个原因：盒子里读的是盒子里那份存档）。
+const String credImageBoundaryMine = '填好了。在下面写一句想要什么图，我就能给你画。';
+const String credImageBoundaryNone = '还没有填。填上它，我才能给你画图。';
+const String credImageBoundaryTenant = '先收着。你这台还没接上，接上就用它画。';
+
+String credImageBoundary({required bool isTenant, required bool hasOwn}) {
+  if (isTenant) return credImageBoundaryTenant;
+  return hasOwn ? credImageBoundaryMine : credImageBoundaryNone;
+}
+
+/// 视频那一句（这条路**还没接**，两种人都一样说实话）。
 const String credBoundaryVideo = '先收在你自己的名下。做片子这条路还没接上，接上就自动用它。';
 
+// ── 「试一张」那几句（画图那一屏里）────────────────────────────
+const String imageTryLabel = '试一张';
+const String imageTryHint = '填好钥匙之后，在这儿写一句话，看它能不能画出来。';
+const String imagePromptLabel = '想要什么样的图';
+const String imageTrySubmit = '画一张';
+const String imageGenerating = '正在画…';
+const String imagePromptBlank = '先写一句想要什么图。';
+const String imageTryFailed = '这次没画成，等会儿再试。';
+const String imageLoadFailed = '图取不回来（地址可能已经过期了）。';
+const String imageTempLink = '图是那边临时给的，想要就存下来。';
 /// 🔴 **语音那一句要跟着事实变**（P1-26 后半，2026-09-24 接通"按人一份"之后）。
 ///
 /// ⚠️ 为什么不能再写死一句：
@@ -228,7 +251,7 @@ String? credBoundaryOf(String tab, {bool isTenant = false, bool hasOwn = false})
     case credTabVoice:
       return credVoiceBoundary(isTenant: isTenant, hasOwn: hasOwn);
     case credTabImage:
-      return credBoundaryImage;
+      return credImageBoundary(isTenant: isTenant, hasOwn: hasOwn);
     case credTabVideo:
       return credBoundaryVideo;
     case credTabChat:

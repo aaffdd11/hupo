@@ -19,10 +19,12 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import '../models/image_outcome.dart';
 import '../models/space.dart';
 import '../models/space_words.dart';
 import '../services/api.dart';
 import '../widgets/cred_form.dart';
+import '../widgets/image_try.dart';
 import '../widgets/key_form.dart';
 import 'about_screen.dart';
 
@@ -59,6 +61,7 @@ class SettingsScreen extends StatelessWidget {
     required this.onSubmit,
     this.creds = const SpaceCreds(),
     this.onSubmitCreds,
+    this.onDrawImage,
     this.localOnly = false,
     this.onCancel,
     this.onCancelled,
@@ -72,6 +75,10 @@ class SettingsScreen extends StatelessWidget {
   /// **那四样有没有**（主人 2026-09-24：配置页就是配这四样）。
   /// ⚠️ 老服务端不回它 ⇒ 全 `false`（"没有"），四个 tab 里就都会说"还没有填"。
   final SpaceCreds creds;
+
+  /// **画一张图**（P1-27）：图片那一屏下面的「试一张」用它。
+  /// ⚠️ `null` ⇒ 不画那一块（这条路没接上时**不给假按钮**）。
+  final Future<ImageOutcome> Function(String prompt)? onDrawImage;
 
   /// **某一屏填好了要送出去**（tab 的名字 ＋ 那一屏的值）。
   ///
@@ -248,12 +255,17 @@ class SettingsScreen extends StatelessWidget {
       credTabVideo => const [CredField(key: 'video', label: credOneKeyLabel)],
       _ => const <CredField>[],
     };
+    final draw = onDrawImage;
     return [
       CredForm(
         fields: fields,
         submitLabel: credsFor(tab) ? keySubmitChange : keySubmit,
         onSubmit: (values) => send(tab, values),
       ),
+      // ★ **画一张试试**（P1-27）：只有"图片"那一屏、而且**填了钥匙**时才给。
+      //   ⚠️ 没接上线（`onDrawImage == null`）就不画 —— 不给假按钮。
+      if (tab == credTabImage && draw != null && credsFor(tab))
+        ImageTry(onDraw: (prompt) => draw(prompt)),
     ];
   }
 

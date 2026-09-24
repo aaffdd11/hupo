@@ -6,6 +6,7 @@
 // ⚠️ 令牌**只走 `Authorization` 头**，绝不进 URL。
 //    服务端也会忽略 URL 里的令牌（两边都守同一条规矩）。
 
+import 'package:hupo_app/models/image_outcome.dart';
 import 'package:hupo_app/models/key_outcome.dart';
 
 export 'package:hupo_app/models/key_outcome.dart';
@@ -415,6 +416,33 @@ class Api {
       return KeySend.failed;
     } catch (_) {
       return KeySend.failed;
+    }
+  }
+
+  /// **画一张图**（P1-27 · 主人 2026-09-24：*"图片用seedream，volcengine的"*）。
+  ///
+  /// ⚠️ 用**他自己**那一把（配置页「图片」那一屏填的）—— 那是服务端的事；
+  ///    这里只把提示词递过去、把结果（图地址 / 一句人话）拿回来。
+  /// ⚠️ 不许自己编失败的原因：服务端那句 `text` 是**上游的原话翻的人话**。
+  Future<ImageOutcome> drawImage(String token, String prompt) async {
+    final p = prompt.trim();
+    if (p.isEmpty) return const ImageOutcome(ok: false, words: '先写一句想要什么图。');
+    try {
+      final r = await _c
+          .post(
+            _u('/api/image'),
+            headers: {'content-type': 'application/json', 'authorization': 'Bearer $token'},
+            body: jsonEncode({'prompt': p}),
+          )
+          // 画图比聊天慢得多 —— 给它足够时间（服务端那边也有上限）
+          .timeout(const Duration(seconds: 150));
+      final j = jsonDecode(r.body);
+      if (r.statusCode == 200) return ImageOutcome.fromJson(j);
+      // 400 / 409 / 502：服务端都会带一句人话 ⇒ 原样显示；没带就回一个不撒谎的兜底
+      final out = ImageOutcome.fromJson(j);
+      return ImageOutcome(ok: false, words: out.words ?? '这次没画成，等会儿再试。');
+    } catch (_) {
+      return const ImageOutcome(ok: false, words: '这会儿连不上，等会儿再试。');
     }
   }
 

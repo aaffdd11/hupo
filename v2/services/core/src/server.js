@@ -349,6 +349,11 @@ export function createServer({
   setCreds = null,
   /** **那四样有没有**（只看存在与否，**永远不回值**）。`credStatusOf(userId)`。 */
   credStatusOf = null,
+  /**
+   * **画一张图**（P1-27）：`drawImage(userId, prompt)` ⇒ `{ok, urls?, why?, text?, ms?}`。
+   * ⚠️ 约定：**密钥不许出现在返回值里**；这里是"用他自己的钥匙去要一张图"的唯一入口。
+   */
+  drawImage = null,
 }) {
   /**
    * 🔴 **这一个函数是"我是谁"与服务对象之间唯一的接缝。**
@@ -647,6 +652,32 @@ export function createServer({
       //    不然会有"填了两样"的半截状态）。
       // ⚠️ 回执里**只有"有没有"**，绝不回值；也**不校验它长得像不像钥匙**
       //    （我们不是它的裁判，真伪由上游说了算）。
+      // ── **画一张图**（主人 2026-09-24：*"图片用seedream，volcengine的"*）──────
+      //
+      // ⚠️ 用**他自己**那一把（配置页「图片」那一屏填的）——调用的那件事住在 `serve.js`
+      //    （只有它知道谁是主人、钥匙存在哪）。密钥**只往上游去**，回执里一个字都没有。
+      if (path === '/api/image' && req.method === 'POST') {
+        if (!drawImage) return sendJson(res, 404, { error: 'not-found' });
+        let body;
+        try {
+          body = await readJson(req, 8 * 1024);
+        } catch {
+          return sendJson(res, 400, { error: 'bad-json' });
+        }
+        const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : '';
+        if (prompt.length === 0) {
+          return sendJson(res, 400, { error: 'blank-prompt', text: '先写一句想要什么图。' });
+        }
+        const r = await drawImage(claim.sub, prompt);
+        if (!r?.ok) {
+          // **每一种"不行"说清是哪一种**（认不出钥匙 / 上游不理 / 那句话太长…）
+          const status = r?.why === 'no-key' ? 409 : r?.why === 'blank-prompt' || r?.why === 'prompt-too-long' ? 400 : 502;
+          return sendJson(res, status, { error: r?.why ?? 'cannot-draw', text: r?.text ?? null });
+        }
+        // ⚠️ 只回"画好了 + 图在哪"（**没有钥匙**；上游原话也不回显 —— 里面可能有带签名的地址）
+        return sendJson(res, 200, { ok: true, urls: r.urls ?? [], ms: r.ms ?? null });
+      }
+
       if (path === '/api/creds' && req.method === 'POST') {
         if (!setCreds) return sendJson(res, 404, { error: 'not-found' });
         let body;

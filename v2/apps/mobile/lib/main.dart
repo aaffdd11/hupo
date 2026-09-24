@@ -17,6 +17,7 @@ import 'screens/landing_screen.dart';
 import 'screens/app_theme.dart';
 import 'screens/login_screen.dart';
 import 'services/api.dart';
+import 'models/image_outcome.dart';
 import 'models/space.dart';
 import 'screens/model_key_screen.dart';
 import 'screens/waiting_screen.dart';
@@ -125,6 +126,13 @@ class _HupoAppState extends State<HupoApp> {
     return r;
   }
 
+  /// **画一张图**（P1-27）：把提示词递上去，把结果（图地址 / 一句人话）拿回来。
+  Future<ImageOutcome> _drawImage(String prompt) async {
+    final token = await _tokens.read();
+    if (token == null) return const ImageOutcome(ok: false, words: '先登录一下再试。');
+    return _api.drawImage(token, prompt);
+  }
+
   Future<KeySend> _sendKey(String key) async {
     final token = await _tokens.read();
     if (token == null) return KeySend.failed;
@@ -207,6 +215,7 @@ class _HupoAppState extends State<HupoApp> {
                   space: _space ?? const SpaceInfo(),
                   onSendKey: _sendKey,
                   onSendCreds: _sendCreds,
+                  onDrawImage: _drawImage,
                   onCancelMe: _cancelMe,
                   onKeyChanged: () async {
                     final t = await _tokens.read();

@@ -44,6 +44,7 @@ import 'package:hupo_app/screens/math_quiz_screen.dart';
 import 'package:hupo_app/screens/model_key_screen.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/screens/waiting_screen.dart';
+import 'package:hupo_app/models/image_outcome.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
@@ -537,6 +538,32 @@ void main() {
         // ⚠️ 新加的界面**必须也过这道闸** —— 不然"五档不溢出"会随时间失效。
         await _openConfig(tester, s);
         expect(_drain(tester), isEmpty, reason: '配置页在 ${s}x 溢出了');
+      });
+
+      testWidgets('配置页·图片那一屏（含「试一张」）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-24（P1-27）：**新加的那一块**（P1-27 的「试一张」＋真图）也要过五档。
+        //    真入口那一趟拿到的 `creds` 全是"没有" ⇒ 那一块**不画**（负向对照见 widget 判据），
+        //    所以这里**直接泵那一屏**（溢出这一档不需要"从真入口进"）。
+        await _pump(
+          tester,
+          Scaffold(
+            body: SettingsScreen(
+              hasKey: true,
+              keyBad: false,
+              creds: const SpaceCreds(image: true),
+              onSubmit: (k) async => KeySend.ok,
+              onSubmitCreds: (t, v) async => KeySend.ok,
+              onDrawImage: (p) async => const ImageOutcome(ok: false, words: '这次没画成，等会儿再试。'),
+              onLogout: () {},
+            ),
+          ),
+          s,
+        );
+        await tester.pumpAndSettle();
+        // 切到「图片」那一屏（那一块只在它上面画）
+        await tester.tap(find.text(credTabImage));
+        await tester.pumpAndSettle();
+        expect(_drain(tester), isEmpty, reason: '图片那一屏（含试一张）在 ${s}x 溢出了');
       });
 
       testWidgets('奥数题（从真入口进）@ ${s}x', (tester) async {
