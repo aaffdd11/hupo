@@ -1,0 +1,14 @@
+# **制品口那条隧道**（小程序那个源 · 草案 · P2-7）。配置 `~/.local/frp/frpc-apps.toml`。
+[Unit]
+Description=frp 隧道 frpc-apps（制品口）
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/deploy/.local/frp
+ExecStart=/home/deploy/.local/frp/frpc -c /home/deploy/.local/frp/frpc-apps.toml
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

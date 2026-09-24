@@ -1,0 +1,15 @@
+# **公网那一跳的隧道**（`w.stalkerai.cn` · 草案 · P2-7）。
+# 配置：`~/.local/frp/frpc-w.toml`（0600，里面有 secretKey —— 本单元**不打印任何 env**）。
+[Unit]
+Description=frp 隧道 frpc-w（w.stalkerai.cn → 本机 8020）
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/deploy/.local/frp
+ExecStart=/home/deploy/.local/frp/frpc -c /home/deploy/.local/frp/frpc-w.toml
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

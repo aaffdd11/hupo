@@ -1,0 +1,29 @@
+# **琥珀调度器（本机 8020 = w.stalkerai.cn）** —— systemd **用户**单元（草案 · P2-7）。
+#
+# ⚠️ 现在它是**从 DSH 工具调用里起的**（cgroup 是 `dsh-subprocess-*.scope`）⇒ 机器一重启就没了。
+#    这个单元就是拿来自启的（`Restart=always` ＋ `enable-linger` 之后**开机就起**）。
+#
+# ⚠️ **接管之前先停旧的**（`scripts/restart-core.sh` 起的那一个），否则两个抢 8020。
+# ⚠️ 绝对路径是故意的：用户单元里的 PATH 很短，`node` 只有 nvm 里那一个（本机没有 /usr/bin/node）。
+[Unit]
+Description=琥珀 v2 调度器（127.0.0.1:8020）
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/deploy/proj/hupo/v2/services/core
+# 钥匙那三样（0600）可选：没有就不带（服务自己会说"没配"）
+EnvironmentFile=-/home/deploy/proj/hupo/v2/services/core/data/asr.env
+Environment=HUPO_DATA=/home/deploy/proj/hupo/v2/services/core/data
+Environment=HUPO_PORT=8020
+Environment=HUPO_WEB=/home/deploy/proj/hupo/v2/services/core/web
+ExecStart=/home/deploy/.nvm/versions/node/v24.15.0/bin/node src/serve.js
+# ⚠️ 日志还是那一个文件：开机横幅与 `restart-core.sh` 都读它
+StandardOutput=append:/home/deploy/proj/hupo/v2/services/core/serve.log
+StandardError=append:/home/deploy/proj/hupo/v2/services/core/serve.log
+Restart=always
+RestartSec=3
+# ⚠️ 不许 `systemctl --user stop` 清 DSH 的 scope（`AGENTS.md` §一）—— 那会顺手把别的会话杀掉
+
+[Install]
+WantedBy=default.target
