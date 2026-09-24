@@ -206,10 +206,15 @@ String credTabWhat(String tab) {
 ///   · 租户那台**还没接**（和他的语音同一个原因：盒子里读的是盒子里那份存档）。
 const String credImageBoundaryMine = '填好了。在下面写一句想要什么图，我就能给你画。';
 const String credImageBoundaryNone = '还没有填。填上它，我才能给你画图。';
-const String credImageBoundaryTenant = '先收着。你这台还没接上，接上就用它画。';
+/// ⚠️ 2026-09-24 更正：租户**下面那个「试一张」本来就能用**（那条路走的是中心，
+///    用的是中心这份按人存档）—— 真正还没接的是**"在聊天里让它画"**
+///    （助手跑在他自己盒子里，读的是盒子里那份存档，见 `77-BLOCKERS.md` B10）。
+///    ⇒ 旧那句"你这台还没接上"**把能用的那半也说成不能用了**，是假话。
+const String credImageBoundaryTenant = '填好了。下面能试一张；在聊天里让它画，还得等你这台接上。';
+const String credImageBoundaryTenantNone = '填上它，就能在下面试一张（聊天里让它画还得等你这台接上）。';
 
 String credImageBoundary({required bool isTenant, required bool hasOwn}) {
-  if (isTenant) return credImageBoundaryTenant;
+  if (isTenant) return hasOwn ? credImageBoundaryTenant : credImageBoundaryTenantNone;
   return hasOwn ? credImageBoundaryMine : credImageBoundaryNone;
 }
 

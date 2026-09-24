@@ -273,6 +273,7 @@ export class Worlds {
       ledgerSocketPath: paths.ledgerSocketPath,
       appsSocketPath: paths.appsSocketPath,
       appsServerPath: this.#cfg.appsServerPath,
+      imageServerPath: this.#cfg.imageServerPath,
     };
 
     dispatcher = new Dispatcher({

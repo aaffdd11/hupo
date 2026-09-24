@@ -362,6 +362,8 @@ export class DshAgent extends EventEmitter {
           // ★ 小程序那几条工具（乙-2）：脚本路径 + 那条域套接字。**都不是秘密**。
           ...(cfg.appsServerPath ? { HUPO_APPS_SERVER: cfg.appsServerPath } : {}),
           ...(cfg.appsSocketPath ? { HUPO_APPS_SOCKET: cfg.appsSocketPath } : {}),
+          // ★ **画图那一支**（P1-27 后半）：它自己那个文件 ＋ **同一条**通道
+          ...(cfg.imageServerPath ? { HUPO_IMAGE_SERVER: cfg.imageServerPath } : {}),
         },
       }),
     });

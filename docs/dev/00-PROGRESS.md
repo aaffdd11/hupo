@@ -325,7 +325,11 @@
 
 | `v2/services/core/hupo-capabilities.yml` **（strict）** | **把画图那条工具从借住的通道里拆出来**：现在 `image_generate` 与九件小程序工具**共用** `mcp-apps` 那一条（写成 `mcp-image` ＋ `HUPO_IMAGE_SERVER`/`HUPO_IMAGE_SOCKET` 那样的独立一条） | 它当初借住是因为能力层是 strict（改它要重建）⇒ **这次重建顺手做掉**，两件事共用同一条 `sudo`（`79-CREDS-TABS.md` §9.5 写着"下次重建时再拆出去"） |
 
-🔴 **重建命令**（`docs/handbook/**` 是 `strict` ⇒ 不重建的话**下次重启会拒绝启动**）：
+🔴 **状态（2026-09-24 主人说「改吧。都要做。」之后）**：上面四处**已经改完**并推上去了
+（手册三处 ＋ 能力层那一处），**就差他跑一次重建** —— 跑完这个清单才对得上，服务才敢重启。
+⚠️ 在重建跑完之前**别重启服务**（重启会拒绝启动）。
+
+🔴 **重建命令**（`docs/handbook/**` 与 `hupo-capabilities.yml` 都是 `strict` ⇒ 不重建的话**下次重启会拒绝启动**）：
 
 ```bash
 PW=$(git show cca2c5e^:docs/dev/03-DEPLOY-WEB.md | grep -oP '(?<=密码 `)[^`]+(?=`)' | head -1); printf '%s\n' "$PW" | sudo -S -p '' /home/deploy/.nvm/versions/node/v24.15.0/bin/node scripts/verify-integrity.mjs --build

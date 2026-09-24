@@ -42,6 +42,23 @@
     # ⚠️ **写入永远只有一处**：这个进程**不写盘**，只把请求经域套接字递给服务端。
     # ⚠️ 这一批只挂**两件**（造 / 看）。发布、装上、授权那几件要等"发现/权限"两批 ——
     #    **现在挂上去就是让它去承诺一件做不到的事**（那正是这个仓库最忌的假话）。
+    # ★ **画图那一支**（P1-27 后半 · 2026-09-24）：工具**面向**独立成一条
+    #   （要给模型单独开关画图，去掉这一块就行，不用碰小程序那条）。
+    #   ⚠️ 通道还是同一条域套接字（`HUPO_APPS_SOCKET`）——服务端只有**一个**动手的地方。
+    - id: mcp-image
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: image
+        transport: stdio
+        command: !!js process.env.HUPO_NODE_BIN
+        args:
+          - !!js process.env.HUPO_IMAGE_SERVER
+        env:
+          HUPO_IMAGE_SOCKET: !!js process.env.HUPO_APPS_SOCKET
+        # 起不来**不许静默降级**（同账本/小程序那两条的理由）
+        failOnStartupError: true
+        # 画图比聊天慢得多（那边自己也开着 120 秒的上限）
+        toolCallTimeoutMs: 150000
     - id: mcp-apps
       name: '@deepseek-ai/dsh-mcp-client'
       config:

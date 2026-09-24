@@ -76,6 +76,8 @@ const env = {
   //   然后整棵树加载失败（慢闸当场抓到过）。
   HUPO_APPS_SERVER: recorder,
   HUPO_APPS_SOCKET: nodePath.join(tmp, 'apps.sock'),
+  // ★ **画图那一支**（P1-27 后半）：它也是被 dsh spawn 起来的一条 ⇒ 也得给桩
+  HUPO_IMAGE_SERVER: recorder,
   HUPO_PROBE_LOG: logFile,
 };
 
@@ -169,6 +171,7 @@ console.log('③ 用真服务器再起一次：它会不会把 dsh 弄挂');
   await sock.ready();
 
   const APPS_SERVER = nodePath.join(CORE, 'src', 'mcp-apps-server.mjs');
+const IMAGE_SERVER = nodePath.join(CORE, 'src', 'mcp-image-server.mjs');
   const apps = new Apps({ dir: dataDir, sub: 'check' });
   const appsSockPath = appsSocketPath(dataDir);
   const appsSock = new AppsSocket({ apps, socketPath: appsSockPath }).listen();
@@ -180,6 +183,7 @@ console.log('③ 用真服务器再起一次：它会不会把 dsh 弄挂');
     HUPO_LEDGER_SOCKET: sockPath,
     HUPO_APPS_SERVER: APPS_SERVER,
     HUPO_APPS_SOCKET: appsSockPath,
+    HUPO_IMAGE_SERVER: IMAGE_SERVER,
   };
   delete realEnv.HUPO_PROBE_LOG;
   const args3 = ['--profile', 'sdk', '--patch', nodePath.join(CORE, 'hupo-persona.yml'), '--patch', PATCH];

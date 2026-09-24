@@ -142,6 +142,8 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     appsSocketPath: env.HUPO_APPS_SOCKET ?? appsSocketPath(dataDir),
     // 给 dsh 拉起的那条 MCP 工具进程（能力层用 `!!js` 从环境取，**不写死路径**）。
     appsServerPath: env.HUPO_APPS_SERVER ?? nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname), 'mcp-apps-server.mjs'),
+    // ★ **画图那一支**（P1-27 后半）：独立一条 MCP（工具面向分开；通道还是同一条）
+    imageServerPath: env.HUPO_IMAGE_SERVER ?? nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname), 'mcp-image-server.mjs'),
 
     /**
      * **临时验证码**（开发期口子 · 契约 `docs/dev/37-MULTITENANT.md` §六）。

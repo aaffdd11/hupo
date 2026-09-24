@@ -168,14 +168,13 @@ test('握手给的是**标准 MCP**：initialize → tools/list 九件工具', a
     await handshake(c);
     const list = await c.call('tools/list', {});
     const names = list.result.tools.map((t) => t.name).sort();
-    // ⚠️ **2026-09-24（P1-27 后半）多了第十件 `image_generate`** ——
-    //    它**借住**在这条通道上（工具只递请求、花钱的只有服务端那一处）。
-    //    为什么不新开一条 MCP：能力层（`hupo-capabilities.yml`）是 **strict**，
-    //    加一条要主人重建开机清单 ⇒ 先借住，下次重建时再拆出去。
+    // ⚠️ **画图那一件已经搬走**（2026-09-24 当天晚些：能力层那次重建把它拆成
+    //    独立一条 `mcp-image`）⇒ 这一支**只剩九件小程序工具**。
+    //    画图那一支自己的判据在 `test/image-server.test.js`。
     assert.deepEqual(names,
       ['app_create', 'app_discover', 'app_grant', 'app_install', 'app_list', 'app_publish',
-        'app_revoke', 'app_uninstall', 'app_unpublish', 'image_generate'],
-      '九件小程序工具 ＋ 一件画图（借住）');
+        'app_revoke', 'app_uninstall', 'app_unpublish'],
+      '小程序那一支就是这九件（画图搬到自己那支去了）');
     for (const t of list.result.tools) {
       assert.equal(t.inputSchema.type, 'object');
       assert.ok(t.description.length > 10, '每条都要说清什么时候调');

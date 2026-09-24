@@ -164,6 +164,7 @@ void main() {
       credImageBoundaryMine,
       credImageBoundaryNone,
       credImageBoundaryTenant,
+      credImageBoundaryTenantNone,
       imageTryLabel,
       imageTryHint,
       imagePromptLabel,
@@ -204,6 +205,19 @@ void main() {
       expect(hasForbidden('把模型钥匙填上'), true);
       expect(hasForbidden('正在给你开一个只属于自己的空间'), false);
     });
+  });
+
+  test('★ 图片那句边界话：租户那两档**不许把"试一张"说成不能用**（2026-09-24 更正）', () {
+    expect(credImageBoundary(isTenant: false, hasOwn: false), credImageBoundaryNone);
+    expect(credImageBoundary(isTenant: false, hasOwn: true), credImageBoundaryMine);
+    expect(credImageBoundary(isTenant: true, hasOwn: true), credImageBoundaryTenant);
+    expect(credImageBoundary(isTenant: true, hasOwn: false), credImageBoundaryTenantNone);
+    // 🔴 租户那两句必须**提到"下面能试一张"**（那是真的能用的那半）
+    for (final line in [credImageBoundaryTenant, credImageBoundaryTenantNone]) {
+      expect(line.contains('试一张'), true, reason: '租户能用的那半要说出来：$line');
+    }
+    // 而"聊天里让它画"还没接 —— 也要说出来（不许含糊）
+    expect(credImageBoundaryTenant.contains('等你这台接上'), true);
   });
 
   test('★ 语音那句边界话：四种组合逐条对表（说错哪一句都是假话）', () {
