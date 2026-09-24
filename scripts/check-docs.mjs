@@ -60,6 +60,11 @@ const RATCHET = [
   'docs/dev/76-PLAN.md',
   'docs/dev/77-BLOCKERS.md',
   'docs/dev/78-OUT-OF-REPO.md',
+  // ⚠️ 2026-09-26：90/91 两份契约**出生就进名单**（91 §11.4·⑦ 点名的那一条）——
+  //    它们定义的是"装／升级前必拍快照""三层边界"这些**正在承重**的规矩，
+  //    指针一断就等于规矩读不到 ⇒ 必须拦。
+  'docs/dev/90-APP-CONTRACT.md',
+  'docs/dev/91-TRIPLE-CONTRACT.md',
 ];
 
 /** ② L0 = 路由层：零事实、零数值、零状态 */

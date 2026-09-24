@@ -30,8 +30,11 @@ import {
   MAX_FILE_BYTES,
   MAX_ID_CHARS,
   MAX_TOTAL_BYTES,
+  MAX_VERSIONS,
   checkAppId,
   checkRelPath,
+  refuseReservedAppId,
+  rootHashOf,
   sha256hex,
 } from './apps.js';
 import { shouldHandToAgent } from './socket-owner.mjs';
@@ -266,6 +269,12 @@ export class AppWorkspaces {
    * @returns {{id:string, dir:string, created:boolean, manifest:object}}
    */
   ensure(scope, { title = null, entry = null, at = null } = {}) {
+    // 🔴 **保留 id 不许在这里建出 app 的工作区**（闸只有一份：`apps.refuseReservedAppId`）。
+    //    ⚠️ 建工作区**发生在写制品之前**（`apps-socket.js` 先 `ensure` 再 `snapshotWorkspace`）
+    //    ⇒ 只靠 `apps.create` 拒的话，一个保留 id 会先在盘上留一个空工作区。
+    //    ⚠️ 内置那四个**是合法房间**：它们的目录走 `worlds.roomFor` 的 `mkdir ＋ hand`，
+    //       不走 `ensure`（B16-2）—— 所以这里拒它们，拒的是"当 app"，不是"当房间"。
+    refuseReservedAppId(scope);
     const id = checkScope(scope);
     const dir = this.dirFor(id);
     const created = !this.has(id);
@@ -314,6 +323,8 @@ export class AppWorkspaces {
    * @returns {{id:string, dir:string, wrote:string[]}}
    */
   write(scope, files) {
+    // 🔴 同 `ensure`：保留 id 的工作区不许被"当 app"写（闸只有一份）
+    refuseReservedAppId(scope);
     const id = checkScope(scope);
     const dir = this.dirFor(id);
     if (!this.has(id)) throw new AppsError(`工作区还没建出来：${id}`);
@@ -445,23 +456,94 @@ export function snapshotWorkspace({
 }
 
 /**
- * **把制品库当前那一版镜像回工作区**（"装上别人的"那条路）。
+ * **工作区当前内容的指纹** —— 与制品 `rootHash` **同一条算法**（排序后拼 `path\nhash\n`）。
+ *
+ * 🔴 为什么必须是同一条算法：装／升级前要比的就是"**我这儿改过没有**"，
+ *    两个 hash 只有同源才比得动（90 Q4.5 的判据就是"工作区 hash ≠ 当前 `rootHash`"）。
+ * ⚠️ 它走 `read()` ⇒ 与制品同一条边界（`.` 开头的**不算**能力体）。
+ *
+ * @returns {string} 十六进制 sha256（工作区里一个文件都没有时是空串的 hash）
+ */
+export function workspaceRootHash(workspaces, id) {
+  const ws = workspaces.read(id);
+  return rootHashOf(Object.entries(ws.files).map(([path, buf]) => ({ path, sha256: sha256hex(buf) })));
+}
+
+/**
+ * **装／升级前先拍工作区快照**（90 Q4.3／Q4.5 · 89 §⑫ 那条"最该先做的"）。
+ *
+ * 🔴 它只做一件事：**在任何覆盖发生之前**，把工作区这一份原始字节留档。
+ *    落点贴现有布局：`hupo/apps/<id>/versions/<n>/`（不可变版本 ＋ 逐文件 sha）——
+ *    **不新造第二套存储**（`apps.create` 本来就把 `files[].sha256` 写进 manifest）。
+ *
+ * ⚠️ **宁多一份，不重复拍**：工作区内容已经等于某一版（比如"没改过"时就是当前版）
+ *    ⇒ 那一版**就是**可以逐字节回退的快照，不再开一版；否则新开一版留档。
+ *    否则每次升级都白吃两个版本号（`apps.MAX_VERSIONS` 兜着）。
+ *
+ * @returns {{version:number|null, rootHash:string, created:boolean, reused:boolean, empty?:boolean, manifest?:object}}
+ */
+export function snapshotBeforeInstall({
+  apps,
+  workspaces,
+  id,
+  title = null,
+  icon = undefined,
+  createdTurn = null,
+}) {
+  if (!apps || !workspaces) throw new AppsError('apps 与 workspaces 都必填（快照要落进制品库）');
+  const ws = workspaces.read(id);
+  const hash = rootHashOf(Object.entries(ws.files).map(([path, buf]) => ({ path, sha256: sha256hex(buf) })));
+  // 空工作区：没有"可丢的东西" ⇒ 不用拍（也拍不成：制品不许一个文件都没有）
+  if (Object.keys(ws.files).length === 0) {
+    return { version: null, rootHash: hash, created: false, reused: false, empty: true };
+  }
+  // 已经有一版一模一样的 ⇒ 它就是快照（判据："逐文件 sha 可核"由那一版的 manifest 给出）
+  for (let v = 1; v <= MAX_VERSIONS; v += 1) {
+    const m = apps.manifest(id, v);
+    if (m && m.rootHash === hash) {
+      return { version: v, rootHash: hash, created: false, reused: true };
+    }
+  }
+  const snap = snapshotWorkspace({
+    apps,
+    workspaces,
+    id,
+    title: title ?? workspaces.manifestOf(id)?.title ?? id,
+    icon,
+    createdBy: 'user',
+    createdTurn,
+  });
+  return {
+    version: snap.manifest.version,
+    rootHash: snap.manifest.rootHash,
+    created: true,
+    reused: false,
+    manifest: snap.manifest,
+  };
+}
+
+/**
+ * **把制品库的某一版镜像回工作区**（"装上别人的"那条路，也是**回退**那条路）。
  *
  * 为什么需要它：一个装上来的小程序也**必须有一个属于它自己的工作区**——
  * 契约第一条是"一个图标 = 一个工作区"，不分成"自己造的"和"装来的"。
  * ⚠️ 读的是**制品库那一版**（不是共享库）：装上的那一刻它已经是他的快照了。
+ *
+ * @param {number|null} [o.version] 指定镜像哪一版（默认 = 当前指针那一版）。
+ *   ★ 指定版本 = **拿快照逐字节还原**（90 S3）：先 `apps.rollback(id, v)` 再叫它，
+ *     或者直接叫它（它只读那一版，不改指针）。
  */
-export function mirrorArtifactIntoWorkspace({ apps, workspaces, id }) {
+export function mirrorArtifactIntoWorkspace({ apps, workspaces, id, version = null }) {
   if (!apps || !workspaces) throw new AppsError('apps 与 workspaces 都必填');
-  const version = apps.current(id);
-  if (version === null) throw new AppsError('这个小程序不在你这儿');
-  const man = apps.manifest(id, version);
+  const v = version === null || version === undefined ? apps.current(id) : Number.parseInt(version, 10);
+  if (v === null || !Number.isInteger(v)) throw new AppsError('这个小程序不在你这儿');
+  const man = apps.manifest(id, v);
   if (!man) throw new AppsError('那一版的清单坏了');
   const files = {};
   for (const f of man.files ?? []) {
-    files[f.path] = apps.read(id, version, f.path).content;
+    files[f.path] = apps.read(id, v, f.path).content;
   }
   workspaces.ensure(id, { title: man.title, entry: man.entry });
   workspaces.write(id, files);
-  return { id, version, files: Object.keys(files).sort() };
+  return { id, version: v, files: Object.keys(files).sort() };
 }

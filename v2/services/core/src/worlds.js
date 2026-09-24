@@ -25,7 +25,7 @@
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
-import { Apps, AppsError } from './apps.js';
+import { Apps, REFUSED_APP_IDS } from './apps.js';
 import { AppWorkspaces, checkScope, scopeDirFor, safeScope, workspacesRoot } from './workspace.js';
 import { AppsSocket, appsSocketPath } from './apps-socket.js';
 import { appendAudit, auditLine, auditPath } from './audit.js';
@@ -87,43 +87,20 @@ export function isBuiltinScope(raw) {
  *
  * ⚠️ 与 `main` 的唯一区别：内置那几个**本身是合法房间**（桌面上就有那个图标），
  *    而 `main` 不是"另一个房间"，它就是主线本身。
- * ⚠️ 名单的**唯一出处**是这里（客户端那张表在 `app_spec.dart`，两边按契约对齐）。
+ * 🔴 **名单的唯一出处是 `apps.js` 的 `REFUSED_APP_IDS`**（那边是闸的落点）——
+ *    这里不再抄一份，抄了就会漂。下面 `BUILTIN_SCOPES` 只描述"哪些是房间"。
  */
-export const RESERVED_APP_SCOPES = Object.freeze([MAIN_SCOPE, ...BUILTIN_SCOPES]);
+export const RESERVED_APP_SCOPES = REFUSED_APP_IDS;
 
-/**
- * 拿保留 id 当 app ⇒ **人话拒掉**（`main` 那条在 `workspace.js` 的 `checkScope` 里，
- * 这里是它同款的第二条 —— 内置那四个**是房间**，所以不能进 `checkScope` 的保留名单）。
- *
- * 🔴 它只拦"当 app"，**不拦"当房间"**：`/api/say` / `/api/timeline` / 那条流
- *    拿这些 id 来开门时，走的是 `roomFor`（那里对内置是**放行**的）。
- */
-function refuseBuiltinAsApp(raw) {
-  const s = safeScope(raw);
-  if (s === null || !BUILTIN_SCOPES.includes(s)) return;
-  throw new AppsError(`"${s}" 是桌面上本来就有的那一格，不能再拿它当小程序的名字`);
-}
-
-/**
- * 这个人的工作区（`AppWorkspaces`）＋ **一条**：内置那四个 id 不许当 app。
- *
- * ⚠️ 为什么要在这一层加：`workspace.js` 的 `checkScope` 只认 `main`
- *    （那一条是"谁都不许占"的老规矩），而内置那四个**同时是房间**⇒
- *    只能在"当 app 用"的那个入口区分。这个入口就是它 ——
- *    `app_create` / 装一个 app / 直接 `w.workspaces.ensure(...)` 都要过它。
- * ⚠️ 读 / `has` / `hand` **一个字都没改**（房间那一边照旧用它们）。
- */
-class UserWorkspaces extends AppWorkspaces {
-  ensure(scope, opts) {
-    refuseBuiltinAsApp(scope);
-    return super.ensure(scope, opts);
-  }
-
-  write(scope, files) {
-    refuseBuiltinAsApp(scope);
-    return super.write(scope, files);
-  }
-}
+// ⚠️ **闸不在这里**（2026-09-26 收口）：保留 id 那道闸只有一份 ——
+//    `apps.refuseReservedAppId`，叫它的地方是**两个写入漏斗**：
+//    ① 制品库那一侧 `apps.create`（老路 / 装上 / 迁移最后都汇到这里）；
+//    ② 工作区那一侧 `AppWorkspaces.ensure/write`（它建在写制品**之前**，
+//       不在那儿叫一次，一个保留 id 会先在盘上留一个空工作区）。
+//    ⇒ 原来这里那个只为"当 app"而生的 `UserWorkspaces` 子类**删掉了**：
+//      闸搬进 `AppWorkspaces` 本身 ⇒ 谁 new 都是同一份逻辑，不会再漏一条路。
+// ⚠️ 内置那四个**本身是合法房间**：它们的目录走下面 `roomFor` 的 `mkdir ＋ hand`，
+//    **不走 `ensure`** —— 所以"ensure 拒内置 id"拒的是"当 app"，不是"当房间"。
 
 /**
  * agent 那个**进程池的键**：`<userId>/<scope>`（主线是 `<userId>/main`）。
@@ -445,9 +422,10 @@ export class Worlds {
     // ★ **子工作区**（契约 `83-APP-WORKSPACE.md` §三·1）：**按人一份**，
     //   落在 `<dir>/workspaces/`（**与主目录平行** —— 手册 §2.2 第二条）。
     //   ⚠️ 这里是"服务端那一刀"的落点：造 app 时**服务端**建目录，不靠模型记得。
-    //   ⚠️ 用 `UserWorkspaces`（不是裸的）：内置那四个 id **是房间，不许当 app**
-    //      （B16-3）—— 那道闸就加在这一层。
-    const workspaces = new UserWorkspaces({ dir: t.dir, log: (m) => this.#warn(m) });
+    //   ⚠️ 保留 id 那道闸**不在这层**（`UserWorkspaces` 已删）：它住 `apps.js`，
+    //      由 `AppWorkspaces.ensure/write` 与 `apps.create` 两个写入漏斗共用一个函数
+    //      （见上面 `RESERVED_APP_SCOPES` 那段说明）。
+    const workspaces = new AppWorkspaces({ dir: t.dir, log: (m) => this.#warn(m) });
     // ⚠️ **调度器建在这下面**（它要 timeline 那几样），而"造东西那条闸"（P1-22）
     //   要看**这一轮他说了什么** —— 那句话住在调度器里。
     //   ⇒ 先空着，等它建好再指过来（`ctx.turnInput` 是个**取值函数**，调的时候才读）。

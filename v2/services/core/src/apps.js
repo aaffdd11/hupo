@@ -107,6 +107,54 @@ export function checkAppId(id) {
 }
 
 /**
+ * **app 不许占用的 id**（🔴 **唯一出处**）：主线那个房间 ＋ 桌面内置那四格。
+ *
+ * 🔴 为什么名单住这里（不另抄一份在 `worlds.js`）：**闸要落在写入路的汇合点**——
+ *    制品库那个 `apps.create()`。所有写路（新路 `snapshotWorkspace`、老路
+ *    `apps-socket.js` 的那一支、装上 `published.installInto`）最后都汇到这里。
+ *    `apps.js` 是叶子模块，`worlds.js` 反过来可以引用它，**不会成环**。
+ *
+ * ⚠️ 与客户端 `v2/apps/mobile/lib/models/app_spec.dart` 的四个内置 id **逐字一致**
+ *    （对不上 ⇒ 客户端拿一个服务端不认的 scope 去连 ⇒ 404）。
+ */
+export const REFUSED_APP_IDS = Object.freeze(['main', 'settings', 'math', 'discover', 'harness']);
+
+/**
+ * 保留 id ⇒ **人话拒**（N11）；不是保留 id ⇒ 原样返回。
+ *
+ * ⚠️ `main` 与内置那四个是同一道闸的两半：前者"谁都不许占"，后者"它已经是别人的房间"。
+ * ⚠️ 它**只拦"当 app"**，不拦"当房间"：`main` 由 `workspace.checkScope` 另有一条，
+ *    内置那四个走 `worlds.roomFor`（那里对内置是**放行**的）。
+ */
+export function refuseReservedAppId(raw) {
+  const s = typeof raw === 'string' ? raw : '';
+  if (!REFUSED_APP_IDS.includes(s)) return s;
+  if (s === 'main') throw new AppsError(`"${s}" 是主线那个房间，不能再拿它当小程序的名字`);
+  throw new AppsError(`"${s}" 是桌面上本来就有的那一格，不能再拿它当小程序的名字`);
+}
+
+/**
+ * **制品里不许出现 `.` 开头的路径**（91 契约 §2.1／§11.3·4）。
+ *
+ * 🔴 为什么非有不可：`workspace.read()` 只跳过 `.` 开头（`workspace.js:395`），
+ *    那是**读取侧**唯一那道"不进制品"的机制；而 `checkRelPath` 是**允许**
+ *    `.data/`／`.exp/` 这类路径的 ⇒ 只要调用方把一份带 `.data/` 的 `files` 直接交给
+ *    `apps.create`（老路、装上、迁移都行），数据／经验就会**进制品、进共享库**。
+ *    ⇒ 把闸补在**写入侧**：这里。
+ *
+ * ⚠️ 判的是**每一段**，不只看首字符：`assets/.hidden/x.js` 同样读不进工作区快照，
+ *    所以同样不许进制品（与 `workspace.read()` 的递归跳过逐字对齐）。
+ */
+export function refuseHiddenRelPath(rel) {
+  const seg = String(rel).split('/').find((p) => p.startsWith('.'));
+  if (seg === undefined) return rel;
+  const where = seg === '.data' || seg === '.exp'
+    ? '（这类是你的数据或经验，不进制品、也不跟着装走）'
+    : '（`.` 开头的名字不进制品）';
+  throw new AppsError(`制品里不许有以 "." 开头的文件${where}：${rel}`);
+}
+
+/**
  * **制品内的相对路径**：白名单 + 拒越界。
  *
  * 🔴 这是整个模块最要紧的一道校验：一个能写 `../../../../etc/passwd` 的制品库
@@ -299,6 +347,9 @@ export class Apps {
    */
   create({ id, title, icon, entry, files, permissions = [], createdBy = 'user', createdTurn = null }) {
     checkAppId(id);
+    // 🔴 **保留 id 的唯一一道闸**（`REFUSED_APP_IDS`）：主线 ＋ 桌面内置四格。
+    //    写在这里 ⇒ **每一条写路都过它**（含 `apps-socket.js` 那条老路、装上、迁移）。
+    refuseReservedAppId(id);
     // 🔴 权限**只许白名单里的**；乙-1 白名单是空的 ⇒ 现在任何非空权限都拒。
     //    这样"制品拿不到任何能力"在乙-1 是**结构上成立**的，而不是"我们记得没给它"。
     if (!Array.isArray(permissions)) throw new AppsError('permissions 必须是数组');
@@ -326,6 +377,8 @@ export class Apps {
     let total = 0;
     for (const rel of paths) {
       checkRelPath(rel);
+      // 🔴 `.data/`／`.exp/`／任何 `.` 开头的路径 ⇒ **写入侧也拒**（不再只靠读取侧跳过）
+      refuseHiddenRelPath(rel);
       const raw = files[rel];
       const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw), 'utf8');
       if (buf.length === 0) throw new AppsError(`制品里有空文件：${rel}`);
@@ -516,5 +569,41 @@ export class Apps {
     writeAtomic(this.fs, nodePath.join(this.appDir(id), 'current.json'), `${JSON.stringify({ version: n })}\n`, 0o644);
     this.#audit({ what: 'rollback', id, version: n });
     return n;
+  }
+
+  /**
+   * **血缘边**（90 Q4.6／Q4.9 · 91 §8.3）：**分叉**时把"上游那一版"记下来。
+   *
+   * 落点是 **`hupo/apps/<id>/lineage.json`**（登记，与 `current.json` / `grant.json` 同一格），
+   * **不写进不可变 `manifest.json`** —— 清单会被下一版覆盖，血缘一写就丢（90 Q4.9）。
+   * 边的形状照契约：`(base rootHash, 我的那一版)`；**只记能力体**，不碰数据／经验。
+   *
+   * ⚠️ 它**不承重**：删掉它，app 照样能装能跑（可检查性归 0 ⇒ 90 Q4.8）。
+   */
+  noteLineage(id, entry = {}) {
+    checkAppId(id);
+    if (this.current(id) === null) throw new AppsError('这个小程序不在你这儿');
+    const all = this.lineage(id);
+    const rec = { at: this.now(), ...entry };
+    all.push(rec);
+    writeAtomic(
+      this.fs,
+      nodePath.join(this.appDir(id), 'lineage.json'),
+      `${JSON.stringify(all, null, 2)}\n`,
+      0o644,
+    );
+    this.#audit({ what: 'lineage', id, ...entry });
+    return rec;
+  }
+
+  /** 盘上那串血缘边（没有 / 坏了 ⇒ 空数组，**不猜**）。 */
+  lineage(id) {
+    checkAppId(id);
+    try {
+      const j = JSON.parse(this.fs.readFileSync(nodePath.join(this.appDir(id), 'lineage.json'), 'utf8'));
+      return Array.isArray(j) ? j : [];
+    } catch {
+      return [];
+    }
   }
 }

@@ -162,10 +162,23 @@ const TOOLS = [
     description:
       '把「发现」里别人发的某一个小程序**装到他的桌面上**（会是只有他这一份的副本）。'
       + '⚠️ 只有他明确说"装上""我也要这个"才调。'
+      + '⚠️ 如果他手里那份**他自己改过**，装新的会先要求他选：**刷新**（用上游那份，'
+      + '他改的先留个底、能退回来）还是**分叉**（留着他改的，把上游那一版记下来）—— '
+      + '**默认分叉**。这时**把两条路都念给他听、等他点一个**，再带上 `mode` 重调一次；'
+      + '**绝不许**替他选"刷新"（那会盖掉他的东西）。'
       + '装完**告诉他它叫什么、是谁发的**（这一点他知道比较好）。',
     inputSchema: {
       type: 'object',
-      properties: { id: { type: 'string', description: '要装的那个短名' } },
+      properties: {
+        id: { type: 'string', description: '要装的那个短名' },
+        mode: {
+          type: 'string',
+          enum: ['refresh', 'fork'],
+          description:
+            '他手里那份改过时怎么处理：refresh = 刷新（用上游那份，他改的留档，能退回）；'
+            + 'fork = 分叉（留他改的，记下上游那一版）。他点了哪个就传哪个；没点**不要传**（默认分叉）。',
+        },
+      },
       required: ['id'],
       additionalProperties: false,
     },
@@ -271,8 +284,20 @@ async function callTool(name, args) {
   if (name === 'app_install') {
     const id = typeof args?.id === 'string' ? args.id.trim().toLowerCase() : '';
     if (!id) return textResult('没说清是哪一个，什么都没装。', true);
-    const r = await ask({ op: 'install', id });
-    if (r.ok) return textResult(`装好了：**${r.title}** 现在在他的桌面上，点开就能用。`);
+    // ⚠️ `mode` 只在**他点了**那两条路之一时才传；不传 ⇒ 服务端按**分叉**办（不覆盖）
+    const mode = args?.mode === 'refresh' ? 'refresh' : args?.mode === 'fork' ? 'fork' : null;
+    const r = await ask({ op: 'install', id, ...(mode ? { mode } : {}) });
+    if (r.ok) {
+      if (r.forked) {
+        return textResult(
+          `收下了：上游那一版记下来了，**你改的那份留着没动**（点开还是你自己的那份）。`
+          + `哪天想换成上游那份，说一声就行。`,
+        );
+      }
+      return textResult(`装好了：**${r.title}** 现在在他的桌面上，点开就能用。`);
+    }
+    // ★ **他手里那份改过 ⇒ 不许替他决定**：把两条路原样念给他听
+    if (r.refused === 'needs-choice') return textResult(r.error, true);
     return textResult(`没装成：${r.error}`, true);
   }
 

@@ -22,7 +22,7 @@ import { NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
 import { NEEDS_ASK_IMAGE, asksToDrawImage } from './image.js';
 import { PublishedError, authorHashOf } from './published.js';
 import { handSocketToAgent } from './socket-owner.mjs';
-import { mirrorArtifactIntoWorkspace, snapshotWorkspace } from './workspace.js';
+import { mirrorArtifactIntoWorkspace, snapshotBeforeInstall, snapshotWorkspace } from './workspace.js';
 
 /** 小程序那条口放哪。**跟着那个人的目录走**（`<他那一格>/apps.sock`）。 */
 export function appsSocketPath(dir) {
@@ -158,25 +158,92 @@ export async function handleAppsOp(apps, req, ctx = {}) {
       }
       case 'install': {
         if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
+        // ★ **装／升级前的三件事**（90 Q4.3／Q4.5 · 89 §⑫ 说这是"最该先做的一件"）：
+        //   ① **先拍工作区快照**（先于任何覆盖；拍不下来 ⇒ 不许装）；
+        //   ② 工作区 hash ≠ 当前 `rootHash` ⇒ **他改过** ⇒ **不许静默覆盖**；
+        //   ③ 二选一：**刷新**（用上游那份，旧版留档）／**分叉**（留他改的，记上游）——
+        //      **默认分叉**（`req.mode` 缺省就是分叉那一侧：不覆盖）。
+        //   🔴 反着验：没有快照就覆盖 ⇒ 红；默认那次安装把工作区改了 ⇒ 红。
+        const mode = req.mode === 'refresh' ? 'refresh' : req.mode === 'fork' ? 'fork' : null;
+        let snapshot = null;
+        let changed = false;
+        if (ctx.workspace && ctx.workspace.has(req.id)) {
+          // ⚠️ 先记下"拍快照之前"指针那一版 —— 拍快照本身会移指针，晚一步就比不出来了
+          const cur = apps.current(req.id);
+          const curMan = cur === null ? null : apps.manifest(req.id, cur);
+          // ① 🔴 **先拍快照，再动任何东西**
+          try {
+            snapshot = snapshotBeforeInstall({
+              apps,
+              workspaces: ctx.workspace,
+              id: req.id,
+              createdTurn: Number.isInteger(req.turn) ? req.turn : null,
+            });
+          } catch (err) {
+            return {
+              ok: false,
+              refused: 'no-snapshot',
+              error: `装之前先给你手里那份留个底，这一步没做成（${err?.message ?? err}）—— 所以什么都没动。`,
+            };
+          }
+          // ② **改过没有**：工作区 hash 与当前那一版的 `rootHash` 一比就知道（两个 hash 同源）
+          //    ⚠️ 空工作区（没有可丢的东西）不算"改过" —— 它连快照都没得拍
+          changed = !snapshot.empty && (!curMan || curMan.rootHash !== snapshot.rootHash);
+          if (changed && mode === null) {
+            // ③ 默认（分叉侧）：**什么都不覆盖**，把两项摆给他看
+            return {
+              ok: false,
+              refused: 'needs-choice',
+              default: 'fork',
+              options: ['refresh', 'fork'],
+              snapshot: { version: snapshot.version, rootHash: snapshot.rootHash },
+              error:
+                '这个小程序你手里这份跟上游不一样了。直接装新的会把你的改动盖掉 —— 先说一声要哪种：'
+                + '「刷新」= 用上游那份，你改的先留个底、随时能退回来；'
+                + '「分叉」= 留着你改的这份，把上游那一版记下来。不说就按分叉办。',
+            };
+          }
+        }
         const r = ctx.published.installInto(apps, req.id);
-        // ★ **装上来也要有自己的工作区**（契约 §三·1：一个图标 = 一个工作区，
-        //   不分成"自己造的"和"装来的"）——把刚装好的那一版镜像进去。
-        //   ⚠️ 读的是**制品库那一版**（不是共享库）：复制模型下它已经是他的了。
-        try {
-          if (ctx.workspace) mirrorArtifactIntoWorkspace({ apps, workspaces: ctx.workspace, id: r.id });
-        } catch (err) {
-          // ⚠️ 制品装上了、工作区没镜像成 —— **如实说**（别回一句"好了"让他们以为
-          //    那间房里也有东西）。制品本身是好的，所以这不算整件事失败。
-          return {
-            ok: false,
-            error: `装上了，但它那间工作区没建好：${err?.message ?? err}`,
-          };
+        const upstreamHash = apps.manifest(req.id, r.version)?.rootHash ?? null;
+        const forked = changed && mode === 'fork';
+        if (forked) {
+          // ★ **分叉 = 记上游、留自己的**：上游那一版已经登记在制品库里（上面那一步），
+          //   把指针拨回**你手里那份**（快照那一版），**工作区一个字节都不动**。
+          //   边落 `hupo/apps/<id>/lineage.json`（登记，不写进不可变清单 —— 90 Q4.9）。
+          try {
+            apps.rollback(req.id, snapshot.version);
+            apps.noteLineage(req.id, {
+              kind: 'fork',
+              baseRootHash: upstreamHash,
+              baseVersion: r.version,
+              myVersion: snapshot.version,
+            });
+          } catch (err) {
+            return { ok: false, error: `上游那一版收下了，但分叉没记成：${err?.message ?? err}` };
+          }
+        } else if (ctx.workspace) {
+          // ★ **刷新 / 没改过 / 新装**：把刚装好的那一版镜像进工作区。
+          //   ⚠️ 读的是**制品库那一版**（不是共享库）：复制模型下它已经是他的了。
+          try {
+            mirrorArtifactIntoWorkspace({ apps, workspaces: ctx.workspace, id: r.id });
+          } catch (err) {
+            // ⚠️ 制品装上了、工作区没镜像成 —— **如实说**（别回一句"好了"让他们以为
+            //    那间房里也有东西）。制品本身是好的，所以这不算整件事失败。
+            return {
+              ok: false,
+              error: `装上了，但它那间工作区没建好：${err?.message ?? err}`,
+            };
+          }
         }
         // ★ 装上了 ⇒ **让他的桌面自己刷新**（流里推一条；客户端收到就重拉清单）
-        try {
-          ctx.onInstalled?.({ id: r.id, title: r.title });
-        } catch {
-          /* 推送失败不许让"装上"这件事失败（他下次开机也会拉到） */
+        //   ⚠️ 分叉那一路桌面上的东西**没变**（留的是他自己那份）⇒ 不喊"装上了"
+        if (!forked) {
+          try {
+            ctx.onInstalled?.({ id: r.id, title: r.title });
+          } catch {
+            /* 推送失败不许让"装上"这件事失败（他下次开机也会拉到） */
+          }
         }
         // ★ **装上来也算"这一轮造了一个 app"**（A1·「发现就报」）：
         //   装它的时候同样会在工作区之外写东西（一个图标 = 一个工作区，不分来源）。
@@ -185,7 +252,15 @@ export async function handleAppsOp(apps, req, ctx = {}) {
         } catch {
           /* 同上：记账失败不影响制品 */
         }
-        return { ok: true, id: r.id, version: r.version, title: r.title };
+        return {
+          ok: true,
+          id: r.id,
+          version: r.version,
+          title: r.title,
+          forked,
+          current: apps.current(r.id),
+          snapshot: snapshot ? { version: snapshot.version, rootHash: snapshot.rootHash } : null,
+        };
       }
       case 'discover': {
         if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
