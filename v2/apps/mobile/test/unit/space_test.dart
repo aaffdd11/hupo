@@ -6,6 +6,8 @@
 //   3. 🔴 **不许假进度**：那两屏的文案里**一个百分号都没有**；
 //   4. 那两屏的每一句都过**禁用词表**（界面词表是硬闸，不是文风偏好）。
 
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
 import 'package:hupo_app/models/space.dart';
@@ -129,7 +131,6 @@ void main() {
       waitingTitle,
       waitingBody,
       waitingRetry,
-      waitingStillLong,
       waitingRetryFail,
       keyTitle,
       keyBody,
@@ -295,5 +296,42 @@ void main() {
     for (final s in [keyStateHas, keyStateNone, keyStateBad, configEntry, configTitle]) {
       expect(hasForbidden(s), isFalse, reason: s);
     }
+  });
+
+  // ════════════════════════════════════════════════════════════
+  // ★ T7（契约 `docs/dev/88-P1-TIME-WAIT.md` §四）：**没有依据的时间话不许说**
+  //
+  // 这一条钉的是那起"页面在说假话"：等开台那一屏原来有一句
+  // `waitingStillLong = '还在开，比平常久了一点。…'`，由 `askedTooLong` 决定画不画 ——
+  // 而那个布尔**没有一个生产者**（`main.dart` 不传、只有 `waiting_screen.dart` 读）。
+  // ⇒ 今天它画不出来；将来谁把它接上，屏幕上立刻出现一句**没基线的比较级**：
+  //    "比平常久"里的"平常"我们**从来没量过**（服务端不记开一台要多久）。
+  //
+  // **选了撤掉**（不是给它编一个基线）：
+  //   · 真基线要先落盘每一次开台的耗时再算分布 —— 那是 P4 耗时预估，契约 §五.1 不做；
+  //   · 这一屏**已经在画真在走的秒数**（`waitingElapsedWords`："已经等了 X 秒"），
+  //     那是量出来的、有口径的 ⇒ 用户要的"它没坏、在动"由它兜着。
+  // 反例：把 `askedTooLong` / `waitingStillLong` 加回来 ⇒ 这一条红。
+  // 正对照：`waitingElapsedWords` 还在（真时间，一个字都不许少）。
+  group('T7 · 没有依据的时间话，一个字都不许说', () {
+    test('🔴 那两句（无生产者的比较级）必须不在源码里', () {
+      final words = File('lib/models/space_words.dart').readAsStringSync();
+      final screen = File('lib/screens/waiting_screen.dart').readAsStringSync();
+      expect(words.contains('比平常久'), false, reason: '没有基准的"比平常久"不许留着');
+      expect(words.contains('waitingStillLong'), false, reason: '那句模板要一起撤掉');
+      expect(screen.contains('askedTooLong'), false, reason: '没有生产者的开关要一起撤掉');
+    });
+
+    test('正对照：真在走的时间还在（有口径的那一句不许被误删）', () {
+      expect(waitingElapsedWords(0), '已经等了 0 秒');
+      expect(waitingElapsedWords(125), '已经等了 2 分 5 秒');
+      // 而且它**不是**比较级、也不含"很快/马上/平常"这类没依据的词
+      for (final n in [0, 3, 59, 60, 125]) {
+        final s = waitingElapsedWords(n);
+        for (final bad in ['很快', '马上', '平常', '通常', '久了']) {
+          expect(s.contains(bad), false, reason: '$s 里不许有 $bad');
+        }
+      }
+    });
   });
 }

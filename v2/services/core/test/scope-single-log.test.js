@@ -402,7 +402,9 @@ test('🔴 迁移：默认 dry-run · 并之前算 sha · 如实报"哪些号变
   );
 
   // ④ **真并**
-  const done = mergeScopeLogs({ dir, apply: true });
+  // ★ T6（契约 88 §四）：真并**必须**与"开机/重开"绑在一起（`atBoot`）——
+  //   热状态合并会撞号（#123）。这里的目录是冷的，补上 `atBoot` 才是合法调用。
+  const done = mergeScopeLogs({ dir, apply: true, atBoot: true });
   assert.equal(done.merged.length, 2);
   assert.equal(done.tagged, 1);
   // 归并顺序：按 `at` ⇒ 1000 主线一、1200 乙一、1500 甲一、2000 主线 r1、2500 甲 ra、2600 甲那半句
@@ -433,7 +435,7 @@ test('🔴 迁移：默认 dry-run · 并之前算 sha · 如实报"哪些号变
   assert.equal(nodeFs.existsSync(nodePath.join(evidence, stamps[0], 'report.json')), true);
 
   // ⑥ **可重跑**：第二次**全 skipped**、一个字节都不动
-  const again = mergeScopeLogs({ dir, apply: true });
+  const again = mergeScopeLogs({ dir, apply: true, atBoot: true });
   assert.equal(again.merged.length, 0, JSON.stringify(again));
   assert.equal(again.skipped.filter((s) => s.id === 'alpha').length, 1, '★ 甲那份要报 skipped');
   assert.equal(again.skipped.filter((s) => s.id === 'beta').length, 1, '★ 乙那份要报 skipped');
@@ -453,7 +455,7 @@ test('★ 盒子里：迁移新写出来的东西要交给 agent 的 uid；宿�
   const calls = [];
   const fs = { ...nodeFs, chownSync: (p, u, g) => calls.push([p, u, g]) };
   const r = mergeScopeLogs({
-    dir, apply: true, fs,
+    dir, apply: true, atBoot: true, fs,
     env: { HUPO_AGENT_UID: '1000', HUPO_AGENT_GID: '1000' },
     uid: 0,
   });
@@ -467,7 +469,7 @@ test('★ 盒子里：迁移新写出来的东西要交给 agent 的 uid；宿�
   const { dir: hostDir } = makeOldLayout();
   const touched = [];
   const hostFs = { ...nodeFs, chownSync: (p) => touched.push(p) };
-  const host = mergeScopeLogs({ dir: hostDir, apply: true, fs: hostFs, env: {}, uid: 501 });
+  const host = mergeScopeLogs({ dir: hostDir, apply: true, atBoot: true, fs: hostFs, env: {}, uid: 501 });
   assert.equal(host.handed?.done, false);
   assert.deepEqual(touched, [], '★ 宿主上不许 chown（那会把文件交给一个不相干的人）');
   // 而并本身照样做成了

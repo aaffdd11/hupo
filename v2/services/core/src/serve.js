@@ -41,6 +41,9 @@ import { integrityReport, repoRootFor, resolveServiceHome } from './integrity.js
 import { describeAdmission, readAdmission } from './admission.js';
 import { applyPrune, groupSlugFor, planPrune, scanEntries, summarize } from './prune.js';
 import { createTurnStatus, statusPath } from './turn-status.js';
+// ★ P1（契约 `docs/dev/88-P1-TIME-WAIT.md` §四 T6）：服务起来时留一把锁，
+//   让**迁移脚本**答得出"这个数据目录现在热不热"（热就不许并 —— 会撞号 #123）。
+import { clearServeLock, writeServeLock } from './serve-lock.js';
 import { ROLLOUT_SWEEP_MS, compareTenantBuild, createNagBook, planRollout, readProductLayer } from './product-layer.js';
 import { DEFAULT_DROP_DIR, createKeyDrop, resolveDropName } from './key-drop.js';
 import { keyFileFor } from './key-path.mjs';
@@ -318,6 +321,11 @@ const turnStatus = createTurnStatus({
   snapshot: () => worlds.busySnapshot(),
 });
 turnStatus.start();
+// ★ T6：把"我在跑"写进 `serve.lock`（pid）。**写不进去也不许挡住启动** ——
+//   它只服务一件事：迁移脚本问"现在能不能并"。认证不出的方向是"当成热"。
+if (!writeServeLock(cfg.dataDir)) {
+  console.warn('  ⚠️ serve.lock 没写成（迁移脚本会因此更保守：把这里当成热的）');
+}
 
 // ════════════════════════════════════════════════════════════
 // ★ **租户通道**（多租户 ②-4b）：把"这个人自己的 key"送进**他的**容器。
@@ -1191,6 +1199,8 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     }
     // ★ 每个人各留一个"这次是好好走的"标记 ⇒ 下次开机才知道上一次是不是被硬杀的
     worlds.markCleanExitAll();
+    // ★ T6：干净退场 ⇒ 撤掉那把锁（不然迁移脚本会一直以为这里热着）。
+    clearServeLock(cfg.dataDir);
     process.exit(0);
   });
 }

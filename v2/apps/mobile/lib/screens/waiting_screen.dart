@@ -1,8 +1,12 @@
 // **"正在给你开一个只属于自己的空间"**（契约 `docs/dev/38-ISOLATION-SPLIT.md` §8.3）。
 //
 // ── 三条规矩（都是 §8.3 点名的）────────────────────────────
-//   1. **如实说**：在建就说在建，久了就说久了（`waitingStillLong`），
-//      问不上就说问不上（`waitingRetryFail`）—— 三句话**不混用**；
+//   1. **如实说**：在建就说在建，问不上就说问不上（`waitingRetryFail`）——
+//      两句话**不混用**；
+//      ⚠️ **2026-09-25 撤掉了"久了就说久了"那一句**（契约 `88` §四 T7）：
+//        它（那句比较级 ＋ 那个开关）**没有生产者**，而且拿来当参照的
+//        "平常"我们**从来没量过**。"等了多久"由下面那个
+//        **真在走的秒数**（`waitingElapsedWords`）如实说 —— 那是有口径的。
 //   2. 🔴 **不许假进度**：这屏上**一个百分号都没有**，也没有进度条
 //      （"看着在动、其实不知道到哪了"比诚实的一句更坏）；
 //   3. 🔴 **这时候不许有输入框**：空间还没好，让他打字等于让他白打。
@@ -22,7 +26,6 @@ class WaitingScreen extends StatefulWidget {
     super.key,
     required this.onRetry,
     this.busy = false,
-    this.askedTooLong = false,
     this.retryFailed = false,
     this.steps = const [],
     this.queued = false,
@@ -64,9 +67,6 @@ class WaitingScreen extends StatefulWidget {
   /// 正在问（按钮转一下，但**不画进度**）。
   final bool busy;
 
-  /// 上一次问的时候还是"在建，而且比平常久"。
-  final bool askedTooLong;
-
   /// 上一次问**根本没问上**（网/服务端的问题）—— 要说清是"没问上"，不是"还在开"。
   final bool retryFailed;
 
@@ -107,13 +107,11 @@ class _WaitingScreenState extends State<WaitingScreen> {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
-    // ⚠️ 三句话**分开**：混用会让用户以为"它一直在稳步推进"，而事实可能是"根本没问上"
+    // ⚠️ 两句话**分开**：混用会让用户以为"它一直在稳步推进"，而事实可能是"根本没问上"
     final String note = widget.retryFailed
         ? waitingRetryFail
-        : (widget.askedTooLong
-            ? waitingStillLong
-            // ⚠️ **正在现开一台**用**它自己**那句（不是"通常很快"）——见 `waitingProvisioning`
-            : (widget.provisioning ? waitingProvisioning : waitingBody));
+        // ⚠️ **正在现开一台**用**它自己**那句（不是"通常很快"）——见 `waitingProvisioning`
+        : (widget.provisioning ? waitingProvisioning : waitingBody);
 
     return Scaffold(
       body: SafeArea(

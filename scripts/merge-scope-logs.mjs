@@ -52,6 +52,9 @@ import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
 import { agentOwnerFromEnv } from '../v2/services/core/src/socket-owner.mjs';
+// ★ T6（契约 `docs/dev/88-P1-TIME-WAIT.md` §四）：**只在没人握着那条日志时**才许并。
+//   理由见 `src/serve-lock.js` 文件头与 `00-PROGRESS.md` #123 的实测记录。
+import { isStoreHot } from '../v2/services/core/src/serve-lock.js';
 
 /** 那条日志的文件名（`Store.pathFor('main')` 的落点）。**只有这一处**。 */
 export const MAIN_LOG = 'main.jsonl';
@@ -170,6 +173,31 @@ export function planMerge({ mainEvents = [], scopes = [] } = {}) {
   };
 }
 
+/**
+ * ★ T6：**开机幂等的那一步**（契约 §四 T6 的"可执行做法"）。
+ *
+ * 盒子重开时、**服务还没起来之前**调它：
+ *   · 那一刻没有内存里的 `Timeline` ⇒ 不算热 ⇒ 真并是安全的；
+ *   · 已经是"一条线"（没有 `scope-*.jsonl`）⇒ 一条都不动（**幂等**，
+ *     第二次跑全 `skipped`）；
+ *   · 有冲突（坏行）⇒ 拒绝并不动盘，由开机日志如实报出来。
+ *
+ * ⚠️ 它**不**改启动路径：想让它在开机时跑，是**盒子的开机单元**加一步
+ *    `node scripts/merge-scope-logs.mjs --dir /data --apply --at-boot`
+ *    （或者调这个函数）。**没有**这一步时的硬约束是：
+ *    **并完必须触发盒子重开**（`--apply` 已经在结构上要求 `--at-boot`）。
+ */
+export function bootMergeIfPending({
+  dir,
+  fs = nodeFs,
+  now = () => new Date(),
+  log = () => {},
+  env = process.env,
+  uid = process.getuid?.(),
+} = {}) {
+  return mergeScopeLogs({ dir, apply: true, atBoot: true, hot: false, fs, now, log, env, uid });
+}
+
 /** 数据目录 → 那一条日志的路径。 */
 export function mainLogPath(dir) {
   return nodePath.join(dir, MAIN_LOG);
@@ -198,6 +226,17 @@ export function readMergeLedger(dir, { fs = nodeFs } = {}) {
 export function mergeScopeLogs({
   dir,
   apply = false,
+  /**
+   * ★ T6：**这是不是"开机那一步"**。
+   *
+   * 🔴 合并会**重新编号**那条日志，而 `store.append` 的 `seq` 是内存里的 `Timeline`
+   *    定的 ⇒ 盒子跑着的时候合并，内存那个 `Timeline` 下一条会从**旧号**起、
+   *    与重编号后的号**撞**（#123 实测）。所以 `--apply` **必须**是被"开机/重开"
+   *    这一步调起来的；否则一律拒绝（dry-run 照旧允许）。
+   */
+  atBoot = false,
+  /** 注入"热不热"（默认真判：锁 ＋ `status.json`）。`null` = 自己去判。 */
+  hot = null,
   fs = nodeFs,
   now = () => new Date(),
   log = () => {},
@@ -206,10 +245,17 @@ export function mergeScopeLogs({
   uid = process.getuid?.(),
 } = {}) {
   if (!dir) throw new Error('缺少 --dir（数据目录）');
+  const hotCheck = hot === null ? isStoreHot(dir, { fs, now: () => now().getTime() }) : { hot: hot === true, why: '注入' };
   const report = {
     dir,
     apply: apply === true,
     at: now().toISOString(),
+    /** ★ T6：这一刻数据目录是不是热的（有服务攥着内存里的 `Timeline`）。 */
+    hot: hotCheck.hot === true,
+    hotWhy: hotCheck.why ?? null,
+    atBoot: atBoot === true,
+    /** 拒绝了没有（拒绝 ⇒ 一个字节都不动）。 */
+    refused: null,
     files: [],
     merged: [],
     skipped: [],
@@ -222,6 +268,19 @@ export function mergeScopeLogs({
     shaAfter: null,
     counts: { before: 0, after: 0 },
   };
+
+  // 🔴 **T6 的闸**：真并的两条硬条件 ——
+  //   ① 是"开机/重开"这一步调起来的（`atBoot`）；
+  //   ② 那一刻数据目录是**冷的**（没有活着的服务）。
+  //   任一条不成立 ⇒ **拒绝、一个字节都不动**（dry-run 不受影响）。
+  if (report.apply && !report.atBoot) {
+    report.refused = '热状态合并会与重编号后的号撞（#123）：--apply 必须与 --at-boot 一起用（或走开机幂等那一步）';
+    return report;
+  }
+  if (report.apply && report.hot) {
+    report.refused = `盒子还在跑（${report.hotWhy ?? '热'}）：合并会撞号 —— 先让盒子重开（或等它停）再并`;
+    return report;
+  }
 
   const mainPath = mainLogPath(dir);
   const main = readLog(mainPath, { fs });
@@ -404,6 +463,17 @@ export function handNewFiles(paths, { fs = nodeFs, env = process.env, uid = proc
 export function describeMerge(report, { sample = 12 } = {}) {
   const lines = [];
   lines.push(`数据目录 ${report.dir}${report.apply ? '（**真并**）' : '（**只看，不会动**）'}`);
+  // ★ T6：把"现在能不能并"摆在第一屏（排查的人第一眼要看的就是它）。
+  lines.push(
+    `盒子状态 ${report.hot ? `**还在跑**（${report.hotWhy ?? '热'}）` : `冷的（${report.hotWhy ?? '没有服务'}）`}` +
+    `${report.atBoot ? ' · 开机那一步' : ''}`,
+  );
+  if (report.refused) {
+    lines.push('');
+    lines.push(`🔴 **拒绝了**：${report.refused}`);
+    lines.push('   （契约 88 §四 T6 / `00-PROGRESS.md` #123：热状态合并会撞号。）');
+    return lines.join('\n');
+  }
   lines.push(`事件     ${report.counts.before} 条 → ${report.counts.after} 条（一条线、重新编号）`);
   for (const f of report.files) {
     lines.push(`  ${f.name}  sha256=${f.sha256 ?? '—'}  ${f.bytes}B  ${f.events ?? '?'} 条`);
@@ -441,9 +511,21 @@ if (isMain) {
   };
   const dir = flag('--dir', process.env.HUPO_DATA ?? null);
   const apply = argv.includes('--apply');
+  const atBoot = argv.includes('--at-boot');
   if (!dir) {
-    console.error('用法：node scripts/merge-scope-logs.mjs --dir /data [--apply]');
+    console.error('用法：node scripts/merge-scope-logs.mjs --dir /data [--apply --at-boot]');
+    console.error('  ⚠️ --apply 必须与 --at-boot 一起用（盒子重开/开机幂等那一步）。');
     process.exit(1);
+  }
+  if (apply && !atBoot) {
+    console.error(
+      '🔴 --apply 必须和 --at-boot 一起用（契约 88 §四 T6）。\n' +
+      '   合并会重新编号那条日志，而 seq 是内存里那个 Timeline 定的 ⇒\n' +
+      '   盒子跑着的时候并，它下一条会从旧号起、与重编号后的号**撞**（#123 实测）。\n' +
+      '   ⇒ 正确做法：① 让盒子重开，在开机幂等那一步跑这条命令；\n' +
+      '              ② 或者先 dry-run 看计划，并完**立刻触发盒子重开**。',
+    );
+    process.exit(3);
   }
   // 🔴 身份闸：盒子里以 root 跑就**必须**能交代"新文件交给谁"
   const uid = process.getuid?.();
@@ -455,8 +537,9 @@ if (isMain) {
     );
     process.exit(1);
   }
-  const report = mergeScopeLogs({ dir, apply, log: (m) => console.log(m) });
+  const report = mergeScopeLogs({ dir, apply, atBoot, log: (m) => console.log(m) });
   console.log(describeMerge(report));
-  // ⚠️ 有冲突就非零退出（不然会被接在 `&&` 后面当成"成功了"）
+  // ⚠️ 有冲突 / 被 T6 拒了 ⇒ 非零退出（不然会被接在 `&&` 后面当成"成功了"）
+  if (report.refused) process.exit(3);
   process.exit(report.conflicts.length > 0 ? 2 : 0);
 }

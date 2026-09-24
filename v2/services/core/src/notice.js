@@ -60,6 +60,20 @@ export const NOTICE_KINDS = Object.freeze([
 /** 瞬态通知的 `kind` **只有这一个**（契约 §五）。 */
 export const URGENT_KIND = 'disk-full';
 
+/**
+ * ★ P1（契约 `docs/dev/88-P1-TIME-WAIT.md` §三）：**后台那几句**的 `kind`。
+ *
+ * 🔴 为什么它们**不并进 `NOTICE_KINDS`**：
+ *   `NOTICE_KINDS` 那五个是"**替你做的决定 / 出事了 / 你不在时发生的事**"，
+ *   是**冻结的两半接口**（服务端那份表 + 客户端那份表，逐条对得上；
+ *   `test/notice.test.js` 逐字钉着那五个）。后台那几句是**助手在说话**
+ *   （有主体、有下文、可追问），是**另一族**。
+ * ⇒ 单开一族，走**同一个 `notice` 事件形状与同一条出口**（客户端对认不出的 `kind`
+ *   有 `unknown` 兜底：**那句话照旧显示**，`notice.dart` 顶上写着这条）。
+ *   ⇒ 旧客户端不炸、协议字段一个都不动。
+ */
+export const WORK_NOTICE_KINDS = Object.freeze(['work-started', 'work-done', 'work-failed', 'work-late']);
+
 /** 撤销：现在**只有回收站那一条**有（契约 §5.1）。动作名与客户端对齐。 */
 export const UNDO_RESTORE = Object.freeze({ action: 'trash/restore', label: '拿回来' });
 
@@ -265,6 +279,32 @@ export class Notice {
   /** 这件事走过哪条通道（`process` / `notice` / `null`）。给闸与排障看。 */
   channelOf(turn, kind) {
     return this.#channel.get(this.#key(turn, kind)) ?? null;
+  }
+
+  /**
+   * ★ P1：**后台那几句**（契约 `88` §三）—— 与 `notice()` 同一条出口、同一个形状，
+   * 只是 `kind` 换成了 `WORK_NOTICE_KINDS` 那一族。
+   *
+   * ⚠️ **不做限频**：一条活**构造上**只发一条开场 / 一条收尾（它自己那本活账兜着，
+   *    见 `dispatcher.js` 的 `#backgroundTurns`）——再用"6 小时内同一句话只说一次"
+   *    去压它，就会出现"这件做完了却没提醒"（那正是 T4 要挡的静默）。
+   * ⚠️ **不占 `(turn, kind)` 那本通道账**：那本账的键是**轮号**，而轮号在每个
+   *    scope 里各从 1 起 —— 拿它当跨 scope 的键会互相顶掉。
+   *
+   * @param {object} o
+   * @param {string} o.kind `WORK_NOTICE_KINDS` 里的一个
+   * @param {string} o.text 人话（**已经过时间词闸**，见 `dispatcher.#sayProactive`）
+   * @returns {object} 落盘成功的事件
+   */
+  work({ kind, text } = {}) {
+    if (!WORK_NOTICE_KINDS.includes(kind)) {
+      throw new NoticeError(
+        `认不出的后台通知种类：${kind}（这一族只有 ${WORK_NOTICE_KINDS.join(' / ')}）`,
+      );
+    }
+    if (typeof text !== 'string' || text === '') throw new NoticeError('通知必须有话说');
+    const at = this.#now();
+    return this.#timeline.emit({ type: NOTICE, kind, text, at });
   }
 
   /**

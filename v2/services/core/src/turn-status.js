@@ -66,7 +66,10 @@ export function readStatus(text, { now = Date.now(), staleMs = STALE_MS } = {}) 
   const busy = j.busy === true;
   if (!Number.isFinite(updatedAt)) return null;
   const ageMs = now - updatedAt;
-  return { busy, updatedAt, ageMs, stale: ageMs > staleMs };
+  // ★ P1（契约 88 §一.1）：**逐件**那本账也读回来 —— "还在 / 已停 / 做完了"
+  //   要答得出来，不能只有一个 busy 布尔。老文件没有这个字段 ⇒ 空数组（不是错）。
+  const items = Array.isArray(j.items) ? j.items : [];
+  return { busy, updatedAt, ageMs, stale: ageMs > staleMs, items };
 }
 
 /**
@@ -88,12 +91,15 @@ export function createTurnStatus({ file, snapshot, now = Date.now, fs = nodeFs }
   let last = null;
   let timer = null;
 
-  const write = (busy, openMessageId, pending, turns) => {
+  const write = (busy, openMessageId, pending, turns, items) => {
     const body = {
       busy,
       openMessageId: openMessageId ?? null,
       pending: Number(pending) || 0,
       turns: Number(turns) || 0,
+      // ★ P1：**逐件**（`(scopeId, turn/ref, 状态, 起止时间)`）—— 契约 §一.1。
+      //   写不进去也不许影响服务（这一整个文件都是维护用的旁路信息）。
+      items: Array.isArray(items) ? items : [],
       updatedAt: now(),
     };
     try {
@@ -108,7 +114,11 @@ export function createTurnStatus({ file, snapshot, now = Date.now, fs = nodeFs }
   const tick = () => {
     const s = snapshot() ?? {};
     const busy = computeBusy(s);
-    const key = `${busy}|${s.openMessageId ?? ''}|${Number(s.pending) || 0}|${Number(s.turns) || 0}`;
+    const items = Array.isArray(s.items) ? s.items : [];
+    const itemsKey = items
+      .map((i) => `${i.scopeId ?? 'main'}:${i.turn ?? ''}:${i.ref ?? ''}:${i.state ?? ''}`)
+      .join(',');
+    const key = `${busy}|${s.openMessageId ?? ''}|${Number(s.pending) || 0}|${Number(s.turns) || 0}|${itemsKey}`;
     const changed = key !== last;
     last = key;
     // ⚠️ 写盘的时机是这条功能最容易做错的地方，两头都要顾：
@@ -117,7 +127,7 @@ export function createTurnStatus({ file, snapshot, now = Date.now, fs = nodeFs }
     //      当成"陈的"（以为服务已经死了），然后照样重启、照样把话切了。
     //    ⇒ 规则：**变了就写，忙就一直写。**
     if (!changed && !busy) return;
-    write(busy, s.openMessageId, s.pending, s.turns);
+    write(busy, s.openMessageId, s.pending, s.turns, items);
   };
 
   return {

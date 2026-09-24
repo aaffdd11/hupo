@@ -47,6 +47,10 @@ import { ScopeView, Timeline } from './timeline.js';
 import { Trash } from './trash.js';
 import { markCleanExit, recordStart } from './boot-marker.js';
 import { reconcileOnBoot } from './reconcile.js';
+// ★ P1（契约 `docs/dev/88-P1-TIME-WAIT.md`）：**逐件落盘**的活账 ＋ 承诺账。
+//   一人一份（和通知那本账同一条理由：它是"这个人的事"）。
+import { WorkLog } from './worklog.js';
+import { PromiseBook } from './time-words.js';
 
 /**
  * **主线那个房间的名字**（不属于任何 app 的对话 —— 契约 `83-APP-WORKSPACE.md` §三·2）。
@@ -509,6 +513,21 @@ export class Worlds {
     //   服务端**拦不住**。⇒ 拦不住就**不许装看不见**：这一轮前后比一次主目录，
     //   多出东西就 ① 记一行账 ② 用现成那条通道讲给他听（`Notice`）。
     //   ⚠️ **只有主线那个调度器**拿得到它（房间的 cwd 就是它自己的工作区）。
+    // ★ P1（契约 `docs/dev/88-P1-TIME-WAIT.md` §一.1 / §四 T2）：
+    //   **逐件落盘的活账**（`pending.jsonl`）＋ **承诺账**（`promises.jsonl`）。
+    //   🔴 开机第一件事：上一次**还开着的**活，逐件诚实收成"已停"——
+    //     硬杀之后逐件答得出"还在/已停/做完了"，而**不是查无此件**。
+    //     ⚠️ 开机时**没有任何 agent 活着**（`aliveGenerations: []`）⇒ 全收；
+    //        一次开机只做一次，之后新开的活归这一代。
+    const work = new WorkLog({ store: t.store, log: (m) => this.#warn(m) });
+    const promises = new PromiseBook({ store: t.store });
+    let settled = [];
+    try {
+      settled = work.settleDead({ aliveGenerations: [] });
+    } catch (err) {
+      this.#warn(`  ⚠️ ${t.userId} 上一次那几件没收住：${err?.message ?? err}`);
+    }
+
     const mainLeak = new MainLeakWatch({
       dir: paths.agentCwd,
       log: (m) => this.#warn(`  ⚠️ ${t.userId} 的主目录没比成：${m}`),
@@ -533,6 +552,13 @@ export class Worlds {
       notice,
       // ★ 见上面那段：只挂在**主线**那条会话上
       mainLeak,
+      // ★ P1：活账 / 承诺账（一个人一本，房间共用）。
+      work,
+      promises,
+      // 长活阈值（住代码；cfg 里给了就按给的，测试要能把它调小）。
+      backgroundAfterMs: cfg.backgroundAfterMs,
+      // "去哪看"那半句用主线的名字（主线就叫"这儿"，用不上 title）。
+      whereTitle: null,
     });
 
     // ★ 账本那条本地通道：**套接字路径由这个人的目录派生** ⇒ 天然跟人走
@@ -578,6 +604,11 @@ export class Worlds {
       appsSocket,
       published: this.#published,
       dispatcher,
+      // ★ P1：逐件活账 / 承诺账（判据与排障都从这里读）。
+      work,
+      promises,
+      // 开机时逐件收成了"已停"的那几件（诊断用；**不是**给用户看的）。
+      settledOnBoot: settled.map((r) => ({ scopeId: r.scopeId, ref: r.ref, turn: r.turn })),
       boot: { ...boot, reconciled },
     };
     this.#worlds.set(t.userId, world);
@@ -653,6 +684,9 @@ export class Worlds {
       timeline: view,
       // 🔴 进程池的键里**带 scope** ⇒ 一个 app 一个 agent 窗口
       agentKey: agentKeyFor(userId, id),
+      // ★ P1：完成提醒里"去哪看"那半句用**它自己的名字**（认不出 ⇒ 不带那半句，
+      //   绝不把内部 id 写上屏）。
+      whereTitle: world.apps.current(id)?.title ?? null,
       // ⚠️ 通知那本账 /「发现就报」**只挂主线**（见 `Dispatcher.addSession`）。
     });
 
@@ -741,6 +775,8 @@ export class Worlds {
     let pending = 0;
     let turns = 0;
     let openMessageId = null;
+    /** ★ P1：**逐件**的活（契约 88 §一.1）—— 重启脚本与排障都看得到"是哪几件"。 */
+    const items = [];
     // ⚠️ **按人走、不是按房间走**：一个用户只有一个调度器，它自己会把
     //    **每一条会话**的账加起来（`Dispatcher.busy()`）。
     //    照 `allRooms()` 走会把同一个调度器数好几遍（房间与主线共享它）。
@@ -750,6 +786,7 @@ export class Worlds {
         pending += b.pending;
         turns += b.turns;
         openMessageId ??= b.openMessageId;
+        items.push(...(b.items ?? []).map((it) => ({ userId: w.userId, ...it })));
         continue;
       }
       // 老调用方（没给 `Dispatcher` 的测试替身）：退回逐房那套
@@ -757,7 +794,7 @@ export class Worlds {
       turns += w.dispatcher?.armedDeadlines ?? 0;
       openMessageId ??= w.timeline?.openMessageId ?? null;
     }
-    return { openMessageId, pending, turns };
+    return { openMessageId, pending, turns, items };
   }
 
   /** 每个人的回收站都扫一遍（到期提醒 + 到点真删）。返回干了哪些事（给日志）。 */

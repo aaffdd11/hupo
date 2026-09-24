@@ -14,6 +14,21 @@
 
 import { RECAP_DEFAULTS, buildRecap } from './recap.js';
 import { TurnTranslator, isAuthFailure } from './session-translate.js';
+// ★ P1 时间分级（契约 `docs/dev/88-P1-TIME-WAIT.md`）：
+//   **逐件落盘**的活账（T2）、后台四句（T4）、承诺行与再报（T5）。
+import { WORK_STATES, isOpen, pairKey } from './worklog.js';
+// ⚠️ 这四句是**我们自己说的话** ⇒ 一律走 `message/*`（不新造通道、不动冻结的 notice kind），
+//    并且出门之前过**时间词闸**（`assertBackedText`）。
+import {
+  WORK_FAILED_LINE,
+  WORK_STARTED_LINE,
+  WORK_LATE_LINE,
+  workAnswerLine,
+  workDoneLine,
+  workResultLine,
+  workWhereWords,
+} from './work-words.js';
+import { assertBackedText, hasTimeClaim } from './time-words.js';
 
 /**
  * 这几句是**用户能看到的**（落盘、上时间线）。所以它们必须是人话，
@@ -38,6 +53,21 @@ const AGENT_UNAVAILABLE_LINE = '我现在接不上活。你这句话我记下了
  * 手册事故一里那行"还有件事在处理"挂了 **68 分钟**。
  */
 export const TURN_DEADLINE_MS = 180_000;
+
+/**
+ * ★ P1：**多久还没做完 ⇒ 当成"长活"**（契约 `88` §三：长活默认进后台，但**必须告诉用户**）。
+ *
+ * ⚠️ 为什么是"等一段"而不是"投递那一刻按他怎么说猜"：
+ *   投递那一刻**没有任何可靠信号**说这活要多久（`86` §四.4：难度/t0 不可观测）。
+ *   拿他一句"帮我做…"就当长活预告，实测会**给一件两秒就完的活加噪音**，
+ *   而且会撞坏既有的"这一轮说完了没有"判据（预告也是一条消息）。
+ *   ⇒ 用**可观察的信号**：**它到现在还没做完**。到点还在跑 ⇒ 说一句"我去做，做完叫你"。
+ *   这既满足"宁可提前说"（一知道是长活就说），也不会冤枉短活。
+ *
+ * ⚠️ **阈值住代码，不写文档**（手册纪律 1）。`88` §五.4 明说：文档只说"分级存在"。
+ */
+export const BACKGROUND_AFTER_MS = 6000;
+
 
 /**
  * **一条会话**（一个 scope/房间）的调度状态。
@@ -72,15 +102,65 @@ class Session {
   /** turn → 计时器。一轮一个，所以"后一轮开始把前一轮的计时器顶掉"不会丢东西。 */
   #deadlines = new Map();
   /**
-   * **投出去了、还没变成一轮**的那些话（先进先出）。
+   * **投出去了、还没变成一轮**的那些话。
    *
    * 为什么要记：实测一轮没结束时再发一句，DSH 会**排队**
    * （`agent/inbox/spliced {target:"next-turn"}`）。所以超时踢进程时，
    * 排队里的话**会跟着一起没**——不逐条收口，用户就永远在等（N19）。
    *
-   * 一轮开始 = 消费一条投递（今天的轮**全部**由投递引起）。
+   * 一轮开始 = 认领一条投递（今天的轮**全部**由投递引起）。
+   *
+   * ⚠️ **P1 改法**（契约 `88` §二.1）：这里**不再用 `shift()` 当配对依据**。
+   *    每条投递带一个自增 `seq`；轮开始时按 `seq` **显式认领**最早那条，
+   *    并把配对键 `(agentGeneration, turn)` **落到活账上**（`#work.bind`）。
+   *    为什么：改前归属只在内存的一个 `Map` 里，重启就丢；而"按数组顺序弹"
+   *    一旦哪里少弹/多弹一条，票就会**整条串位**，且事后查不出来。
+   *    ⚠️ 认领仍然是"最早那条"（FIFO）——这是 DSH 事件里**唯一**给得出的关联
+   *      （`turn/start` 不带 prompt id）。变的不是 FIFO，变的是**它现在是落盘的、
+   *      可复算的键**，而不是一个隐式的数组顺序。
    */
   #delivered = [];
+
+  /** 投递的自增号（认领按它选，不靠数组位置）。 */
+  #deliverSeq = 0;
+
+  /**
+   * **轮是从哪一代 agent 开的**（`turn` → 进程代号）。
+   * ⚠️ 一轮跑到一半换了进程时，收口要用**开轮那一代**，不是"现在这一代"。
+   */
+  #turnGeneration = new Map();
+
+  /**
+   * **逐件落盘的活账**（P1 地基 · 契约 §一.1）。`null` = 老调用方没接（离线测试）。
+   */
+  #work = null;
+
+  /** **承诺账**（T5）：说了时间就落一行，到点没完必须再报一次。 */
+  #promises = null;
+
+  /**
+   * **agent 进程代号**（契约 §二.1 的配对键那一半）。
+   *
+   * ⚠️ 为什么必须有：轮号在**每个进程里都从 1 重新开始**（`session-translate.reset()`）。
+   *    单靠 `turn` 配对，新进程的第 1 轮会认到旧进程的第 1 轮上。
+   *    它是"换了一个 agent 实例"就 +1，**不等同于**重启（一次重启里可能换好几代）。
+   */
+  #generation = 0;
+
+  /** 这一代里被预告过"我去做"的轮（只有这些轮做完/失败才**另发一条提醒**）。 */
+  #backgroundTurns = new Set();
+
+  /** 轮 → "还没做完就说一声"那个计时器。 */
+  #backgroundTimers = new Map();
+
+  /** 阈值（构造可注入；默认住 `BACKGROUND_AFTER_MS`）。 */
+  #backgroundAfterMs = BACKGROUND_AFTER_MS;
+
+  /** 承诺 id → 那个到期计时器。 */
+  #promiseTimers = new Map();
+
+  /** 这一轮它最后说了什么（完成提醒里"结果一句"用；**不落新盘**，只是转述）。 */
+  #lastSpokenText = '';
 
   /**
    * **这一轮他说了什么**（P1-22，2026-09-24）。
@@ -134,6 +214,16 @@ class Session {
    */
   #mainLeak;
 
+  /** P1：这一间的名字（"去哪看"用它；没有 ⇒ 那句里不带"在哪"）。 */
+  #whereTitle = null;
+
+  /**
+   * P1：**后台通知的出入口**（`Notice`）。房间也接它（同一个人的一本账）。
+   * ⚠️ 与 `#notice`（`(turn,kind)` 通道账）不是同一件事：那个只挂主线
+   *    （轮号跨 scope 会顶掉），这个按**一个人一本**。
+   */
+  #workNotice = null;
+
   /**
    * agent 那个**进程池的键**。
    *
@@ -178,6 +268,16 @@ class Session {
     notice = null,
     /** 见 [#mainLeak]（`MainLeakWatch`；只挂在主线那个调度器上）。 */
     mainLeak = null,
+    /** ★ P1：**逐件落盘的活账**（`WorkLog`）。不接 ⇒ 老行为（不记逐件）。 */
+    work = null,
+    /** ★ P1：承诺账（`PromiseBook`）。不接 ⇒ 说了时间也不落承诺（那就别说时间）。 */
+    promises = null,
+    /** ★ P1：这一间的名字（"去哪看"那半句用它；没有 ⇒ 不带那半句）。 */
+    whereTitle = null,
+    /** ★ P1：后台那几句的出入口（`Notice`；房间也接 —— 一个人一本账）。 */
+    workNotice = null,
+    /** ★ P1：多久还没做完 ⇒ 当成"长活"，先交代一句（阈值住代码，不写文档）。 */
+    backgroundAfterMs = BACKGROUND_AFTER_MS,
   }) {
     if (!store) {
       // ⚠️ **不许默认没有 recap 就悄悄开工。**
@@ -194,20 +294,40 @@ class Session {
     this.#turnDeadlineMs = turnDeadlineMs;
     this.#notice = notice;
     this.#mainLeak = mainLeak;
+    this.#work = work;
+    this.#promises = promises;
+    this.#whereTitle = whereTitle;
+    this.#workNotice = workNotice ?? notice;
+    this.#backgroundAfterMs = backgroundAfterMs;
     this.#onAuthFailure = onAuthFailure;
     this.#translator = new TurnTranslator({ timeline, scopeId, notice });
 
+    // ★ P1：记下这一轮最后说出口的正文 —— 完成提醒里那句"结果一句"就是它
+    //   （**转述**，不是新落一条；模型原文本身已经在时间线上了）。
+    this.#translator.on('text', ({ text }) => {
+      if (typeof text === 'string' && text !== '') this.#lastSpokenText = text;
+    });
+
     // 超时硬收口：轮的起讫从翻译层来（它才知道"这一轮开始了没有"）
     this.#translator.on('turn-start', (turn) => {
-      // 一轮开始 = 消化掉一条投递。**顺手记住是哪句话引起来的**（见 `#turnOwner`）
-      const owner = this.#delivered.shift();
-      this.#turnOwner.set(turn, owner?.messageId ?? null);
+      this.#lastSpokenText = '';
+      // 一轮开始 = **认领**一条投递（按自增号选，不靠数组顺序 —— 契约 §二.1）。
+      const generation = this.#generation;
+      this.#turnGeneration.set(turn, generation);
+      const owner = this.#claimDelivery();
+      this.#turnOwner.set(pairKey(generation, turn), owner?.messageId ?? null);
       // ★ P1-22：**这一轮他说了什么** = 引起来的那句话（没有票 ⇒ 空 ⇒ 不许造东西）
       this.#turnInput = owner?.text ?? '';
+      // ★ P1：**逐件落盘**（契约 T2）。有票 ⇒ 绑到 `(generation, turn)`；
+      //   无票（助手自己发起的一轮）⇒ 也记一件，但**归属是 `null`**（T1 的反例正身）。
+      this.#openWork({ turn, generation, owner });
       this.#armDeadline(turn);
       this.#announceTurn(turn);
       // ★ A1·「发现就报」：这一轮开始 ⇒ 记一份主目录的清单（**只记路径**）
       this.#mainLeak?.start();
+      // ★ P1 后台四句 ①：**到点还在跑才说**（见 `BACKGROUND_AFTER_MS` 那段：
+      //   长活是"它还没做完"这个可观察信号，不是拿他一句话猜出来的）。
+      this.#armBackgroundNotice(turn);
     });
 
     // ★ 这一轮动过东西 ⇒ **落一条盘**。重启之后只有盘上这份能告诉对账：
@@ -215,9 +335,10 @@ class Session {
     //   ⚠️ 事件里**没有工具名、没有参数** —— 只一个归属，见 `#turnOwner`。
     this.#translator.on('mutated', ({ turn }) => {
       try {
+        const gen = this.#turnGeneration.get(turn) ?? this.#generation;
         this.#timeline.emit({
           type: 'task/mutated',
-          ref: this.#turnOwner.get(turn) ?? null,
+          ref: this.#turnOwner.get(pairKey(gen, turn)) ?? null,
           turn,
         });
       } catch (err) {
@@ -227,11 +348,20 @@ class Session {
     });
     this.#translator.on('turn-end', ({ turn, kind }) => {
       this.#clearDeadline(turn);
+      this.#clearBackgroundNotice(turn);
       // ★ P1-22：**这一轮结束了 ⇒ 当轮输入立刻作废。**
       //   ⚠️ 这条不是"顺手清理"：一轮结束到下一句之间，**助手自己发起的那一轮**
       //      （定时 / 重做 / 别人代投）用的是**同一个派发器**。
       //      不清的话它看到的是**上一句他说过的话** ⇒ 造东西那条闸会拿旧话当"他明说了"。
       this.#turnInput = '';
+      // ★ P1：**逐件收口**（T2）。做完 ⇒ `done`；别的原因收场 ⇒ `stopped`（"已停"）。
+      const done = kind === 'completed';
+      this.#closeWork({ turn, outcome: done ? WORK_STATES.done : WORK_STATES.stopped, reason: kind });
+      this.#turnGeneration.delete(turn);
+      // ★ P1 后台四句 ②③：**只对预告过的那件**发提醒（短活不许重复说）。
+      if (this.#backgroundTurns.delete(turn)) {
+        this.#announceWorkFinished({ turn, kind, done });
+      }
       // ★ A1·「发现就报」：**正常结束**这条路也要比（三条路缺一不可）
       this.#mainLeak?.finish({ turn, reason: kind });
     });
@@ -241,9 +371,21 @@ class Session {
     //   ⚠️ `force-close` 不带轮号（它一次收掉**所有**开着的轮，见 `forceClose`），
     //      所以这里 `turn` 给 `null`；判据要的是"这一轮前后比过"。
     this.#translator.on('turn-deadline', ({ turn }) => {
+      // ★ P1：超时 = **删失样本**（被超时那一轮也要算进分位），收成"已停"。
+      this.#clearBackgroundNotice(turn);
+      this.#closeWork({ turn, outcome: WORK_STATES.stopped, reason: 'timeout' });
+      this.#turnGeneration.delete(turn);
+      if (this.#backgroundTurns.delete(turn)) {
+        this.#announceWorkFinished({ turn, kind: 'timeout', done: false });
+      }
       this.#mainLeak?.finish({ turn, reason: 'timeout' });
     });
     this.#translator.on('force-close', ({ reason }) => {
+      // ⚠️ 这条路不带轮号 ⇒ 本代**所有还开着的**活一律收成"已停"（没有"消失"）。
+      // ★ P1：失败也要提醒 —— 先看有没有预告过（有 ⇒ 收完再补一条失败提醒）。
+      const wasBackground = this.#backgroundTurns.size > 0;
+      this.#closeAllWorkInScope(reason ?? 'failed');
+      if (wasBackground) this.#announceWorkFinished({ turn: null, kind: reason ?? 'failed', done: false });
       this.#mainLeak?.finish({ turn: null, reason: reason ?? 'failed' });
     });
   }
@@ -263,7 +405,27 @@ class Session {
 
   /** 现在还没变成轮的那些话（诊断 / 验收用）。 */
   get pendingDeliveries() {
-    return this.#delivered.length;
+    return this.#delivered.filter((t) => !t.claimed).length;
+  }
+
+  /** ★ P1：这一代 agent 的代号（配对键那一半 · 契约 §二.1）。 */
+  get generation() {
+    return this.#generation;
+  }
+
+  /**
+   * ★ P1：**这一间现在开着的活，逐件**（契约 §二.3）。
+   * ⚠️ 这就是"逐件可查"的落点：改前只有一个全局 busy 布尔。
+   */
+  get workItems() {
+    return this.#liveWorkOfScope().map((r) => ({
+      scopeId: r.scopeId,
+      generation: r.generation,
+      turn: r.turn,
+      ref: r.ref,
+      state: r.state,
+      startedAt: r.startedAt,
+    }));
   }
 
   /** 现在挂着几个超时计时器（诊断用）。 */
@@ -367,6 +529,194 @@ class Session {
     });
   }
 
+  // ── P1：逐件落盘的活账（契约 88 §一.1 / §二.2 / §二.3）────────────
+
+  /**
+   * **认领一条投递**（一轮开始 = 一张票被用掉）。
+   *
+   * ⚠️ **不靠 `shift()`**：按自增 `seq` 选**最早还没认领**的那条。
+   *    为什么 FIFO 是唯一能给的关联：DSH 的 `turn/start` 里**没有 prompt id**
+   *    （`07-TIMEOUT.md` §1.1 实测：排队的第二句下一轮才变成轮，顺序是 DSH 给的）。
+   *    所以"选哪条"仍是 FIFO；变的是**配对现在是落盘的、按 `(generation, turn)`
+   *    可查的键**，而且认领动作不依赖数组位置（少弹/多弹不会整条串位）。
+   */
+  #claimDelivery() {
+    let pick = null;
+    let at = -1;
+    for (const [i, t] of this.#delivered.entries()) {
+      if (t.claimed) continue;
+      if (pick === null || t.seq < pick.seq) {
+        pick = t;
+        at = i;
+      }
+    }
+    if (pick) {
+      this.#delivered.splice(at, 1); // 用掉了就拿走（不然这个数组会一直长）
+      pick.claimed = true;
+    }
+    return pick;
+  }
+
+  /** 这一代里现在还开着的活（诊断 / 聚合用）。 */
+  #liveWorkOfScope() {
+    if (!this.#work) return [];
+    return this.#work.live().filter((r) => (r.scopeId ?? 'main') === (this.#scopeId ?? 'main'));
+  }
+
+  /** 开一件活：有票 ⇒ 绑到 `(generation, turn)`；无票 ⇒ 记一件但**归属 `null`**。 */
+  #openWork({ turn, generation, owner }) {
+    if (!this.#work) return;
+    const scopeId = this.#scopeId ?? 'main';
+    try {
+      if (owner?.messageId) {
+        this.#work.bind({ scopeId, ref: owner.messageId, generation, turn });
+      } else {
+        // ⚠️ T1 的反例正身：无票自发轮的归属是 `null` —— 它**不许**去认领谁的票。
+        this.#work.spontaneous({ scopeId, generation, turn });
+      }
+    } catch (err) {
+      this.#lastError = `这件活没记上账：${err?.message ?? err}`;
+    }
+  }
+
+  /** 按 `(generation, turn)` 收口一件活。**幂等**；那一代没记过 ⇒ 安静跳过。 */
+  #closeWork({ turn, outcome, reason }) {
+    if (!this.#work) return null;
+    const scopeId = this.#scopeId ?? 'main';
+    const gen = this.#turnGeneration.get(turn) ?? this.#generation;
+    try {
+      let rec = this.#work.byTurn(scopeId, gen, turn);
+      // 兜底：绑轮那次可能没写成（盘满）⇒ 按票找。
+      if (!rec) {
+        const ownerRef = this.#turnOwner.get(pairKey(gen, turn));
+        if (ownerRef) rec = this.#work.byRef(scopeId, ownerRef);
+      }
+      if (!rec || !isOpen(rec.state)) return null;
+      const r = this.#work.close({ id: rec.id, outcome, reason });
+      return r.record;
+    } catch (err) {
+      this.#lastError = `这件活没收住口：${err?.message ?? err}`;
+      return null;
+    } finally {
+      this.#turnGeneration.delete(turn);
+      this.#turnOwner.delete(pairKey(gen, turn));
+    }
+  }
+
+  /** 本代**所有**还开着的活一律收口（`force-close` / 进程退了两条路都走它）。 */
+  #closeAllWorkInScope(reason) {
+    for (const rec of this.#liveWorkOfScope()) {
+      try {
+        this.#work.close({ id: rec.id, outcome: WORK_STATES.stopped, reason });
+      } catch (err) {
+        this.#lastError = `停下来的那件没收住口：${err?.message ?? err}`;
+      }
+    }
+    this.#turnGeneration.clear();
+    this.#turnOwner.clear();
+    this.#backgroundTurns.clear();
+  }
+
+  /**
+   * ★ P1 后台四句 —— **走 `notice` 那条唯一出口**（同一个事件形状、落盘取号），
+   * 出门之前过**时间词闸**。没有依据的时间词 ⇒ 这句话**不发**（宁可不发，也不许说假话）。
+   *
+   * ⚠️ **不用气泡**（`message/*`）：那会让"盘上有一条 `message/end`"不再等于
+   *    "这一轮说完了"——实测立刻撞红一条既有判据（造 app 那一轮的对账等的是
+   *    `message/end`，开场那句会**提前**把它满足掉）。通知这条出口本来就是给
+   *    "主动开口 / 你不在时发生的事"用的，形状也正好。
+   */
+  #sayProactive(text, { evidence = null, kind = 'work-started' } = {}) {
+    if (typeof text !== 'string' || text.trim() === '') return null;
+    if (!this.#workNotice) return null;
+    try {
+      assertBackedText(text, { evidence });
+    } catch (err) {
+      this.#lastError = `这句话没说出口（时间词没依据）：${err?.message ?? err}`;
+      return null;
+    }
+    try {
+      return this.#workNotice.work({ kind, text });
+    } catch (err) {
+      this.#lastError = `这条提醒没发出去：${err?.message ?? err}`;
+      return null;
+    }
+  }
+
+  /** ① 开跑："我去做，做完叫你"（**不带时间承诺**）。 */
+  #announceWorkStarted() {
+    this.#sayProactive(WORK_STARTED_LINE, { kind: 'work-started' });
+  }
+
+  /** ② 完成 / ③ 失败："做完了（+结果一句+去哪看）" / "这件事我没做完"。 */
+  #announceWorkFinished({ turn, kind, done }) {
+    if (done) {
+      const result = workResultLine(this.#lastSpokenText, { hasTimeClaim });
+      return this.#sayProactive(
+        workDoneLine({ result, scopeId: this.#scopeId ?? 'main', title: this.#whereTitle }),
+        { kind: 'work-done' },
+      );
+    }
+    // ⚠️ 失败也要提醒（契约 §三.③）—— 不许静默。
+    return this.#sayProactive(WORK_FAILED_LINE, { kind: 'work-failed' });
+  }
+
+  /**
+   * **他随时能问"那件怎么样了"**（契约 §三.④）：逐件答案。
+   * @returns {string} 那句话（查无此件 ⇒ 也有一句，不许空着）
+   */
+  workReport({ scopeId = null, ref = null, turn = null, generation = null } = {}) {
+    if (!this.#work) return workAnswerLine('unknown');
+    const scope = scopeId ?? this.#scopeId ?? 'main';
+    const rec = this.#work.answer({ scopeId: scope, ref, turn, generation });
+    if (!rec) return workAnswerLine('unknown');
+    const base = workAnswerLine(rec.answer);
+    const where = workWhereWords({ scopeId: rec.scopeId, title: this.#whereTitle });
+    return `${base}${where}`;
+  }
+
+  /**
+   * **说一句带时间承诺的话**（T5）：先落承诺行 + 挂到活上，再发那句话。
+   * 到点没做完 ⇒ 计时器触发**再报一次**。
+   *
+   * @param {object} o
+   * @param {string} [o.ref]   哪张票（哪件活）
+   * @param {string} o.text    承诺的原话
+   * @param {string} o.basis   **依据 id**（`elapsed:` / `duration:`）—— 给不出来就不许承诺
+   * @param {number} o.dueAt   说到什么时候
+   */
+  notePromise({ ref = null, text, basis = null, dueAt = null } = {}) {
+    if (!this.#promises || !this.#work) return null;
+    if (!basis || !Number.isFinite(dueAt)) {
+      // ⚠️ 没有依据 / 没有到期时刻 ⇒ **不许说**（契约 §二.4）。
+      this.#lastError = '想承诺一个时间，但给不出依据（那就不许说）';
+      return null;
+    }
+    const scopeId = this.#scopeId ?? 'main';
+    const rec = ref ? this.#work.byRef(scopeId, ref) : null;
+    const id = `p:${scopeId}:${ref ?? 'anon'}:${dueAt}`;
+    this.#promises.make({ id, scopeId, ref, workId: rec?.id ?? null, text, basis, dueAt });
+    if (rec) this.#work.attachPromise({ id: rec.id, promiseId: id });
+    const timer = setTimeout(() => this.#onPromiseDue(id), Math.max(0, dueAt - Date.now()));
+    timer.unref?.();
+    this.#promiseTimers.set(id, timer);
+    // 承诺的那句话本身也要过时间词闸（它就是那句时间话）。
+    return { id, event: this.#sayProactive(text, { evidence: basis }) };
+  }
+
+  #onPromiseDue(id) {
+    this.#promiseTimers.delete(id);
+    try {
+      const fate = this.#promises.fate({ works: this.#work.all() });
+      const p = [...fate.pending, ...fate.unfulfilled].find((x) => x.id === id);
+      if (!p) return; // 已经兑现 / 已经不在了
+      this.#promises.reReport({ id, text: WORK_LATE_LINE });
+      this.#sayProactive(WORK_LATE_LINE, { evidence: `promise:${id}`, kind: 'work-late' });
+    } catch (err) {
+      this.#lastError = `承诺到点没报成：${err?.message ?? err}`;
+    }
+  }
+
   // ── 超时硬收口（N19 挂起必有收尾 + N10 收气泡 ≠ 停 agent）────────
 
   #armDeadline(turn) {
@@ -393,6 +743,39 @@ class Session {
   #clearAllDeadlines() {
     for (const t of this.#deadlines.values()) clearTimeout(t);
     this.#deadlines.clear();
+    // ★ P1：那一代没了 ⇒ "还没做完就说一声"的计时器也一起撤（不然会说一句没主的话）。
+    this.#clearAllBackgroundNotices();
+  }
+
+  /**
+   * ★ P1：**到点还在跑 ⇒ 说一句"我去做，做完叫你"**（后台四句 ①）。
+   * 一句话都不含时间承诺 —— 我们**不知道**还要多久（契约 §二.4）。
+   */
+  #armBackgroundNotice(turn) {
+    if (!(this.#backgroundAfterMs > 0)) return;
+    this.#clearBackgroundNotice(turn);
+    const timer = setTimeout(() => {
+      this.#backgroundTimers.delete(turn);
+      // 那一轮已经收口了（计时器可能晚一拍）⇒ 什么都不说。
+      if (!this.#turnGeneration.has(turn)) return;
+      this.#backgroundTurns.add(turn);
+      this.#announceWorkStarted();
+    }, this.#backgroundAfterMs);
+    timer.unref?.();
+    this.#backgroundTimers.set(turn, timer);
+  }
+
+  #clearBackgroundNotice(turn) {
+    const t = this.#backgroundTimers.get(turn);
+    if (t) {
+      clearTimeout(t);
+      this.#backgroundTimers.delete(turn);
+    }
+  }
+
+  #clearAllBackgroundNotices() {
+    for (const t of this.#backgroundTimers.values()) clearTimeout(t);
+    this.#backgroundTimers.clear();
   }
 
   /**
@@ -416,13 +799,26 @@ class Session {
   #closeUndelivered(reason) {
     // ★ P1-22：这条路是"这一轮不会再有下文了"（超时 / 失败）⇒ 当轮输入同样作废
     this.#turnInput = '';
-    const n = this.#delivered.length;
+    const tickets = this.#delivered.filter((t) => !t.claimed);
     this.#delivered.length = 0;
-    for (let i = 0; i < n; i += 1) {
+    for (const t of tickets) {
       try {
         this.#translator.turnUndelivered({ reason });
       } catch (err) {
         this.#lastError = `排队那句没收住：${err?.message ?? err}`;
+      }
+      // ★ P1：排队那句也**逐件收口**（不许留一张永远不配对的欠条 · T1/T2）。
+      try {
+        if (t.messageId) {
+          this.#work?.closeByRef({
+            scopeId: this.#scopeId ?? 'main',
+            ref: t.messageId,
+            outcome: WORK_STATES.stopped,
+            reason: `undelivered:${reason}`,
+          });
+        }
+      } catch (err) {
+        this.#lastError = `排队那张票没收住：${err?.message ?? err}`;
       }
     }
   }
@@ -475,6 +871,19 @@ class Session {
     //   不清的话，新进程的第 1 轮会接到上一个进程的陈账上（见 `TurnTranslator.reset()`）。
     this.#translator.reset();
     this.#clearAllDeadlines();
+
+    // ★ P1：**换代**（契约 §二.1 的配对键那一半）。轮号在新进程里从 1 重来，
+    //   所以配对键必须带这一代号；不带就会"新进程第 1 轮认到旧进程第 1 轮"。
+    this.#generation += 1;
+    const generation = this.#generation;
+    // ⚠️ 旧代还开着的活，这一刻**诚实收口成"已停"**（不许留在半空里 —— 契约 §二.2）。
+    try {
+      this.#work?.settleDead({ aliveGenerations: [generation] });
+    } catch (err) {
+      this.#lastError = `换进程时旧账没收住：${err?.message ?? err}`;
+    }
+    this.#turnGeneration.clear();
+    this.#backgroundTurns.clear();
 
     agent.on('session-event', (params) => {
       try {
@@ -581,8 +990,22 @@ class Session {
     //   于是"帮我做一个小程序" + "快点" 会被判成"没说"（误拒）。
     //   ⚠️ 只挂在票上、**不在这里写 `#turnInput`**：真正认领的是 `turn-start`
     //     （那时才知道"这一轮是哪句话引起来的"）。
-    const ticket = { messageId, at: Date.now(), text: typeof text === 'string' ? text : '' };
+    const ticket = {
+      messageId,
+      at: Date.now(),
+      text: typeof text === 'string' ? text : '',
+      // ★ P1：自增号 —— 认领按它选（**不靠数组顺序**，契约 §二.1）。
+      seq: (this.#deliverSeq += 1),
+      claimed: false,
+    };
     this.#delivered.push(ticket);
+    // ★ P1：**票先落盘**（T1/T2）。票就是欠条：这张票一定有个配对终态。
+    //   写不进去不许把回答带走（那句话已经落盘了）——但**必须报出来**。
+    try {
+      this.#work?.declare({ scopeId: this.#scopeId ?? 'main', ref: messageId, ticket: messageId });
+    } catch (err) {
+      this.#lastError = `这张票没记进活账：${err?.message ?? err}`;
+    }
     if (needsRecap) this.#recapFedTo = agent;
 
     try {
@@ -591,8 +1014,19 @@ class Session {
       return { delivered: true, messageId: r?.messageId, recapped: needsRecap };
     } catch (err) {
       // 没进去的就从队列里摘掉（摘不掉也只是多收一条，不会漏收）
-      const i = this.#delivered.indexOf(ticket);
+      const i = this.#delivered.findIndex((t) => t === ticket);
       if (i !== -1) this.#delivered.splice(i, 1);
+      // ★ P1：投不出去 ⇒ 这张票也有终态（不许留一张永远不配对的欠条）。
+      try {
+        this.#work?.closeByRef({
+          scopeId: this.#scopeId ?? 'main',
+          ref: messageId,
+          outcome: WORK_STATES.stopped,
+          reason: 'deliver-failed',
+        });
+      } catch (werr) {
+        this.#lastError = `票没收住：${werr?.message ?? werr}`;
+      }
       if (needsRecap) this.#recapFedTo = null; // 没喂成 ⇒ 下次补
       this.#lastError = String(err?.message ?? err);
       // 起不来的时候**也要有个交代**——静默失败等于"它不理我"
@@ -660,6 +1094,15 @@ export class Dispatcher {
   #onAuthFailure;
   #notice;
   #mainLeak;
+  /** ★ P1：后台那几句的出入口（`Notice`，一个人一本）。 */
+  #workNotice;
+  /** ★ P1：每个用户**一份**的活账 / 承诺账（所有会话共用）。 */
+  #work;
+  #promises;
+  /** `scopeId` → 那一间的名字（"去哪看"用）。 */
+  #titles;
+  /** ★ P1：长活判定的阈值（房间也要同一份）。 */
+  #backgroundAfterMs;
 
   /**
    * @param {object} o
@@ -677,7 +1120,17 @@ export class Dispatcher {
     //    通知的互斥是"一个人一份"的账，一间一个会让同一件事在几处各记一次。
     this.#notice = args.notice ?? null;
     this.#mainLeak = args.mainLeak ?? null;
-    const main = new Session(args);
+    // ★ P1：**后台通知**——房间也接同一个（一个人一本账），
+    //   与 `#notice`（只挂主线）分开，理由见 `Session.#workNotice`。
+    this.#workNotice = args.workNotice ?? args.notice ?? null;
+    // ★ P1：**一个人一本活账 / 一本承诺账**（房间与主线共用 —— P-l 是"一条日志"，
+    //   逐件账也一样：多 scope 只是记录上的 `scopeId` 标签）。
+    this.#work = args.work ?? null;
+    this.#promises = args.promises ?? null;
+    this.#titles = new Map();
+    if (args.whereTitle) this.#titles.set(this.#mainScope, args.whereTitle);
+    this.#backgroundAfterMs = args.backgroundAfterMs ?? BACKGROUND_AFTER_MS;
+    const main = new Session({ ...args, work: this.#work, promises: this.#promises });
     this.#sessions.set(main.scopeId, main);
   }
 
@@ -710,10 +1163,11 @@ export class Dispatcher {
    *    `roomFor` 每次都用同一把视图，重复挂不该把轮账清掉）。
    * @returns {Session}
    */
-  addSession({ scope, timeline, agentKey, notice = null, mainLeak = null, onAuthFailure = null }) {
+  addSession({ scope, timeline, agentKey, notice = null, mainLeak = null, onAuthFailure = null, whereTitle = null }) {
     const id = scope === null || scope === undefined || scope === '' ? this.#mainScope : String(scope);
     const had = this.#sessions.get(id);
     if (had) return had;
+    if (whereTitle) this.#titles.set(id, whereTitle);
     const s = new Session({
       timeline,
       runtime: this.#runtime,
@@ -722,14 +1176,48 @@ export class Dispatcher {
       agentKey,
       // ⚠️ 房间**不接**通知那本账 / 「发现就报」：那两样只挂主线（与改前一致）
       notice: id === this.#mainScope ? (notice ?? this.#notice) : null,
+      // ★ P1：**后台那几句房间也接**（一个人一本账；它不占 `(turn,kind)` 那本通道账）。
+      workNotice: this.#workNotice,
       mainLeak: id === this.#mainScope ? (mainLeak ?? this.#mainLeak) : null,
       onAuthFailure: onAuthFailure ?? this.#onAuthFailure,
       // ⚠️ recap / 超时**跟着这个世界**走（`Worlds` 建调度器时已经算好了）。
       recap: this.#recapOptions,
       turnDeadlineMs: this.#turnDeadlineMs,
+      // ★ P1：活账 / 承诺账是**一个人一本**（房间共用）；标题只影响"去哪看"那半句。
+      work: this.#work,
+      promises: this.#promises,
+      whereTitle: this.#titles.get(id) ?? null,
+      backgroundAfterMs: this.#backgroundAfterMs,
     });
     this.#sessions.set(id, s);
     return s;
+  }
+
+  /**
+   * ★ P1：**他随时能问"那件怎么样了"**（契约 §三.④）——按 scope ＋ 票/轮逐件答。
+   * 认不出 scope ⇒ `null`（不许悄悄落到主线）。
+   */
+  workReport({ scope = null, ref = null, turn = null, generation = null } = {}) {
+    const s = this.sessionFor(scope);
+    if (!s) return null;
+    return s.workReport({ scopeId: s.scopeId, ref, turn, generation });
+  }
+
+  /** ★ P1：**逐件**列出还开着的活（判据与聚合状态都用它）。 */
+  workItems() {
+    const out = [];
+    for (const s of this.#sessions.values()) out.push(...s.workItems);
+    return out;
+  }
+
+  /** ★ P1：承诺账（诊断 / 判据）。 */
+  get promises() {
+    return this.#promises;
+  }
+
+  /** ★ P1：活账（诊断 / 判据）。 */
+  get work() {
+    return this.#work;
   }
 
   get translator() {
@@ -804,12 +1292,15 @@ export class Dispatcher {
     let pending = 0;
     let turns = 0;
     let openMessageId = null;
+    /** ★ P1：**逐件**那本账（不只一个布尔 · 契约 §一.1）。 */
+    const items = [];
     for (const s of this.#sessions.values()) {
       pending += s.pendingDeliveries;
       turns += s.armedDeadlines;
       openMessageId ??= s.openMessageId;
+      items.push(...s.workItems);
     }
-    return { openMessageId, pending, turns };
+    return { openMessageId, pending, turns, items };
   }
 
   /** 收工：**每一条会话**都要把话说圆（漏一条 = 那条被切断）。 */
