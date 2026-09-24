@@ -36,6 +36,7 @@ import { INTERNAL_PREFIX, parseArtifactQuery, parseInternalPath } from './apps-b
 // ⚠️ 只用它的**错误类型**（内部写入那条路要把"校验不过"如实回给宿主，而不是 500）
 //    与那个总量上限（内部口的身体上限由它推出来，**不另写一个数**）。
 import { AppsError, MAX_TOTAL_BYTES } from './apps.js';
+import { USAGE_KINDS } from './usage.js';
 import { ASR_PATH } from './asr.js';
 import { HARNESS_PATH } from './harness-session.mjs';
 import { DEV_HARNESS_PATH, DEV_MODE_PATH, DEV_PATH_PREFIX, createDevHostRelay, devEntryLink, devHostFor } from './dev-mode.js';
@@ -809,6 +810,13 @@ export function createServer({
         const prompt = typeof body?.prompt === 'string' ? body.prompt : '';
         const r = await askViaLocalProxy({ prompt });
         if (!r.ok) return sendJson(res, 502, { error: r.error });
+        // ★ **93 §5.2·C：`ask` 自己那条也落账** —— 这里**已经知道 `appId`**
+        //   （旁边就是 `bumpAsk`），上游那份 `usage` 也带回来了。
+        //   ⚠️ 只记量；记不上账**不许**把这次问话弄失败（`UsageLedger.note` 自己吞错）。
+        const appId = typeof body?.appId === 'string' ? body.appId : '';
+        if (appId && r.usage) {
+          w?.usage?.note(appId, { kind: USAGE_KINDS.ask, usage: r.usage, scopeId: appId });
+        }
         return sendJson(res, 200, {
           text: r.text,
           left: left === null ? null : left - 1,

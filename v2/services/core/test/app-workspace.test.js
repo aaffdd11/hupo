@@ -368,7 +368,14 @@ test('★ A1 补：装上来也要有自己的工作区（一个图标 = 一个�
   const u2 = h.worlds.worldFor('u2');
   // 甲做了一份、发出去
   u2.workspaces.ensure('shared-one', { title: '共享的', entry: 'index.html' });
-  u2.workspaces.write('shared-one', { 'index.html': '<p>共享的</p>' });
+  u2.workspaces.write('shared-one', {
+    'index.html': '<p>共享的</p>',
+    // ★ A16：外联申报（93 §2.2）—— 没有它上架拒（fail-closed）
+    'outbound.json': JSON.stringify({
+      schema: 1, outbound: [],
+      declaredUsage: { dailyTokensBand: 0, dailyCallsBand: 0, basis: '还没人用过，先按 0 报' },
+    }),
+  });
   snapshotWorkspace({ apps: u2.apps, workspaces: u2.workspaces, id: 'shared-one', title: '共享的', icon: 'dice' });
   u2.published.publish(u2.apps, { id: 'shared-one', authorSub: 'u2', authorName: '乙' });
 
@@ -947,7 +954,14 @@ test('★ A1·补：装上来那条路同样算"这一轮造了 app"（不许只
   const u1 = h.worlds.worldFor('u1');
   const u2 = h.worlds.worldFor('u2');
   u2.workspaces.ensure('shared-two', { title: '共享的', entry: 'index.html' });
-  u2.workspaces.write('shared-two', { 'index.html': '<p>共享</p>' });
+  u2.workspaces.write('shared-two', {
+    'index.html': '<p>共享</p>',
+    // ★ A16：外联申报（93 §2.2）—— 没有它上架拒（fail-closed）
+    'outbound.json': JSON.stringify({
+      schema: 1, outbound: [],
+      declaredUsage: { dailyTokensBand: 0, dailyCallsBand: 0, basis: '还没人用过，先按 0 报' },
+    }),
+  });
   snapshotWorkspace({ apps: u2.apps, workspaces: u2.workspaces, id: 'shared-two', title: '共享的', icon: 'dice' });
   u2.published.publish(u2.apps, { id: 'shared-two', authorSub: 'u2', authorName: '乙' });
 

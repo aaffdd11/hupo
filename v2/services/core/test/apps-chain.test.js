@@ -23,6 +23,7 @@ import nodePath from 'node:path';
 import { Apps } from '../src/apps.js';
 import { AppsSocket, appsSocketPath, handleAppsOp } from '../src/apps-socket.js';
 import { Published } from '../src/published.js';
+import { buildReviewPolicy } from '../src/review.js';
 
 const HERE = nodePath.dirname(new URL(import.meta.url).pathname);
 const MCP_SERVER = nodePath.resolve(HERE, '..', 'src', 'mcp-apps-server.mjs');
@@ -52,6 +53,10 @@ function setup({ withPublished = true, installed = [] } = {}) {
       // ★ P1-22：造东西那条闸要看"**这一轮他说了什么**"。
       //   这一批验的不是那条闸（它在 `apps-consent.test.js`），所以**照他真会说的一句**接线。
       turnInput: () => '帮我做一个小程序',
+      // ★ **上架流程第一步是预审**（96 第 4 条）：这里给一份最小规则 ＋ 一个"没风险"的
+      //   评审，让这一组（验的是真链路）不被动；预审自己的判据在 `app-review.test.js`。
+      reviewPolicy: buildReviewPolicy({ fingerprint: 'test' }),
+      reviewAgent: async () => ({ summary: '没看到外联风险', risks: [], rating: 0, verdict: 'pass' }),
     },
   }).listen();
   return { dir, apps, published, sock, socketPath: path, installed };
@@ -109,7 +114,15 @@ const APP = {
   title: '掷骰子',
   icon: 'dice',
   entry: 'index.html',
-  files: { 'index.html': '<!doctype html><button id="r">掷</button><script>document.getElementById("r")</script>' },
+  files: {
+    'index.html': '<!doctype html><button id="r">掷</button><script>document.getElementById("r")</script>',
+    // ★ A16：外联申报（93 §2.2）。这一批起没有它 ⇒ 上架拒（fail-closed）。
+    'outbound.json': JSON.stringify({
+      schema: 1,
+      outbound: [],
+      declaredUsage: { dailyTokensBand: 0, dailyCallsBand: 0, basis: '还没人用过，先按 0 报' },
+    }),
+  },
 };
 
 async function handshake(c) {

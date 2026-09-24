@@ -37,6 +37,7 @@ import {
   readExpPacks,
 } from '../src/outbound.js';
 import { Published } from '../src/published.js';
+import { buildReviewPolicy } from '../src/review.js';
 import { AppWorkspaces } from '../src/workspace.js';
 
 const HERE = nodePath.dirname(new URL(import.meta.url).pathname);
@@ -71,9 +72,27 @@ function world() {
 
 const APP = { title: '新闻', icon: 'dice', entry: 'index.html' };
 
+// ★ **A16：外联申报是制品里的一个固定名文件**（93 §2.2 · 主人第 5 条）。
+//   这一批起，制品没有它 ⇒ **上架拒**（fail-closed）⇒ 这一组夹具要带上它。
+//   ⚠️ 它**不是** `manifest.json` 的字段：改它 ⇒ `rootHash` 变（判据 2.3.1）。
+const DECLARATION = JSON.stringify({
+  schema: 1,
+  outbound: [],
+  declaredUsage: { dailyTokensBand: 0, dailyCallsBand: 0, basis: '还没人用过，先按 0 报' },
+});
+
+/**
+ * ★ **预审那两样是注入的**（96 第 3b／4 条 · 93 §八 的"真模型调用可以先留成可注入的"）：
+ *   规则本来住**产品层**（只读挂载＋指纹），评审 agent 是一个真模型调用。
+ *   这一组验的是**出界闸**，所以给一份最小的规则 ＋ 一个说"没风险"的评审，
+ *   让"预审"这一关不挡住它们 —— 预审自己的判据在 `app-review.test.js`。
+ */
+const TEST_POLICY = buildReviewPolicy({ fingerprint: 'test' });
+const TEST_REVIEWER = async () => ({ summary: '没看到外联风险', risks: [], rating: 0, verdict: 'pass' });
+
 /** 造一版并返回那份 manifest（`rootHash` 就是"可核起点"）。 */
 function makeApp(w, id = 'news', body = '<p>第一版</p>') {
-  w.apps.create({ id, ...APP, files: { 'index.html': body } });
+  w.apps.create({ id, ...APP, files: { 'index.html': body, 'outbound.json': DECLARATION } });
   return w.apps.manifest(id, w.apps.current(id));
 }
 
@@ -298,7 +317,11 @@ test('🔴 §2-9b 旁路②：本地那条口（`apps.sock` 的 `publish`，新�
   const w = world();
   makeApp(w);
   writePack(w, 'news', 'notes', noAnchor());
-  const ctx = { published: w.published, sub: 'u1', authorName: '甲', workspace: w.workspaces };
+  const ctx = {
+    published: w.published, sub: 'u1', authorName: '甲', workspace: w.workspaces,
+    // ★ 这一组验的是出界闸 ⇒ 预审给一份最小规则 ＋ 一个"没风险"的评审（见上面那段）
+    reviewPolicy: TEST_POLICY, reviewAgent: TEST_REVIEWER,
+  };
 
   const r = await handleAppsOp(w.apps, { op: 'publish', id: 'news' }, ctx);
   assert.equal(r.ok, false, `🔴 新路也必须拒：${JSON.stringify(r)}`);
@@ -366,6 +389,9 @@ test('🔴 §2-9c 旁路③：**真 MCP 工具** `app_publish` ⇒ 也拒（上�
       authorName: '用户 1111',
       workspace: w.workspaces,
       turnInput: () => '帮我做一个小程序',
+      // ★ 预审那两样（见 `TEST_POLICY` 那段）
+      reviewPolicy: TEST_POLICY,
+      reviewAgent: TEST_REVIEWER,
     },
   }).listen();
   const c = mcpClient({ HUPO_APPS_SOCKET: socketPath });
@@ -374,7 +400,10 @@ test('🔴 §2-9c 旁路③：**真 MCP 工具** `app_publish` ⇒ 也拒（上�
     c.notify('notifications/initialized', {});
     const made = await c.call('tools/call', {
       name: 'app_create',
-      arguments: { id: 'dice', title: '掷骰子', icon: 'dice', entry: 'index.html', files: { 'index.html': '<p>掷</p>' } },
+      arguments: {
+        id: 'dice', title: '掷骰子', icon: 'dice', entry: 'index.html',
+        files: { 'index.html': '<p>掷</p>', 'outbound.json': DECLARATION },
+      },
     });
     assert.equal(made.result.isError, false, JSON.stringify(made.result));
 

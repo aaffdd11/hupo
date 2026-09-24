@@ -83,7 +83,11 @@ export async function askViaLocalProxy({
     const got = j?.choices?.[0]?.message?.content;
     if (typeof got !== 'string' || got.trim() === '') return { ok: false, error: '那边没有回话' };
     const cut = got.length > MAX_ANSWER_CHARS ? got.slice(0, MAX_ANSWER_CHARS) : got;
-    return { ok: true, text: cut };
+    // ★ **93 §5.2·C：上游那份 `usage` 一并带回去**（改前只回 `{ok,text}` ⇒ 用量当场丢）。
+    //   ⚠️ 认不出 ⇒ `null`（**不许**拿 0 充一笔）；记账由**知道 `appId` 的那个调用点**做
+    //      （`server.js` 的 `/api/app-ask`，旁边就是 `bumpAsk`）。
+    const usage = j?.usage && typeof j.usage === 'object' ? j.usage : null;
+    return { ok: true, text: cut, usage };
   } catch (err) {
     if (err?.name === 'AbortError') return { ok: false, error: '等太久了，没等到回话' };
     // ⚠️ 主人那一份**今天还没接上**（他那台没有盒子，本机也没有代理）⇒ 如实说，

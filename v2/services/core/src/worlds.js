@@ -38,6 +38,8 @@ import {
 } from './main-leak.js';
 import { Published, authorHashOf } from './published.js';
 import { Dispatcher } from './dispatcher.js';
+import { loadReviewPolicy } from './review.js';
+import { USAGE_KINDS, UsageLedger } from './usage.js';
 import { Ledger, LEDGER_TIMELINE_ID } from './ledger.js';
 import { LedgerSocket, ledgerSocketPath } from './ledger-socket.js';
 import { Notice, UNDO_RESTORE } from './notice.js';
@@ -196,6 +198,28 @@ export class Worlds {
   #makeTrash;
   /** 共享的小程序库（乙-3）。**一个部署一份**（不是按人一份）。 */
   #published;
+  /**
+   * ★ **预审规则**（96 第 3b 条）：产品层那份（只读挂载＋指纹），
+   * **一个部署一份**。`undefined` = 还没读过；`null` = 读过但读不到（fail-closed）。
+   */
+  #reviewPolicyCache;
+
+  /**
+   * 把产品层那份预审规则读出来（**缓存一次**）。
+   *
+   * 🔴 读不到就返回 `null` ⇒ 上架时的预审 **escalate**（不自动放行）。
+   *    ⚠️ 这**不是**"跳过预审"：跳过等于让"自己审自己"成立（96 第 3b 条）。
+   */
+  #reviewPolicy() {
+    if (this.#reviewPolicyCache !== undefined) return this.#reviewPolicyCache;
+    try {
+      this.#reviewPolicyCache = loadReviewPolicy({ codeRoot: this.#cfg.codeRoot });
+    } catch (err) {
+      this.#warn(`  ⚠️ 预审规则读不出来（${err?.message ?? err}）⇒ 上架前的预审一律不自动放行`);
+      this.#reviewPolicyCache = null;
+    }
+    return this.#reviewPolicyCache;
+  }
 
   /**
    * @param {object} o
@@ -263,6 +287,19 @@ export class Worlds {
   /** 主线 ＋ 所有房间（聚合状态 / 收工用）。 */
   allRooms() {
     return [...this.#worlds.values(), ...this.#rooms.values()];
+  }
+
+  /**
+   * ★ **从外面记一笔用量**（语音那一路在 `serve.js` 里收尾时叫它）。
+   *
+   * ⚠️ **世界没热过 ⇒ 不为了记账去 provision 一个人**（那会有副作用）；
+   *    如实回 `{ok:false}`（调用方日志里看得到）。
+   * ⚠️ 只记量；不抛（`UsageLedger.note` 自己吞）。
+   */
+  noteUsage(userId, scopeId, patch = {}) {
+    const w = this.#worlds.get(userId);
+    if (!w?.usage) return { ok: false, error: '这一位还没热过，账先没记' };
+    return w.usage.note(scopeId, patch);
   }
 
   /**
@@ -426,6 +463,10 @@ export class Worlds {
     //      由 `AppWorkspaces.ensure/write` 与 `apps.create` 两个写入漏斗共用一个函数
     //      （见上面 `RESERVED_APP_SCOPES` 那段说明）。
     const workspaces = new AppWorkspaces({ dir: t.dir, log: (m) => this.#warn(m) });
+    // ★ **用量账（93 §五）**：**按 app（scopeId）记 token**，含它触发的子任务；
+    //   落 `<dir>/hupo/apps/<id>/usage.jsonl`（**贴现有布局，不新造第二套**）。
+    //   ⚠️ 它只记量（token 三格／次数／张数／秒数），**不记任何访问日志**。
+    const usage = new UsageLedger({ apps, log: (m) => this.#warn(`  ${m}`) });
     // ⚠️ **调度器建在这下面**（它要 timeline 那几样），而"造东西那条闸"（P1-22）
     //   要看**这一轮他说了什么** —— 那句话住在调度器里。
     //   ⇒ 先空着，等它建好再指过来（`ctx.turnInput` 是个**取值函数**，调的时候才读）。
@@ -464,6 +505,14 @@ export class Worlds {
         // ★ **画一张图**（P1-27 后半）：工具只递请求，真正去花他那把钥匙的是这里。
         //   ⚠️ 与 `/api/image`（配置页那个「试一张」）**同一套规则**（`image-use.js`）。
         drawImage: makeDrawImage({ dataDir: t.dir, log: (m) => this.#warn(`  ${m}`) }),
+        // ★ **用量账**（93 §五）：`ask`（server.js）与画图（apps-socket.js）都记到它上面。
+        usage,
+        // ★ **上架第一步的预审**（96 第 3b／4 条）：规则是**产品层**那份（只读挂载＋指纹），
+        //   读不到 / 指纹对不上 ⇒ `null` ⇒ 预审 **fail-closed**（不自动放行）。
+        //   ⚠️ `reviewAgent` 是**注入的**评审实现；本批没有 ⇒ `null` ⇒ 一律 `escalate`
+        //      （**不许**因为"审不了"就自动放行）。
+        reviewPolicy: this.#reviewPolicy(),
+        reviewAgent: this.#cfg.reviewAgent ?? null,
         // ★ 装上了 ⇒ 往**他自己**的流里推一条（客户端收到就重拉清单，桌面自己长出来）
         onInstalled: (info) => {
           try {
@@ -537,6 +586,12 @@ export class Worlds {
       backgroundAfterMs: cfg.backgroundAfterMs,
       // "去哪看"那半句用主线的名字（主线就叫"这儿"，用不上 title）。
       whereTitle: null,
+      // ★ **93 §5.2·A：`usage` 从这里接上** —— 翻译层拿到的上游 usage 不再被丢掉，
+      //   按**这一间的 `scopeId`** 记一笔（主人第 8 条：含它触发的子任务）。
+      //   ⚠️ 只记量、不记内容；回调失败不挡轮（`UsageLedger.note` 自己吞）。
+      onUsage: ({ scopeId, turn, usage: u }) => {
+        usage.note(scopeId, { kind: USAGE_KINDS.agentTurn, usage: u, scopeId, turn });
+      },
     });
 
     // ★ 账本那条本地通道：**套接字路径由这个人的目录派生** ⇒ 天然跟人走
@@ -579,6 +634,8 @@ export class Worlds {
       ledgerSocket,
       apps,
       workspaces,
+      // ★ **用量账**（93 §五）：`worlds.noteUsage()` 用它接语音那一路的账。
+      usage,
       appsSocket,
       published: this.#published,
       dispatcher,
@@ -670,7 +727,7 @@ export class Worlds {
 
     // ★ **房间里那份 cfg**：`DSH_HOME` / 本地通道还是这个人的，
     //   **只有工作目录换成那个工作区** —— 这就是"模型写的东西落在它自己家里"。
-    const cfg = { ...world.cfg, agentCwd: paths.agentCwd };
+    const cfg = { ...world.cfg, agentCwd: paths.agentCwd, scope: id };
     const room = {
       userId,
       dir: world.dir,

@@ -17,7 +17,8 @@ import { Auth } from './auth.js';
 import { Users, maskPhone } from './users.js';
 import { TenantChannel } from './tenant-channel.mjs';
 import { stepsFor } from './space-steps.js';
-import { Worlds } from './worlds.js';
+import { Worlds, MAIN_SCOPE } from './worlds.js';
+import { USAGE_KINDS } from './usage.js';
 import { OWNER_ID, readTenantTemplate, tenancyFor, tenantNameFor, userIdNumber } from './tenants.js';
 import { ProvisionQueue } from './provision.js';
 import { dropTunnel, notifyHost } from './tenant-tunnel-agent.mjs';
@@ -762,6 +763,15 @@ const { listen, listenTrusted, close } = createServer({
   asr: createAsrRelay({
     config: (info) => voiceCredsFor({ sub: info?.sub, dataDir: cfg.dataDir }),
     log: (m) => console.log(`▶ ${m}`),
+    // ★ **P2-3：听了几分钟进那个账本**（一个账本三个计数器）。
+    //   语音是**他自己的**（主线那条），所以记在 `main` 那一格上。
+    onSpend: ({ sub, seconds }) => {
+      worlds.noteUsage(sub, MAIN_SCOPE, {
+        kind: USAGE_KINDS.voice,
+        voiceSeconds: seconds,
+        scopeId: MAIN_SCOPE,
+      });
+    },
   }),
   /**
    * ★ **甲那条**（`/api/harness` · 2026-09-24）：盒子里那台 DSH 自己的**原始会话流**。

@@ -84,9 +84,16 @@ function world() {
 
 const APP = { title: '新闻', icon: 'dice', entry: 'index.html' };
 
+/** ★ A16：外联申报（93 §2.2）。这一批起制品没有它 ⇒ 上架拒（fail-closed）。 */
+const DECLARATION = JSON.stringify({
+  schema: 1,
+  outbound: [],
+  declaredUsage: { dailyTokensBand: 0, dailyCallsBand: 0, basis: '还没人用过，先按 0 报' },
+});
+
 /** 甲发第 n 版（同名同 id，版本只增 —— 这就是"上游出了新版本"）。 */
 function publish(w, n, id = 'news') {
-  w.author.create({ id, ...APP, files: { 'index.html': `<p>上游第 ${n} 版</p>` } });
+  w.author.create({ id, ...APP, files: { 'index.html': `<p>上游第 ${n} 版</p>`, 'outbound.json': DECLARATION } });
   return w.published.publish(w.author, { id, authorSub: 'u1', authorName: '甲' });
 }
 

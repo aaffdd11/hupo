@@ -195,3 +195,60 @@ test('🔴 S5·装上也算一条写入路：共享库里就算塞了条保留 i
   assert.equal(apps.current('settings'), null, '🔴 装上那条路也进不去');
   assert.equal(nodeFs.existsSync(nodePath.join(apps.root, 'settings')), false, '盘上零残留');
 });
+
+// ════════════════════════════════════════════════════════════════
+// S6 · 🔴 装上：共享库那份的起点必须与**重算出来的**逐字一致
+// ════════════════════════════════════════════════════════════════
+//
+// 前一批查出来的洞（91 §11.3 · 本批必修）：`installInto()` 原来**从不拿**共享库
+// `index.rootHash` 与重算值比对 ⇒ 共享库被改过（字节变了、登记没变）时会**静默
+// 换一个 rootHash** 收下 —— 而"可核起点"这句话就靠这个比对才成立。
+//
+// ⚠️ **保留 id 那条判据的报错顺序一个字没动**：比对发生在 `apps.create` 里
+//    **所有既有闸之后**（所以 `settings` 那条仍然先报"桌面上/主线"）。
+//    上面那条测试（`:192` 附近）就是它的证据 —— **不是**被改弱，而是**没动**。
+
+test('🔴 S6：共享库那份被人动过（字节变了、登记没变）⇒ **拒装 ＋ 人话**，盘上零残留', () => {
+  const dir = tmp();
+  const author = new Apps({ dir: nodePath.join(dir, 'author'), sub: 'u1' });
+  const published = new Published({ dir });
+  author.create({
+    id: 'news', title: '新闻', icon: 'dice', entry: 'index.html',
+    files: {
+      'index.html': '<p>原版</p>',
+      // ★ A16：外联申报（93 §2.2）—— 没有它上架拒（fail-closed）
+      'outbound.json': JSON.stringify({
+        schema: 1, outbound: [],
+        declaredUsage: { dailyTokensBand: 0, dailyCallsBand: 0, basis: '还没人用过，先按 0 报' },
+      }),
+    },
+  });
+  const idx = published.publish(author, { id: 'news', authorSub: 'u1', authorName: '甲' });
+
+  // ★ 正对照：没动过 ⇒ 装得上，而且装进来的起点＝共享库登记的那一个
+  const good = new Apps({ dir: nodePath.join(dir, 'v-good'), sub: 'u2' });
+  const r = published.installInto(good, 'news');
+  assert.equal(r.id, 'news');
+  assert.equal(good.manifest('news', 1).rootHash, idx.rootHash, '起点逐字带过来');
+
+  // 🔴 只动共享库里那一版的**字节**（`index.json` 里登记的 rootHash 不动）
+  //    ⚠️ 共享库里那份是 0444（不可变）⇒ 判据里先放开权限再改（模拟"有人动了盘"）
+  const sharedFile = nodePath.join(dir, 'published-apps', 'news', 'versions', '1', 'index.html');
+  nodeFs.chmodSync(sharedFile, 0o644);
+  nodeFs.writeFileSync(sharedFile, '<p>被人改过</p>');
+  nodeFs.chmodSync(sharedFile, 0o444);
+
+  const victim = new Apps({ dir: nodePath.join(dir, 'v-bad'), sub: 'u3' });
+  const err = caught(() => published.installInto(victim, 'news'));
+  assert.ok(err, '🔴 改过的共享库必须拒装（改前这里会静默换一个 rootHash 收下）');
+  assert.match(String(err.message), /对不上|被人动过/, `拒的话要是人话：${err?.message}`);
+  assert.equal(victim.current('news'), null, '不许登记进制品库');
+  assert.equal(nodeFs.existsSync(nodePath.join(victim.root, 'news')), false, '🔴 盘上零残留');
+
+  // **反着验**：把字节改回去 ⇒ 同一条路又能装（证明闸是"判"，不是"关"）
+  nodeFs.chmodSync(sharedFile, 0o644);
+  nodeFs.writeFileSync(sharedFile, '<p>原版</p>');
+  nodeFs.chmodSync(sharedFile, 0o444);
+  const again = published.installInto(new Apps({ dir: nodePath.join(dir, 'v-ok2'), sub: 'u4' }), 'news');
+  assert.equal(again.id, 'news');
+});

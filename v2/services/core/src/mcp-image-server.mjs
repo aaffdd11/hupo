@@ -50,6 +50,10 @@ const DEFAULT_VERSION = '2024-11-05';
 const SOCKET = process.env.HUPO_IMAGE_SOCKET ?? process.env.HUPO_APPS_SOCKET ?? '';
 const TIMEOUT_MS = Number.parseInt(process.env.HUPO_IMAGE_TIMEOUT_MS ?? '150000', 10);
 
+/** ★ **这一间是哪一间**（`HUPO_APPS_SCOPE`，由 agent 那侧传下来）。
+ *  ⚠️ 只是房间名（不是秘密）：服务端靠它把"这张图"记到叫它画的那个 app 头上。 */
+const SCOPE = process.env.HUPO_APPS_SCOPE ?? '';
+
 /** 一行一条的那个口。问一句、拿一句、挂断（服务端重启之后自己就好）。 */
 function ask(payload) {
   return new Promise((resolve) => {
@@ -137,7 +141,7 @@ async function callTool(name, args) {
   if (name !== 'image_generate') return textResult(`不认识的工具：${name}`, true);
   const prompt = typeof args?.prompt === 'string' ? args.prompt.trim() : '';
   if (!prompt) return textResult('这次没画成：得先有一句"要画什么"。', true);
-  const r = await ask({ op: 'draw', prompt });
+  const r = await ask({ op: 'draw', prompt, ...(SCOPE ? { scope: SCOPE } : {}) });
   if (r.ok) {
     const urls = Array.isArray(r.urls) ? r.urls.filter((u) => typeof u === 'string') : [];
     if (urls.length === 0) return textResult('画是画了，可它没给我地址 —— 再试一次。', true);

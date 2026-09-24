@@ -343,9 +343,15 @@ export class Apps {
    * @param {Record<string,string|Buffer>} o.files  path → 内容
    * @param {string} [o.createdBy]    `user` | `agent`
    * @param {number} [o.createdTurn]  哪一轮造的（**可倒查**）
+   * @param {string} [o.expectRootHash] 🔴 **这一版"应该"是这个起点吗**（可选）。
+   *   给了就**逐字比对**算出来的 `rootHash`，对不上 ⇒ 拒（**在动盘之前**）。
+   *   ⚠️ 它是"装上"那条路要的：共享库里那份 `index.rootHash` 是**登记在册的承诺**，
+   *      比对不上说明**那份东西被人动过** —— 不许静默换一个起点收下。
+   *   ⚠️ 顺序刻意：它在**所有既有闸之后**（保留 id、权限、路径、隐藏路径……），
+   *      所以既有判据的**报错顺序与话都不变**（`test/app-write-gates.test.js` 那条保留 id 判据）。
    * @returns {object} 写下去的 manifest
    */
-  create({ id, title, icon, entry, files, permissions = [], createdBy = 'user', createdTurn = null }) {
+  create({ id, title, icon, entry, files, permissions = [], createdBy = 'user', createdTurn = null, expectRootHash = null }) {
     checkAppId(id);
     // 🔴 **保留 id 的唯一一道闸**（`REFUSED_APP_IDS`）：主线 ＋ 桌面内置四格。
     //    写在这里 ⇒ **每一条写路都过它**（含 `apps-socket.js` 那条老路、装上、迁移）。
@@ -415,6 +421,16 @@ export class Apps {
       createdAt: this.now(),
       bytes: total,
     };
+
+    // 🔴 **"应该就是这个起点吗"**（装上那条路的承诺比对；见 `expectRootHash` 的说明）。
+    //    ⚠️ 放在**这里**（内存里全算完、盘还没动）—— 对不上就拒，且盘上零残留。
+    if (expectRootHash !== null && expectRootHash !== undefined) {
+      if (typeof expectRootHash !== 'string' || manifest.rootHash !== expectRootHash) {
+        throw new AppsError(
+          '这一版的内容跟它登记的起点（rootHash）对不上 —— 说明那份东西被人动过，装不了',
+        );
+      }
+    }
 
     // ── 到这里为止，盘上一个字节都没动（规矩②）────────────────
     this.fs.mkdirSync(this.versionsDir(id), { recursive: true, mode: 0o755 });

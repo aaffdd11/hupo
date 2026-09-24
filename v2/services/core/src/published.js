@@ -19,6 +19,7 @@ import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
 import { AppsError } from './apps.js';
+import { assertDeclarationAllowed } from './app-outbound.js';
 import { assertOutboundAllowed } from './outbound.js';
 
 /** 共享库放在数据目录下的哪个子目录。 */
@@ -135,6 +136,13 @@ export class Published {
     for (const f of manifest.files ?? []) {
       files[f.path] = apps.read(id, mine.version, f.path).content;
     }
+
+    // 🔴 **外联申报（A16）** —— 93 §2.4：**读不到申报 ⇒ 拒上架**（fail-closed，
+    //    **不是**"当没有外联"）。申报是制品里的一个普通文件 ⇒ **随 `rootHash` 冻结**
+    //    （主人第 5 条）；它同时也被**逐个出网点对照代码**（93 §三 R1／R2）。
+    //    ⚠️ 顺序刻意：它在 `assertOutboundAllowed`（`.exp/` 那条）**之后**、
+    //       在**任何一次写盘之前** —— 拒的时候共享库一个字节都不动。
+    assertDeclarationAllowed({ files, version: mine.version });
 
     const vdir = nodePath.join(this.appDir(id), 'versions', String(mine.version));
     this.fs.mkdirSync(vdir, { recursive: true, mode: 0o755 });
@@ -260,6 +268,12 @@ export class Published {
       files,
       permissions: index.permissions ?? [],
       createdBy: 'user',
+      // 🔴 **登记在册的那个起点，必须与重算出来的逐字一致**（91 §11.3 那条洞：
+      //    改前这里**从不比对** `index.rootHash` ⇒ 共享库被改会**静默换一个 rootHash**
+      //    收下）。比对不上 ⇒ 拒装 ＋ 人话；而比对发生在 `apps.create` **动盘之前**，
+      //    所以盘上零残留。
+      //    ⚠️ 保留 id 那条判据的报错顺序**不变**：它在 `apps.create` 里排在更前面。
+      expectRootHash: index.rootHash,
     });
     this.#audit({ what: 'install', id, version: m.version, by: apps.sub ?? null });
     return { id: m.id, version: m.version, title: m.title };

@@ -99,6 +99,8 @@ class Session {
   #onAuthFailure = null;
   #recapFedTo = null;
   #lastRecap = null;
+  /** ★ 用量账（见构造参数 `onUsage`）。不接 ⇒ 老行为。 */
+  #onUsage = null;
   /** turn → 计时器。一轮一个，所以"后一轮开始把前一轮的计时器顶掉"不会丢东西。 */
   #deadlines = new Map();
   /**
@@ -278,6 +280,14 @@ class Session {
     workNotice = null,
     /** ★ P1：多久还没做完 ⇒ 当成"长活"，先交代一句（阈值住代码，不写文档）。 */
     backgroundAfterMs = BACKGROUND_AFTER_MS,
+    /**
+     * ★ **用量账**（契约 `docs/dev/93-OUTBOUND-USAGE.md` §5.2·A）：
+     *   上游回来的 `usage` 到了翻译层（`session-translate.js`）就被**丢在这里**。
+     *   现在**不再丢**：连同**这一轮的 `scopeId`** 交给它。
+     *   ⚠️ 回调失败**不许挡这一轮**（记账是旁路，93 §4.5.5）。
+     *   不接 ⇒ 老行为（与改前逐字一致）。
+     */
+    onUsage = null,
   }) {
     if (!store) {
       // ⚠️ **不许默认没有 recap 就悄悄开工。**
@@ -300,12 +310,15 @@ class Session {
     this.#workNotice = workNotice ?? notice;
     this.#backgroundAfterMs = backgroundAfterMs;
     this.#onAuthFailure = onAuthFailure;
+    this.#onUsage = onUsage;
     this.#translator = new TurnTranslator({ timeline, scopeId, notice });
 
     // ★ P1：记下这一轮最后说出口的正文 —— 完成提醒里那句"结果一句"就是它
     //   （**转述**，不是新落一条；模型原文本身已经在时间线上了）。
-    this.#translator.on('text', ({ text }) => {
+    // ★ **93 §5.2·A：`usage` 不再当场丢掉** —— 交给 `#noteUsage()`（按这一间的 scope 记账）。
+    this.#translator.on('text', ({ turn, text, usage }) => {
       if (typeof text === 'string' && text !== '') this.#lastSpokenText = text;
+      this.#noteUsage(turn, usage);
     });
 
     // 超时硬收口：轮的起讫从翻译层来（它才知道"这一轮开始了没有"）
@@ -392,6 +405,27 @@ class Session {
 
   get translator() {
     return this.#translator;
+  }
+
+  /**
+   * ★ **93 §5.2·A：把这一轮的 `usage` 交出去**（按**这一间**的 `scopeId`）。
+   *
+   * 🔴 为什么按 scope：主人第 8 条"**都算到这个 app（含它触发的子任务）**"——
+   *    这一间房里的轮（含它自己拉起来的子任务）都带这个 `scopeId`。
+   * ⚠️ **回调失败不许挡这一轮**（93 §4.5.5：盘满时那一轮照旧收口）。
+   * ⚠️ `usage` 为空 / 认不出 ⇒ **不记**（不许拿 0 充一笔）。
+   */
+  #noteUsage(turn, usage) {
+    if (!this.#onUsage || !usage || typeof usage !== 'object') return;
+    try {
+      this.#onUsage({
+        scopeId: this.#scopeId ?? 'main',
+        turn: Number.isInteger(turn) ? turn : null,
+        usage,
+      });
+    } catch {
+      /* 记账是旁路：它出事不许把用户那一轮弄失败 */
+    }
   }
 
   get lastError() {
@@ -1103,6 +1137,8 @@ export class Dispatcher {
   #titles;
   /** ★ P1：长活判定的阈值（房间也要同一份）。 */
   #backgroundAfterMs;
+  /** ★ 用量账（见 `Session` 的 `onUsage`）——每个用户一份，所有会话共用。 */
+  #onUsage;
 
   /**
    * @param {object} o
@@ -1130,6 +1166,8 @@ export class Dispatcher {
     this.#titles = new Map();
     if (args.whereTitle) this.#titles.set(this.#mainScope, args.whereTitle);
     this.#backgroundAfterMs = args.backgroundAfterMs ?? BACKGROUND_AFTER_MS;
+    // ★ 93 §5.2·A：用量账（一个人一份）。主线与会话都从这里拿同一个回调。
+    this.#onUsage = args.onUsage ?? null;
     const main = new Session({ ...args, work: this.#work, promises: this.#promises });
     this.#sessions.set(main.scopeId, main);
   }
@@ -1188,6 +1226,8 @@ export class Dispatcher {
       promises: this.#promises,
       whereTitle: this.#titles.get(id) ?? null,
       backgroundAfterMs: this.#backgroundAfterMs,
+      // ★ 93 §5.2·A：**每一个房间**的用量都记到它自己的 scope 头上。
+      onUsage: this.#onUsage,
     });
     this.#sessions.set(id, s);
     return s;

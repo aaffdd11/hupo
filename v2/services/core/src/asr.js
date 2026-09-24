@@ -61,8 +61,11 @@ export const safeAsrMessage = (err) => {
  * @param {() => number} [o.now]
  * @param {number} [o.maxMs] 一次最多听多久（判据里会调小）
  * @param {(m: string) => void} [o.log]
+ * @param {(info:{sub:string|null, seconds:number}) => void} [o.onSpend]
+ *   ★ **P2-3：听了几分钟也要进那个账本**（一个账本三个计数器）。
+ *   ⚠️ 一次会话**只报一次**（收尾那一刻）；`seconds` 从收到的字节推（不记内容）。
  */
-export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log = () => {} }) {
+export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log = () => {}, onSpend = null }) {
   /**
    * **这一条连接用哪份凭据**（P1-26）。
    *
@@ -149,6 +152,16 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
       if (!ended) {
         ended = true;
         log(`asr：会话结束 · 收到 ${bytes} 字节 ≈ ${(bytes / 32000).toFixed(1)} 秒 · 原因：${why}`);
+        // ★ **P2-3：听了几分钟进那个账本**（一次会话**只报一次**）。
+        //   ⚠️ 只报"多少秒"，不报内容；记账失败不许把收尾弄挂。
+        if (!spent) {
+          spent = true;
+          try {
+            onSpend?.({ sub: info?.sub ?? null, seconds: bytes / 32000 });
+          } catch {
+            /* 记账是旁路 */
+          }
+        }
         send({
           type: 'asr/end',
           text,
@@ -160,6 +173,9 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
       stopUpstream();
       closeClient();
     };
+
+    /** 这一次会话的账报过没有（只报一次）。 */
+    let spent = false;
 
     /** 收到多少音频（日志里只报这个数，不报内容）。 */
     let bytes = 0;

@@ -20,9 +20,11 @@ import nodePath from 'node:path';
 import { AppsError } from './apps.js';
 import { NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
 import { NEEDS_ASK_IMAGE, asksToDrawImage } from './image.js';
-import { OutboundError } from './outbound.js';
+import { OutboundError, assertOutboundAllowed } from './outbound.js';
 import { PublishedError, authorHashOf } from './published.js';
+import { preReview } from './review.js';
 import { handSocketToAgent } from './socket-owner.mjs';
+import { USAGE_KINDS } from './usage.js';
 import { mirrorArtifactIntoWorkspace, snapshotBeforeInstall, snapshotWorkspace } from './workspace.js';
 
 /** 小程序那条口放哪。**跟着那个人的目录走**（`<他那一格>/apps.sock`）。 */
@@ -135,6 +137,11 @@ export async function handleAppsOp(apps, req, ctx = {}) {
         if (prompt === '') return { ok: false, error: '先写一句想要什么图。' };
         const r = await ctx.drawImage(ctx.sub, prompt);
         if (!r?.ok) return { ok: false, error: r?.text ?? '这次没画成，等会儿再试。' };
+        // ★ **P2-3：画了几张也进那个账本**（一个账本三个计数器）。
+        //   ⚠️ 归到**叫它画的那一间**（`req.scope` 由工具那侧带上；空 ⇒ 主线）。
+        //     记不上账**不许**把这一张图弄没（`UsageLedger.note` 自己吞错）。
+        const scope = typeof req.scope === 'string' && req.scope.trim() !== '' ? req.scope.trim() : 'main';
+        ctx.usage?.note(scope, { kind: USAGE_KINDS.image, images: (r.urls ?? []).length, scopeId: scope });
         // ⚠️ 只回"画好了 + 图在哪"（**没有钥匙**）
         return { ok: true, urls: r.urls ?? [] };
       }
@@ -145,16 +152,44 @@ export async function handleAppsOp(apps, req, ctx = {}) {
       // ── 发布 / 下架 / 装上 / 看共享库（乙-3）────────────────
       case 'publish': {
         if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
+        // 🔴 **`.exp/` 那条出界闸先跑**（92 §③ 阶段 2 的硬规矩）：说不清来路的东西
+        //    一份都不许出去。预审是**上架流程的第一步**，但它跑在这条**前置校验**之后
+        //    —— 顺序是"先说清来路 → 再申报与评审"。
+        //    ⚠️ `published.publish` 里还会再跑一次同一道闸（幂等，不是第二份逻辑）。
+        assertOutboundAllowed({ route: 'publish', apps, workspaces: ctx.workspace ?? null, id: req.id });
+        // ★ **预审 = 上架流程的第一步，自动跑**（96 第 4 条）。
+        //   它按顺序：规则（产品层只读＋指纹）→ 申报（A16 · fail-closed）→ 代码扫描（R1／R2）
+        //   → 用量（盒里日均 vs 申报量级）→ 评审 agent（注入的；没接上 ⇒ 不自动放行）。
+        //   结论**绑 `rootHash`** 落 `review.jsonl`（R5）；低风险自动放行、高风险找主人。
+        //   🔴 拒的时候**共享库一个字节都不动**（预审跑在 `published.publish` 之前）。
+        const rev = await preReview({
+          apps,
+          id: req.id,
+          policy: ctx.reviewPolicy ?? null,
+          agent: typeof ctx.reviewAgent === 'function' ? ctx.reviewAgent : null,
+          usage: ctx.usage ?? null,
+          turn: Number.isInteger(req.turn) ? req.turn : null,
+        });
+        if (!rev.allow) {
+          return {
+            ok: false,
+            refused: rev.refused ?? rev.verdict,
+            verdict: rev.verdict,
+            review: rev.review ?? null,
+            error: `${rev.words} —— 这一版没上架`,
+          };
+        }
         // 🔴 **出界那一条独木桥**（92 §③ 阶段 2）：`published.publish` 是共享库唯一的写入者，
         //    而它第一件事就是过 `outbound.assertOutboundAllowed`。这里把**这一间房**递过去
         //    （申报住 `<scope>/.exp/`）—— 少了它，出界检查就只能按默认布局找了。
+        //    ⚠️ `published.publish` 里还有**外联申报（A16）**那道闸（读不到 ⇒ 拒）。
         const r = ctx.published.publish(apps, {
           id: req.id,
           authorSub: ctx.sub,
           authorName: ctx.authorName,
           workspaces: ctx.workspace ?? null,
         });
-        return { ok: true, id: r.id, version: r.version, title: r.title };
+        return { ok: true, id: r.id, version: r.version, title: r.title, verdict: rev.verdict };
       }
       case 'unpublish': {
         if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };

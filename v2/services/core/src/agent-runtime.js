@@ -364,6 +364,10 @@ export class DshAgent extends EventEmitter {
           ...(cfg.appsSocketPath ? { HUPO_APPS_SOCKET: cfg.appsSocketPath } : {}),
           // ★ **画图那一支**（P1-27 后半）：它自己那个文件 ＋ **同一条**通道
           ...(cfg.imageServerPath ? { HUPO_IMAGE_SERVER: cfg.imageServerPath } : {}),
+          // ★ **这一间是哪一间**（`scope`）：那几条工具把它原样带回来 ⇒ 用量账
+          //   才知道"这一张图是哪个 app 叫的"（P2-3 一个账本三个计数器）。
+          //   ⚠️ 它**不是秘密**（就是房间名，客户端也看得到）⇒ 走 env 不破纪律。
+          ...(cfg.scope ? { HUPO_APPS_SCOPE: String(cfg.scope) } : {}),
         },
       }),
     });
