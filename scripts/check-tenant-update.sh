@@ -115,6 +115,7 @@ portable_part() {
   fi
   # 负向对照：真塞一个进去，上面那条**必须**红
   LEAK="$T/leak"; cp -r "$FAKE" "$LEAK"
+  # check-secrets:允许（这一行是**负向对照**用的假钥匙 —— 上面那条判据必须抓得住它）
   printf 'HUPO_MODEL_KEY: sk-abcdefghijklmnopqrstuvwxyz012345\n' > "$LEAK/src/leak.txt"
   if grep -rIl -E 'sk-[A-Za-z0-9]{16,}' "$LEAK" >/dev/null 2>&1; then
     ok "负向对照：塞一个假 key 进去 ⇒ 那一条判据抓得住"
@@ -171,10 +172,15 @@ portable_part() {
         sleep 0.5
       done
       "$PODMAN" kill "$NAME" >/dev/null 2>&1; rm -rf "$DATA"
-      if [ "$GOT" = "dev" ]; then
-        ok "负向对照：不挂产品层 ⇒ 报 「dev\」（那个指纹**确实是挂载带进去的**）"
+      # ⚠️ **2026-09-24 改**：原来期望「报 dev」——那是"镜像里还烤着产品层"那个年代的形状。
+      #    实测（拿那个镜像看 /app）：镜像里**只有** entry.mjs 那几样、**没有 /app/code**
+      #    ⇒ 不挂产品层它**根本起不来**（进程直接退，HTTP 也没有）。
+      #    ⇒ 判据改成**更强的那个**：**没有挂载 ⇒ 就没有那个指纹** ——
+      #      这才是"那个指纹确实是挂载带进去的"真正要证的事。
+      if [ -z "$GOT" ] || { [ -n "${FP:-}" ] && [ "$GOT" != "$FP" ]; }; then
+        ok "负向对照：不挂产品层 ⇒ 那个指纹就**没有**（「$GOT」）—— 它确实是挂载带进去的"
       else
-        bad "🔴 不挂产品层它却报了「$GOT」—— 那第 4 条验的就不是挂载"
+        bad "🔴 不挂产品层它却报出了候选那一版「$GOT」—— 那第 4 条验的就不是挂载"
       fi
     else
       bad "找不到端口做负向对照"
