@@ -26,6 +26,52 @@ enum SpaceScreen {
   key,
 }
 
+/// **配置页那四样有没有**（主人 2026-09-24 定的形状 · 契约 `docs/dev/79-CREDS-TABS.md`）。
+///
+/// ⚠️ 服务端**只回"有没有"**，永远不回值（那是密钥那条路）。
+/// ⚠️ 宽容解析：缺字段 / 老服务端 / 坏类型 ⇒ 一律 `false`（"没有"）。
+///    **不许**把"不知道"当成"有"——那会让配置页对他说"填好了"，而他其实没有。
+class SpaceCreds {
+  const SpaceCreds({
+    this.model = false,
+    this.voice = false,
+    this.image = false,
+    this.video = false,
+  });
+
+  /// **聊天用的那一串**（语言那一把）—— 它决定他能不能开口说话。
+  final bool model;
+
+  /// **听我说话用的那三样**（三样齐了才算有，服务端说的）。
+  final bool voice;
+
+  /// 画图那一把。
+  final bool image;
+
+  /// 做视频那一把。
+  final bool video;
+
+  factory SpaceCreds.fromJson(Object? raw) {
+    if (raw is! Map) return const SpaceCreds();
+    return SpaceCreds(
+      model: raw['model'] == true,
+      voice: raw['voice'] == true,
+      image: raw['image'] == true,
+      video: raw['video'] == true,
+    );
+  }
+
+  /// **有没有任何一个**（这一批的边界：图片/视频/语音先只是"收着"，但收下了就该看得见）。
+  bool get any => model || voice || image || video;
+
+  Map<String, dynamic> toJson() => {
+        'model': model,
+        'voice': voice,
+        'image': image,
+        'video': video,
+      };
+}
+
 /// 服务端说的"我那台到哪一步了"。**认不出来就当"就绪"**（见纪律 1）。
 class SpaceInfo {
   const SpaceInfo({
@@ -34,6 +80,7 @@ class SpaceInfo {
     this.hasKey = false,
     this.keyBad = false,
     this.steps = const [],
+    this.creds = const SpaceCreds(),
   });
 
   /// `local` = 主人那种（本机那份，没有单独一台）；`tenant` = 有自己一台。
@@ -51,6 +98,9 @@ class SpaceInfo {
 
   /// 他那台上有没有填过钥匙。
   final bool hasKey;
+
+  /// **配置页那四样有没有**（主人 2026-09-24）。老服务端不回它 ⇒ 全 `false`。
+  final SpaceCreds creds;
 
   /// 🔴 **他填过、但上游说那一串不灵**（服务端说的 · 契约 `48-SETTINGS-KEY.md`）。
   ///
@@ -92,6 +142,7 @@ class SpaceInfo {
       // ⚠️ 宽容解析：只有**真的 true** 才算（缺字段 / 老服务端 ⇒ false）
       keyBad: raw['keyBad'] == true,
       steps: parseSteps(raw['steps']),
+      creds: SpaceCreds.fromJson(raw['creds']),
     );
   }
 
@@ -101,6 +152,7 @@ class SpaceInfo {
         'hasKey': hasKey,
         'keyBad': keyBad,
         'steps': steps.map((e) => e.toJson()).toList(),
+        'creds': creds.toJson(),
       };
 }
 

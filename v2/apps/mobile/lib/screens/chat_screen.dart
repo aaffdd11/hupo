@@ -67,6 +67,7 @@ class ChatScreen extends StatefulWidget {
     required this.onLoggedOut,
     this.space = const SpaceInfo(),
     this.onSendKey,
+    this.onSendCreds,
     this.onCancelMe,
     this.onKeyChanged,
     this.initialTier = FloaterTier.collapsed,
@@ -81,6 +82,10 @@ class ChatScreen extends StatefulWidget {
   /// 把钥匙交上去（和第一次那一屏**同一个入口**）。`null` ⇒ 抓手行不显示「配置」
   /// （单看这一屏的测试可以不传）。
   final Future<KeySend> Function(String key)? onSendKey;
+
+  /// **配置页那四样**（主人 2026-09-24）：某一屏填好了 ⇒ 一次送出去。
+  /// ⚠️ `tab` 就是那四个 tab 的名字（`space_words.dart` 里那四个常量）。
+  final Future<KeySend> Function(String tab, Map<String, String> values)? onSendCreds;
 
   /// 取消注册（照样只有一次实现，见 `KeyForm`）。
   final Future<CancelOutcome> Function()? onCancelMe;
@@ -490,6 +495,8 @@ class _ChatScreenState extends State<ChatScreen> {
           keyBad: widget.space.keyBad,
           localOnly: !widget.space.isTenant,
           onSubmit: widget.onSendKey ?? ((_) async => KeySend.failed),
+          creds: widget.space.creds,
+          onSubmitCreds: widget.onSendCreds,
           onCancel: widget.onCancelMe,
           onCancelled: widget.onLoggedOut,
           onKeyChanged: widget.onKeyChanged,

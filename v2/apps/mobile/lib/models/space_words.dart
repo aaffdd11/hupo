@@ -164,6 +164,82 @@ const String settingsLogout = '退出登录';
 /// 钥匙那一段的小标题。
 const String configKeySection = '你那串钥匙';
 
+// ── ★ 配置页那**四个 tab**（主人 2026-09-24 定的形状）────────────────
+//
+// 主人原话：*"配置页用来配置模型，语言大模型apikey，语音大模型，图片生成，视频生成。"*
+//
+// ⚠️ **tab 上那两个字必须是他说得懂的话**：他点的这一屏要能自己看明白。
+//    "模型"是**内部词**（词表硬闸会拦）⇒ 一律用"干什么用"来说：
+//    聊天 / 语音 / 图片 / 视频。
+// ⚠️ 每一屏都要说清**它管什么**＋（这一批里）**收下之后生效不生效**：
+//    图片与视频这一批**只是收着**（那两条路还没接上），
+//    语音这一批也**只是收着**（现在听你说话用的是这台机器上已经配好的那一份）。
+
+/// 四个 tab 的名字（顺序＝主人说的顺序）。
+const String credTabChat = '聊天';
+const String credTabVoice = '语音';
+const String credTabImage = '图片';
+const String credTabVideo = '视频';
+
+/// 某一屏那一句人话（**说它管什么**）。
+String credTabWhat(String tab) {
+  switch (tab) {
+    case credTabVoice:
+      return '填上它，我就能听懂你说话。';
+    case credTabImage:
+      return '填上它，我才能给你画图。';
+    case credTabVideo:
+      return '填上它，我才能给你做小片子。';
+    case credTabChat:
+    default:
+      return '填上它，我才能开口答话。';
+  }
+}
+
+/// 🔴 **这一批的边界句**（P1-1：收下之后**生效不生效**，必须当面说清）。
+///
+/// ⚠️ 为什么非说不可：不说的话，他填完图/视频那两把，以为什么都能干了 ——
+///    而这两条路**还没接上**。那句"填上了"就成了他自己脑补出来的假承诺。
+const String credBoundaryImage = '先收在你自己的名下。画图这条路还没接上，接上就自动用它。';
+const String credBoundaryVideo = '先收在你自己的名下。做片子这条路还没接上，接上就自动用它。';
+const String credBoundaryVoice = '先收在你自己的名下。现在听你说话用的是这台机器上已经配好的那一份。';
+
+/// 某一屏的边界句（**聊天那一屏没有** —— 它是现在就在用的那一条）。
+String? credBoundaryOf(String tab) {
+  switch (tab) {
+    case credTabVoice:
+      return credBoundaryVoice;
+    case credTabImage:
+      return credBoundaryImage;
+    case credTabVideo:
+      return credBoundaryVideo;
+    case credTabChat:
+    default:
+      return null;
+  }
+}
+
+/// 语音那三样各自的说明（**三样齐了才算有**）。
+const String credVoiceAppIdLabel = 'AppID';
+const String credVoiceSecretIdLabel = 'SecretId';
+const String credVoiceSecretKeyLabel = 'SecretKey';
+
+/// 图片 / 视频 / 聊天：一把钥匙时输入框上那句话。
+const String credOneKeyLabel = '把它们给你的那一串贴进来';
+
+/// 某一屏"现在有没有"那句话（**纯函数**）。
+///
+/// ⚠️ 三种状态必须分开（与 [keyStateLine] 同一条纪律）：
+///    有 / 填过但被判无效 / 还没填。混成一句就是页面在说假话。
+String credStateLine({required String tab, required bool has, required bool bad}) {
+  if (has) {
+    if (tab == credTabChat) return keyStateHas;
+    return '这一样已经有了。填一串新的就会把它换掉。';
+  }
+  if (bad) return keyStateBad;
+  return '还没有填。';
+}
+
 /// ── 更早的消息：往上翻着加载（批 C · `docs/dev/64-CHAT-REDESIGN.md` §三）──────
 ///
 /// ⚠️ **"没问到"与"到头了"必须分开说**（混成一句就是把网络问题说成"没有更早的"）。
@@ -200,7 +276,10 @@ const String keySubmitChange = '换好了';
 ///    **"没送过去。是我这边的问题"**（指错方向：根本不是"我们出问题"，
 ///    是"这一份不走这条门"）。
 ///    ⇒ 对他**说真话、不给假输入框**。
-const String configLocalOnly = '你自己这一份就在这台机器上 —— 钥匙不在这页填。';
+/// ⚠️ **2026-09-24 改口径**：主人选了"要真能改"（他的原话选的是这一档）——
+///    所以他自己那一份**也能在这页填**了（语言那一把会写进他本机那份凭据里）。
+///    这句话从"钥匙不在这页填"改成"填了会写到哪" —— 仍然是**实话**，只是换了事实。
+const String configLocalOnly = '你自己这一份就在这台机器上：填了会写到本机那份凭据里，下一条消息就生效。';
 
 /// **现在是什么状态**那句话。**纯函数**（`test/unit` 里钉三种）。
 ///

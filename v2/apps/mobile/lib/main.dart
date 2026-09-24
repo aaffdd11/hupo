@@ -111,6 +111,20 @@ class _HupoAppState extends State<HupoApp> {
   }
 
   /// 把钥匙送过去，然后**再问一次**（问回来才是真的算数）。
+  /// **配置页那四样**（主人 2026-09-24 定的形状）：某一屏填好了 ⇒ 一次送出去。
+  /// ⚠️ 与 `_sendKey`（老路，只写语言那一把）分开：这一条**一次能写一屏的字段**。
+  Future<KeySend> _sendCreds(String tab, Map<String, String> values) async {
+    final token = await _tokens.read();
+    if (token == null) return KeySend.failed;
+    final r = await _api.setCreds(token, values);
+    if (r == KeySend.ok && mounted) {
+      // 填了就先放他进去（他刚填完），再问一次拿服务端的话为准
+      if (tab == '聊天') setState(() => _keySent = true);
+      await _askSpace(token);
+    }
+    return r;
+  }
+
   Future<KeySend> _sendKey(String key) async {
     final token = await _tokens.read();
     if (token == null) return KeySend.failed;
@@ -192,6 +206,7 @@ class _HupoAppState extends State<HupoApp> {
                   //   现状（有没有钥匙 / 是不是被判无效了）+ 交钥匙那条路 + 换完之后重问一次。
                   space: _space ?? const SpaceInfo(),
                   onSendKey: _sendKey,
+                  onSendCreds: _sendCreds,
                   onCancelMe: _cancelMe,
                   onKeyChanged: () async {
                     final t = await _tokens.read();

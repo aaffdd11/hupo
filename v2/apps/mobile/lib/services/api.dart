@@ -382,6 +382,42 @@ class Api {
     }
   }
 
+  /// **配置页那四样**（主人 2026-09-24 定的形状 · 契约 `docs/dev/79-CREDS-TABS.md`）。
+  ///
+  /// ⚠️ 与 [`setModelKey`] 的分别：那一条是**老路**（只写语言那一把，协议冻结、老客户端还在跑）；
+  ///    这一条**一次能写多字段**（语音那三样必须一次写完，不然会有"填了两样"的半截状态）。
+  /// ⚠️ 这里**也只挡明摆着的坏输入**（空 / 非可打印 / 太长）——像不像钥匙由上游说了算。
+  Future<KeySend> setCreds(String token, Map<String, String> creds) async {
+    final clean = <String, String>{};
+    for (final e in creds.entries) {
+      final v = e.value.trim();
+      if (v.isEmpty) continue; // 空的**不送**（服务端那边也拒）
+      if (v.length > 4096) return KeySend.tooLong;
+      if (RegExp(r'[^\x20-\x7e]').hasMatch(v)) return KeySend.badChars;
+      clean[e.key] = v;
+    }
+    // 一样都没填 ⇒ 当成"空"（不拿一次空请求去打扰服务端）
+    if (clean.isEmpty) return KeySend.blank;
+    try {
+      final r = await _c
+          .post(
+            _u('/api/creds'),
+            headers: {'content-type': 'application/json', 'authorization': 'Bearer $token'},
+            body: jsonEncode({'creds': clean}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (r.statusCode == 200) return KeySend.ok;
+      if (r.statusCode == 400) {
+        final e = (jsonDecode(r.body) as Map)['error'];
+        if (e == 'blank-key') return KeySend.blank;
+        if (e == 'bad-key-chars') return KeySend.badChars;
+      }
+      return KeySend.failed;
+    } catch (_) {
+      return KeySend.failed;
+    }
+  }
+
   /// 🔴 **注销：请服务端把我那一台收回去**（2026-09-22 主人："贴 apikey 的时候，
   /// 也要有个撤回的功能……就是取消注册，这样我就不用浪费资源了"）。
   ///

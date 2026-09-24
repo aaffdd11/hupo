@@ -27,6 +27,7 @@ import { buildExport } from './export.js';
 import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
 import { SIGNED_TTL_MS, entryUrl } from './app-serve.js';
 import { ASR_PATH } from './asr.js';
+import { isCredField } from './creds.mjs';
 
 /// **看起来像"一个文件"的路径**（P1-14）：这些后缀一律**不回 SPA 兜底**，
 /// 而是如实 404 —— 拿 HTML 冒充 JS/CSS/字体/wasm，是把"缺文件"变成"白屏"。
@@ -337,6 +338,17 @@ export function createServer({
    * ⚠️ 约定：`setModelKey(userId, key)`，返回值里**不含 key**；调用方**不许**把它写日志。
    */
   setModelKey = null,
+  /**
+   * **配置页那四样**（主人 2026-09-24 定的形状 · 契约 `docs/dev/79-CREDS-TABS.md`）。
+   *
+   * ⚠️ 约定：`setCreds(userId, patch)`，`patch` 是**短名 → 值**（`src/creds.mjs` 的
+   *    `CRED_FIELDS`）；返回 `{ok, why, creds?}`，**里面绝不含值**。
+   *    `field === 'model'` 那一条走**各人本来那条路**（租户：推给盒子；主人：DSH 那份凭据）——
+   *    那件事住在 `serve.js`（只有它知道谁是主人、谁是租户）。
+   */
+  setCreds = null,
+  /** **那四样有没有**（只看存在与否，**永远不回值**）。`credStatusOf(userId)`。 */
+  credStatusOf = null,
 }) {
   /**
    * 🔴 **这一个函数是"我是谁"与服务对象之间唯一的接缝。**
@@ -620,7 +632,56 @@ export function createServer({
       }
 
       if (path === '/api/space' && req.method === 'GET') {
-        return sendJson(res, 200, tenantStatusOf(claim.sub));
+        // ★ **那四样有没有**（配置页那四个 tab）：**只有有没有，没有值**。
+        //   ⚠️ 加字段是安全的（协议纪律：**加不破**，老客户端忽略它）。
+        const creds = credStatusOf ? credStatusOf(claim.sub) : null;
+        const space = tenantStatusOf(claim.sub);
+        return sendJson(res, 200, creds ? { ...space, creds } : space);
+      }
+
+      // ── 配置页那四样（主人 2026-09-24：*"配置页用来配置模型，语言大模型apikey，
+      //    语音大模型，图片生成，视频生成"*）────────────────────────────
+      //
+      // ⚠️ **老的 `/api/model-key` 一字不动**（协议冻结：老客户端还在跑）——
+      //    这一条是**加**出来的，一次能写多字段（语音那三样必须一次写完，
+      //    不然会有"填了两样"的半截状态）。
+      // ⚠️ 回执里**只有"有没有"**，绝不回值；也**不校验它长得像不像钥匙**
+      //    （我们不是它的裁判，真伪由上游说了算）。
+      if (path === '/api/creds' && req.method === 'POST') {
+        if (!setCreds) return sendJson(res, 404, { error: 'not-found' });
+        let body;
+        try {
+          body = await readJson(req, 8 * 1024);
+        } catch {
+          return sendJson(res, 400, { error: 'bad-json' });
+        }
+        const given = body?.creds;
+        if (!given || typeof given !== 'object' || Array.isArray(given)) {
+          return sendJson(res, 400, { error: 'bad-shape', text: '没看懂要存哪几样。' });
+        }
+        const patch = {};
+        for (const [field, raw] of Object.entries(given)) {
+          if (!isCredField(field)) {
+            return sendJson(res, 400, { error: 'bad-field', text: '有一项我不认识，先别存。' });
+          }
+          if (typeof raw !== 'string' || raw.length > 4096) {
+            return sendJson(res, 400, { error: 'bad-value', text: '那一串太长或者不像一串钥匙。' });
+          }
+          const v = raw.trim();
+          if (v.length === 0) return sendJson(res, 400, { error: 'blank-key' });
+          // 能被 HTTP 头带走的字符（和 `/api/model-key`、`put-key.mjs` 同一条规矩）
+          if (/[^\x20-\x7e]/.test(v)) return sendJson(res, 400, { error: 'bad-key-chars' });
+          patch[field] = v;
+        }
+        if (Object.keys(patch).length === 0) return sendJson(res, 400, { error: 'blank-key' });
+        const r = setCreds(claim.sub, patch);
+        if (!r?.ok) {
+          return sendJson(res, r?.status ?? 409, {
+            error: r?.why ?? 'cannot-set',
+            ...(r?.text ? { text: r.text } : {}),
+          });
+        }
+        return sendJson(res, 200, { ok: true, creds: r?.creds ?? null });
       }
 
       // ── 用户填自己的模型凭据（多租户 ②-4b）──────────────────────────

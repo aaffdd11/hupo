@@ -25,6 +25,8 @@ import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
 import { appsBaseOf, createAppServer, loadSignKey } from './app-serve.js';
 import { createAsrRelay } from './asr.js';
+import { readUserCreds, writeUserCreds } from './creds-store.js';
+import { OWNER_KEY_REF, writeOwnerKey } from './owner-creds.js';
 import { describeVoiceCreds, resolveVoiceCreds, voiceCredsFor } from './asr-creds.js';
 import { createServer } from './server.js';
 import { describeAgentIdentity, loadConfig, preflight } from './config.js';
@@ -503,6 +505,91 @@ if (!tpl.ok) {
  * ⚠️ （这一坨在 2026-09-21 被我误删过一次 —— 删内联函数时切多了，
  *     现象是服务起来就 `ReferenceError: setModelKey is not defined`。）
  */
+/**
+ * 主人那一份的凭据文件在哪（**只此一处**）。
+ * ⚠️ 事实来自 DSH 自己：`$DSH_HOME/.credentials.yaml` 的 `refs.DEEPSEEK_API_KEY`
+ *    ——`records` 里那条是**浏览器会话授权**，与钥匙无关（`owner-creds.js` 顶上写着）。
+ */
+function ownerCredsFile() {
+  return nodePath.join(cfg.dshHome, '.credentials.yaml');
+}
+
+/** 主人那份凭据里**现在有没有**一把语言钥匙（读，不写；读不到 ⇒ false）。 */
+function ownerHasModelKey() {
+  try {
+    const text = nodeFs.readFileSync(ownerCredsFile(), 'utf8');
+    const m = text.match(new RegExp(`^\\s+${OWNER_KEY_REF}\\s*:\\s*(\\S.*)$`, 'm'));
+    return Boolean(m && m[1].trim().length > 0);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * **配置页那四样写进来**（主人 2026-09-24）。
+ *
+ * 分路（**别读成一套**）：
+ *   · 语言那一把 + 主人 ⇒ 写 **DSH 自己那份凭据**（他授权我动它：2026-09-24）；
+ *   · 语言那一把 + 租户 ⇒ **已有的那条路**（推给他盒子的卷，`setModelKey`）；
+ *   · 其余三样 ⇒ **中心这份按人存档**（`creds-store.js`）。
+ *     ⚠️ 为什么不塞进盒子那个文件：盒子那边是**整份重写**（只写一行模型钥匙）
+ *        ⇒ 下一次送钥匙就把它们抹掉；要真进盒子得改产品层（部署期，要主人签字）。
+ *
+ * @returns {{ok:boolean, why:string, status?:number, text?:string, creds?:object}}
+ */
+function setCreds(userId, patch) {
+  const out = {};
+  const modelKey = Object.prototype.hasOwnProperty.call(patch, 'model') ? patch.model : null;
+  const others = { ...patch };
+  delete others.model;
+
+  if (modelKey !== null) {
+    if (tenantOf(userId)) {
+      const r = setModelKey(userId, modelKey);
+      if (!r?.ok) return { ok: false, why: r?.why ?? 'cannot-set', status: 409 };
+    } else {
+      // 主人（`local`）—— 只有他这一种人会被写这一份
+      const r = writeOwnerKey({ file: ownerCredsFile(), key: modelKey });
+      if (!r?.ok) {
+        // ⚠️ 报错**不带钥匙、不带路径**（`why` 是几个固定词，见 `owner-creds.js`）
+        return { ok: false, why: r?.why ?? 'cannot-set', status: 409 };
+      }
+      console.log(`  🔑 主人那一份的语言钥匙换好了（备份：${nodePath.basename(r.backup ?? '')}）`);
+    }
+    out.model = modelKey;
+  }
+
+  if (Object.keys(others).length > 0) {
+    const r = writeUserCreds(cfg.dataDir, userId, others);
+    if (!r?.ok) return { ok: false, why: r?.why ?? 'cannot-set', status: 409 };
+  }
+  return { ok: true, why: 'saved', creds: credStatusOf(userId) };
+}
+
+/**
+ * **那四样有没有**（配置页那四个 tab 与 `/api/space`）。
+ * 🔴 只回**有没有** —— 一个字符的值都不出去。
+ */
+function credStatusOf(userId) {
+  const mine = readUserCreds(cfg.dataDir, userId).status;
+  let model = mine.model;
+  if (tenantOf(userId)) {
+    // 租户：权威是**他那台自己报的**（他真拿着），宿主内存只是"我送过"
+    try {
+      model = Boolean(keyStateOf({
+        hasKeyPushed: tenantKeys.has(userId),
+        hasKeyReported: channel.hasKeyFor(tenantOf(userId)),
+        rejected: badKeys.has(userId),
+      }).hasKey);
+    } catch {
+      model = false;
+    }
+  } else {
+    model = ownerHasModelKey() || mine.model;
+  }
+  return { model, voice: mine.voice, image: mine.image, video: mine.video };
+}
+
 function setModelKey(userId, key) {
   const tenant = tenantOf(userId);
   if (!tenant) return { ok: false, why: 'no-tenant' };
@@ -617,6 +704,8 @@ const { listen, listenTrusted, close } = createServer({
   users,
   devCode: cfg.devCode,
   setModelKey,
+  setCreds,
+  credStatusOf,
   tenantOf,
   // ★ **新号登录时替他申请一台**（除了改状态，这是登录路径上唯一新增的动作）
   ensureTenant,
@@ -645,7 +734,14 @@ const { listen, listenTrusted, close } = createServer({
     //    ⚠️ 一个**新号**在 `tenantMap` 里**没有对应租户** —— 那**不是** `local`：
     //       `local` 的语义是"本机那份 = 主人那一份"，把新号当成它
     //       就是**让新用户看见主人的东西**（多租户要防的第一件事）。
-    if (userId === OWNER_ID) return { kind: 'local' };
+    if (userId === OWNER_ID) {
+      // ⚠️ **这里原来只回 `{kind:'local'}`** ⇒ 主人那一屏只能显示"还没有填"，
+      //    而他其实有一把能用的钥匙（在 DSH 自己那份凭据里）—— 那是**在说假话**。
+      //    现在照实报：他那一份的"有没有"就是那份文件里那个 ref 在不在。
+      //    ⚠️ `keyBad` 恒 `false`：我们**不知道**它灵不灵（那要真发一次请求才知道），
+      //      而"不知道"**不许**写成"不灵"。
+      return { kind: 'local', state: 'ready', hasKey: ownerHasModelKey(), keyBad: false };
+    }
     const tenant = tenantOf(userId);
     if (!tenant) {
       // 推不出名字 = 只有两种可能，**都不是"正在开"**：

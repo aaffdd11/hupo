@@ -19,8 +19,10 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import '../models/space.dart';
 import '../models/space_words.dart';
 import '../services/api.dart';
+import '../widgets/cred_form.dart';
 import '../widgets/key_form.dart';
 import 'about_screen.dart';
 
@@ -46,12 +48,17 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
+/// 四个 tab 的名字（**顺序＝主人说的顺序** · `space_words.dart` 里那四个常量）。
+const List<String> credTabs = [credTabChat, credTabVoice, credTabImage, credTabVideo];
+
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({
     super.key,
     required this.hasKey,
     required this.keyBad,
     required this.onSubmit,
+    this.creds = const SpaceCreds(),
+    this.onSubmitCreds,
     this.localOnly = false,
     this.onCancel,
     this.onCancelled,
@@ -61,6 +68,16 @@ class SettingsScreen extends StatelessWidget {
 
   /// 现在有没有一串能用的钥匙（服务端说的）。
   final bool hasKey;
+
+  /// **那四样有没有**（主人 2026-09-24：配置页就是配这四样）。
+  /// ⚠️ 老服务端不回它 ⇒ 全 `false`（"没有"），四个 tab 里就都会说"还没有填"。
+  final SpaceCreds creds;
+
+  /// **某一屏填好了要送出去**（tab 的名字 ＋ 那一屏的值）。
+  ///
+  /// ⚠️ 与 `onSubmit`（聊天那一把的老路）分开：老路只写语言那一把，
+  ///    而这一条**一次能写一屏的字段**（语音那三样必须一起写）。
+  final Future<KeySend> Function(String tab, Map<String, String> values)? onSubmitCreds;
 
   /// 有没有"填过、但上游说它不灵"（服务端说的）。
   final bool keyBad;
@@ -83,111 +100,210 @@ class SettingsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context);
     // ⚠️ **没有 `Scaffold` / `AppBar`**：顶上那一条由**小程序容器**给
     //    （`MiniAppHost`）—— 小程序自己画的话，"跳不出容器"这件事就没了保证。
     return Center(
-          child: ConstrainedBox(
-            // ⚠️ **和首页同一条窄列**（契约 `49-STYLE.md`）：一行太长没人读得下去
-            constraints: const BoxConstraints(maxWidth: 640),
-            // ⚠️ `ListView` 不是 `Column`：字体放到最大时**能滚**，而不是溢出
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: d.gapL, vertical: d.gapL),
+      child: ConstrainedBox(
+        // ⚠️ **和首页同一条窄列**（契约 `49-STYLE.md`）：一行太长没人读得下去
+        constraints: const BoxConstraints(maxWidth: 640),
+        child: DefaultTabController(
+          length: credTabs.length,
+          child: Column(
+            children: [
+              // ── 四个 tab（主人 2026-09-24：*"配置页用来配置模型，语言大模型apikey，
+              //    语音大模型，图片生成，视频生成"*）──
+              // ⚠️ `isScrollable`：字放到最大时**横向能滚**，而不是挤成一团、更不是溢出
+              TabBar(
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                tabs: [for (final tab in credTabs) Tab(height: 48, text: tab)],
+              ),
+              Expanded(
+                child: TabBarView(
+                  children: [for (final tab in credTabs) _tabBody(context, tab)],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 一屏的内容（**每一屏自己可滚** —— 字放到最大时不许溢出）。
+  Widget _tabBody(BuildContext context, String tab) {
+    final t = Theme.of(context);
+    final has = credsFor(tab);
+    final boundary = credBoundaryOf(tab);
+    return ListView(
+      // ⚠️ **给每一屏一个指名道姓的 key**（`credTab:<名字>`）：`TabBarView` 自己
+      //    也是一个 `Scrollable`（横向翻页那一个），而且排在**前面**
+      //    ⇒ 判据想"像用户那样滚内容"就必须指得到**这一列**，不能靠 `.first`。
+      //    （2026-09-24 判据当场抓到的：滚错了对象 ⇒ "关于"永远滚不出来。）
+      key: ValueKey('credTab:$tab'),
+      padding: const EdgeInsets.symmetric(horizontal: d.gapL, vertical: d.gapL),
+      children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(d.gapM),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // ── 钥匙那一段：**分区标题 + 白卡** ──
-                // ★ 2026-09-23（主人：*"先整理整个UI"*）：标题原来是**强调色 + 加宽字距**，
-                //   在屏幕上读起来像一条**警告**（它是分区名，不是告警）。
-                //   ⇒ 改成"黑 + 加粗"的普通分区标题；什么时候统一到全站，见 E。
-                const _SectionTitle(configKeySection),
-                const SizedBox(height: d.gapS + 2),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(d.gapM),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (localOnly) ...[
-                          // 🔴 **本机那一份：说实话、不给假输入框**（见 `configLocalOnly` 那段）
-                          Text(configLocalOnly, style: t.textTheme.bodyMedium?.copyWith(color: d.ink)),
-                        ] else ...[
-                          // ★ **现状**：三种状态分开说（见 `keyStateLine` 那段）。
-                          Text(
-                            keyStateLine(hasKey: hasKey, keyBad: keyBad),
-                            style: t.textTheme.bodyMedium?.copyWith(color: d.ink),
-                          ),
-                          if (hasKey) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              configKeyHint,
-                              style: t.textTheme.bodySmall?.copyWith(color: d.muted),
-                            ),
-                          ],
-                          const SizedBox(height: d.gapM),
-                          KeyForm(
-                            // ⚠️ 换成功之后**顺手叫一声**（上层拿它去重问一次状态）——
-                            //    不然用户回到聊天页时，别处可能还挂着"没有钥匙"那句旧话。
-                            onSubmit: (k) async {
-                              final r = await onSubmit(k);
-                              if (r == KeySend.ok && context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text(configKeyChanged)),
-                                );
-                                onKeyChanged?.call();
-                              }
-                              return r;
-                            },
-                            onCancel: onCancel,
-                            onCancelled: onCancelled,
-                            submitLabel: hasKey ? keySubmitChange : keySubmit,
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
+                // ① 这一屏**管什么**
+                Text(
+                  credTabWhat(tab),
+                  style: t.textTheme.bodyMedium?.copyWith(color: d.ink),
                 ),
-                const SizedBox(height: d.gapL),
-                // ── 第二个分区：**这个助手**（关于 / 退出登录）──
-                // ★ 2026-09-23：原来这两条**光秃秃挂在最下面**（一页三块读不出结构）
-                //   ⇒ 加分区标题，并把两条收进**同一张卡**（中间一条分隔线）。
-                const _SectionTitle(settingsAboutSection),
-                const SizedBox(height: d.gapS + 2),
-                Card(
-                  child: Column(
-                    children: [
-                      // ⚠️ **关于搬进来了**（见 `space_words.dart` 那段）：
-                      //    顶栏再加一个图标就是 7 个 —— 手机上那一条会挤成一团。
-                      ListTile(
-                        leading: const Icon(Icons.info_outline),
-                        title: const Text('关于'),
-                        // ★ 加一句小字：光"关于"两个字，读不出这一页管什么
-                        subtitle: Text(
-                          aboutEntryHint,
-                          style: t.textTheme.bodySmall?.copyWith(color: d.muted),
-                        ),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(builder: (_) => const AboutScreen()),
-                        ),
-                      ),
-                      // ── **退出登录**（主人 2026-09-22：设置里管"退出登录 / 注销账号 / 改钥匙"）──
-                      // ⚠️ 它原来挂在**聊天抓手行**上 —— 那一行是"聊天"的地方，退出登录不是聊天的事。
-                      if (onLogout != null) ...[
-                        Divider(height: 1, color: d.line),
-                        ListTile(
-                          leading: Icon(Icons.logout, color: d.accent),
-                          title: Text(
-                            settingsLogout,
-                            style: t.textTheme.bodyLarge?.copyWith(color: d.ink),
-                          ),
-                          onTap: onLogout,
-                        ),
-                      ],
-                    ],
-                  ),
+                const SizedBox(height: d.gapXs),
+                // ② 现在**有没有**（三种状态分开说，见 `credStateLine`）
+                Text(
+                  credStateLine(tab: tab, has: has, bad: tab == credTabChat && keyBad),
+                  style: t.textTheme.bodyMedium?.copyWith(color: d.ink),
                 ),
+                if (has && tab == credTabChat) ...[
+                  const SizedBox(height: d.gapXs),
+                  Text(configKeyHint, style: t.textTheme.bodySmall?.copyWith(color: d.muted)),
+                ],
+                // ③ 🔴 **这一批的边界**（图片/视频/语音：收下了 ≠ 现在就生效）
+                if (boundary != null) ...[
+                  const SizedBox(height: d.gapXs),
+                  Text(boundary, style: t.textTheme.bodySmall?.copyWith(color: d.muted)),
+                ],
+                const SizedBox(height: d.gapM),
+                // ④ 填的那一块
+                ..._formFor(context, tab),
               ],
             ),
           ),
-        );
+        ),
+        // ⑤ **这个助手**（关于 / 退出登录）：只在**第一屏**（聊天）底下。
+        //    ⚠️ 为什么不放"四屏共用的固定页脚"：字放到 3.1 倍时那个页脚会把
+        //      上面挤爆（D3.5 那道硬闸当场判红）。放进可滚列里就永远滚得到。
+        if (tab == credTabChat) ...[
+          const SizedBox(height: d.gapL),
+          _aboutCard(context),
+        ],
+      ],
+    );
+  }
+
+  /// 某一屏现在有没有（**聊天那一把看老字段**，其余三样看 `creds`）。
+  bool credsFor(String tab) {
+    return switch (tab) {
+      credTabVoice => creds.voice,
+      credTabImage => creds.image,
+      credTabVideo => creds.video,
+      _ => hasKey,
+    };
+  }
+
+  /// 每一屏各自的表单。**聊天那一屏是老表单**（它带着粘贴与"取消注册"）。
+  List<Widget> _formFor(BuildContext context, String tab) {
+    if (tab == credTabChat) {
+      return [
+        if (localOnly) ...[
+          // 🔴 **本机那一份**：2026-09-24 起**也能在这页填**
+          //    （主人选了"要真能改"：语言那一把会写进他本机那份凭据里）。
+          Text(
+            configLocalOnly,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: d.muted),
+          ),
+          const SizedBox(height: d.gapS),
+        ],
+        KeyForm(
+          // ⚠️ 换成功之后**顺手叫一声**（上层拿它去重问一次状态）——
+          //    不然用户回到聊天页时，别处可能还挂着"没有钥匙"那句旧话。
+          onSubmit: (k) async {
+            final r = await onSubmit(k);
+            if (r == KeySend.ok && context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text(configKeyChanged)),
+              );
+              onKeyChanged?.call();
+            }
+            return r;
+          },
+          onCancel: onCancel,
+          onCancelled: onCancelled,
+          submitLabel: hasKey ? keySubmitChange : keySubmit,
+        ),
+      ];
+    }
+    final send = onSubmitCreds;
+    if (send == null) {
+      // ⚠️ 没接线 ⇒ **不给假输入框**（宁可不画）：那条路不在，
+      //    画一个填了没用的框就是"页面在说假话"。
+      return [
+        Text(keyFailed, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: d.muted)),
+      ];
+    }
+    final fields = switch (tab) {
+      credTabVoice => const [
+          CredField(key: 'voiceAppId', label: credVoiceAppIdLabel),
+          CredField(key: 'voiceSecretId', label: credVoiceSecretIdLabel),
+          CredField(key: 'voiceSecretKey', label: credVoiceSecretKeyLabel),
+        ],
+      credTabImage => const [CredField(key: 'image', label: credOneKeyLabel)],
+      credTabVideo => const [CredField(key: 'video', label: credOneKeyLabel)],
+      _ => const <CredField>[],
+    };
+    return [
+      CredForm(
+        fields: fields,
+        submitLabel: credsFor(tab) ? keySubmitChange : keySubmit,
+        onSubmit: (values) => send(tab, values),
+      ),
+    ];
+  }
+
+  /// **这个助手**那张卡（关于 / 退出登录）。
+  ///
+  /// ⚠️ 主人 2026-09-24 定的四个 tab 全是**配钥匙**的；"关于/退出登录"不属于其中任何一样
+  ///    ⇒ 它挂在**第一屏**（聊天）的可滚内容底下，不做成固定页脚（理由见 `_tabBody` 第 ⑤ 条）。
+  Widget _aboutCard(BuildContext context) {
+    final t = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ★ 2026-09-23：这两条原来**光秃秃挂在最下面**（一页三块读不出结构）
+        //   ⇒ 加分区标题，并把两条收进**同一张卡**（中间一条分隔线）。
+        const _SectionTitle(settingsAboutSection),
+        const SizedBox(height: d.gapS + 2),
+        Card(
+          child: Column(
+            children: [
+              // ⚠️ **关于搬进来了**（见 `space_words.dart` 那段）：
+              //    顶栏再加一个图标就是 7 个 —— 手机上那一条会挤成一团。
+              ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('关于'),
+                // ★ 加一句小字：光"关于"两个字，读不出这一页管什么
+                subtitle: Text(
+                  aboutEntryHint,
+                  style: t.textTheme.bodySmall?.copyWith(color: d.muted),
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const AboutScreen()),
+                ),
+              ),
+              // ── **退出登录**（主人 2026-09-22：设置里管"退出登录 / 注销账号 / 改钥匙"）──
+              // ⚠️ 它原来挂在**聊天抓手行**上 —— 那一行是"聊天"的地方，退出登录不是聊天的事。
+              if (onLogout != null) ...[
+                Divider(height: 1, color: d.line),
+                ListTile(
+                  leading: Icon(Icons.logout, color: d.accent),
+                  title: Text(
+                    settingsLogout,
+                    style: t.textTheme.bodyLarge?.copyWith(color: d.ink),
+                  ),
+                  onTap: onLogout,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }

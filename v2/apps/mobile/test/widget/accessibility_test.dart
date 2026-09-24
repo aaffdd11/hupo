@@ -128,10 +128,19 @@ Future<void> _openAbout(WidgetTester tester, double scale) async {
   // ⚠️ **2026-09-22 补**：桌面上了之后，树里**不止一个** `Scrollable`
   //    （桌面图标墙自己也是）⇒ 原来那个 `find.byType(Scrollable).first` 会滚错东西。
   //    ⇒ 指名道姓：**设置那一屏里的**那一个。
+  // ⚠️ **2026-09-24 改**：配置页变成**四个 tab**（主人定的四样）之后，
+  //    `SettingsScreen` 里**第一个** `Scrollable` 是 **TabBar 自己**那一行
+  //    （`isScrollable: true`）—— 滚它会滚错东西（"关于"永远不出现）。
+  //    ⇒ 指名到**那一屏的内容列**（`TabBarView` 里面那个）。
   await tester.scrollUntilVisible(
     find.text('关于'),
     240,
-    scrollable: find.descendant(of: find.byType(SettingsScreen), matching: find.byType(Scrollable)).first,
+    scrollable: find
+        .descendant(
+          of: find.byKey(const ValueKey('credTab:$credTabChat')),
+          matching: find.byType(Scrollable),
+        )
+        .first,
   );
   await tester.pumpAndSettle();
   await tester.tap(find.text('关于'));

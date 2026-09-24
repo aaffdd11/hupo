@@ -148,6 +148,26 @@ void main() {
       waitingElapsedWords(59),
       waitingElapsedWords(60),
       waitingElapsedWords(125),
+      // ★ **配置页那四个 tab 的话**（主人 2026-09-24 定的四样）——
+      //   界面词表是硬闸：tab 上那两个字、"管什么"、"边界句"、状态句**都要过它**
+      //   （"模型"是禁用词 ⇒ 所以那四屏只能说"聊天/语音/图片/视频"）。
+      credTabChat,
+      credTabVoice,
+      credTabImage,
+      credTabVideo,
+      for (final tab in [credTabChat, credTabVoice, credTabImage, credTabVideo]) credTabWhat(tab),
+      credBoundaryVoice,
+      credBoundaryImage,
+      credBoundaryVideo,
+      credVoiceAppIdLabel,
+      credVoiceSecretIdLabel,
+      credVoiceSecretKeyLabel,
+      credOneKeyLabel,
+      for (final tab in [credTabChat, credTabVoice, credTabImage, credTabVideo]) ...[
+        credStateLine(tab: tab, has: true, bad: false),
+        credStateLine(tab: tab, has: false, bad: false),
+      ],
+      configLocalOnly,
     ];
 
     test('🔴 **不许假进度**：一个百分号都没有', () {
@@ -169,6 +189,30 @@ void main() {
       expect(hasForbidden('把模型钥匙填上'), true);
       expect(hasForbidden('正在给你开一个只属于自己的空间'), false);
     });
+  });
+
+  test('★ 配置页那四样"有没有"：宽容解析（缺字段/坏类型 ⇒ 一律"没有"，不许当成有）', () {
+    // ⚠️ 把"不知道"当成"有"，配置页就会对他说"填好了" —— 而他其实没有（假话）。
+    final none = SpaceInfo.fromJson({'kind': 'local', 'state': 'ready'});
+    expect(none.creds.any, false);
+    expect(none.creds.model, false);
+    expect(none.creds.voice, false);
+
+    final some = SpaceInfo.fromJson({
+      'kind': 'local',
+      'creds': {'model': true, 'voice': false, 'image': true, 'video': 'yes'},
+    });
+    expect(some.creds.model, true);
+    expect(some.creds.image, true);
+    expect(some.creds.voice, false);
+    expect(some.creds.video, false, reason: '只有真的 true 才算有（字符串不算）');
+    expect(some.creds.any, true);
+
+    // 负向对照：整块 creds 不认识（老服务端）⇒ 全 false，而且**不抛**
+    expect(SpaceInfo.fromJson({'creds': 'x'}).creds.any, false);
+    expect(SpaceInfo.fromJson({'creds': []}).creds.any, false);
+    // 回写（toJson 要能带回去 —— 判据与缓存都靠它）
+    expect(some.toJson()['creds'], {'model': true, 'voice': false, 'image': true, 'video': false});
   });
 
   test('🔴 "没有钥匙"要分得开：没填过 vs 填过但被判无效（`keyBad`）', () {

@@ -32,6 +32,9 @@ import nodeFs from 'node:fs';
 import nodeHttp from 'node:http';
 
 import { keyFileFor } from './key-path.mjs';
+// ⚠️ **模型那一把在文件里叫什么，只许有一处定义**（`tenant-shell.mjs` 的 `KEY_FIELD`）——
+//    这里再写一个字面量就是第二处，迟早漂。
+import { KEY_FIELD as MODEL_KEY_NAME } from './tenant-shell.mjs';
 
 /** 默认端口。⚠️ 与 `hupo-model-proxy.yml` 里那个 `baseURL` **必须一致**。 */
 export const DEFAULT_PROXY_PORT = 8787;
@@ -108,6 +111,12 @@ export function parseKey(text) {
     })
     .filter((p) => p && p.value.length > 0);
   if (pairs.length === 0) return null; // 有名字没值 ⇒ **没有 key**，不是"名字就是 key"
+  // 🔴 **先认名字**（2026-09-24，配置页那四样之后）：多字段的文件里
+  //    语音那三样里也带 `SECRET` ⇒ 光按"名字里带 KEY/SECRET 的第一个"取，
+  //    **把语音密钥写在前面就会把模型钥匙换成它**（现象只是上游鉴权失败，
+  //    看日志完全看不出原因）。⇒ `HUPO_MODEL_KEY` 在就一定是它。
+  const exact = pairs.find((p) => p.name === MODEL_KEY_NAME);
+  if (exact) return exact.value;
   const named = pairs.find((p) => /(KEY|TOKEN|SECRET)/i.test(p.name));
   return (named ?? pairs[0]).value;
 }

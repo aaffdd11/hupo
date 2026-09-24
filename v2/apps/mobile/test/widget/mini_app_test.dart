@@ -107,7 +107,15 @@ void main() {
     await tester.scrollUntilVisible(
       find.text(settingsLogout),
       200,
-      scrollable: find.descendant(of: find.byType(SettingsScreen), matching: find.byType(Scrollable)).first,
+      // ⚠️ **2026-09-24 改**：配置页变成四个 tab 之后，`SettingsScreen` 里**第一个**
+      //    `Scrollable` 是 **TabBar 自己**那一行 ⇒ 滚它会滚错东西（"退出登录"永远滚不出来）。
+      //    ⇒ 指名到**那一屏的内容列**（`_tabBody` 那个 ListView，key 带着 tab 名）。
+      scrollable: find
+          .descendant(
+            of: find.byKey(const ValueKey('credTab:$credTabChat')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
     );
     await tester.pumpAndSettle();
     expect(find.text(settingsLogout), findsOneWidget, reason: '主人点名要的三件之一：退出登录');
