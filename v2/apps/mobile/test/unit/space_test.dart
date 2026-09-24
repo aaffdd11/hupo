@@ -156,7 +156,11 @@ void main() {
       credTabImage,
       credTabVideo,
       for (final tab in [credTabChat, credTabVoice, credTabImage, credTabVideo]) credTabWhat(tab),
-      credBoundaryVoice,
+      // 语音那一句有**四种说法**（本机/租户 × 填了/没填）—— 四种都要过词表
+      credVoiceBoundaryMine,
+      credVoiceBoundaryDefault,
+      credVoiceBoundaryTenantHas,
+      credVoiceBoundaryTenantNone,
       credBoundaryImage,
       credBoundaryVideo,
       credVoiceAppIdLabel,
@@ -189,6 +193,29 @@ void main() {
       expect(hasForbidden('把模型钥匙填上'), true);
       expect(hasForbidden('正在给你开一个只属于自己的空间'), false);
     });
+  });
+
+  test('★ 语音那句边界话：四种组合逐条对表（说错哪一句都是假话）', () {
+    // 本机 + 没填 ⇒ 说清现在用的是机器上那份
+    expect(credVoiceBoundary(isTenant: false, hasOwn: false), credVoiceBoundaryDefault);
+    // 本机 + 填了 ⇒ **真的就用它**（识别路优先读他自己的三样）
+    expect(credVoiceBoundary(isTenant: false, hasOwn: true), credVoiceBoundaryMine);
+    // 租户 + 填了 ⇒ 只许说"先收着、你这台还没接上"（盒子那份 serve.js 读的是盒子里）
+    expect(credVoiceBoundary(isTenant: true, hasOwn: true), credVoiceBoundaryTenantHas);
+    expect(credVoiceBoundary(isTenant: true, hasOwn: false), credVoiceBoundaryTenantNone);
+    // 🔴 四句**互不相同**（两两相同就是把两种情况说成一件事）
+    final all = {
+      credVoiceBoundaryMine,
+      credVoiceBoundaryDefault,
+      credVoiceBoundaryTenantHas,
+      credVoiceBoundaryTenantNone,
+    };
+    expect(all.length, 4, reason: '四种组合要有四句不同的话');
+    // ⚠️ 而且"本机 + 填了"那一句必须**明说"不再用"别的那份**
+    //    （只提"这台机器上那份"不算错 —— 它正是要说"不再用它"；
+    //      第一版判据就写糙在这里，自己当场红了一次。）
+    expect(credVoiceBoundaryMine.contains('不再用'), true);
+    expect(credVoiceBoundaryMine.contains('就用这三样'), true);
   });
 
   test('★ 配置页那四样"有没有"：宽容解析（缺字段/坏类型 ⇒ 一律"没有"，不许当成有）', () {

@@ -202,13 +202,31 @@ String credTabWhat(String tab) {
 ///    而这两条路**还没接上**。那句"填上了"就成了他自己脑补出来的假承诺。
 const String credBoundaryImage = '先收在你自己的名下。画图这条路还没接上，接上就自动用它。';
 const String credBoundaryVideo = '先收在你自己的名下。做片子这条路还没接上，接上就自动用它。';
-const String credBoundaryVoice = '先收在你自己的名下。现在听你说话用的是这台机器上已经配好的那一份。';
+
+/// 🔴 **语音那一句要跟着事实变**（P1-26 后半，2026-09-24 接通"按人一份"之后）。
+///
+/// ⚠️ 为什么不能再写死一句：
+///   · 主人这一份（本机）**填了就真的用它**（识别路优先读他自己那三样）
+///     ⇒ 那时候还说"现在用的是这台机器上配好的那一份"就是**假话**；
+///   · 租户那台**还没接上**（他的 `/api/asr` 在盒子里，读的是盒子里那份）
+///     ⇒ 那时候说"填了就真用它"也是**假话**。
+/// ⇒ 四种组合四句话，**一个字都不许省**（说错哪一句都是"页面在说假话"）。
+const String credVoiceBoundaryMine = '填好了。以后听你说话就用这三样，不再用这台机器上那份。';
+const String credVoiceBoundaryDefault = '先收着。现在听你说话用的是这台机器上已经配好的那一份。';
+const String credVoiceBoundaryTenantHas = '先收着。你这台还没接上，接上就用这三样。';
+const String credVoiceBoundaryTenantNone = '先收着。你这台还没接上。';
+
+/// 语音那一屏此刻该说的那句话（**纯函数**，判据钉四种组合）。
+String credVoiceBoundary({required bool isTenant, required bool hasOwn}) {
+  if (isTenant) return hasOwn ? credVoiceBoundaryTenantHas : credVoiceBoundaryTenantNone;
+  return hasOwn ? credVoiceBoundaryMine : credVoiceBoundaryDefault;
+}
 
 /// 某一屏的边界句（**聊天那一屏没有** —— 它是现在就在用的那一条）。
-String? credBoundaryOf(String tab) {
+String? credBoundaryOf(String tab, {bool isTenant = false, bool hasOwn = false}) {
   switch (tab) {
     case credTabVoice:
-      return credBoundaryVoice;
+      return credVoiceBoundary(isTenant: isTenant, hasOwn: hasOwn);
     case credTabImage:
       return credBoundaryImage;
     case credTabVideo:

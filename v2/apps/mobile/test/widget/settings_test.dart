@@ -31,7 +31,10 @@ class Sent {
 
 Future<Sent> pump(
   WidgetTester tester, {
-  bool localOnly = false,
+  // ⚠️ 默认＝**主人那一份**（真实接线里 `localOnly = !space.isTenant`）——
+  //    判据的默认值要跟真实那条路一致，不然"默认就是租户"会让人看错结论。
+  bool localOnly = true,
+  bool tenant = false,
   SpaceCreds creds = const SpaceCreds(),
   bool hasKey = false,
 }) async {
@@ -43,7 +46,7 @@ Future<Sent> pump(
           hasKey: hasKey,
           keyBad: false,
           creds: creds,
-          localOnly: localOnly,
+          localOnly: tenant ? false : localOnly,
           onSubmit: (k) async => KeySend.ok,
           onSubmitCreds: (tab, values) async {
             sent.tab = tab;
@@ -94,8 +97,27 @@ void main() {
     }
     // 负向对照：聊天那一屏**没有**这句（它是现在就在用的那一条）
     await goTab(tester, credTabChat);
-    expect(find.text(credBoundaryVoice), findsNothing);
+    expect(find.text(credVoiceBoundaryDefault), findsNothing);
     expect(credBoundaryOf(credTabChat), isNull);
+  });
+
+  testWidgets('③ 🔴 语音那一句**跟着事实变**（填了就真用它 / 租户那台还没接上）', (tester) async {
+    // ① 主人（本机）**没填** ⇒ 说清"现在用的是机器上配好的那份"
+    await pump(tester);
+    await goTab(tester, credTabVoice);
+    expect(find.text(credVoiceBoundaryDefault), findsOneWidget);
+
+    // ② 主人（本机）**填了** ⇒ 说清"以后就用这三样"
+    await pump(tester, creds: const SpaceCreds(voice: true));
+    await goTab(tester, credTabVoice);
+    expect(find.text(credVoiceBoundaryMine), findsOneWidget);
+    expect(find.text(credVoiceBoundaryDefault), findsNothing, reason: '★ 填了还说"用的是别的那份"就是假话');
+
+    // ③ 租户（有自己一台）——**还没接上**：填了也不许说"就用它"
+    await pump(tester, localOnly: false, creds: const SpaceCreds(voice: true), tenant: true);
+    await goTab(tester, credTabVoice);
+    expect(find.text(credVoiceBoundaryTenantHas), findsOneWidget);
+    expect(find.text(credVoiceBoundaryMine), findsNothing, reason: '★ 租户那台还没接上，不许承诺');
   });
 
   testWidgets('④ 语音那一屏是**三样**；图片/视频各一串', (tester) async {

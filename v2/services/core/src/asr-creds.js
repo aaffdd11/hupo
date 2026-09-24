@@ -21,9 +21,21 @@ import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
 import { asrConfigFromEnv } from './asr.js';
+import { VOICE_FIELDS } from './creds.mjs';
+import { readUserCreds } from './creds-store.js';
 
 /** 那三样的名字（**只此一处**：读文件与读环境变量用的是同一组）。 */
 export const VOICE_ENV_NAMES = ['TENCENT_APPID', 'TENCENT_SECRET_ID', 'TENCENT_SECRET_KEY'];
+
+/**
+ * 语音那三样在**存档里**叫什么（短名）。
+ * ⚠️ 这张表只住一处：`creds.mjs` 的 `VOICE_FIELDS`（顺序＝AppID / SecretId / SecretKey）。
+ */
+const VOICE_FIELD_OF = Object.freeze({
+  TENCENT_APPID: VOICE_FIELDS[0],
+  TENCENT_SECRET_ID: VOICE_FIELDS[1],
+  TENCENT_SECRET_KEY: VOICE_FIELDS[2],
+});
 
 /** 默认的钥匙文件（`restart-core.sh` 也读它：**0600、不进仓库**）。 */
 export function defaultAsrEnvFile(dataDir) {
@@ -115,9 +127,32 @@ export function resolveVoiceCreds({ dataDir, env = process.env, fs = nodeFs } = 
  * @param {string|null} o.sub 这一端验过签的身份（**从令牌来**，绝不从请求里读）
  */
 export function voiceCredsFor({ sub = null, dataDir, env = process.env, fs = nodeFs } = {}) {
+  const who = typeof sub === 'string' && sub ? sub : null;
+  // ★ **他自己的那三样优先**（P1-26 后半 · 2026-09-24）：配置页那一屏填的就是这三样
+  //   （`creds-store.js` 的 `data/creds/<他>.yaml`，键名 `HUPO_VOICE_*`）。
+  //   ⚠️ **三样齐了才算数**（缺一样就是没填过）—— 与页面回报的口径**同一个规则**
+  //      （`creds.mjs` 的 `credStatus`），不然会出现"页面说有、发出去是空的"。
+  const mine = who ? readUserCreds(dataDir, who).values : {};
+  const mineOk = VOICE_ENV_NAMES.every((n) => typeof mine[VOICE_FIELD_OF[n]] === 'string'
+    && mine[VOICE_FIELD_OF[n]].length > 0);
+  if (mineOk) {
+    const engine = mine.engine ?? '';
+    const base = asrConfigFromEnv(engine ? { ...env, TENCENT_ASR_ENGINE: engine } : env);
+    return {
+      ...base,
+      appid: mine.voiceAppId,
+      secretId: mine.voiceSecretId,
+      secretKey: mine.voiceSecretKey,
+      upstream: null, // 他自己填的是"直连腾讯"那三样，不走取证中转
+      configured: true,
+      source: 'his-own',
+      sub: who,
+    };
+  }
   const cfg = resolveVoiceCreds({ dataDir, env, fs });
-  // ⚠️ 这一行就是"将来接上按人取"的位置。今天 `sub` 只用于日志（谁在用哪一份）。
-  return { ...cfg, sub: typeof sub === 'string' && sub ? sub : null, source: cfg.configured ? 'default' : 'none' };
+  // ⚠️ 没有他自己那份 ⇒ 退回**部署默认那一份**（`data/asr.env` 现读）。
+  //    来源如实写 `default`，**绝不假装是他的**。
+  return { ...cfg, sub: who, source: cfg.configured ? 'default' : 'none' };
 }
 
 /**

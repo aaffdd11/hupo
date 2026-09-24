@@ -15,6 +15,7 @@ import nodeOs from 'node:os';
 import nodePath from 'node:path';
 
 import { createAsrRelay } from '../src/asr.js';
+import { writeUserCreds } from '../src/creds-store.js';
 import {
   defaultAsrEnvFile,
   describeVoiceCreds,
@@ -201,4 +202,61 @@ test('🔴 中继：`config` 是函数 ⇒ **每条连接各取一份**（一条
   const fixed = createAsrRelay({ config: { configured: true, engine: '16k_zh' }, log: () => {} });
   assert.equal(fixed.configured, true);
   assert.equal(createAsrRelay({ config: { configured: false }, log: () => {} }).configured, false);
+});
+
+// ── ★ P1-26 后半：**他自己填的那三样优先**（2026-09-24）──────────
+test('★ 🔴 配置页那三样填了 ⇒ **就用他的**（来源如实写 `his-own`）', () => {
+  const dir = tmp();
+  try {
+    // 部署默认那一份也在（负向对照要靠它：证明不是"默认那份没了才用他的"）
+    writeEnvFile(dir, 'TENCENT_APPID=999\nTENCENT_SECRET_ID=env-id\nTENCENT_SECRET_KEY=env-key\n');
+    const w = writeUserCreds(dir, 'u1', {
+      voiceAppId: '1300000001',
+      voiceSecretId: 'mine-id',
+      voiceSecretKey: 'mine-key',
+    });
+    assert.equal(w.ok, true);
+    assert.equal(w.status.voice, true, '三样齐了 ⇒ 页面那边也该说"有"');
+
+    const cfg = voiceCredsFor({ sub: 'u1', dataDir: dir, env: {} });
+    assert.equal(cfg.source, 'his-own');
+    assert.equal(cfg.appid, '1300000001');
+    assert.equal(cfg.secretId, 'mine-id');
+    assert.equal(cfg.secretKey, 'mine-key');
+    assert.equal(cfg.configured, true);
+    assert.equal(cfg.sub, 'u1', '要记住这是谁的（日志用）');
+
+    // 负向对照：**别人**那一份不许用在他身上
+    const other = voiceCredsFor({ sub: 'u2', dataDir: dir, env: {} });
+    assert.equal(other.source, 'default', '★ 乙没填 ⇒ 只许用部署默认那一份');
+    assert.equal(other.appid, '999');
+  } finally {
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('★ 三样**缺一** ⇒ 不算"他填了"（退回默认；与页面口径同一条规则）', () => {
+  const dir = tmp();
+  try {
+    writeEnvFile(dir, 'TENCENT_APPID=999\nTENCENT_SECRET_ID=env-id\nTENCENT_SECRET_KEY=env-key\n');
+    writeUserCreds(dir, 'u1', { voiceAppId: '1300000001', voiceSecretId: 'mine-id' }); // 少 secretKey
+    const cfg = voiceCredsFor({ sub: 'u1', dataDir: dir, env: {} });
+    assert.equal(cfg.source, 'default', '★ 只有两样 ⇒ 当没填过（缺一样发不出请求）');
+    assert.equal(cfg.configured, true, '默认那份还在 ⇒ 仍然能用');
+  } finally {
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('他自己填了 ⇒ 不许走"取证中转"（那是给没钥匙时验链路用的）', () => {
+  const dir = tmp();
+  try {
+    writeEnvFile(dir, 'HUPO_ASR_URL=ws://127.0.0.1:1/up\nTENCENT_APPID=999\nTENCENT_SECRET_ID=e\nTENCENT_SECRET_KEY=k\n');
+    writeUserCreds(dir, 'u1', { voiceAppId: '1', voiceSecretId: 'a', voiceSecretKey: 'b' });
+    const cfg = voiceCredsFor({ sub: 'u1', dataDir: dir, env: {} });
+    assert.equal(cfg.source, 'his-own');
+    assert.equal(cfg.upstream, null, '★ 用他自己的钥匙时不许再指向中转');
+  } finally {
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
 });

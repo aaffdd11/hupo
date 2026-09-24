@@ -175,7 +175,12 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
       if (up) return;
       // ⚠️ 这一行是**排查用的**（2026-09-23 加）：主人手机上"按一下就没声了"，
       //    而服务端以前**什么都不记** ⇒ 只能猜。现在至少能看清"有没有走到这里、是谁的设备"。
-      log(`asr：会话开始 · 引擎 ${config.engine} · 来自 ${String(info.ua ?? '未知设备').slice(0, 90)}`);
+      // ⚠️ 带上**来源**（`his-own` / `default`）—— 它是"到底用了谁的钥匙"的唯一线索，
+      //    而它**不是秘密**（只是"从哪来"）。
+      log(
+        `asr：会话开始 · 引擎 ${config.engine} · 凭据来源 ${config.source ?? 'default'}` +
+          ` · 来自 ${String(info.ua ?? '未知设备').slice(0, 90)}`,
+      );
       let url;
       try {
         url = upstreamUrl();
