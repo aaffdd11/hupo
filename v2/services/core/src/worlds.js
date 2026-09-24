@@ -43,7 +43,7 @@ import { LedgerSocket, ledgerSocketPath } from './ledger-socket.js';
 import { Notice, UNDO_RESTORE } from './notice.js';
 import { SayService } from './say.js';
 import { Tenants, OWNER_ID } from './tenants.js';
-import { Timeline } from './timeline.js';
+import { ScopeView, Timeline } from './timeline.js';
 import { Trash } from './trash.js';
 import { markCleanExit, recordStart } from './boot-marker.js';
 import { reconcileOnBoot } from './reconcile.js';
@@ -139,15 +139,18 @@ export function agentKeyFor(userId, scope = MAIN_SCOPE) {
 /**
  * 一个 scope 的**对话日志**叫什么（`<dir>/<这个名字>.jsonl`）。
  *
- * ⚠️ 主线的日志必须**逐字不变**（`main.jsonl`）：盘上已有的事件、跨重启的取号、
- *    客户端还记得的号，全都挂在那个名字上。
- * ⚠️ 别的 scope 加前缀，是为了**构造上不可能撞上主线**。
+ * 🔴 **2026-09-25 收回**（契约 `docs/dev/84-DISPATCHER-FOCUS.md` §六 · 判据 F1）：
+ *    改前这里给每个 scope 一个不同的名字（`scope-<id>`）⇒ **每 scope 一份日志**。
+ *    手册 `05-DECISIONS.md` **P-l** 定的是「**一条可见时间线 = 一条日志**；
+ *    多作用域只是事件上的标签，不是并列的计数器」。
+ *    ⇒ 现在**所有 scope 都是那一条日志**（`main.jsonl`），
+ *      "这一间是谁"住在事件上的 `scopeId` 标签里（`ScopeView` 负责盖与挑）。
  *
- * ⚠️ 日志**不放进工作区**：工作区是"这个 app 的源码与产物"，
- *    往里塞一条对话记录会让"迁移时内容逐字节不变"（A6）变成一句难验的话。
+ * ⚠️ 这个函数留着是因为"日志叫什么"只有一处出处；它**不再**随 scope 变。
+ * @returns {string} 永远是 `main`（那条日志）
  */
-export function scopeTimelineId(scope = MAIN_SCOPE) {
-  return scope === MAIN_SCOPE ? 'main' : `scope-${scope}`;
+export function scopeTimelineId(_scope = MAIN_SCOPE) {
+  return 'main';
 }
 
 /**
@@ -191,12 +194,21 @@ export class Worlds {
   /** userId → 世界 */
   #worlds = new Map();
   /**
-   * `userId\u0000scope` → **房间**（一个 scope = 一个 cwd = 一条对话 · 契约 §三·3）。
+   * `userId\u0000scope` → **房间**（一个 scope = 一个 cwd = 一条会话 · 契约 §三·3）。
    *
    * ⚠️ 房间**不是**"另一个人的世界"：它和主人那份世界共用 `dir` / `DSH_HOME` /
-   *    制品库 / 本地通道，**只有三样不同** —— 工作目录、时间线、agent 进程池的键。
+   *    制品库 / 本地通道，**只有两样不同** —— 工作目录、agent 进程池的键。
+   *    ⚠️ **时间线不再不同**（契约 84 §三·2）：所有房间共用那**一条日志**，
+   *      "是哪一间"住在事件上的 `scopeId` 标签里（`room.timeline` 是那层视图）。
    */
   #rooms = new Map();
+  /**
+   * `userId\u0000scope` → `ScopeView`（同一把 `Timeline` 上"这一间"的视图）。
+   *
+   * ⚠️ 视图**不是日志**：一条日志一把 `Timeline`，视图只是"盖标签 / 挑标签"。
+   *    缓存它是为了让"同一间"每次拿到**同一个对象**（`roomFor` 幂等）。
+   */
+  #views = new Map();
   /** agentKey → 世界 / 房间（`onEvict` 与 `cfgForAgentKey` 回来时要知道该找谁） */
   #byAgentKey = new Map();
   #now;
@@ -394,6 +406,9 @@ export class Worlds {
       }
     }
 
+    // ★ **一条可见时间线 = 一条日志**（P-l · 契约 84 §三·2）：
+    //   这是**这个用户唯一那条** `Timeline`（`main.jsonl`、一套号）。
+    //   每个房间拿到的不是新 `Timeline`，而是**它自己那层 `ScopeView`**。
     const timeline = new Timeline({
       id: 'main',
       store: t.store,
@@ -401,15 +416,18 @@ export class Worlds {
         this.#warn(`[timeline] 订阅者出错（${event.type}）：${err?.message ?? err}`);
       },
     });
+    // 主线那层视图：**不盖标签**（盘上老事件没有 `scopeId`，主线逐字不变），
+    // 读的时候只挑"没有标签 / 标 main"的那些（房间的话不许漏进主线 · A4）。
+    const mainView = new ScopeView({ timeline, scope: MAIN_SCOPE });
     const notice = new Notice({
-      timeline,
+      timeline: mainView,
       store: t.store,
       timelineId: 'main',
       log: (m) => this.#warn(m),
     });
-    const say = new SayService({ timeline, store: t.store, timelineId: 'main' });
+    const say = new SayService({ timeline: mainView, store: t.store, timelineId: 'main' });
     const trash = this.#wantTrash
-      ? this.#makeTrash({ timeline, store: t.store, timelineId: 'main' }).sync()
+      ? this.#makeTrash({ timeline: mainView, store: t.store, timelineId: 'main' }).sync()
       : null;
 
     // 账本**另起一条日志**（`<dir>/ledger.jsonl`），所以它有自己的 Timeline
@@ -497,8 +515,11 @@ export class Worlds {
       onLeak: (report) => this.#tellMainLeak(t, notice, report),
     });
 
+    // ★ **每个用户一个调度器**（E 期 · 契约 84 §三·1 / 判据 F5）：
+    //   改前这里是"每间 `roomFor()` 再 `new` 一个"，现在**只有这一处** `new`，
+    //   房间走下面的 `dispatcher.addSession(...)` 挂到同一个对象上。
     dispatcher = new Dispatcher({
-      timeline,
+      timeline: mainView,
       runtime: this.#runtime,
       // ⚠️ 回调里带的是**这个人**（每个世界各一份调度器 ⇒ 不用再传 userId）
       onAuthFailure: this.#onAuthFailure ? () => this.#onAuthFailure(t.userId) : null,
@@ -510,7 +531,7 @@ export class Worlds {
       recap: cfg.recap,
       turnDeadlineMs: cfg.turnDeadlineMs,
       notice,
-      // ★ 见上面那段：只挂在**主线**这个调度器上
+      // ★ 见上面那段：只挂在**主线**那条会话上
       mainLeak,
     });
 
@@ -523,9 +544,12 @@ export class Worlds {
     }).listen();
 
     // ★ 开机那几件（**按人各算一份**）：崩溃环、对账。
+    //   ⚠️ 对账传的是**主线那层视图**：一条日志现在也装着房间的事件，
+    //      不过滤的话主线的对账会去收**别人房间**里未收口的气泡
+    //      （收出来的 `message/end` 还会落在主线上 —— 两处都错）。
     const boot = recordStart(t.dir);
     const reconciled = reconcileOnBoot({
-      timeline,
+      timeline: mainView,
       store: t.store,
       resume: { degraded: boot.degraded },
       notice,
@@ -540,7 +564,10 @@ export class Worlds {
       agentKey: agentKeyFor(t.userId),
       scopeId: 'main',
       store: t.store,
-      timeline,
+      // ⚠️ `world.timeline` 是**那层主线视图**，不是裸 `Timeline`：
+      //    `id` 还是 `'main'`（那条日志），`seq` 还是那套号，
+      //    但 `readAll()` / `subscribe()` 只给主线的事件（A4 靠它）。
+      timeline: mainView,
       notice,
       say,
       trash,
@@ -560,12 +587,15 @@ export class Worlds {
   }
 
   /**
-   * **取一个 scope 的房间**（一个 icon = 一个工作区 = 一条对话 · 契约 §三·3）。
+   * **取一个 scope 的房间**（一个 icon = 一个工作区 = 一条会话 · 契约 §三·3）。
    *
    * `main` 就是主人那个世界本身（**逐字不变**）；别的 scope 现建一个房间：
    *   · `agentCwd` = `<dir>/workspaces/<scope>`（DSH 按 cwd 给会话分组 ⇒ 判据 A2）；
-   *   · `timeline` = 自己那条日志（`scope-<scope>.jsonl`）⇒ 对话分家（判据 A3）；
-   *   · `agentKey` = `<userId>/<scope>` ⇒ 自己的 agent 窗口。
+   *   · `timeline` = 那条日志上**这一间的视图**（盖 / 挑 `scopeId` 标签）——
+   *     ⚠️ **不是另一条日志**（契约 84 §三·2）：日志与号仍然是那一条、那一套；
+   *   · `agentKey` = `<userId>/<scope>` ⇒ 自己的 agent 窗口；
+   *   · `dispatcher` = **这个用户那一个调度器**（不是每间 new 一个 · 判据 F5），
+   *     这一间只是它里面的一条会话（`dispatcher.addSession()`）。
    *
    * ⚠️ **scope 必须已经存在**（工作区目录在，或者制品库里有这个 app）：
    *    不然一个随手的字符串就能在盘上拉出一条日志来。
@@ -606,36 +636,24 @@ export class Worlds {
     //    （否则它写不进自己的工作区 —— 和那两条套接字是同一个病）
     world.workspaces.hand(id);
 
-    const timeline = new Timeline({
-      id: scopeTimelineId(id),
-      store: world.store,
-      onSubscriberError: (err, event) => {
-        this.#warn(`[timeline] 订阅者出错（${event.type}）：${err?.message ?? err}`);
-      },
-    });
-    // ★ 这一间里的对话**只写这一条日志**：`user/echo` 带上真的 scope
-    //   （主线那边**不带**这个字段 —— 老事件盘上没有它，主线行为逐字不变）。
+    // ★ **这一间的视图**（不是新日志）：盖标签 / 挑标签都住在这里，
+    //   取号与落盘仍然是 `world` 那把 `Timeline` 的（一条线、一套号）。
+    const view = this.#viewFor(userId, id);
+    // ★ 这一间里的话落进**同一条日志**，只是事件上带真的 scope：
+    //   `user/echo` 由 `SayService` 盖，别的（`message/*` 等）由视图盖。
     const say = new SayService({
-      timeline,
+      timeline: view,
       store: world.store,
       timelineId: scopeTimelineId(id),
       scopeId: id,
     });
-    const dispatcher = new Dispatcher({
-      timeline,
-      runtime: this.#runtime,
-      onAuthFailure: this.#onAuthFailure ? () => this.#onAuthFailure(userId) : null,
-      // ★ **写到事件里的那个字段**：盘上已有的主线是 `'main'`，
-      //   而这一间里的事件从此带**真的** scope（契约 §三·3）。
-      scopeId: id,
+    // ★ **挂到这个用户那一个调度器上**（判据 F5）——不再 `new Dispatcher`。
+    const session = world.dispatcher.addSession({
+      scope: id,
+      timeline: view,
       // 🔴 进程池的键里**带 scope** ⇒ 一个 app 一个 agent 窗口
       agentKey: agentKeyFor(userId, id),
-      store: world.store,
-      recap: world.cfg.recap,
-      turnDeadlineMs: world.cfg.turnDeadlineMs,
-      // ⚠️ 通知那本账**只挂在主线上**：过程/通知两条通道的互斥是"一个人一份"的账，
-      //   一间一个会让同一件事在两处各记一次（那正是它要防的）。
-      notice: null,
+      // ⚠️ 通知那本账 /「发现就报」**只挂主线**（见 `Dispatcher.addSession`）。
     });
 
     // ★ **房间里那份 cfg**：`DSH_HOME` / 本地通道还是这个人的，
@@ -648,9 +666,12 @@ export class Worlds {
       agentKey: agentKeyFor(userId, id),
       scopeId: id,
       store: world.store,
-      timeline,
+      timeline: view,
       say,
-      dispatcher,
+      // ⚠️ **与 `world.dispatcher` 是同一个对象**（判据 F5 的反例正是
+      //    "两间拿到两个不同的 Dispatcher"）。
+      dispatcher: world.dispatcher,
+      session,
       apps: world.apps,
       workspaces: world.workspaces,
       world,
@@ -658,6 +679,20 @@ export class Worlds {
     this.#rooms.set(key, room);
     this.#byAgentKey.set(room.agentKey, room);
     return room;
+  }
+
+  /**
+   * `userId\u0000scope` → **那一间的视图**（同一把 `Timeline` 上）。
+   * 缓存 ⇒ 同一间每次拿到**同一个对象**（`roomFor` 幂等、订阅可退）。
+   */
+  #viewFor(userId, scope) {
+    const key = `${userId}\u0000${scope}`;
+    const had = this.#views.get(key);
+    if (had) return had;
+    const world = this.worldFor(userId);
+    const view = new ScopeView({ timeline: world.timeline.base, scope });
+    this.#views.set(key, view);
+    return view;
   }
 
   /**
@@ -706,11 +741,20 @@ export class Worlds {
     let pending = 0;
     let turns = 0;
     let openMessageId = null;
-    for (const w of this.allRooms()) {
+    // ⚠️ **按人走、不是按房间走**：一个用户只有一个调度器，它自己会把
+    //    **每一条会话**的账加起来（`Dispatcher.busy()`）。
+    //    照 `allRooms()` 走会把同一个调度器数好几遍（房间与主线共享它）。
+    for (const w of this.#worlds.values()) {
+      if (w.dispatcher?.busy) {
+        const b = w.dispatcher.busy();
+        pending += b.pending;
+        turns += b.turns;
+        openMessageId ??= b.openMessageId;
+        continue;
+      }
+      // 老调用方（没给 `Dispatcher` 的测试替身）：退回逐房那套
       pending += w.dispatcher?.pendingDeliveries ?? 0;
       turns += w.dispatcher?.armedDeadlines ?? 0;
-      // ⚠️ `openMessageId` 只有第一个非空的有意义（它是"某一条没收口的气泡"）——
-      //    `computeBusy` 只判它**在不在**，所以取谁的不影响"忙不忙"
       openMessageId ??= w.timeline?.openMessageId ?? null;
     }
     return { openMessageId, pending, turns };
@@ -764,9 +808,15 @@ export class Worlds {
     }
   }
 
-  /** 优雅退出：每个人的派发器（**含每个房间的**）先把手上的话收圆。 */
+  /**
+   * 优雅退出：**每个用户那一个**调度器先把手上的话收圆。
+   *
+   * ⚠️ **按人走**（契约 84 §三·1）：房间与主线**共用同一个**调度器
+   *    ⇒ 照 `allRooms()` 走会对同一个对象调好几遍 `shutdown()`。
+   *    `Dispatcher.shutdown()` 自己会遍历它的**每一条会话**，所以每人一次就够。
+   */
   async shutdownDispatchers() {
-    for (const w of this.allRooms()) {
+    for (const w of this.#worlds.values()) {
       try {
         await w.dispatcher?.shutdown();
       } catch (err) {

@@ -15,8 +15,39 @@
 //
 // "一条可见时间线 = 一条日志"（P-l 甲）：
 //   多作用域**只是事件上的 `scopeId` 标签**，不是并列的计数器。
+//
+// ★ **2026-09-25 更正**（契约 `docs/dev/84-DISPATCHER-FOCUS.md` §六）：
+//   这个文件头那句话一直是对的，但**实现**曾经走了相反的路 ——
+//   `worlds.js` 给每个 scope 各建了一条 `Timeline`（各一份 `scope-<id>.jsonl`、
+//   各一套号）。现在收回来了，落点是下面两件东西：
+//
+//     · `Timeline` —— **每个用户一条**（就是那条日志、就是那套号）；
+//     · `ScopeView` —— 同一把 `Timeline` 上的一层**带标签的视图**：
+//       它把这一间的事件盖上 `scopeId`，读的时候只挑属于这一间的事件。
+//
+//   ⚠️ 所以"一条 WS 连接"与"焦点路由"是 C 期的事，这里**不做**：
+//      这一层只保证**同一个文件、同一套号**。
 
 import { StoreError } from './store.js';
+
+/** 主线那个房间的名字。**与 `worlds.js` 的 `MAIN_SCOPE` 逐字一致**（不动历史字节）。 */
+export const MAIN_SCOPE_LABEL = 'main';
+
+/**
+ * 这条事件**属于**哪个 scope（`scopeId` 只是事件上的标签 · P-l）。
+ *
+ * 认法两条，别处不许再写一份：
+ *   · 某个房间 ⇒ 标签**逐字**等于它；
+ *   · 主线 ⇒ 标签**没有 / 是 `main`**（盘上老事件没有这个字段 ⇒ 主线逐字不变）。
+ *
+ * @param {object} event
+ * @param {string} scope
+ */
+export function eventInScope(event, scope) {
+  const tag = event?.scopeId;
+  if (scope === MAIN_SCOPE_LABEL) return tag === undefined || tag === null || tag === MAIN_SCOPE_LABEL;
+  return tag === scope;
+}
 
 export class Timeline {
   #id;
@@ -24,7 +55,15 @@ export class Timeline {
   #clock;
   #seq = 0;
   #subs = new Set();
-  #open = null; // 当前未收口的那条消息（N22：同一时刻最多一条）
+  /**
+   * scope 键 → 当前未收口的那条消息（N22）。
+   *
+   * ⚠️ 为什么是**按 scope 各记一份**：一条日志现在装着所有房间，而
+   *    N22 的本意是"**一条对话里**同一时刻最多一条未收口"（消息不许交叉）。
+   *    收成全局一份的话，甲房间正说着、用户切到乙房间说一句 ⇒ 乙那条
+   *    `beginMessage` 会当场抛 —— 那是把一条正确的不变量用错了地方。
+   */
+  #opens = new Map();
   #onSubscriberError;
 
   /**
@@ -56,7 +95,28 @@ export class Timeline {
 
   /** 当前未收口的那条消息 id；没有则为 null。 */
   get openMessageId() {
-    return this.#open?.messageId ?? null;
+    for (const w of this.#opens.values()) return w.messageId;
+    return null;
+  }
+
+  /**
+   * **某个 scope 那条对话**当前未收口的消息 id（没有 ⇒ null）。
+   *
+   * ⚠️ 有了它，`ScopeView` 才能报"**我这一间**有没有没收口的气泡"，
+   *    而不被别的房间正说着的消息顶掉。
+   */
+  openMessageIdOf(scopeKey = '') {
+    return this.#opens.get(scopeKey)?.messageId ?? null;
+  }
+
+  /** 全量读（**不过滤**；要按 scope 过滤用 `ScopeView.readAll()`）。 */
+  readAll() {
+    return this.#store.readAll(this.#id);
+  }
+
+  /** 最后一条已落盘事件（重启取号的依据，也是"这条日志存不存在"的依据）。 */
+  lastEvent() {
+    return this.#store.lastEvent(this.#id);
   }
 
   /** 重启取 max。磁盘上没有日志 ⇒ 从 0 开始。 */
@@ -121,19 +181,20 @@ export class Timeline {
 
   // ── 未收口的那条消息（不变量 N22）─────────────────────────────
 
-  /** @internal 由 MessageWriter 调用 */
-  beginMessage(writer) {
-    if (this.#open) {
+  /** @internal 由 MessageWriter 调用（`scopeKey` 由 `ScopeView` 传进来） */
+  beginMessage(writer, scopeKey = '') {
+    const open = this.#opens.get(scopeKey);
+    if (open) {
       throw new StoreError(
-        `同一时刻最多一条未收口：${this.#open.messageId} 还没收口，${writer.messageId} 不能开始`,
+        `同一时刻最多一条未收口：${open.messageId} 还没收口，${writer.messageId} 不能开始`,
       );
     }
-    this.#open = writer;
+    this.#opens.set(scopeKey, writer);
   }
 
   /** @internal 由 MessageWriter 调用 */
-  endMessage(writer) {
-    if (this.#open === writer) this.#open = null;
+  endMessage(writer, scopeKey = '') {
+    if (this.#opens.get(scopeKey) === writer) this.#opens.delete(scopeKey);
   }
 
   #publish(event) {
@@ -146,5 +207,118 @@ export class Timeline {
         this.#onSubscriberError(err, event);
       }
     }
+  }
+}
+
+/**
+ * **同一把 `Timeline` 上的一层 scope 视图**（契约 84 §三·2 · P-l）。
+ *
+ * 一个 `ScopeView` 就是"**这一间**看那条日志的样子"：
+ *
+ *   · **写**：本间的事件盖上 `scopeId`（主线**不盖** —— 盘上老事件没有它，
+ *     主线必须逐字不变）；取号与落盘仍然是那把 `Timeline` 的（**一套号**）。
+ *   · **读**：`readAll()` / `subscribe()` 只给属于这一间的事件。
+ *   · **未收口**：按 scope 各记一份（见 `Timeline.#opens`）。
+ *
+ * ⚠️ **它不是第二条日志**：`id` 永远是那把 `Timeline` 的 id（每条日志一个文件）。
+ * ⚠️ 它**不是安全边界**（同 `worlds.js` 顶上那段）：过滤是为了"视图不串"，
+ *    跨 uid 的隔离要靠容器。
+ */
+export class ScopeView {
+  #timeline;
+  #scope;
+
+  /** @param {object} o @param {Timeline} o.timeline @param {string} [o.scope] */
+  constructor({ timeline, scope = MAIN_SCOPE_LABEL }) {
+    if (!timeline) throw new StoreError('ScopeView 需要 timeline');
+    this.#timeline = timeline;
+    this.#scope = scope === null || scope === undefined || scope === '' ? MAIN_SCOPE_LABEL : String(scope);
+  }
+
+  /** **那条日志**的 id（不是这一间的名字 —— 一条日志）。 */
+  get id() {
+    return this.#timeline.id;
+  }
+
+  /** 这一间叫什么（事件上的标签）。 */
+  get scopeId() {
+    return this.#scope;
+  }
+
+  get isMain() {
+    return this.#scope === MAIN_SCOPE_LABEL;
+  }
+
+  /**
+   * **认它是不是"同一把时间线上的 scope 视图"**。
+   * ⚠️ 给那些"要按这一间读、又要兼容裸 `Timeline`"的调用方（例如 `reconcile.js`）。
+   */
+  get isScopeView() {
+    return true;
+  }
+
+  /** 底下的那把 `Timeline`（建别的 scope 视图时要用它）。 */
+  get base() {
+    return this.#timeline;
+  }
+
+  get seq() {
+    return this.#timeline.seq;
+  }
+
+  /** **这一间**未收口的那条消息（别的房间正说着不影响它）。 */
+  get openMessageId() {
+    return this.#timeline.openMessageIdOf(this.#scope);
+  }
+
+  /** 这条事件属不属于这一间。 */
+  includes(event) {
+    return eventInScope(event, this.#scope);
+  }
+
+  /**
+   * 写的事件上要不要盖标签。
+   * ⚠️ 主线**不盖**（盘上老事件没有 `scopeId`；`message/start` 上那个 `'main'`
+   *    是 `MessageWriter` 本来就写的，不从这里来）。
+   */
+  #tagged(event) {
+    if (this.isMain) return event;
+    return { ...event, scopeId: this.#scope };
+  }
+
+  emit(event) {
+    return this.#timeline.emit(this.#tagged(event));
+  }
+
+  emitTransient(event) {
+    return this.#timeline.emitTransient(this.#tagged(event));
+  }
+
+  /** @internal 由 `MessageWriter` 调用 */
+  beginMessage(writer) {
+    return this.#timeline.beginMessage(writer, this.#scope);
+  }
+
+  /** @internal 由 `MessageWriter` 调用 */
+  endMessage(writer) {
+    return this.#timeline.endMessage(writer, this.#scope);
+  }
+
+  /** 只订阅**这一间**的事件。 */
+  subscribe(fn) {
+    return this.#timeline.subscribe((event) => {
+      if (this.includes(event)) fn(event);
+    });
+  }
+
+  /** 读**这一间**的全部事件（主线 ＝ 不带标签 / 标 `main` 的那些）。 */
+  readAll() {
+    return this.#timeline.readAll().filter((e) => this.includes(e));
+  }
+
+  /** 这一间最后一条已落盘事件。 */
+  lastEvent() {
+    const all = this.readAll();
+    return all.length > 0 ? all[all.length - 1] : null;
   }
 }

@@ -39,7 +39,22 @@ const AGENT_UNAVAILABLE_LINE = '我现在接不上活。你这句话我记下了
  */
 export const TURN_DEADLINE_MS = 180_000;
 
-export class Dispatcher {
+/**
+ * **一条会话**（一个 scope/房间）的调度状态。
+ *
+ * ⚠️ 它是**私有的**：外面拿到的是 `Dispatcher`（每个用户一个，内部持有多条会话）。
+ *    分成两层是 E 期（契约 84 §七）那一条的落点：
+ *
+ *      改前：`roomFor()` 每间 `new Dispatcher(...)` ⇒ **每间一个调度器**
+ *      改后：`worlds.js` 一个用户建**一个** `Dispatcher`，
+ *            每间用 `dispatcher.addSession({scope, timeline, agentKey})` 挂上去
+ *
+ *    为什么这不是"换个名字"：轮的起讫、超时计时器、排队那本账、`turnInput`
+ *    （P1-22 那条"他明说才许写"的闸）**都是按会话各算一份**的 ——
+ *    共用一个会互相顶掉（甲房间的一轮会把乙房间的计时器顶掉）。
+ *    ⇒ 收的是"**谁持有**"，每一间的账**照样各记一份**。
+ */
+class Session {
   #timeline;
   #runtime;
   #scopeId;
@@ -256,6 +271,21 @@ export class Dispatcher {
     return this.#deadlines.size;
   }
 
+  /** 这一间叫什么（事件上的标签）。 */
+  get scopeId() {
+    return this.#scopeId;
+  }
+
+  /** agent 进程池里这一间的键（`u1/main`、`u1/alpha`…）。 */
+  get agentKey() {
+    return this.#agentSessionKey;
+  }
+
+  /** **这一间**未收口的气泡（别的房间正说着不影响它）。 */
+  get openMessageId() {
+    return this.#timeline.openMessageId ?? null;
+  }
+
   /**
    * ★ **这一轮里造了一个 app**（A1·「发现就报」）。
    *
@@ -283,7 +313,10 @@ export class Dispatcher {
    *    就必须同时改取号方式，不能只改一半）。
    */
   #recapText(excludeMessageId) {
-    const events = this.#store.readAll(this.#timeline.id);
+    // ★ **读这一间自己的**（一条日志里的这一段）：`ScopeView.readAll()` 按
+    //   `scopeId` 标签挑出来。少了这一步，乙房间的 agent 会把甲房间的话
+    //   当自己的背景读进去（一条日志之后新冒出来的病，契约 84 §三·2）。
+    const events = this.#timeline.readAll();
     const built = buildRecap(events, { ...this.#recapOptions, excludeMessageId });
     this.#lastRecap = built.text === '' ? null : built.text;
     return built.text;
@@ -596,5 +629,197 @@ export class Dispatcher {
     this.#translator.forceClose('failed');
     this.#clearAllDeadlines();
     this.#recapFedTo = null;
+  }
+}
+
+/**
+ * **一个用户的调度器**（E 期 · 契约 84 §三·1 / 判据 F5）。
+ *
+ * 手册 `02-ARCHITECTURE.md` §四原文是「调度器（永续，**同时持有 A、B、C… 每条会话**）」。
+ * 改前是 `roomFor()` 每间 `new Dispatcher(...)` —— **每间一个调度器**，
+ * 那是 `83-APP-WORKSPACE.md` 走偏的三处之一。
+ *
+ * ⇒ 现在：**每个用户一个 `Dispatcher`**，内部 `#sessions` 持有 N 条 `Session`。
+ *   外面的老接口（`deliver` / `shutdown` / `translator` / `pendingDeliveries`…）
+ *   **一律指向主线那条会话** —— 单房间的老调用方与老测试一个字都不用改。
+ *
+ * ⚠️ 每条会话的账**各算一份**（轮、计时器、排队、`turnInput`）——
+ *    见 `Session` 顶上那段：共用一个会互相顶掉。
+ * ⚠️ 宿主那层**只转发字节**（`37-MULTITENANT.md`）：这里没有"当前用户"全局，
+ *    身份与 scope 只能靠参数传进来。
+ */
+export class Dispatcher {
+  /** `scopeId` → `Session`。**主线那条一定在**（构造时就建好）。 */
+  #sessions = new Map();
+  #mainScope;
+  #runtime;
+  #store;
+  /** 新挂上来的会话共用这三样（与主线那条一致）。 */
+  #recapOptions;
+  #turnDeadlineMs;
+  #onAuthFailure;
+  #notice;
+  #mainLeak;
+
+  /**
+   * @param {object} o
+   *        与 `Session` 同一组参数（`timeline` 是**主线那一间**的视图）。
+   *        另加 `runtime` / `store`（新挂上来的会话要共用它们）。
+   */
+  constructor(args) {
+    this.#runtime = args.runtime;
+    this.#store = args.store;
+    this.#mainScope = args.scopeId ?? null;
+    this.#recapOptions = args.recap ?? {};
+    this.#turnDeadlineMs = args.turnDeadlineMs ?? TURN_DEADLINE_MS;
+    this.#onAuthFailure = args.onAuthFailure ?? null;
+    // ⚠️ 通知那本账 / 「发现就报」**只挂主线那一间**（与改前逐字一致）：
+    //    通知的互斥是"一个人一份"的账，一间一个会让同一件事在几处各记一次。
+    this.#notice = args.notice ?? null;
+    this.#mainLeak = args.mainLeak ?? null;
+    const main = new Session(args);
+    this.#sessions.set(main.scopeId, main);
+  }
+
+  /** 这个用户手上有几条会话（主线 ＋ 每个房间）。 */
+  get sessionCount() {
+    return this.#sessions.size;
+  }
+
+  /** 已挂上来的那些 scope（诊断 / 判据用）。 */
+  scopes() {
+    return [...this.#sessions.keys()];
+  }
+
+  /** 主线那条会话（老接口都指向它）。 */
+  get #main() {
+    return this.#sessions.get(this.#mainScope);
+  }
+
+  /** 按 scope 取会话；**认不出 ⇒ `null`**（不许悄悄退回主线）。 */
+  sessionFor(scope) {
+    const s = scope === null || scope === undefined || scope === '' ? this.#mainScope : String(scope);
+    return this.#sessions.get(s) ?? null;
+  }
+
+  /**
+   * **把一条会话挂上来**（`worlds.roomFor()` 调它 —— 这是"收回每间一个调度器"
+   * 之后，房间拿到调度能力的唯一入口）。
+   *
+   * ⚠️ 同一个 scope 重复挂 ⇒ **原样返回已有的那条**（幂等：
+   *    `roomFor` 每次都用同一把视图，重复挂不该把轮账清掉）。
+   * @returns {Session}
+   */
+  addSession({ scope, timeline, agentKey, notice = null, mainLeak = null, onAuthFailure = null }) {
+    const id = scope === null || scope === undefined || scope === '' ? this.#mainScope : String(scope);
+    const had = this.#sessions.get(id);
+    if (had) return had;
+    const s = new Session({
+      timeline,
+      runtime: this.#runtime,
+      store: this.#store,
+      scopeId: id,
+      agentKey,
+      // ⚠️ 房间**不接**通知那本账 / 「发现就报」：那两样只挂主线（与改前一致）
+      notice: id === this.#mainScope ? (notice ?? this.#notice) : null,
+      mainLeak: id === this.#mainScope ? (mainLeak ?? this.#mainLeak) : null,
+      onAuthFailure: onAuthFailure ?? this.#onAuthFailure,
+      // ⚠️ recap / 超时**跟着这个世界**走（`Worlds` 建调度器时已经算好了）。
+      recap: this.#recapOptions,
+      turnDeadlineMs: this.#turnDeadlineMs,
+    });
+    this.#sessions.set(id, s);
+    return s;
+  }
+
+  get translator() {
+    return this.#main.translator;
+  }
+
+  get lastError() {
+    return this.#main.lastError;
+  }
+
+  get lastRecap() {
+    return this.#main.lastRecap;
+  }
+
+  get pendingDeliveries() {
+    return this.#main.pendingDeliveries;
+  }
+
+  get armedDeadlines() {
+    return this.#main.armedDeadlines;
+  }
+
+  get turnInput() {
+    return this.#main.turnInput;
+  }
+
+  /** 主线那间未收口的气泡（老接口）。 */
+  get openMessageId() {
+    return this.#main.openMessageId;
+  }
+
+  /** 主线那条会话（判据要看"每条会话各有各的账"时用）。 */
+  get mainSession() {
+    return this.#main;
+  }
+
+  noteAppBuilt(info) {
+    return this.#main.noteAppBuilt(info);
+  }
+
+  /**
+   * 用户说了一句话 —— 交给**它那个 scope**的会话。
+   *
+   * ★ 新增可选参数 `scope`（契约 84 §四：协议**只加不改**）：
+   *   不给 ⇒ 主线（老调用方一字不改）。
+   */
+  async deliver(text, { messageId = null, scope = null } = {}) {
+    const s = this.sessionFor(scope);
+    if (!s) {
+      // ⚠️ **不许悄悄落到主线**：那会让"某一间的话"出现在主线上（而且看不出来）。
+      //    调用方（server.js）会把这句话翻成 404/人话，这里只如实回。
+      return { delivered: false, error: `没有这个 scope 的会话：${String(scope)}` };
+    }
+    return s.deliver(text, { messageId });
+  }
+
+  /**
+   * 淘汰回调：按 **agentKey** 找到它属于哪一间，让那一间收口。
+   * ⚠️ 少了它，超时/淘汰时的"先收口再卸"会落到主线那一间上。
+   */
+  async onEvict(sessionId) {
+    for (const s of this.#sessions.values()) {
+      if (s.agentKey === sessionId) {
+        await s.onEvict(sessionId);
+        return;
+      }
+    }
+  }
+
+  /** 聚合"手上还有没有没说完的话"（`worlds.busySnapshot()` 用）。 */
+  busy() {
+    let pending = 0;
+    let turns = 0;
+    let openMessageId = null;
+    for (const s of this.#sessions.values()) {
+      pending += s.pendingDeliveries;
+      turns += s.armedDeadlines;
+      openMessageId ??= s.openMessageId;
+    }
+    return { openMessageId, pending, turns };
+  }
+
+  /** 收工：**每一条会话**都要把话说圆（漏一条 = 那条被切断）。 */
+  async shutdown() {
+    for (const s of this.#sessions.values()) {
+      try {
+        await s.shutdown();
+      } catch {
+        /* 一条收不干净不许影响别的 */
+      }
+    }
   }
 }

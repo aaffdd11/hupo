@@ -1066,12 +1066,15 @@ export function createServer({
           return sendJson(res, 400, { error: 'bad-before' });
         }
         // ★ **可选 `scope`**（契约 `83-APP-WORKSPACE.md` §三·3）：缺了就是主线。
-        //   A 房间的日志与 B 房间的不是同一条文件 ⇒ 这里换一个 `W` 就换了一条时间线。
+        //   ★ 2026-09-25（契约 84 §三·2）：日志**只有一条**了 ⇒ 这里换的不是
+        //     "另一份日志"，而是**同一份日志上的另一层视图**（按 `scopeId` 标签挑）。
+        //     协议与语义**一个字没改**：`?scope=alpha` 还是"只看这一间"，
+        //     不带还是主线（老客户端一个字节都不用改）。
         const scope = parseScope(q);
         const TW = roomFor(claim.sub, scope);
         if (!TW) return sendJson(res, 404, { error: 'no-such-scope', text: '这个房间还没建好。' });
         const page = planBackfill({
-          events: TW.store.readAll(TW.timeline.id),
+          events: TW.timeline.readAll(),
           before,
           limit: Number.isInteger(limit) && limit > 0 ? Math.min(limit, BACKFILL_MAX) : BACKFILL_PAGE,
         });
@@ -1079,7 +1082,7 @@ export function createServer({
       }
       if (path === '/api/export' && req.method === 'GET') {
         const bin = W.trash ? W.trash.list() : [];
-        return sendJson(res, 200, buildExport(W.store.readAll(W.timeline.id), {
+        return sendJson(res, 200, buildExport(W.timeline.readAll(), {
           hiddenIds: bin.flatMap((t) => t.messageIds),
           // ⚠️ **这个数 = 删除次数**，而它**恰好等于"删掉的轮数"** ——
           //    因为客户端**一次只删一轮**（`turnMessageIds(id)` ⇒ 一次 remove 调用）。
@@ -1376,7 +1379,9 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
       if (!result.duplicate && W.dispatcher) {
         // 投递是异步的（`session/prompt` 立刻返回，答案从事件流回来），
         // 所以**不等它**——等它会把 HTTP 响应也拖住。
-        W.dispatcher.deliver(body?.text, { messageId: body?.messageId }).catch((err) => {
+        // ★ **带上这一间**（契约 84 §四）：一个用户只有一个调度器，
+        //   不给 scope 它会落到主线那条会话上（那就是"甲房的话进乙房的窗口"）。
+        W.dispatcher.deliver(body?.text, { messageId: body?.messageId, scope: W.scopeId }).catch((err) => {
           log(`[dispatch] 投递失败：${err?.message ?? err}`);
         });
       }
@@ -1820,7 +1825,7 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     // 补发（手册 §2.2，决策 P-h）
     let plan;
     try {
-      plan = planResume({ events: W.store.readAll(W.timeline.id), sinceSeq });
+      plan = planResume({ events: W.timeline.readAll(), sinceSeq });
     } catch {
       ws.close(1008, 'bad-sinceSeq');
       return;

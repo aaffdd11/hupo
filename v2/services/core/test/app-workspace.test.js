@@ -8,7 +8,8 @@
 // 这一份就是"接上了没有"的判据，**每条都带反例**：
 //   A1 造 app ⇒ 文件**只**在它自己的工作区里（写进 main ⇒ 红）
 //   A2 每个 scope 自己的 DSH 会话 / cwd（两个 app 落进同一个 slug ⇒ 红）
-//   A3 对话分家（共用一个 timeline ⇒ 红）
+//   A3 对话分家（**一条日志 ＋ 视图过滤**：不带标签的话不许出现在别间；
+//      ⚠️ 2026-09-25 按 P-l 改：分的是**视图**，不是"每间一份日志"）
 //   A4 主线不受影响（分了家把主线弄坏 ⇒ 红）
 //   A5 制品库是快照（直接线上读工作区 ⇒ 红）
 //   A6 迁移逐字节不变、主目录里不许再留着它（搬丢 / 没删源 ⇒ 红）
@@ -497,12 +498,28 @@ test('🔴 A3：A 房间说的话，B 房间**看不到**（正对照：A 自己
   assert.match(fB, /乙的暗号-BETA/);
   assert.doesNotMatch(fB, /甲的暗号-ALPHA/, '🔴 乙的流里不许补发出甲的话');
 
-  // **反例的正身**：共用一个 timeline（今天那种）时两句话必然在一起 —— 而它们现在不在一起
-  assert.notEqual(scopeTimelineId('alpha'), scopeTimelineId('beta'));
-  assert.notEqual(scopeTimelineId('alpha'), 'main');
-  assert.equal(w.store.pathFor(scopeTimelineId('alpha')).endsWith('scope-alpha.jsonl'), true);
-  assert.equal(w.store.pathFor(scopeTimelineId('beta')).endsWith('scope-beta.jsonl'), true);
-  assert.notEqual(w.store.pathFor(scopeTimelineId('alpha')), w.store.pathFor(scopeTimelineId('beta')));
+  // ★ **反例的正身**（2026-09-25 按手册 P-l **改了**，契约 `84-DISPATCHER-FOCUS.md` §六）：
+  //
+  //   ⚠️ **为什么改**：这几行原来断言的是"每 scope 一份日志、各一套号"
+  //      （`scope-alpha.jsonl` / `scope-beta.jsonl` 各有各的文件）——
+  //      那正是 `#121` 走偏的第二处，与 `05-DECISIONS.md` **P-l**
+  //      「一条可见时间线 = 一条日志；多作用域只是事件上的标签」**相反**。
+  //      收回来之后：**一条日志（`main.jsonl`）、一套号**，
+  //      "是哪一间"只住在事件上的 `scopeId`（上面那些 notMatch 靠**视图过滤**成立）。
+  //
+  //   反例：每 scope 一份日志 ⇒ 下面这两条 `false` / `不存在` 会当场红。
+  assert.equal(scopeTimelineId('alpha'), 'main', '🔴 一条可见时间线 = 一条日志（P-l）');
+  assert.equal(scopeTimelineId('beta'), 'main');
+  assert.equal(w.store.pathFor(scopeTimelineId('alpha')), w.store.pathFor('main'));
+  assert.equal(w.store.pathFor(scopeTimelineId('alpha')).endsWith('scope-alpha.jsonl'), false);
+  assert.equal(
+    nodeFs.existsSync(nodePath.join(w.dir, 'scope-alpha.jsonl')), false,
+    '🔴 分家的旧文件不许再出现（反例：每 scope 一份日志 ⇒ 红）',
+  );
+  assert.equal(nodeFs.existsSync(nodePath.join(w.dir, 'scope-beta.jsonl')), false);
+  // 两间的事件确实在**同一个文件**里（判据 F1 在 `scope-single-log.test.js` 里正面钉）
+  assert.match(jsonl(w.dir), /甲的暗号-ALPHA/);
+  assert.match(jsonl(w.dir), /乙的暗号-BETA/);
 
   await h.close();
 });
@@ -565,16 +582,31 @@ test('★ A4：主线（main）不受影响 —— 老对话还在、还能说�
   makeScope(h, 'u1', 'alpha');
   assert.equal((await post(h, '/api/say', { messageId: 's1', text: '房间里的新话', scope: 'alpha' }, 'u1')).status, 200);
 
-  // 主线：那句老话还在、新话一个字都没漏进去、号**没有被房间的事件推着走**
+  // ★ **盘上是同一条日志**（2026-09-25 按 P-l **改了**，契约 84 §六）：
+  //   ⚠️ **为什么改**：原来这三行断言"文件里不许出现房间的话"＋"房间的事件不占号"
+  //      —— 那是"每 scope 一份日志 / 各一套号"的旧契约（`#121` 走偏的第二处），
+  //      与 `05-DECISIONS.md` P-l「一条可见时间线 = 一条日志；编号是一条线」**相反**。
+  //   ⇒ 现在：房间的话**就在那个文件里**（靠 `scopeId` 标签分），而且**占同一条线的号**。
+  //      "主线那一眼看不到它"这条**行为**没变 —— 改由**主线视图**保证（下面那一条钉它）。
   const after = jsonl(w.dir);
   assert.match(after, /主线的老话-A4/, '★ 老对话还在');
-  assert.doesNotMatch(after, /房间里的新话/, '🔴 房间的话不许漏进主线');
-  assert.equal(w.timeline.seq, beforeSeq, '★ 房间的事件不占主线的号');
+  assert.match(after, /房间里的新话/, '★ 一条日志：房间的话也在这个文件里（标签是 `scopeId`）');
+  assert.equal(w.store.pathFor('main').endsWith('main.jsonl'), true, '★ 只有那一条日志');
+
+  // ★ **主线那层视图**看不到房间的话（行为一个字没改；反例：不按标签挑 ⇒ 红）
+  assert.equal(
+    w.timeline.readAll().some((e) => e.text === '房间里的新话'), false,
+    '🔴 主线视图里不许出现房间的话（A4 保的是**这一条**）',
+  );
+
+  // ★ 号：**一条线**（判据 F1）—— 房间的事件也占这条线的号
+  assert.ok(w.timeline.seq > beforeSeq, '★ 房间的事件占**同一条线**的号（P-l）');
+  const afterRoomSeq = w.timeline.seq;
 
   // 主线还能说，而且接着原来的号
   const again = await post(h, '/api/say', { messageId: 'old2', text: '主线接着说-A4' }, 'u1');
   assert.equal(again.status, 200);
-  assert.equal((await again.json()).seq, beforeSeq + 1, '★ 主线的号接着走（分家没把它弄坏）');
+  assert.equal((await again.json()).seq, afterRoomSeq + 1, '★ 号接着走、不跳（一条线，分家没把它弄坏）');
 
   // 主线的流照旧
   const { ws, frames } = await wsConnect(h.origin, { token: tokenFor(h, 'u1') });

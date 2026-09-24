@@ -278,7 +278,13 @@ export function reconcileOnBoot({
   let events;
   let found;
   try {
-    events = store.readAll(id);
+    // ★ **读这条时间线自己的那些事件**（契约 84 §三·2）：一条日志现在装着
+    //   所有房间，`ScopeView.readAll()` 会按 `scopeId` 标签挑出属于这一间的。
+    //   少了这一步，"主线的对账"会去收别人房间里未收口的气泡。
+    //   ⚠️ 裸 `Timeline`（离线测试、老调用方）走**传进来的 `store`** ——
+    //      "读日志坏掉"这条判据正是打在它上面（`reconcile.test.js`）。
+    const scoped = timeline?.isScopeView === true;
+    events = scoped ? timeline.readAll() : store.readAll(id);
     found = findInterrupted(events, { now, windowMs });
   } catch (err) {
     return {
