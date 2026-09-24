@@ -56,5 +56,5 @@ if [ "$WANT_DIFF" = "1" ]; then
 else
   echo "  （想看差异：bash scripts/check-nginx-drift.sh --diff）"
 fi
-echo "  ⇒ 修法：把线上那份**照实抄回** `deploy/nginx-w-stalkerai.conf`（抄本永远是"抄"的，不是"源"）"
+echo '  ⇒ 修法：把线上那份**照实抄回** `deploy/nginx-w-stalkerai.conf`（抄本永远是"抄"的，不是"源"）'
 exit 1

@@ -24,6 +24,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:hupo_app/models/export_words.dart';
+import 'package:hupo_app/models/harness.dart';
 import 'package:hupo_app/models/message_state.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/space.dart';
@@ -35,9 +36,11 @@ import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/widgets/bubbles.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
+import 'package:hupo_app/widgets/harness_pane.dart';
 import 'package:hupo_app/screens/landing_screen.dart';
 import 'package:hupo_app/screens/login_screen.dart';
 import 'package:hupo_app/models/app_words.dart';
+import 'package:hupo_app/models/harness_words.dart';
 import 'package:hupo_app/models/math_words.dart';
 import 'package:hupo_app/screens/discover_screen.dart';
 import 'package:hupo_app/screens/math_quiz_screen.dart';
@@ -108,6 +111,68 @@ Future<void> _openMath(WidgetTester tester, double scale) async {
   await tester.tap(find.text(mathAppLabel));
   await tester.pumpAndSettle();
   expect(find.byType(MathQuizScreen), findsOneWidget, reason: '★ 没进奥数题那一屏 ⇒ 判据扫错了屏幕');
+}
+
+/// **像用户那样**打开「我自己那台」（2026-09-24 新加的磁贴 · 契约 `81-HARNESS-ENTRY.md`）。
+///
+/// ⚠️ 同关于页 / 发现那条理由：**新加的界面必须也过那两道硬闸**
+///    （五档不溢出 + 命中区 ≥44），不然它们会随时间失效。
+/// ⚠️ 那一层连的是**外面那一台**（一条 WS），VM 上真连不上 ⇒ 这里**注入一条假通道**，
+///    把"跑着"和"停了"两种状态都泵出来（两种状态各有各的按钮要量）。
+///    真实现那一条的判据在 `test/unit/harness_test.dart`（地址/令牌）与
+///    `test/widget/harness_test.dart`（接不上时不白屏）。
+Future<void> _openHarness(
+  WidgetTester tester,
+  double scale, {
+  HarnessStatus? state,
+}) async {
+  final feed = _FakeHarnessFeed(state ?? const HarnessStatus(HarnessState.ready));
+  await _pump(
+    tester,
+    ChatScreen(controller: _controller(), onLoggedOut: () {}, harnessFeed: () => feed),
+    scale,
+  );
+  await tester.tap(find.text(harnessAppLabel));
+  await tester.pumpAndSettle();
+  expect(find.byType(HarnessPane), findsOneWidget, reason: '★ 没进那一层 ⇒ 判据扫错了屏幕');
+}
+
+/// 一条**假的**通道：那一层的两种状态在 VM 上没法靠真连一个口演出来。
+///
+/// ⚠️ 那几行里**故意**放一条"没见过的"（类型 + JSON）：
+///    五档字号下最容易被挤爆的就是那种长 JSON。
+class _FakeHarnessFeed implements HarnessFeed {
+  _FakeHarnessFeed(this._current);
+  final HarnessStatus _current;
+
+  @override
+  Stream<HarnessLine> get lines => Stream<HarnessLine>.fromIterable(const [
+    HarnessLine(HarnessLineKind.turn, '── 第 1 轮 ──'),
+    HarnessLine(HarnessLineKind.user, '你 › 用一句话告诉我今天是星期几'),
+    HarnessLine(HarnessLineKind.text, '它 › 今天是星期四。'),
+    HarnessLine(HarnessLineKind.unknown, 'todo/write', detail: '{"todos":[1,2,3]}'),
+  ]);
+
+  @override
+  Stream<HarnessStatus> get status => const Stream<HarnessStatus>.empty();
+
+  @override
+  HarnessStatus get current => _current;
+
+  @override
+  void open() {}
+
+  @override
+  void say(String text) {}
+
+  @override
+  void stop() {}
+
+  @override
+  void restart() {}
+
+  @override
+  Future<void> close() async {}
 }
 
 /// **像用户那样**打开关于页：主界面 → 顶栏「配置」→ 里面的「关于」。
@@ -576,6 +641,22 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '发现在 ${s}x 溢出了');
       });
 
+      testWidgets('我自己那台（从真入口进·跑着）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-24 新加的那一层（`81-HARNESS-ENTRY.md`）⇒ 必须也过这道闸。
+        await _openHarness(tester, s);
+        expect(_drain(tester), isEmpty, reason: '那一层在 ${s}x 溢出了');
+      });
+
+      testWidgets('我自己那台（从真入口进·停了）@ ${s}x', (tester) async {
+        // ⚠️ "停了"那一态比"跑着"多两行字（一句普通话 + 原因）⇒ 它也得过五档。
+        await _openHarness(
+          tester,
+          s,
+          state: const HarnessStatus(HarnessState.gone, '它那一台被收了'),
+        );
+        expect(_drain(tester), isEmpty, reason: '那一层（停了）在 ${s}x 溢出了');
+      });
+
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {
         // ⚠️ 新加的界面**必须也过这道闸** —— 不然"五档不溢出"会随时间失效。
         await _openAbout(tester, s);
@@ -776,6 +857,25 @@ void main() {
       testWidgets('发现（从真入口进）@ ${s}x', (tester) async {
         await _openDiscover(tester, s);
         await sweep(tester, '发现 @${s}x');
+      });
+
+      testWidgets('我自己那台（从真入口进·跑着）@ ${s}x', (tester) async {
+        // ⚠️ 新加的那一层里的按钮（跑着时的「停」/ 送出）也得进这份扫描。
+        await _openHarness(tester, s);
+        await sweep(tester, '我自己那台 @${s}x');
+      });
+
+      testWidgets('我自己那台（从真入口进·停了）@ ${s}x', (tester) async {
+        // ⚠️ 「重来」是**另一条状态**下的按钮：不单独泵一次的话，它的命中区
+        //    没有任何东西守着（而 D3.6 就是"命中区 ≥44"）。
+        await _openHarness(
+          tester,
+          s,
+          state: const HarnessStatus(HarnessState.gone, '它那一台被收了'),
+        );
+        // 负向对照：那个「重来」真的在屏幕上（不在的话这条扫描量的是别的按钮）
+        expect(find.text(harnessRestart), findsOneWidget, reason: '★「重来」没进这棵树');
+        await sweep(tester, '我自己那台（停了）@${s}x');
       });
 
       testWidgets('关于页（从真入口进）@ ${s}x', (tester) async {

@@ -146,4 +146,33 @@ void main() {
       expect(u.toString(), 'ws://127.0.0.1:8091/api/asr');
     });
   });
+
+  // ── 「我自己那台」那条（`docs/dev/81-HARNESS-ENTRY.md` §5.1）──────
+  //
+  // ⚠️ 这是**同一个坑的第三个入口**：`ws://` vs `wss://` 那次事故（`16-STREAM.md`）
+  //    之所以发生，是因为"客户端自己算的地址"没有闸打在这一侧。
+  //    ⇒ 这一条也不许例外：金丝雀必须有。
+  group('「我自己那台」那条（/api/harness）', () {
+    test('★ https 页面上**不许降级**（第三个入口的金丝雀）', () {
+      final u = harnessUri(base: '', page: page('https://w.stalkerai.cn/'));
+      expect(u.toString(), 'wss://w.stalkerai.cn/api/harness');
+      expect(u.scheme, 'wss', reason: '在 https 页面上拼出 ws:// 会被浏览器直接拦掉');
+    });
+
+    test('同源：看页面自己的协议（http 调试页面 ⇒ ws）', () {
+      final u = harnessUri(base: '', page: page('http://127.0.0.1:8020/'));
+      expect(u.toString(), 'ws://127.0.0.1:8020/api/harness');
+    });
+
+    test('默认端口不许多写 :443 / :80；跨源看 base 的协议，端口照带', () {
+      expect(harnessUri(base: '', page: page('https://a.cn/')).hasPort, false);
+      final u = harnessUri(base: 'http://127.0.0.1:8091', page: page('https://w.stalkerai.cn/'));
+      expect(u.toString(), 'ws://127.0.0.1:8091/api/harness');
+    });
+
+    test('地址上**不带令牌**（令牌走子协议，和 /api/stream 同一条规矩）', () {
+      final u = harnessUri(base: '', page: page('https://w.stalkerai.cn/'));
+      expect(u.query, isEmpty);
+    });
+  });
 }

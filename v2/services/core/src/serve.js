@@ -25,6 +25,7 @@ import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
 import { appsBaseOf, createAppServer, loadSignKey } from './app-serve.js';
 import { createAsrRelay } from './asr.js';
+import { createHarnessRelay } from './harness-session.mjs';
 import { readUserCreds, writeUserCreds } from './creds-store.js';
 import { makeDrawImage } from './image-use.js';
 import { OWNER_KEY_REF, writeOwnerKey } from './owner-creds.js';
@@ -708,6 +709,19 @@ const { listen, listenTrusted, close } = createServer({
   //      "没配"的原话，而不是一个握手失败让界面去猜。
   asr: createAsrRelay({
     config: (info) => voiceCredsFor({ sub: info?.sub, dataDir: cfg.dataDir }),
+    log: (m) => console.log(`▶ ${m}`),
+  }),
+  /**
+   * ★ **甲那条**（`/api/harness` · 2026-09-24）：盒子里那台 DSH 自己的**原始会话流**。
+   *
+   * ⚠️ 它**只在容器侧够得着**：`server.js` 那道闸门要求 `trusted === true`，
+   *    而宿主上根本不听那条 UDS（`cfg.trustedSocketPath` 只有盒里设）。
+   *
+   * ⚠️ 它和琥珀自己那条路**完全隔离**（判据 H7）：另起进程、**不带人格/能力 patch**，
+   *    也不碰 `AgentRuntime` 的实例与 LRU —— 见 `src/harness-session.mjs` 顶上那段。
+   */
+  harness: createHarnessRelay({
+    cfg,
     log: (m) => console.log(`▶ ${m}`),
   }),
   // ★ **字体镜像的缓存目录**（`/fonts/…` 那条口）：镜像下来的字体落在这儿

@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
+import 'package:hupo_app/models/harness_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
 import 'package:hupo_app/models/login_words.dart';
 import 'package:hupo_app/models/notice_words.dart';
@@ -172,6 +173,51 @@ void main() {
       speakAutoHintOn,
       speakAutoHintOff,
       speakCannotWords,
+      // ★ 2026-09-24：「我自己那台」那个入口（契约 `docs/dev/81-HARNESS-ENTRY.md` §5.4）——
+      //    桌面上那个字 + 那一层里**每一句**（状态、每一行的抬头、结构行、说明行、
+      //    未知事件那一条）。**直接引数据源**（手抄会漂）。
+      //    ⚠️ 硬闸点名的那几个词（模型 / 会话 / 客户端 / 工作区 / 口令 / 连接 / 云端 /
+      //       工具名 / `web_search`）这一组**一个都不许有**。
+      harnessAppLabel,
+      harnessOpening,
+      harnessGoneLine,
+      harnessWhyPrefix,
+      harnessRestart,
+      harnessDroppedWhy,
+      harnessSayHint,
+      harnessSend,
+      harnessStop,
+      harnessYourPrefix,
+      harnessItsPrefix,
+      harnessThinkPrefix,
+      harnessSystemPrefix,
+      harnessAnswered,
+      harnessUnknownLine,
+      harnessNoTextLine,
+      harnessInterruptedLine,
+      // ⚠️ 拼出来的那几句也要扫（模板里最可能混进内部词）
+      harnessTurnStartLine(1),
+      harnessStepStartLine(1, 2),
+      harnessStepEndLine(2),
+      harnessTurnEndLine(harnessReasonWords('completed')),
+      harnessReasonWords('completed'),
+      harnessReasonWords('canceled'),
+      harnessReasonWords('max-tokens'),
+      harnessReasonWords('interrupted'),
+      harnessReasonWords(null),
+      harnessReasonWords('some-other-reason'),
+      harnessHeaderLine(0),
+      harnessHeaderLine(3),
+      harnessContextLine,
+      harnessTitleLine('记一笔账'),
+      harnessTitleLine(''),
+      harnessPermissionLine,
+      harnessSandboxLine,
+      harnessApprovalLine,
+      harnessSplicedLine(0),
+      harnessSplicedLine(2),
+      harnessRunStatusLine(true),
+      harnessRunStatusLine(false),
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

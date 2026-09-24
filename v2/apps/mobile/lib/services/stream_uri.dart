@@ -57,6 +57,17 @@ Uri streamUri({
 Uri asrUri({required String base, required Uri page}) =>
     Uri.parse('${_wsOrigin(base: base, page: page)}/api/asr');
 
+/// 算出**「我自己那台」那条**该往哪儿连：`wss://<host>/api/harness`
+/// （契约 `docs/dev/81-HARNESS-ENTRY.md` §5.1）。
+///
+/// 🔴 它和上面两条**共用同一个算地址的函数**（[streamUri] 顶上记着那次事故：
+///    "客户端自己算地址、闸却打在另一侧" ⇒ 每道闸都绿、用户那里全黑）。
+///    ⇒ 这一条**不许再拼一遍** `ws://`，否则同一个坑会有第三个入口。
+///    令牌用法与 `/api/stream` 完全一致（子协议 `['bearer', token]`，不进 URL）。
+///    判据：`test/unit/stream_uri_test.dart`（含 https 页面**不许降级**的金丝雀）。
+Uri harnessUri({required String base, required Uri page}) =>
+    Uri.parse('${_wsOrigin(base: base, page: page)}/api/harness');
+
 /// `wss://<host>`（不带路径）：同源看页面协议，跨源看 `base` 的协议。
 String _wsOrigin({required String base, required Uri page}) {
   final raw = base.trim();
