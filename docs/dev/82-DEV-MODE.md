@@ -51,6 +51,14 @@ VPS 上的门牌号 → **现有那条 visitor** → 本机核心（按 `Host` �
 | 免登 | 壳自己 `GET /?token=…` 换 DSH 的 cookie 存住，之后**替浏览器**带上；并把上游的 `Host`/`Origin` 改写成回环（那道 `/api` 栅栏按回环放行，正反例都实测过 —— `81-HARNESS-ENTRY.md` §四）|
 | 外层的锁 | **琥珀的登录**（甲）：见 §五 |
 
+🔴 **那条界面的数据通道是 WebSocket，不是"全走普通 HTTP"**（我一开始判错了，`81-HARNESS-ENTRY.md` §三 那批事实只覆盖了 RPC 那一半）：
+`@deepseek-ai/dsh-api-gateway/lib/client.js:49` 写着 `REMOTE_STREAM_MUX_PATH = "/api/remote.mux"`
+（*"Exact WebSocket route carrying every Typert Remote stream"*）。
+⇒ **三层都必须转发升级**：nginx（那个域名要 `Upgrade`/`Connection`）、宿主（锁通过后放行升级并转进容器）、
+容器（把升级也代理到 `dsh web`，Host/Origin 改写成回环 + 注入 DSH 的 cookie）。
+**漏了它的表现**：首页 200、`__DSH_BOOT__` 也在，**但屏幕上写着 `No sessions yet` ＋ 左下角一直 `Reconnecting…`** ——
+而当时 D8 那三条**全绿**（判据打在了被测代码的另一侧，正是 `AGENTS.md` V13 的形状）⇒ 这是 **D9** 存在的原因。
+
 ## 五、两把锁（甲）
 
 1. **外层的锁 = 琥珀的登录**：`App 里点一下` ⇒ 服务端现签一条**短时效**链接
@@ -74,6 +82,7 @@ VPS 上的门牌号 → **现有那条 visitor** → 本机核心（按 `Host` �
 | D6 | 只有 `owner` 能翻标记；`/api/dev-harness` 只给自己（owner 可点名给别人）| 拿 `u2` 的令牌去翻 ⇒ 403 |
 | D7 | 盒子侧**没有**宿主端口；`dsh web` 只听**回环** | `podman -p` 或听 `0.0.0.0` ⇒ 红 |
 | D8 | **真图**：`curl -I https://dsh<手机号>.stalkerai.cn/`（无 cookie）⇒ **拒**；走一次 `/__enter` 签名 ⇒ **302 + cookie** ⇒ 带 cookie 取 `/` ⇒ **200 且 HTML 里有 `__DSH_BOOT__`** | —— |
+| **D9** | 🔴 **真图（数据通道）**：带 cookie **真的升一次级** `wss://dsh<手机号>.stalkerai.cn/api/remote.mux` ⇒ **101** | 升不上去 ⇒ 界面能开却列不出会话（见下面那条教训）|
 
 ## 七、明确**不做**的事
 

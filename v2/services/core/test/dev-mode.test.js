@@ -1,9 +1,9 @@
-// **开发者模式** —— 判据 D1–D7（契约 `docs/dev/82-DEV-MODE.md` §六）。
+// **开发者模式** —— 判据 D1–D7、D9（契约 `docs/dev/82-DEV-MODE.md` §六）。
 //
 // ── 这份怎么打 ──────────────────────────────────────────────
-//   · **宿主那半边**（D1–D6）：起一台**真 HTTP**服务，用一个**假盒子**（真的 TCP 口）
+//   · **宿主那半边**（D1–D6、D9）：起一台**真 HTTP**服务，用一个**假盒子**（真的 TCP 口）
 //     接住转发 —— "路径到底有没有带 `/h`"只有从**接住的那一头**才看得见。
-//   · **盒子那半边**（D7）：注入**假 spawn + 假上游**（不用真 DSH、不用真容器），
+//   · **盒子那半边**（D7、D9）：注入**假 spawn + 假上游**（不用真 DSH、不用真容器），
 //     验参数、验换 cookie、验改写的头、验只连回环。
 //
 // ⚠️ 判据 D8（真图）在 `scripts/check-dev-mode.mjs` 里（要**部署好的**系统才跑得起来）。
@@ -15,6 +15,13 @@
 //   D4 关掉标记 ⇒ **当场**拒   · 反例：翻回来又通（证明拒的是标记不是 cookie）
 //   D5 签名**分域**            · 反例：制品签名 / 登录令牌 / **cookie 域的签名** ⇒ 403
 //   D6 只有 owner 能翻 / 只给自己 · 反例：u2 的令牌 ⇒ 403
+//   D9 开发者域名上的**升级**（界面那条主数据通道 `/api/remote.mux`）
+//      · 正例：有效 cookie ⇒ **真的升级成**，容器收到 `/h/api/remote.mux`
+//      · 反例：没 cookie / 假 cookie / 没标 dev / 没有租户 ⇒ **握手阶段就拒**
+//
+// ⚠️ **D9 是 2026-09-24 修的真 bug**：当初判成"那台界面全走普通 HTTP"，
+//    于是开发者域名上的升级一律 404 ⇒ **界面能打开，但一个会话都列不出来**
+//    （左下角一直 `Reconnecting…`、工作区写 `No sessions yet`）。
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,6 +32,7 @@ import nodeNet from 'node:net';
 import nodeOs from 'node:os';
 import nodePath from 'node:path';
 import { Readable, Writable } from 'node:stream';
+import { WebSocket, WebSocketServer } from 'ws';
 
 import { Auth } from '../src/auth.js';
 import { Users } from '../src/users.js';
@@ -52,12 +60,23 @@ import {
 const BASE = 'stalkerai.cn';
 const PHONE = '19145526557'; // u2（开发者）
 const OTHER = '13800001111'; // u3（不是开发者）
+const NO_TENANT = '13700002222'; // u4（被标成开发者，但**没有租户**）
 const KEY = Buffer.alloc(32, 7); // 判据自己的密钥（**不是**生产那把）
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const openServers = new Set();
+const openClients = new Set();
 after(async () => {
+  // ⚠️ **先把客户端断掉**：`wss.close()` 会等连接自己结束（同 `server.js` 的那条注释）。
+  for (const ws of openClients) {
+    try {
+      ws.terminate();
+    } catch {
+      /* 已经断了 */
+    }
+  }
+  await sleep(30);
   for (const close of openServers) {
     try {
       await close();
@@ -66,6 +85,7 @@ after(async () => {
     }
   }
   openServers.clear();
+  openClients.clear();
 });
 
 // ── 小工具 ─────────────────────────────────────────────────
@@ -94,20 +114,123 @@ function request(origin, path, { method = 'GET', headers = {}, body = null } = {
   });
 }
 
-/** 一个**假盒子**：把转发进来的请求原样记下来，回一段带 `__DSH_BOOT__` 的 HTML。 */
+/**
+ * 真 WebSocket 客户端连一次。
+ *
+ * ⚠️ 判 D9 的关键是"**握手阶段**的结论"：`ok:true` = 真的 `101` 了；
+ *    `ok:false, status` = 对面在握手阶段就拒了（**不是**先连上再关 —— 那样会先 `open`）。
+ * ⚠️ `host` 头**要能自己给**（判据打的就是按 Host 分流）。
+ */
+function wsConnect(url, { headers = {}, protocols = null } = {}) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      resolve(v);
+    };
+    const ws = protocols ? new WebSocket(url, protocols, { headers }) : new WebSocket(url, { headers });
+    openClients.add(ws);
+    ws.on('open', () => finish({ ok: true, ws }));
+    ws.on('unexpected-response', (_q, res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => finish({ ok: false, status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+      res.on('error', () => finish({ ok: false, status: res.statusCode, body: '' }));
+      res.on('close', () => finish({ ok: false, status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    ws.on('error', (err) => finish({ ok: false, err: String(err.message) }));
+  });
+}
+
+/** 一个**假盒子**：把转发进来的请求原样记下来，回一段带 `__DSH_BOOT__` 的 HTML。
+ *  ⚠️ 它也接**升级**（判据 D9）—— 记下 `req.url` / `req.headers`，然后**真的**完成握手，
+ *     并把客户端说的话原样回一句（证明双向管道通着）。
+ */
 function fakeBox() {
   const seen = [];
+  const upgraded = [];
   const srv = nodeHttp.createServer((req, res) => {
     seen.push({ method: req.method, url: req.url, headers: req.headers });
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end('<!doctype html><title>那台 DSH</title>__DSH_BOOT__');
+  });
+  const wss = new WebSocketServer({ noServer: true });
+  srv.on('upgrade', (req, sock, head) => {
+    upgraded.push({ method: req.method, url: req.url, headers: req.headers });
+    wss.handleUpgrade(req, sock, head, (ws) => {
+      ws.on('message', (d, isBinary) => ws.send(d, { binary: isBinary }));
+    });
   });
   return new Promise((resolve) => {
     srv.listen(0, '127.0.0.1', () => {
       resolve({
         port: srv.address().port,
         seen,
-        close: () => new Promise((r) => srv.close(r)),
+        upgraded,
+        close: () =>
+          new Promise((r) => {
+            for (const c of wss.clients) {
+              try {
+                c.terminate();
+              } catch {
+                /* 已经断了 */
+              }
+            }
+            wss.close();
+            srv.closeAllConnections?.();
+            srv.close(() => r());
+          }),
+      });
+    });
+  });
+}
+
+/**
+ * 一个**真的假 `dsh web`**（判据 D9 · 盒子侧）：
+ *   · `GET /?token=…` ⇒ 303 + `dsh-auth-…`（换 cookie 那一跳，和真的一样）；
+ *   · 升级 ⇒ 记下路径与头，然后**真的**完成握手并把客户端说的话回给它。
+ * 用真 `net`/`http`（不是注入的假货），所以验的是**真那条路**。
+ */
+function fakeDshWeb() {
+  const httpSeen = [];
+  const upgrades = [];
+  const srv = nodeHttp.createServer((req, res) => {
+    httpSeen.push({ url: req.url, headers: req.headers });
+    if (req.url.startsWith('/?token=')) {
+      res.writeHead(303, { location: '/', 'set-cookie': ['dsh-auth-abc=1; Path=/; HttpOnly'] });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html>__DSH_BOOT__');
+  });
+  const wss = new WebSocketServer({ noServer: true });
+  srv.on('upgrade', (req, sock, head) => {
+    upgrades.push({ method: req.method, url: req.url, headers: req.headers });
+    wss.handleUpgrade(req, sock, head, (ws) => {
+      ws.on('message', (d, isBinary) => ws.send(d, { binary: isBinary }));
+    });
+  });
+  return new Promise((resolve) => {
+    srv.listen(0, '127.0.0.1', () => {
+      resolve({
+        port: srv.address().port,
+        httpSeen,
+        upgrades,
+        close: () =>
+          new Promise((r) => {
+            for (const c of wss.clients) {
+              try {
+                c.terminate();
+              } catch {
+                /* 已经断了 */
+              }
+            }
+            wss.close();
+            srv.closeAllConnections?.();
+            srv.close(() => r());
+          }),
       });
     });
   });
@@ -131,6 +254,8 @@ async function boot(t, { dev = true } = {}) {
   const users = new Users({ dataDir: usersDir });
   users.ensure(PHONE, { newId: 'u2' });
   users.ensure(OTHER, { newId: 'u3' });
+  // ⚠️ u4 **没有租户**（`tenantOf` 不认他）—— 判据 D9 的反例之一要用
+  users.ensure(NO_TENANT, { newId: 'u4' });
   if (dev) users.setDev(PHONE, true);
 
   const box = await fakeBox();
@@ -162,6 +287,7 @@ async function boot(t, { dev = true } = {}) {
   const origin = `http://127.0.0.1:${addr.port}`;
   return {
     origin,
+    wsBase: `ws://127.0.0.1:${addr.port}`,
     box,
     users,
     auditFile,
@@ -520,8 +646,124 @@ test('没配开发者模式（`dev=null`）⇒ `/api/dev-harness` 404（这条�
 });
 
 // ════════════════════════════════════════════════════════════
+// D9：开发者域名上的**升级**（界面那条主数据通道 `/api/remote.mux`）
+//     —— 2026-09-24 修的真 bug：当初一律 404 ⇒ "界面能打开、什么都列不出来"
+// ════════════════════════════════════════════════════════════
+
+test('★ D9：开发者域名 + 有效 cookie + 升级 `/api/remote.mux` ⇒ **真的升级成**，容器收到 `/h/api/remote.mux`', async (t) => {
+  const s = await boot(t);
+  const h = s.devHostOf(PHONE);
+  const r = await wsConnect(`${s.wsBase}/api/remote.mux`, {
+    headers: { host: h, origin: `https://${h}`, cookie: `${DEV_COOKIE}=${s.cookieFor('u2')}` },
+  });
+  assert.equal(r.ok, true, '带着合法 cookie 的升级**必须真的升上去**（界面的会话流就是它）');
+
+  // ★ **容器那一侧收到的是加过 `/h` 前缀的那一条**（从接住的那一头才看得见）
+  assert.equal(s.box.upgraded.length, 1, '这条升级要真的进到盒子里');
+  assert.equal(
+    s.box.upgraded[0].url,
+    '/h/api/remote.mux',
+    '`/api/remote.mux` 进容器必须是 `/h/api/remote.mux`',
+  );
+  assert.equal(s.box.upgraded[0].headers.cookie, undefined, '浏览器那份 cookie 不许进容器');
+
+  // ★ **双向管道**：客户端说一句、盒子原样回一句（证明不是"101 之后就断了"）
+  const got = new Promise((res) => r.ws.on('message', (d) => res(String(d))));
+  r.ws.send('ping');
+  assert.equal(await got, 'ping');
+  r.ws.terminate();
+});
+
+test('🔴 D9 反例：没 cookie / 假 cookie / 没标 dev / 没有租户 ⇒ **握手阶段就拒**，盒子一次都不许被碰到', async (t) => {
+  const s = await boot(t);
+  s.users.setDev(NO_TENANT, true); // u4 被标了，但 `tenantOf` 不认他
+  const h = s.devHostOf(PHONE);
+
+  // ① 标了 + **没 cookie** ⇒ 403（`ok:false` 就是"没升上去"；不是先 `open` 再关）
+  const no = await wsConnect(`${s.wsBase}/api/remote.mux`, { headers: { host: h } });
+  assert.equal(no.ok, false, '没通过外层 ⇒ 不许升上去');
+  assert.equal(no.status, 403);
+
+  // ② 假 cookie ⇒ 也是 403（不是"有这个头就算数"）
+  const fake = await wsConnect(`${s.wsBase}/api/remote.mux`, {
+    headers: { host: h, cookie: `${DEV_COOKIE}=u2.9999999999999.deadbeef` },
+  });
+  assert.equal(fake.ok, false);
+  assert.equal(fake.status, 403);
+
+  // ③ **没有租户**（标了 dev、cookie 也合法）⇒ 503 —— 宿主不许替他接
+  const noTenant = await wsConnect(`${s.wsBase}/api/remote.mux`, {
+    headers: { host: s.devHostOf(NO_TENANT), cookie: `${DEV_COOKIE}=${s.cookieFor('u4')}` },
+  });
+  assert.equal(noTenant.ok, false, '没有租户 ⇒ 不许升上去');
+  assert.equal(noTenant.status, 503);
+
+  // ④ **没标 dev**（另一个 boot：谁都没标）⇒ 403，哪怕 cookie 是真的
+  const off = await boot(t, { dev: false });
+  const offHost = off.devHostOf(PHONE);
+  const offR = await wsConnect(`${off.wsBase}/api/remote.mux`, {
+    headers: { host: offHost, cookie: `${DEV_COOKIE}=${off.cookieFor('u2')}` },
+  });
+  assert.equal(offR.ok, false, '没标 dev ⇒ 一律拒（连升级也不给机会）');
+  assert.equal(offR.status, 403);
+
+  // ★ 四个反例合起来：**一次都不许**碰到盒子
+  assert.equal(s.box.upgraded.length, 0, '没通过外层 ⇒ 升级一次都不许进容器');
+  assert.equal(off.box.upgraded.length, 0);
+});
+
+test('🔴 D9：`/h…` 的升级**只在 `trusted`（那条 0600 UDS）上接** —— 公网口一律拒', async (t) => {
+  const dataDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-dev-hup-'));
+  const store = new Store({ dataDir, fsync: false });
+  const timeline = new Timeline({ id: 'main', store });
+  const auth = new Auth({ dataDir: nodePath.join(dataDir, 'auth') });
+  const seen = [];
+  // ⚠️ 桩里用**真的** `WebSocketServer` 完成握手：回一个裸 `101` 是过不了 `ws` 客户端
+  //    校验的（缺 `Sec-WebSocket-Accept`）⇒ 那条正例会假红。
+  const wss = new WebSocketServer({ noServer: true });
+  const devContainer = {
+    handle(_req, res) {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('__DSH_BOOT__');
+    },
+    handleUpgrade(req, socket, head, rel) {
+      seen.push(rel);
+      wss.handleUpgrade(req, socket, head, () => {});
+    },
+  };
+  const srv = createServer({
+    timeline,
+    store,
+    say: new SayService({ timeline, store, timelineId: 'main' }),
+    auth,
+    webRoot: null,
+    buildId: 't',
+    devContainer,
+  });
+  openServers.add(srv.close);
+  const addr = await srv.listen(0);
+  const sockPath = nodePath.join(nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-dev-hsock-')), 'api.sock');
+  await srv.listenTrusted(sockPath);
+
+  // ① 可信口：`/h/api/remote.mux` ⇒ 前缀剥掉、交给 `handleUpgrade`
+  const viaTrusted = await wsConnect(`ws+unix://${sockPath}:/h/api/remote.mux`);
+  assert.equal(viaTrusted.ok, true, '可信口上这条升级必须交给中继');
+  assert.deepEqual(seen, ['/api/remote.mux'], '`/h` 前缀要剥掉再交给反代');
+
+  // ② 公网口：同一条升级 ⇒ **中继一次都不许被碰到**
+  const viaPublic = await wsConnect(`ws://127.0.0.1:${addr.port}/h/api/remote.mux`);
+  assert.equal(viaPublic.ok, false, '公网口不许接 `/h` 的升级（少了这道闸就是把盒子递给整张网）');
+  assert.equal(seen.length, 1, '公网口**一次都不许**碰到那个中继');
+  // ⚠️ 先把那条真连接断掉再 `close()`：`server.close()` 会等连接自己结束
+  //    （桩里那个 `wss` 不在 `server.js` 的清单里，它不会替我们断）。
+  viaTrusted.ws.terminate();
+  await srv.close();
+});
+
+// ════════════════════════════════════════════════════════════
 // D7：盒子侧**没有**宿主端口；`dsh web` 只听回环
 // ════════════════════════════════════════════════════════════
+
 
 test('🔴 D7：起 `dsh web` 的参数 —— **只听回环、端口交给内核**，`--patch` 在 `--profile web` 后面', () => {
   const cfg = { modelPatchPath: '/app/code/hupo-model-proxy.yml', agentProfile: 'sdk' };
@@ -726,4 +968,103 @@ test('D7：盒里那台起不来 ⇒ 502 说人话（不是空连接，也不是
   assert.equal(res.status, 502);
   assert.match(res.body(), /没起来/u);
   relay.shutdown();
+});
+
+// ════════════════════════════════════════════════════════════
+// D9 · 盒子侧：`/h…` 的**升级** ⇒ 原样搬字节到回环上的 `dsh web`
+// ════════════════════════════════════════════════════════════
+
+/** 一个 `dsh web` **起不来**的假子进程（立刻 `exit 1`）。 */
+function deadChild() {
+  const c = new EventEmitter();
+  c.stdout = new EventEmitter();
+  c.stdout.setEncoding = () => {};
+  c.stderr = new EventEmitter();
+  c.stderr.setEncoding = () => {};
+  c.stdin = new Writable({ write(_c, _e, cb) { cb(); } });
+  c.kill = () => {};
+  setImmediate(() => c.emit('exit', 1, null));
+  return c;
+}
+
+/**
+ * 一条**可信口**的壳（生产里那是容器里那条 `0600` UDS）：把 `/h…` 的升级交给中继。
+ * ⚠️ 这里只做**前缀剥掉**那一件 —— 和 `server.js` 的 `handleUpgrade` 里那一行逐字一致。
+ */
+async function devFront(relay) {
+  const front = nodeHttp.createServer(() => {});
+  front.on('upgrade', (req, sock, head) => {
+    relay.handleUpgrade(req, sock, head, req.url.replace(/^\/h/u, '') || '/');
+  });
+  await new Promise((r) => front.listen(0, '127.0.0.1', r));
+  openServers.add(() => new Promise((r) => front.close(() => r())));
+  return { port: front.address().port };
+}
+
+test('★ D9（盒子侧）：升级到回环 —— Host/Origin 改写、DSH cookie 注入、浏览器 cookie 剥掉、双向管道', async (t) => {
+  const dsh = await fakeDshWeb();
+  openServers.add(dsh.close);
+
+  const cfg = {
+    dshBin: '/bin/dsh',
+    agentCwd: '/data/main',
+    dshHome: '/data/dsh',
+    agentUid: 1000,
+    agentGid: 1000,
+    agentBootTimeoutMs: 5000,
+  };
+  // 假子进程报的是**那个假上游**的端口 ⇒ 换 cookie 与升级都打到它身上。
+  // ⚠️ child **必须在 spawn 那一刻才造**：`fakeChild` 是 `setImmediate` 报端口，
+  //    提前造好会在监听挂上之前就把那一行发掉（那样这一条会白等一个 boot 超时）。
+  const relay = createDevWebRelay({
+    cfg,
+    spawnFn: () => fakeChild(`dsh web: http://127.0.0.1:${dsh.port}/?token=PROC-TOKEN`),
+    bootTimeoutMs: 2000,
+  });
+  t.after(() => relay.shutdown());
+
+  const front = await devFront(relay);
+  const r = await wsConnect(`ws://127.0.0.1:${front.port}/h/api/remote.mux`, {
+    headers: {
+      host: 'dsh19145526557.stalkerai.cn',
+      origin: 'https://dsh19145526557.stalkerai.cn',
+      // ⚠️ 浏览器那份里塞两把：`hupo-dev`（外层锁）与一把**假的** DSH cookie ——
+      //    两把都**不许**进上游，替它带上的是换来的那把。
+      //    ⚠️ 头值只能是 ASCII（node 拒 U+00FF 以上的字符）⇒ 这里用英文写。
+      cookie: 'hupo-dev=outer-lock; dsh-auth-should-be-removed=1',
+      'sec-fetch-site': 'cross-site',
+    },
+  });
+  assert.equal(r.ok, true, '盒子里这条升级必须真的接上（那是界面唯一的会话流）');
+
+  // ★ 上游看到的路径与头
+  const up = dsh.upgrades[0];
+  assert.ok(up, '假上游必须真的收到那条升级');
+  assert.equal(dsh.httpSeen[0]?.url, '/?token=PROC-TOKEN', '先拿进程令牌换 cookie（那一跳不能少）');
+  assert.equal(up.url, '/api/remote.mux', '`/h` 前缀由**宿主**剥掉后才进来；这里原样转给 dsh');
+  assert.equal(up.headers.host, `127.0.0.1:${dsh.port}`, 'Host 要改写成回环（`/api` 栅栏靠它）');
+  assert.equal(up.headers.origin, `http://127.0.0.1:${dsh.port}`, 'Origin 也要回环');
+  assert.equal(up.headers.cookie, 'dsh-auth-abc=1', '**剥掉浏览器那份**，替它带上 DSH 自己那把');
+  assert.equal(up.headers['sec-fetch-site'], 'same-origin');
+  assert.match(String(up.headers.upgrade), /websocket/iu, '`Connection`/`Upgrade` 不许被当 hop-by-hop 删掉');
+
+  // ★ **双向**：客户端说一句、上游回一句
+  const got = new Promise((res) => r.ws.on('message', (d) => res(String(d))));
+  r.ws.send('ping');
+  assert.equal(await got, 'ping');
+  r.ws.terminate();
+});
+
+test('D9（盒子侧）：盒里那台起不来 ⇒ **握手阶段** 502 说人话（不是先 101 再关）', async (t) => {
+  const cfg = { dshBin: '/bin/dsh', agentCwd: '/data/main', dshHome: '/data/dsh', agentUid: 1000, agentBootTimeoutMs: 50 };
+  const relay = createDevWebRelay({ cfg, spawnFn: () => deadChild(), bootTimeoutMs: 200 });
+  t.after(() => relay.shutdown());
+
+  const front = await devFront(relay);
+  const r = await wsConnect(`ws://127.0.0.1:${front.port}/h/api/remote.mux`, {
+    headers: { host: 'dsh19145526557.stalkerai.cn' },
+  });
+  assert.equal(r.ok, false, '起不来 ⇒ 不许先给一条 101');
+  assert.equal(r.status, 502);
+  assert.match(r.body ?? '', /没起来/u, '要有一句人话');
 });

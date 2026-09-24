@@ -14,17 +14,31 @@
 //     之后每条上游请求都**替浏览器**带上它，并把 `Host`/`Origin` 改写成回环
 //     （那道 `/api` 栅栏按回环放行，正反例都实测过 —— `81-HARNESS-ENTRY.md` §四）。
 //
+// ── ⚠️ 主数据通道是一条 **WebSocket**（2026-09-24 修的真 bug）──────
+//   那个界面的主数据通道是 `@deepseek-ai/dsh-api-gateway/lib/client.js` 里的
+//   `REMOTE_STREAM_MUX_PATH = "/api/remote.mux"`（*"Exact WebSocket route carrying
+//   every Typert Remote stream"*）。当初"界面全走普通 HTTP"的**判断是错的**：
+//   少了升级这一条，界面能打开但**一个会话都列不出来**（左下角一直 `Reconnecting…`，
+//   工作区写 `No sessions yet`）。⇒ 两侧都要接升级：
+//     · 宿主：开发者域名上的升级**先过和普通请求一模一样的那把锁**（`authorize`），
+//       过了才 `proxyUpgrade` 进容器（路径加 `/h` 前缀）；没过 ⇒ **握手阶段就拒**。
+//     · 盒子：`handleUpgrade` 把这条升级**原样搬字节**到回环上的 `dsh web`，
+//       并改写 `Host`/`Origin`、注入 DSH 那把 cookie、剥掉浏览器 cookie。
+//
 // ── 三条不许破 ─────────────────────────────────────────────
 //   ① 🔴 **签名分域**：`/__enter` 的 payload 是 `d|<sub>|<exp>`，cookie 是 `dh|<sub>|<exp>`；
 //      拿**制品**那条签名（`<sub>|<id>|<version>|<exp>`）或别处的签名来用 ⇒ **一律不过**（判据 D5）。
 //   ② 🔴 **每个请求现查 `dev`**（`users.isDev`）：关掉就**当场**拒，不是等重启（判据 D4）。
-//   ③ 🔴 **不缓冲**：请求体与响应体两头都 `pipe`（`dsh web` 的界面全走普通 HTTP）。
+//      升级那条走的是**同一个** `authorize`（判据 D9 的反例：没 cookie / 假 cookie /
+//      没标 dev / 没租户 ⇒ **握手阶段**拒，不是先连上再关）。
+//   ③ 🔴 **不缓冲**：请求体与响应体两头都 `pipe`；升级那条是**双向管道**。
 //
 // ⚠️ **绝不用 root 跑 DSH、绝不用容器真实的 `DSH_HOME` 做探针**（`81-HARNESS-ENTRY.md` §9.3
 //    那次事故）。这一份里的 spawn 走 `childEnv()` + `cfg.agentUid/Gid`（"换手"那条安全设计）。
 
 import nodeCrypto from 'node:crypto';
 import nodeHttp from 'node:http';
+import nodeNet from 'node:net';
 import { spawn as nodeSpawn } from 'node:child_process';
 
 // ⚠️ 只借**纯函数**（与 `harness-session.mjs` 同一个做法）：
@@ -72,6 +86,21 @@ const HOP_BY_HOP = [
   'trailer',
   'transfer-encoding',
   'upgrade',
+];
+
+/**
+ * 升级那条上**不许**原样带过去的 hop-by-hop。
+ *
+ * 🔴 与上面那张表的**唯一区别**：`connection` 与 `upgrade` 要**留着** ——
+ *    它们正是"这次请求是升级"这件事本身。把它们删掉，上游只会当成一条普通 GET。
+ */
+const UPGRADE_HOP_BY_HOP = [
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
 ];
 
 /**
@@ -232,6 +261,34 @@ export function devUnavailable(res, status, text) {
   res.end(body);
 }
 
+/**
+ * **握手阶段**拒一次升级（与 `server.js` 的 `rejectUpgrade` 同一个形状）。
+ *
+ * 🔴 为什么不能"先 `101` 再关"：那会给爬虫留下一个**站得住的连接**，
+ *    而且界面那边分不清"没通过锁"和"连上又断了"（本项目最忌的"看起来在跑"）。
+ * ⚠️ 带上 body 与 content-type：排障时一眼能认出这句出自我这儿。
+ */
+export function rejectUpgradeSocket(socket, status, reason, text) {
+  const body = `${text}\n`;
+  try {
+    socket.write(
+      `HTTP/1.1 ${status} ${reason}\r\n` +
+        'content-type: text/plain; charset=utf-8\r\n' +
+        `content-length: ${Buffer.byteLength(body)}\r\n` +
+        'connection: close\r\n' +
+        '\r\n' +
+        body,
+    );
+  } catch {
+    /* 已经没了 */
+  }
+  try {
+    socket.destroy();
+  } catch {
+    /* 已经没了 */
+  }
+}
+
 // ── 宿主这一侧：按 Host 分流 ─────────────────────────────────
 
 /**
@@ -274,6 +331,61 @@ export function createDevHostRelay({
     }
   };
 
+  /**
+   * 这个请求是**谁**：`{phone, sub}`；没被标 `dev` 一律 `sub: null`。
+   *
+   * ★ D1：没被标 `dev` ⇒ 这个域名**一律拒**（连 `/__enter` 都不给机会）。
+   * ⚠️ **每一次现查**（`devAt` → `users.isDev`）——标记一关就当场生效（判据 D4）。
+   */
+  const subjectOf = (req) => {
+    const phone = parseDevHost(req.headers?.host, base);
+    const rec = phone ? users?.get?.(phone) ?? null : null;
+    const sub = typeof rec?.id === 'string' ? rec.id : null;
+    if (!sub || !devAt(sub)) {
+      say(`开发者域名：${phone ? maskPhone(phone) : '（认不出来）'} 没有开发者标记 ⇒ 拒`);
+      return { phone, sub: null };
+    }
+    return { phone, sub };
+  };
+
+  /**
+   * **外层那把锁**（`/__enter` 之外的一切都要过它）：
+   * 现查 dev 标记 ＋ cookie 验签（必须就是这个域名这个人）＋ 这个人有租户 ＋ 隧道通。
+   *
+   * 🔴 **普通 HTTP 与升级走的是这同一份**（`handle` 与 `server.js` 的 `handleUpgrade`）——
+   *    两处各写一遍锁 = 迟早分叉，而分叉的那一次就是"**升级绕过了锁**"。
+   *
+   * @returns {{ok:true, sock:any, path:string}
+   *          |{ok:false, status:number, error:string, text:string}}
+   */
+  const authorize = (req) => {
+    const { sub } = subjectOf(req);
+    if (!sub) return { ok: false, status: 403, error: 'forbidden', text: DEV_DENY_TEXT };
+
+    //   ★ D3：没 cookie ⇒ 拒（不是先给界面）
+    //   ★ D4：cookie 还在、但标记刚被关掉 ⇒ **当场**拒（`devAt` 是每个请求现查的）
+    const sess = verifyDevCookie({
+      key,
+      value: readCookie(req.headers?.cookie, DEV_COOKIE),
+      now: now(),
+    });
+    if (!sess || sess.sub !== sub || !devAt(sess.sub)) {
+      return { ok: false, status: 403, error: 'forbidden', text: DEV_DENY_TEXT };
+    }
+
+    const tenant = tenantOf(sess.sub);
+    if (!tenant) {
+      return { ok: false, status: 503, error: 'no-tenant', text: '你这一份还没有单独一台，暂时进不去。' };
+    }
+    const sock = proxyFor ? proxyFor(tenant) : null;
+    if (!sock) {
+      return { ok: false, status: 503, error: 'tenant-not-ready', text: '你那台现在没连上，等会儿再试。' };
+    }
+    // ★ D2：进容器那条路**带 `/h` 前缀**（`/` → `/h/`、`/api/x` → `/h/api/x`）
+    const rel = typeof req.url === 'string' && req.url.startsWith('/') ? req.url : `/${req.url ?? ''}`;
+    return { ok: true, sock, path: `${DEV_PATH_PREFIX}${rel}` };
+  };
+
   return {
     scheme,
     base,
@@ -285,25 +397,21 @@ export function createDevHostRelay({
     match(hostHeader) {
       return parseDevHost(hostHeader, base);
     },
+    /** ★ **升级那条**用的就是它（`server.js` 的 `handleUpgrade`）—— 见上面那段说明。 */
+    authorize,
     /**
      * 处理一条落在开发者域名上的请求。
      *
      * @returns {Promise<void>}
      */
     async handle(req, res, url) {
-      const phone = parseDevHost(req.headers?.host, base);
-      const rec = phone ? users?.get?.(phone) ?? null : null;
-      const sub = typeof rec?.id === 'string' ? rec.id : null;
-      // ★ D1：没被标 `dev` ⇒ 这个域名**一律拒**（连 `/__enter` 都不给机会）
-      if (!sub || !devAt(sub)) {
-        say(`开发者域名：${phone ? maskPhone(phone) : '（认不出来）'} 没有开发者标记 ⇒ 拒`);
-        return devDeny(res);
-      }
-
       const path = url?.pathname ?? '/';
 
       // ── ★ `/__enter`：短时效签名 ⇒ 种第一方 cookie ⇒ 302 到 `/` ──
+      //   ⚠️ 它自己**不要 cookie**（它正是来换 cookie 的），但**一样要先过 D1**。
       if (path === DEV_ENTER_PATH) {
+        const { sub } = subjectOf(req);
+        if (!sub) return devDeny(res);
         if (req.method !== 'GET') return devDeny(res, 405);
         const q = url.searchParams;
         const u = q.get('u') ?? '';
@@ -328,29 +436,15 @@ export function createDevHostRelay({
         return undefined;
       }
 
-      // ── 其余路径：要第一方 cookie（验签 + **现查 dev**）──
-      //   ★ D3：没 cookie ⇒ 拒（不是先给界面）
-      //   ★ D4：cookie 还在、但标记刚被关掉 ⇒ **当场**拒（`devAt` 是每个请求现查的）
-      const sess = verifyDevCookie({
-        key,
-        value: readCookie(req.headers?.cookie, DEV_COOKIE),
-        now: now(),
-      });
-      if (!sess || sess.sub !== sub || !devAt(sess.sub)) return devDeny(res);
-
-      const tenant = tenantOf(sess.sub);
-      if (!tenant) {
-        return devUnavailable(res, 503, '你这一份还没有单独一台，暂时进不去。');
+      // ── 其余路径：**同一把锁**（cookie 验签 + 现查 dev + 有租户 + 隧道通）──
+      const a = authorize(req);
+      if (!a.ok) {
+        if (a.status === 403) return devDeny(res);
+        return devUnavailable(res, a.status, a.text);
       }
-      const sock = proxyFor ? proxyFor(tenant) : null;
-      if (!sock) {
-        return devUnavailable(res, 503, '你那台现在没连上，等会儿再试。');
-      }
-      // ★ D2：进容器那条路**带 `/h` 前缀**（`/` → `/h/`、`/api/x` → `/h/api/x`），
-      //   并把**浏览器那份 cookie 剥掉**（`forward` 里做）—— 里层那把锁归壳拿着。
-      const rel = typeof req.url === 'string' && req.url.startsWith('/') ? req.url : `/${req.url ?? ''}`;
+      // ★ 把**浏览器那份 cookie 剥掉**（`forward` 里做）—— 里层那把锁归壳拿着。
       try {
-        forward(sock, req, res, `${DEV_PATH_PREFIX}${rel}`);
+        forward(a.sock, req, res, a.path);
       } catch (err) {
         say(`开发者域名：转发进容器那一步抛了：${err?.message ?? err}`);
         if (!res.headersSent) devUnavailable(res, 502, '刚才没接上，等会儿再试。');
@@ -408,11 +502,13 @@ export function pickDshAuth(setCookie) {
  *   `modelPatchPath` / `agentUid` / `agentGid` / `agentBootTimeoutMs`…）
  * @param {Function} [o.spawnFn]   注入用（判据里换成一个假子进程；默认真 spawn）
  * @param {Function} [o.httpRequest] 注入用（判据里换成一个假上游；默认真 `http.request`）
+ * @param {Function} [o.connectFn] 注入用（**升级那条**接上游用的 `net.connect`；判据里换成假上游）
  */
 export function createDevWebRelay({
   cfg,
   spawnFn = nodeSpawn,
   httpRequest = nodeHttp.request,
+  connectFn = nodeNet.connect,
   log = () => {},
   killGraceMs = DEV_KILL_GRACE_MS,
   bootTimeoutMs = null,
@@ -658,8 +754,86 @@ export function createDevWebRelay({
     return undefined;
   }
 
+  /**
+   * 把一次 `/h…` 的**升级**反代到那台 `dsh web`。
+   *
+   * 主数据通道就是它（`/api/remote.mux`）—— 少了这一条，界面能打开但**一个会话都列不出来**。
+   *
+   * ⚠️ 与 `handle` 同一个道理，改为"**原样搬字节**"而不是用 `ws` 客户端再连一次：
+   *    用 `ws` 就等于**把协议实现两遍**（子协议、扩展、掩码、关闭握手…），
+   *    每一处细节都可能跟盒里那台不一致。⇒ 这里只写请求行 + 头，
+   *    **握手交给上游自己**完成；之后两边都是裸字节，直接对拷。
+   *
+   * 🔴 只有 `trusted === true`（容器里那条 `0600` UDS）才会走到这儿 —— 闸在 `server.js`。
+   *
+   * @param {import('node:net').Socket} socket 面向浏览器那条
+   * @param {Buffer} head 握手之前已经读出来的字节（**必须原样转给上游**）
+   * @param {string} relPath 已经剥掉 `/h` 前缀的路径（`/api/remote.mux`）
+   */
+  function handleUpgrade(req, socket, head, relPath) {
+    const path = typeof relPath === 'string' && relPath.startsWith('/') ? relPath : `/${relPath ?? ''}`;
+    ensure()
+      .then((up) => {
+        const headers = { ...req.headers };
+        for (const h of UPGRADE_HOP_BY_HOP) delete headers[h];
+        // ★ **剥掉浏览器那份 cookie**，替它带上 DSH 自己那把（里层那把锁归壳拿着）
+        delete headers.cookie;
+        headers.cookie = up.cookie;
+        // ★ 那道 `/api` 栅栏按**回环**放行：Host / Origin / Sec-Fetch-Site 都要改写成回环
+        headers.host = `127.0.0.1:${up.port}`;
+        if (headers.origin !== undefined) headers.origin = `http://127.0.0.1:${up.port}`;
+        if (typeof headers.referer === 'string') {
+          headers.referer = headers.referer.replace(/^https?:\/\/[^/]+/u, `http://127.0.0.1:${up.port}`);
+        }
+        headers['sec-fetch-site'] = 'same-origin';
+
+        const sock = connectFn({ host: '127.0.0.1', port: up.port });
+        let dead = false;
+        const done = () => {
+          if (dead) return;
+          dead = true;
+          try {
+            socket.destroy();
+          } catch {
+            /* 已经没了 */
+          }
+          try {
+            sock.destroy();
+          } catch {
+            /* 已经没了 */
+          }
+        };
+        socket.on('error', done);
+        socket.on('close', done);
+        sock.on('error', (err) => {
+          say(`转给盒里那台 dsh web 的升级失败：${err?.message ?? err}`);
+          done();
+        });
+        sock.on('close', done);
+
+        // 请求行 + 头（**逐字节**搬），`head` 是握手之前已经读出来的那一段。
+        const lines = [`${req.method} ${path} HTTP/1.1`];
+        for (const [name, value] of Object.entries(headers)) {
+          if (value === undefined) continue;
+          for (const one of Array.isArray(value) ? value : [value]) lines.push(`${name}: ${one}`);
+        }
+        sock.write(`${lines.join('\r\n')}\r\n\r\n`);
+        if (head && head.length > 0) sock.write(head);
+        // ★ **双向管道**：握手之后两头都是裸字节
+        socket.pipe(sock);
+        sock.pipe(socket);
+      })
+      .catch((err) => {
+        // **握手阶段**如实拒 + 人话（不是先 101 再关）
+        say(`盒里那台 dsh web 没起来（升级）：${err?.message ?? err}`);
+        rejectUpgradeSocket(socket, 502, 'Service Unavailable', '那台界面现在没起来，等会儿再试。');
+      });
+    return undefined;
+  }
+
   return {
     handle,
+    handleUpgrade,
     ensure,
     /** 现在什么状态（**不含任何秘密**；给横幅/排障用）。 */
     state() {

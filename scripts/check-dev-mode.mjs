@@ -22,6 +22,9 @@
 
 import nodeProcess from 'node:process';
 
+// 🔴 升级那条判据必须用 `ws`：`Host`/`Cookie` 是 fetch 的**禁止头**，拿 `fetch` 验不了升级。
+import WebSocket from '../v2/services/core/node_modules/ws/index.js';
+
 const argv = nodeProcess.argv.slice(2);
 const hasFlag = (f) => argv.includes(f);
 const valueOf = (f, dflt = null) => {
@@ -206,6 +209,63 @@ if (!cookie) {
     record(false, '③ 带 cookie 取 `/`', '200 了，但 HTML 里没有 `__DSH_BOOT__` —— 来的不是那台 DSH 的界面');
   } else {
     record(true, '③ 带 cookie 取 `/`', `200 · HTML ${home.body.length} 字节 · 含 \`__DSH_BOOT__\``);
+  }
+}
+
+// ④ 带 cookie **真的升一次级**（那台界面的**数据通道**就是它）
+//   🔴 **为什么必须有这一步**：③ 只证明"那一页 HTML 来对了地方"——
+//      而它的数据通道（`/api/remote.mux` 那条 WebSocket）**死着的时候，③ 照样是绿的**。
+//      2026-09-24 就这么被骗过一次：屏幕上写着 `No sessions yet` ＋ `Reconnecting…`，
+//      而当时 D8 那三条全绿（判据打在了被测代码的**另一侧** —— 正是 `AGENTS.md` V13 说的形状）。
+//      ⇒ 判据要打在这一侧：**真升一次级**。
+say('');
+say('── ④ 带 cookie 真升一次级 `/api/remote.mux` ⇒ 必须升得上去 ─────');
+if (!cookie) {
+  record(null, '④ 升级 `/api/remote.mux`', '没验到：还没有 cookie');
+} else {
+  const wsUrl = `${URL_.replace(/^http/u, 'ws')}/api/remote.mux`;
+  const up = await new Promise((resolve) => {
+    let ws;
+    try {
+      ws = new WebSocket(wsUrl, { headers: { cookie: `hupo-dev=${cookie}` } });
+    } catch (e) {
+      resolve({ ok: false, why: `连不出去：${String(e?.message ?? e)}` });
+      return undefined;
+    }
+    const t = setTimeout(() => {
+      try {
+        ws.terminate();
+      } catch {
+        /* 已经没了 */
+      }
+      resolve({ ok: false, why: '15 秒没升上去（超时）' });
+    }, 15000);
+    ws.on('open', () => {
+      clearTimeout(t);
+      try {
+        ws.close();
+      } catch {
+        /* 已经关了 */
+      }
+      resolve({ ok: true });
+    });
+    ws.on('unexpected-response', (_req, res) => {
+      clearTimeout(t);
+      resolve({ ok: false, why: `握手被拒：HTTP ${res.statusCode}` });
+    });
+    ws.on('error', (e) => {
+      clearTimeout(t);
+      resolve({ ok: false, why: `握手失败：${String(e?.message ?? e)}` });
+    });
+  });
+  if (up.ok) {
+    record(true, '④ 升级 `/api/remote.mux`', '101 —— 那条数据通道真的通了');
+  } else {
+    record(
+      false,
+      '④ 升级 `/api/remote.mux`',
+      `${up.why} —— 界面会一直显示「Reconnecting…」、会话列不出来。查两处：nginx 有没有转发 \`Upgrade\`、宿主那道升级闸有没有放行`,
+    );
   }
 }
 

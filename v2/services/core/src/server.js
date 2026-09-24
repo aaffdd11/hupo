@@ -1461,10 +1461,40 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
    */
   function handleUpgrade(req, socket, head, trusted) {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
-    // 🔴 **开发者域名上不接任何升级**（那台界面全走普通 HTTP，契约 §四）——
-    //    这个域名上的**一切**都归开发者中继（同 `handleRequest` 顶上那一条）。
+    // ── ★ **开发者域名上的升级**（宿主那一侧）────────────────────────
+    // 🔴 **先过和普通请求一模一样的那把锁**（`authorize`：cookie 验签 + **每请求现查
+    //    `dev` 标记** + 这个人有租户 + 隧道通），过了才代理进容器、路径加 `/h` 前缀。
+    //    没过 ⇒ **握手阶段就拒**（`rejectUpgrade`），**不许**先建立连接再关。
+    //
+    // ⚠️ 这一条曾经写成"开发者域名上不接任何升级 ⇒ 404"，依据是"那台界面全走普通 HTTP"
+    //    —— **那个判断是错的**：界面的主数据通道是 `/api/remote.mux` 那条 WebSocket
+    //    （`@deepseek-ai/dsh-api-gateway/lib/client.js` 里的 `REMOTE_STREAM_MUX_PATH`）。
+    //    少了它，界面能打开但**什么都列不出来**（左下角一直 `Reconnecting…`、工作区
+    //    写 `No sessions yet`）。⇒ 判据 D9（`test/dev-mode.test.js`）。
     if (devHost && devHost.match(req.headers?.host)) {
-      return rejectUpgrade(socket, 404, 'Not Found', { error: 'not-found' });
+      const a = devHost.authorize(req);
+      if (!a.ok) {
+        return rejectUpgrade(socket, a.status, a.status === 403 ? 'Forbidden' : 'Service Unavailable', {
+          error: a.error,
+          text: a.text,
+        });
+      }
+      // ⚠️ 复用租户那条**同一个** `proxyUpgrade`，只是把路径换成带 `/h` 前缀的那一条、
+      //    并把浏览器那份 cookie 剥掉（外层那把锁是我们自己的）。
+      return proxyUpgrade(req, socket, head, a.sock, { path: a.path, dropCookie: true });
+    }
+    // ── ★ **盒子这一侧**：`/h…` 的升级 ⇒ 反代到容器内回环上的 `dsh web` ──
+    // 🔴 **只在 `trusted === true`**（容器里那条 `0600` UDS）—— 公网口（盒子自己那个
+    //    `0.0.0.0:8080`）走到这儿时 `trusted === false`，**一律拒**（同现在：落到下面那条
+    //    路径白名单 ⇒ 404）。判据 D9 的反例之一。
+    if (
+      devContainer &&
+      trusted &&
+      (url.pathname === DEV_PATH_PREFIX || url.pathname.startsWith(`${DEV_PATH_PREFIX}/`))
+    ) {
+      // 前缀剥掉（`/h/api/remote.mux` → `/api/remote.mux`）
+      const rel = req.url.slice(DEV_PATH_PREFIX.length) || '/';
+      return devContainer.handleUpgrade(req, socket, head, rel);
     }
     const wantAsr = url.pathname === ASR_PATH;
     const wantHarness = url.pathname === HARNESS_PATH;
@@ -1595,10 +1625,17 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
    *    每一处细节都可能和容器那台不一致。
    *    ⇒ 这里只做一件事：**把客户端的原始请求行与头原样写进隧道**，
    *      让**容器那台自己**完成握手；握手之后两边都是裸字节，直接对拷。
+   *
+   * @param {object} [opts]
+   * @param {string|null} [opts.path] 改写过的请求行路径（开发者模式那条要加 `/h` 前缀）；
+   *   `null` = 原样用 `req.url`（租户那条老路一字不变）
+   * @param {boolean} [opts.dropCookie] 把浏览器那份 cookie 剥掉（开发者模式外层那把锁的 cookie
+   *   **不进容器** —— 里层那把 DSH 的锁由盒子里的壳替它拿着）
    */
-  function proxyUpgrade(req, socket, head, sock) {
-    const lines = [`${req.method} ${req.url} HTTP/1.1`];
+  function proxyUpgrade(req, socket, head, sock, { path = null, dropCookie = false } = {}) {
+    const lines = [`${req.method} ${path ?? req.url} HTTP/1.1`];
     for (let i = 0; i + 1 < req.rawHeaders.length; i += 2) {
+      if (dropCookie && String(req.rawHeaders[i]).toLowerCase() === 'cookie') continue;
       lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
     }
     sock.write(`${lines.join('\r\n')}\r\n\r\n`);
