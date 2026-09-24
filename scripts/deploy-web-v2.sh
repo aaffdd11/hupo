@@ -299,4 +299,13 @@ else
 fi
 
 echo
+# ★ **记下这一版是从哪份客户端源码构建的**（给 `check-web-drift.sh` 用）。
+#   ⚠️ 写在 `data/` 里：那份**不进 git**、也**不被静态服务**到（`web/` 才是被服务的）。
+SRC_FP="$(bash "$ROOT/scripts/client-source-fingerprint.sh" 2>/dev/null || echo '未知')"
+mkdir -p "$ROOT/v2/services/core/data" 2>/dev/null || true
+cat > "$ROOT/v2/services/core/data/deploy-stamp.json" <<JSON 2>/dev/null || true
+{"clientSrcFp":"$SRC_FP","buildId":"$STAMP","commit":"$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '')","at":$(date +%s000)}
+JSON
+echo "  客户端源码指纹 $SRC_FP（记在 data/deploy-stamp.json，给"线上是不是仓库这一版"那条闸用）"
+
 echo "✅ 完成：https://w.stalkerai.cn ｜ 入口指纹 $STAMP"
