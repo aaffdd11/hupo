@@ -122,36 +122,36 @@ async function handshake(c) {
 
 // ── 纯函数那一层：那几件"还没做"的必须明说 ──────────────────
 
-test('🔴 不认识的 op ⇒ 明说认不出（不许假装成功）；坏输入只让那一条失败', () => {
+test('🔴 不认识的 op ⇒ 明说认不出（不许假装成功）；坏输入只让那一条失败', async () => {
   const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-op-'));
   tmpDirs.push(dir);
   const apps = new Apps({ dir });
   // 乙-4b 起九件都做得了 ⇒ 这一段守的是"**不认识的**不许被当成做成了"
-  const r = handleAppsOp(apps, { op: 'publish-everything' });
+  const r = await handleAppsOp(apps, { op: 'publish-everything' });
   assert.equal(r.ok, false);
   assert.match(r.error, /认不出/);
-  assert.equal(handleAppsOp(apps, {}).ok, false);
+  assert.equal((await handleAppsOp(apps, {})).ok, false);
 
   // 坏输入：校验不过 ⇒ ok:false，而且盘上没东西
-  const bad = handleAppsOp(apps, { op: 'create', app: { ...APP, id: '../evil' } },
+  const bad = await handleAppsOp(apps, { op: 'create', app: { ...APP, id: '../evil' } },
     { turnInput: () => '帮我做一个小程序' });
   assert.equal(bad.ok, false);
   assert.doesNotMatch(String(bad.error), /亲口说一句/, '★ 拒的原因要是"id 坏了"，不是"没明说"');
   assert.equal(nodeFs.existsSync(nodePath.join(dir, 'hupo', 'apps')), false, '不该建出任何东西');
 });
 
-test('🔴 建成的回执里**要带回图标**（没给的话自动配的那个 —— 工具要据此说实话）', () => {
+test('🔴 建成的回执里**要带回图标**（没给的话自动配的那个 —— 工具要据此说实话）', async () => {
   const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-op-'));
   tmpDirs.push(dir);
   const apps = new Apps({ dir });
   // ★ 允许他造：这一条验的是"图标要带回去"，不是那条闸
   const ctx = { turnInput: () => '帮我做一个小程序' };
   // ① 不给图标 ⇒ 按名字自动配，回执里得能读到它
-  const auto = handleAppsOp(apps, { op: 'create', app: { ...APP, id: 'tianqi', title: '查天气', icon: undefined } }, ctx);
+  const auto = await handleAppsOp(apps, { op: 'create', app: { ...APP, id: 'tianqi', title: '查天气', icon: undefined } }, ctx);
   assert.equal(auto.ok, true);
   assert.equal(auto.icon, 'weather', '★ 回执里没有图标 ⇒ 工具那边会把 undefined 念出来');
   // ② 给了白的 ⇒ 原样带回（负向对照：不许被自动配覆盖）
-  const given = handleAppsOp(apps, { op: 'create', app: { ...APP, id: 'mydice', title: '掷骰子', icon: 'star' } }, ctx);
+  const given = await handleAppsOp(apps, { op: 'create', app: { ...APP, id: 'mydice', title: '掷骰子', icon: 'star' } }, ctx);
   assert.equal(given.ok, true);
   assert.equal(given.icon, 'star');
 });
@@ -168,10 +168,14 @@ test('握手给的是**标准 MCP**：initialize → tools/list 九件工具', a
     await handshake(c);
     const list = await c.call('tools/list', {});
     const names = list.result.tools.map((t) => t.name).sort();
+    // ⚠️ **2026-09-24（P1-27 后半）多了第十件 `image_generate`** ——
+    //    它**借住**在这条通道上（工具只递请求、花钱的只有服务端那一处）。
+    //    为什么不新开一条 MCP：能力层（`hupo-capabilities.yml`）是 **strict**，
+    //    加一条要主人重建开机清单 ⇒ 先借住，下次重建时再拆出去。
     assert.deepEqual(names,
       ['app_create', 'app_discover', 'app_grant', 'app_install', 'app_list', 'app_publish',
-        'app_revoke', 'app_uninstall', 'app_unpublish'],
-      '乙-4b 起是这九件');
+        'app_revoke', 'app_uninstall', 'app_unpublish', 'image_generate'],
+      '九件小程序工具 ＋ 一件画图（借住）');
     for (const t of list.result.tools) {
       assert.equal(t.inputSchema.type, 'object');
       assert.ok(t.description.length > 10, '每条都要说清什么时候调');

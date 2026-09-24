@@ -26,7 +26,7 @@ import { RESUMED_EVENT } from './resume-plan.js';
 import { appsBaseOf, createAppServer, loadSignKey } from './app-serve.js';
 import { createAsrRelay } from './asr.js';
 import { readUserCreds, writeUserCreds } from './creds-store.js';
-import { DEFAULT_IMAGE_MODEL, DEFAULT_IMAGE_URL, generateImage, imageErrorWords } from './image.js';
+import { makeDrawImage } from './image-use.js';
 import { OWNER_KEY_REF, writeOwnerKey } from './owner-creds.js';
 import { describeVoiceCreds, resolveVoiceCreds, voiceCredsFor } from './asr-creds.js';
 import { createServer } from './server.js';
@@ -539,35 +539,15 @@ function ownerHasModelKey() {
  * @returns {{ok:boolean, why:string, status?:number, text?:string, creds?:object}}
  */
 /**
- * **画一张图**（P1-27 · 主人 2026-09-24：*"图片用seedream，volcengine的"*）。
+ * **画一张图**（P1-27 · 主人 2026-09-24：*"图片用seedream，volcengine的。"*）。
  *
- * 🔴 用**他自己**那把（`data/creds/<他>.yaml` 的 `HUPO_IMAGE_KEY`）；
- *    端点与模型名**可配**（`HUPO_IMAGE_URL` / `HUPO_IMAGE_MODEL`）—— 它们会过期，
- *    绝不写死在调用逻辑里。
- * ⚠️ 返回值里**没有钥匙**；失败时给一句人话（`imageErrorWords`）。
- * ⚠️ **租户那半同样还没接**（和语音一样：他盒子里的服务读的是盒子那份存档）——
- *    那边今天一定回"还没填画图那一把钥匙"，而那是**实话**（B10 的同一族）。
+ * ⚠️ 规则**只住一处**（`image-use.js`）：这里只是把它造出来，
+ *    两个入口（`/api/image` 与小程序通道上的 `draw`）用的是**同一个**。
  */
-async function drawImage(userId, prompt) {
-  const mine = readUserCreds(cfg.dataDir, userId).values;
-  const key = typeof mine.image === 'string' ? mine.image.trim() : '';
-  if (key === '') {
-    return { ok: false, why: 'no-key', text: imageErrorWords({ why: 'no-key' }) };
-  }
-  const r = await generateImage({
-    key,
-    prompt,
-    model: process.env.HUPO_IMAGE_MODEL || DEFAULT_IMAGE_MODEL,
-    url: process.env.HUPO_IMAGE_URL || DEFAULT_IMAGE_URL,
-    size: process.env.HUPO_IMAGE_SIZE || '2K',
-  });
-  if (!r.ok) {
-    console.log(`  🖼 ${userId} 画图没成（${r.why}${r.ms ? ` · ${r.ms}ms` : ''}）`); // ⚠️ 不含钥匙
-    return { ok: false, why: r.why, text: imageErrorWords(r), ms: r.ms };
-  }
-  console.log(`  🖼 ${userId} 画好了：${(r.urls ?? []).length} 张（${r.ms}ms）`);
-  return { ok: true, urls: r.urls, ms: r.ms };
-}
+const drawImage = makeDrawImage({
+  dataDir: cfg.dataDir,
+  log: (m) => console.log(`  ${m}`),
+});
 
 function setCreds(userId, patch) {
   const out = {};

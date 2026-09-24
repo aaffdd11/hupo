@@ -19,6 +19,7 @@ import nodePath from 'node:path';
 
 import { AppsError } from './apps.js';
 import { NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
+import { NEEDS_ASK_IMAGE, asksToDrawImage } from './image.js';
 import { PublishedError, authorHashOf } from './published.js';
 import { handSocketToAgent } from './socket-owner.mjs';
 
@@ -49,7 +50,7 @@ const MAX_LINE_BYTES = 512 * 1024;
  *     没接线 ⇒ 当作"没有明说"（**fail-closed**，见 `apps-consent.js` 顶上）。
  * @returns {object} 永远 `{ok:true,…}` 或 `{ok:false,error,…}`（**绝不抛**）
  */
-export function handleAppsOp(apps, req, ctx = {}) {
+export async function handleAppsOp(apps, req, ctx = {}) {
   const op = req?.op;
   if (typeof op !== 'string') return { ok: false, error: '没说要做什么' };
   try {
@@ -76,6 +77,28 @@ export function handleAppsOp(apps, req, ctx = {}) {
         //    而服务端会自动配一个 —— 那边得知道**最后配的是哪个**，才说得出一句实话
         //    （第一版漏了这个字段 ⇒ 工具回执会把 `undefined` 念给模型听）。
         return { ok: true, id: m.id, version: m.version, title: m.title, icon: m.icon, rootHash: m.rootHash };
+      }
+      // ── **画一张图**（P1-27 后半 · 主人 2026-09-24："图片需要打通"）──────────
+      //
+      // ⚠️ 它**借住**在小程序这条通道上：这条通道的形状正是"工具只递请求、动手的只有服务端"
+      //    （`59-USER-APPS.md` §二）。⚠️ **为什么不新开一条**：能力层
+      //    （`hupo-capabilities.yml`）是 **strict** —— 加一条 MCP 要主人重建开机清单
+      //    ⇒ 先借住，**下次重建时再拆出去**（记在 `77-BLOCKERS.md`）。
+      //
+      // 🔴 **他明说才许生成**：判据只读**服务端自己记的当轮输入**（`ctx.turnInput()`），
+      //    请求里写什么都不作数（与 `create` 那条同一个道理）。
+      case 'draw': {
+        const turnInput = typeof ctx.turnInput === 'function' ? ctx.turnInput() : null;
+        if (!asksToDrawImage(turnInput)) {
+          return { ok: false, error: NEEDS_ASK_IMAGE, refused: 'needs-ask' };
+        }
+        if (typeof ctx.drawImage !== 'function') return { ok: false, error: '这台部署还没接上画图那条路' };
+        const prompt = typeof req.prompt === 'string' ? req.prompt.trim() : '';
+        if (prompt === '') return { ok: false, error: '先写一句想要什么图。' };
+        const r = await ctx.drawImage(ctx.sub, prompt);
+        if (!r?.ok) return { ok: false, error: r?.text ?? '这次没画成，等会儿再试。' };
+        // ⚠️ 只回"画好了 + 图在哪"（**没有钥匙**）
+        return { ok: true, urls: r.urls ?? [] };
       }
       case 'list':
         return { ok: true, apps: apps.list() };
@@ -223,9 +246,9 @@ export class AppsSocket {
     });
   }
 
-  #onConnection(conn) {
+  async #onConnection(conn) {
     let buf = '';
-    conn.on('data', (chunk) => {
+    conn.on('data', async (chunk) => {
       buf += chunk.toString('utf8');
       if (buf.length > MAX_LINE_BYTES) {
         // 一行太长：**回一句再断开**（不许把内存吃光）
@@ -246,7 +269,7 @@ export class AppsSocket {
           continue;
         }
         // ⚠️ **一条坏输入只让那一条失败**（`handleAppsOp` 自己保证不抛）
-        conn.write(`${JSON.stringify(handleAppsOp(this.#apps, req, this.#ctx))}\n`);
+        conn.write(`${JSON.stringify(await handleAppsOp(this.#apps, req, this.#ctx))}\n`);
       }
     });
     conn.on('error', (err) => this.#log(`[apps] 连接出错：${err?.message ?? err}`));

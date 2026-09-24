@@ -9,6 +9,8 @@
 
 import 'package:flutter/material.dart';
 
+import '../models/image_links.dart';
+import '../models/space_words.dart';
 import '../models/design.dart' as d;
 import '../models/message_state.dart';
 import '../models/notice_words.dart';
@@ -143,6 +145,40 @@ class AnswerBubble extends StatelessWidget {
   ///      这里只负责画（同一件事两处口径 ⇒ 迟早会漂）。
   ///   ② 能点开的时候**命中区 ≥44**（D3.6），图标大小跟字算（不写死尺寸）。
   ///   ③ 画不下就**如实报数**，不许静默少画。
+  /// **画好的图**（P1-27 后半 · 主人 2026-09-24："图片需要打通"）。
+  ///
+  /// ⚠️ 认得出**才**画（`imageUrlsIn` 是纯函数，判据钉着）——
+  ///    认不出就一个字都不动（把普通网址当图片去取 = 屏幕上多一块空白）。
+  /// ⚠️ 取不到图 ⇒ **说一句实话**（地址是临时的那种），不留一块空白让人猜。
+  List<Widget> _imageRows(ThemeData theme, String text) {
+    final urls = imageUrlsIn(text);
+    if (urls.isEmpty) return const [];
+    return [
+      for (final url in urls) ...[
+        const SizedBox(height: d.gapS),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(d.radiusField),
+          child: Image.network(
+            url,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => Text(
+              imageGoneWords,
+              style: theme.textTheme.bodySmall,
+            ),
+            loadingBuilder: (_, child, progress) => progress == null
+                ? child
+                : Padding(
+                    padding: const EdgeInsets.symmetric(vertical: d.gapXs),
+                    child: Text(imageLoadingWords, style: theme.textTheme.bodySmall),
+                  ),
+          ),
+        ),
+        const SizedBox(height: d.gapXs),
+        Text(imageTempWords, style: theme.textTheme.bodySmall),
+      ],
+    ];
+  }
+
   List<Widget> _sourceRows(ThemeData theme) {
     final shown = message.sources.take(sourcesShown).toList();
     final extra = message.sources.length - shown.length;
@@ -210,8 +246,13 @@ class AnswerBubble extends StatelessWidget {
                   if (text.isEmpty)
                     // 一句话都还没有：不要留一个空气泡，给一个"在处理"的轻标记
                     Text('在处理…', style: theme.textTheme.bodySmall)
-                  else
-                    Text(text, style: theme.textTheme.bodyLarge),
+                  else ...[
+                    // ⚠️ **画出来的图那一行地址不重复显示**（图就在下面）——
+                    //    但**只有整行都是地址**时才去掉（句子里的地址留着）
+                    Text(textWithoutImageLines(text), style: theme.textTheme.bodyLarge),
+                    // ★ **画好的图**（P1-27 后半）：回话里带着图片地址 ⇒ **画在聊天里**
+                    ..._imageRows(theme, text),
+                  ],
                   if (message.sources.isNotEmpty) ...[
                     const SizedBox(height: 10),
                     Text(sourcesHeadWords, style: theme.textTheme.bodySmall),

@@ -213,8 +213,10 @@ String credImageBoundary({required bool isTenant, required bool hasOwn}) {
   return hasOwn ? credImageBoundaryMine : credImageBoundaryNone;
 }
 
-/// 视频那一句（这条路**还没接**，两种人都一样说实话）。
-const String credBoundaryVideo = '先收在你自己的名下。做片子这条路还没接上，接上就自动用它。';
+/// 视频那一句（🔴 **这条路不做** —— 主人 2026-09-24 定的：*"图片需要打通，视频不需要。"*）。
+/// ⚠️ 所以不能说"还没接上、接上就用它"（那听着像**在排队**）—— 要**明说没做**。
+/// ⚠️ 钥匙那一栏留着（他还是能存），但一个字的承诺都不给。
+const String credBoundaryVideo = '先收在你自己的名下。做片子那条路**不做**（你说不需要）—— 这一栏先只把钥匙收着。';
 
 // ── 「试一张」那几句（画图那一屏里）────────────────────────────
 const String imageTryLabel = '试一张';
@@ -390,3 +392,11 @@ const String voiceToMic = '语音';
 //      ⇒ 留着它就是**假装有一个做不到的东西**；
 //    · 真做得到的那半（**让它念出来**）现在**是真的**了，词在 `speak_words.dart`
 //      （开关"读出来 / 不读"、每条按钮"读一遍 / 别念了"），契约 `docs/dev/68-SPEAK.md`。
+
+// ── 聊天里那张图跟前跟后的两句（P1-27 后半）────────────────────
+/// 图还在取的时候。
+const String imageLoadingWords = '图正在过来…';
+/// 🔴 取不到图时**说实话**（多半是那个临时地址过期了 —— 不许留一块空白让人猜）。
+const String imageGoneWords = '这张图取不回来了（那个地址是临时的，多半过期了）。';
+/// 图是临时地址那件事（与配置页那句同一个意思）。
+const String imageTempWords = '图是那边临时给的，想要就存下来。';

@@ -200,3 +200,65 @@ test('上游说钥匙不灵 ⇒ 502，而且**把原因如实带出来**（不�
     await s.close();
   }
 });
+
+// ── ⑤ 通道那一层（助手走的就是这条：`draw` op）────────────────────
+test('🔴 通道：**他明说才许生成**（没说 ⇒ 拒，而且一次都不花）；说了才真画', async () => {
+  const dir = tmp();
+  try {
+    const { Apps } = await import('../src/apps.js');
+    let drawn = 0;
+    const ctx = {
+      sub: 'u1',
+      turnInput: () => said,
+      drawImage: async (sub, prompt) => { drawn += 1; return { ok: true, urls: ['https://x.example/a.png'] }; },
+    };
+    const apps = new Apps({ dir, sub: 'u1' });
+    const { handleAppsOp } = await import('../src/apps-socket.js');
+    let said = '这个图是什么意思';
+
+    // ① 他只是"问一句那个图" ⇒ 拒（而且**一次都没画**）
+    const no = await handleAppsOp(apps, { op: 'draw', prompt: '一只猫' }, ctx);
+    assert.equal(no.ok, false);
+    assert.equal(no.refused, 'needs-ask');
+    assert.match(no.error, /亲口说一句/, '要告诉他该怎么说');
+    assert.equal(drawn, 0, '★ 拒了就不许花他的钱');
+
+    // ② 他明说了 ⇒ 真画
+    said = '帮我画一只在窗台上的猫';
+    const yes = await handleAppsOp(apps, { op: 'draw', prompt: '一只在窗台上的猫' }, ctx);
+    assert.equal(yes.ok, true);
+    assert.deepEqual(yes.urls, ['https://x.example/a.png']);
+    assert.equal(drawn, 1);
+
+    // ③ 没有"他那句话"（助手自己发起的）⇒ 拒
+    said = '';
+    assert.equal((await handleAppsOp(apps, { op: 'draw', prompt: 'x' }, ctx)).refused, 'needs-ask');
+    // ④ 空话 ⇒ 拒（在"明说"之后）
+    said = '帮我画一张';
+    assert.equal((await handleAppsOp(apps, { op: 'draw', prompt: '   ' }, ctx)).ok, false);
+    // ⑤ 没接线 ⇒ 如实说（不是假装画了）
+    const off = await handleAppsOp(apps, { op: 'draw', prompt: 'x' }, { sub: 'u1', turnInput: () => '帮我画一张' });
+    assert.equal(off.ok, false);
+    assert.match(off.error, /还没接上/);
+    // ⑥ 服务端那句"没填钥匙"要**原样传上去**
+    const noKey = await handleAppsOp(apps, { op: 'draw', prompt: 'x' }, {
+      sub: 'u1', turnInput: () => '帮我画一张',
+      drawImage: async () => ({ ok: false, why: 'no-key', text: imageErrorWords({ why: 'no-key' }) }),
+    });
+    assert.equal(noKey.ok, false);
+    assert.match(noKey.error, /还没填画图那一把钥匙/);
+    assert.equal(JSON.stringify(noKey).includes('ark-key'), false, '★ 回执里不许有钥匙');
+  } finally {
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('★ 那条闸的真值表：认得出"他要我画"才放（保守：认不出就拒）', async () => {
+  const { asksToDrawImage } = await import('../src/image.js');
+  for (const t of ['帮我画一只猫', '画一张日落', '给我画个头像', '生成一张海报', '来一张风景图', '做一张封面']) {
+    assert.equal(asksToDrawImage(t), true, `这句是"他要我画"，该认：${t}`);
+  }
+  for (const t of ['这个图是什么意思', '我画了个图给你看', '图片怎么这么大', '别看那个', '', '  ', null, undefined]) {
+    assert.equal(asksToDrawImage(t), false, `这句不是"他要我画"，不该认：${JSON.stringify(t)}`);
+  }
+});

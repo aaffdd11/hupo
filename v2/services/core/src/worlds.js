@@ -27,6 +27,7 @@ import nodePath from 'node:path';
 
 import { Apps } from './apps.js';
 import { AppsSocket, appsSocketPath } from './apps-socket.js';
+import { makeDrawImage } from './image-use.js';
 import { Published, authorHashOf } from './published.js';
 import { Dispatcher } from './dispatcher.js';
 import { Ledger, LEDGER_TIMELINE_ID } from './ledger.js';
@@ -251,6 +252,9 @@ export class Worlds {
         //   取的是**服务端记的**那一份（`dispatcher.turnInput`）；
         //   还没建好（`null`）⇒ 当作"没有明说"（那正是**开机那几秒**该有的保守行为）。
         turnInput: () => dispatcher?.turnInput ?? null,
+        // ★ **画一张图**（P1-27 后半）：工具只递请求，真正去花他那把钥匙的是这里。
+        //   ⚠️ 与 `/api/image`（配置页那个「试一张」）**同一套规则**（`image-use.js`）。
+        drawImage: makeDrawImage({ dataDir: t.dir, log: (m) => this.#warn(`  ${m}`) }),
         // ★ 装上了 ⇒ 往**他自己**的流里推一条（客户端收到就重拉清单，桌面自己长出来）
         onInstalled: (info) => {
           try {
