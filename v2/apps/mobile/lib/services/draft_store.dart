@@ -185,12 +185,20 @@ class DraftStore {
   /// 读回来。读不到、坏了、插件不可用 ⇒ **空**（不抛）。
   ///
   /// ⚠️ **一行坏不许拖垮整份存档**：坏行跳过，好的照用。
-  Future<List<LocalDraft>> load() => _enqueue(_load, const <LocalDraft>[]);
+  ///
+  /// ⚠️ **键在"叫这一声"的时候就钉住**（`final k = key`），不是轮到了再算：
+  ///    队列是异步的，而 `namespace` 会在**切房间 / 换人**时被改
+  ///    （`ChatController._bindNamespace`）⇒ 照执行时那个值写，就会把 A 间的话
+  ///    写进 B 间的存档（或者反过来读到别人的）。见 `TimelineStore.load` 顶上那段。
+  Future<List<LocalDraft>> load() {
+    final k = key;
+    return _enqueue(() => _load(k), const <LocalDraft>[]);
+  }
 
-  Future<List<LocalDraft>> _load() async {
+  Future<List<LocalDraft>> _load(String k) async {
     try {
       final p = await SharedPreferences.getInstance();
-      final lines = p.getStringList(key);
+      final lines = p.getStringList(k);
       if (lines == null) return const [];
       final out = <LocalDraft>[];
       for (final line in lines) {
@@ -210,9 +218,13 @@ class DraftStore {
   }
 
   /// 存下这几句。存不上就算了（**聊天本身绝不能因此不能用**）。
-  Future<void> save(Iterable<LocalDraft> drafts) => _enqueue(() => _save(drafts), null);
+  /// ⚠️ 键在"叫这一声"的时候钉住（同 [load]：切房间会把 `namespace` 换掉）。
+  Future<void> save(Iterable<LocalDraft> drafts) {
+    final k = key;
+    return _enqueue(() => _save(k, drafts), null);
+  }
 
-  Future<void> _save(Iterable<LocalDraft> drafts) async {
+  Future<void> _save(String k, Iterable<LocalDraft> drafts) async {
     try {
       final lines = <String>[];
       for (final d in drafts) {
@@ -224,19 +236,23 @@ class DraftStore {
         }
       }
       final p = await SharedPreferences.getInstance();
-      await p.setStringList(key, trimLines(lines));
+      await p.setStringList(k, trimLines(lines));
     } catch (_) {
       // 盘满 / 没权限 / 插件不可用：当没存档
     }
   }
 
   /// 清掉。**退出登录时必须调**——否则换个人登录会看见上一个人打了一半的话。
-  Future<void> clear() => _enqueue(_clear, null);
+  /// ⚠️ 键在"叫这一声"的时候钉住（同 [load]）。
+  Future<void> clear() {
+    final k = key;
+    return _enqueue(() => _clear(k), null);
+  }
 
-  Future<void> _clear() async {
+  Future<void> _clear(String k) async {
     try {
       final p = await SharedPreferences.getInstance();
-      await p.remove(key);
+      await p.remove(k);
     } catch (_) {}
   }
 

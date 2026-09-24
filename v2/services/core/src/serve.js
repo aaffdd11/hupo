@@ -194,17 +194,28 @@ const warmed = worlds.warmUp([OWNER_ID, ...users.ids()]);
 //      不分组地清会连**别的项目**和这个 GUI 自己可 resume 的记录一起删。
 const pruned = [];
 for (const w of worlds.all()) {
+  // ★ **每个 scope 也是一个 cwd**（契约 `83-APP-WORKSPACE.md`）：DSH 按 cwd 分组，
+  //   那些组和主线那一组一样**只涨不降** ⇒ 一起清。
+  //   ⚠️ 仍然是"一组一组地清"（不分组地清会连**别的项目**一起删）。
+  let cwds = [w.cfg.agentCwd];
   try {
-    const groupDir = nodePath.join(w.cfg.dshHome, 'sessions', groupSlugFor(w.cfg.agentCwd));
-    if (!nodeFs.existsSync(groupDir)) continue;
-    const plan = planPrune({ entries: scanEntries({ root: groupDir }) });
-    if (plan.remove.length > 0) {
-      const done = applyPrune(plan.remove, { root: groupDir });
-      pruned.push({ userId: w.userId, text: summarize(plan, { applied: true, done }) });
+    cwds = cwds.concat(w.workspaces.list().map((s) => w.workspaces.dirFor(s)));
+  } catch {
+    /* 列不出来就只清主线那一组（一个人清不动不许影响别人，也不许阻断启动） */
+  }
+  for (const cwd of cwds) {
+    try {
+      const groupDir = nodePath.join(w.cfg.dshHome, 'sessions', groupSlugFor(cwd));
+      if (!nodeFs.existsSync(groupDir)) continue;
+      const plan = planPrune({ entries: scanEntries({ root: groupDir }) });
+      if (plan.remove.length > 0) {
+        const done = applyPrune(plan.remove, { root: groupDir });
+        pruned.push({ userId: w.userId, text: summarize(plan, { applied: true, done }) });
+      }
+    } catch (err) {
+      // ⚠️ 一个人清不动不许影响别人，也不许阻断启动
+      console.warn(`  ⚠️ ${w.userId} 的旧记录没清成（不影响服务）：${err?.message ?? err}`);
     }
-  } catch (err) {
-    // ⚠️ 一个人清不动不许影响别人，也不许阻断启动
-    console.warn(`  ⚠️ ${w.userId} 的旧记录没清成（不影响服务）：${err?.message ?? err}`);
   }
 }
 

@@ -24,6 +24,7 @@ import 'api.dart';
 import '../models/conn_state.dart';
 import '../models/retry.dart';
 import '../models/process_levels.dart';
+import '../models/scope.dart';
 
 class StreamClient {
   StreamClient({
@@ -31,6 +32,7 @@ class StreamClient {
     required this.token,
     required this.api,
     this.level = defaultProcessLevel,
+    this.scope = mainScope,
     this.pingTimeout = const Duration(seconds: 60),
     /// ★ P1-10（2026-09-24）："令牌还行不行"那一问**可注入** ——
     ///   判据要能验"401 就停下重连"那条路（B1），而真的去连一个坏地址是验不准的。
@@ -45,6 +47,13 @@ class StreamClient {
   /// 过程四档（契约 §三）。**连接级**：服务端按这条连接决定发多少过程
   /// ⇒ 换档只能靠**重连**（`chat_controller.setLevel` 就是这么做的）。
   final ProcessLevel level;
+
+  /// **这一条流连的是哪个房间**（契约 `83-APP-WORKSPACE.md` §五·甲）。
+  ///
+  /// ⚠️ 和 [level] **同一类**：它是**连接级**的（服务端按这条连接决定补发哪一间、
+  ///    订阅哪一间）⇒ 换房间也只能靠**重连**（`chat_controller.setScope`）。
+  /// ⚠️ 它**在地址上**（`?scope=…`），不在帧里 —— 见 `stream_uri.dart`。
+  final String scope;
 
   final Duration pingTimeout;
 
@@ -100,7 +109,15 @@ class StreamClient {
 
     // ⚠️ 别在这里自己拼协议：同源时必须看**页面**的协议，
     //    否则会在 https 页面上拼出 ws:// 并被浏览器拦掉（`stream_uri.dart` 记着这次事故）。
-    final uri = streamUri(base: base, page: Uri.base, sinceSeq: _sinceSeq, level: level);
+    // ⚠️ `scope` 和 `level` **同一类**（连接级）：都只走这一个算地址的函数，
+    //    谁都不许在别处再拼一遍（那条事故的第二个/第三个入口就是这么来的）。
+    final uri = streamUri(
+      base: base,
+      page: Uri.base,
+      sinceSeq: _sinceSeq,
+      level: level,
+      scope: scope,
+    );
 
     try {
       // 令牌走**子协议**（手册 §2.1）——不进 URL。

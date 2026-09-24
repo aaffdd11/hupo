@@ -30,22 +30,43 @@
 // **不能**连上之后再补发一个"改档"的帧（那会变成全局开关）。
 // 契约：不带 = `doing`；客户端**永远带上**，好让"用户在哪个档"这件事
 // 在服务端和客户端只有一种理解。
+//
+// ── 批 4：地址上再多带一个 `scope`（一个图标 = 一条对话）──────────
+//
+// 契约 `docs/dev/83-APP-WORKSPACE.md` §六·4（§五 定的是**甲**：跟着图标走）：
+// 打开某个"我的小程序"⇒ 下面那条聊天就是**它的**对话 ⇒ 那条流也得连到它那一间。
+// `scope` 和 `level` **同一类**：**连接级**的（服务端按每条连接决定补发哪一间、
+// 订阅哪一间）⇒ 切房间**只能靠重连**，不能连上之后再补一帧。
+// 契约：不带 = `main`；客户端**永远带上**（和 `level` 一个道理：
+// "在哪个房间"在服务端与客户端只许有一种理解）。
+//
+// ⚠️ **这一刀一个字都不许动那个老坑**：协议还是 [_wsOrigin] 算的
+//    （`ws://` vs `wss://` 那次事故，见 `16-STREAM.md`）——
+//    `scope` 只是往后面接一个参数，**不是**第二个地址构造入口。
 
 import '../models/process_levels.dart';
+import '../models/scope.dart';
 
-/// 算出流该往哪儿连：`wss://<host>/api/stream?sinceSeq=<n>&level=<档>`。
+/// 算出流该往哪儿连：
+/// `wss://<host>/api/stream?sinceSeq=<n>&level=<档>&scope=<房间>`。
 ///
 /// * [base] 空串 = **同源**（生产就是这个），协议取 [page]（浏览器地址栏里的那个）。
 /// * [base] 非空 = 跨源调试用，协议取它自己的。
 /// * [sinceSeq] 是续传起点（断线重连时带上，服务端从这里把缺的补回来）。
 /// * [level] 过程四档（契约 §三）。默认 [defaultProcessLevel] = `doing`。
+/// * [scope] 房间（契约 `83` §五·甲）。默认 [mainScope] = 桌面上那条主对话。
+///
+/// ⚠️ **令牌不进地址**（走子协议 `['bearer', token]`，手册 §2.1）——
+///    这里多出来的只有 `scope` 这一个**不是秘密**的东西。
 Uri streamUri({
   required String base,
   required Uri page,
   required int sinceSeq,
   ProcessLevel level = defaultProcessLevel,
+  String scope = mainScope,
 }) => Uri.parse(
-  '${_wsOrigin(base: base, page: page)}/api/stream?sinceSeq=$sinceSeq&level=${level.wire}',
+  '${_wsOrigin(base: base, page: page)}/api/stream'
+  '?sinceSeq=$sinceSeq&level=${level.wire}&scope=${Uri.encodeQueryComponent(scope)}',
 );
 
 /// 算出**语音那条**该往哪儿连：`wss://<host>/api/asr`（主人 2026-09-23：真开麦）。

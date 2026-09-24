@@ -19,6 +19,10 @@ import { WebSocketServer } from 'ws';
 
 import { PUBLIC_ROUTES, clientIp, tokenFromRequest } from './auth.js';
 import { SayError } from './say.js';
+// ★ **scope（一个图标 = 一个工作区 = 一条对话 · 契约 `83-APP-WORKSPACE.md`）**：
+//   协议**只加可选字段** —— 缺了就是主线（老客户端一个字节都不用改）。
+//   取值与校验只有一处出处（`worlds.js`），免得"什么算合法 scope"有两份。
+import { MAIN_SCOPE, parseScope } from './worlds.js';
 // ⚠️ 只借它**校验手机号形状**（`/api/send-code` 用）；模块本身不碰用户表
 import { normalizePhone } from './users.js';
 import { ADMIT_RATIO, readAdmission } from './admission.js';
@@ -394,6 +398,25 @@ export function createServer({
   const shared = { timeline, store, say, dispatcher, trash };
   const worldFor = worlds ? (sub) => worlds.worldFor(sub) : () => shared;
 
+  /**
+   * **按 scope 取房间**（契约 `83-APP-WORKSPACE.md` §三·3）。
+   *
+   * ⚠️ 缺省 / `'main'` ⇒ 主线那一份世界（**逐字不变**）。
+   * ⚠️ 取不到（没开多租户、scope 名不合法、没有这个工作区）⇒ `null`，
+   *    调用方**如实说**（404 + 人话），**绝不许**悄悄退回主线 ——
+   *    那会让"A 房间说的话出现在 B 房间"变成一件看不见的事。
+   */
+  const roomFor = (sub, scope) => {
+    const s = typeof scope === 'string' && scope.trim() !== '' ? scope.trim() : MAIN_SCOPE;
+    if (s === MAIN_SCOPE) return worldFor(sub);
+    if (!worlds || typeof worlds.roomFor !== 'function') return null;
+    try {
+      return worlds.roomFor(sub, s);
+    } catch {
+      return null;
+    }
+  };
+
   const server = http.createServer((req, res) => {
     handleRequest(req, res, false).catch((err) => {
       // 兜底：HTTP 层自己不许把异常漏出去变成未捕获
@@ -675,7 +698,7 @@ export function createServer({
       //   **不许**再直接摸上面那几个单例 —— 那正是"甲看到乙"的来源。
       //   ⚠️ `sub` 只来自**验过签的令牌**（`claim`），不读 URL / body / 头。
       const W = worldFor(claim.sub);
-      if (path === '/api/say' && req.method === 'POST') return handleSay(req, res, claim, W);
+      if (path === '/api/say' && req.method === 'POST') return handleSay(req, res, claim);
       if (path === '/api/health' && req.method === 'GET') {
         return sendJson(res, 200, { ok: true, timelineId: W.timeline.id, seq: W.timeline.seq });
       }
@@ -964,8 +987,13 @@ export function createServer({
         if (!Number.isInteger(before) || before < 0) {
           return sendJson(res, 400, { error: 'bad-before' });
         }
+        // ★ **可选 `scope`**（契约 `83-APP-WORKSPACE.md` §三·3）：缺了就是主线。
+        //   A 房间的日志与 B 房间的不是同一条文件 ⇒ 这里换一个 `W` 就换了一条时间线。
+        const scope = parseScope(q);
+        const TW = roomFor(claim.sub, scope);
+        if (!TW) return sendJson(res, 404, { error: 'no-such-scope', text: '这个房间还没建好。' });
         const page = planBackfill({
-          events: W.store.readAll(W.timeline.id),
+          events: TW.store.readAll(TW.timeline.id),
           before,
           limit: Number.isInteger(limit) && limit > 0 ? Math.min(limit, BACKFILL_MAX) : BACKFILL_PAGE,
         });
@@ -1224,12 +1252,26 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     return sendJson(res, 200, { token, expiresAt });
   }
 
-  async function handleSay(req, res, claim, W) {
+  async function handleSay(req, res, claim) {
     let body;
     try {
       body = await readJson(req, 64 * 1024);
     } catch (err) {
       return sendJson(res, 400, { error: 'bad-json' });
+    }
+    // ★ **这一句说给哪个房间**（契约 `83-APP-WORKSPACE.md` §三·3）：
+    //   body 上多一个**可选** `scope`（那个 app 的 id），缺了就是主线 ——
+    //   协议只加字段，老客户端一字不改。⚠️ 不是这个人的 app ⇒ **如实 404**，
+    //   绝不悄悄落到主线（那会让两句不同房间的话糊在一起，而且看不出来）。
+    const scope = typeof body?.scope === 'string' && body.scope.trim() !== ''
+      ? body.scope.trim()
+      : MAIN_SCOPE;
+    const W = roomFor(claim.sub, scope);
+    if (!W) {
+      return sendJson(res, 404, {
+        error: 'no-such-scope',
+        text: '这个房间还没建好，先在对话里把它做出来。',
+      });
     }
     try {
       // ★ **准入闸**（手册 §9.1）：满了就明确拒绝，而且要在**落盘之前**判。
@@ -1572,8 +1614,20 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
       //      而且是**运行到那一条连接时**才炸 —— 判据当场抓住）。
       return asrWss.handleUpgrade(req, socket, head, (ws) => onAsr(ws, req, claim));
     }
+    // ★ **可选 `scope`**（契约 `83-APP-WORKSPACE.md` §三·3）：**连接级的**，
+    //   照 `level` 那个先例 —— 每条连接各自一份，缺了就是主线。
+    //   🔴 取不到那个房间 ⇒ **握手阶段就拒**（同"没令牌"那条规矩）：
+    //      不许先连上再关，更不许悄悄退回主线（那会让 A 房间的话出现在 B 房间的流里）。
+    const streamScope = parseScope(url.searchParams);
+    const streamRoom = streamScope === MAIN_SCOPE ? null : roomFor(claim.sub, streamScope);
+    if (streamScope !== MAIN_SCOPE && !streamRoom) {
+      return rejectUpgrade(socket, 404, 'Not Found', {
+        error: 'no-such-scope',
+        text: '这个房间还没建好。',
+      });
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      onStream(ws, url, claim);
+      onStream(ws, url, claim, streamRoom);
     });
   }
 
@@ -1663,10 +1717,12 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
 
   server.on('upgrade', (req, socket, head) => handleUpgrade(req, socket, head, false));
 
-  function onStream(ws, url, claim) {
+  function onStream(ws, url, claim, room = null) {
     // ★ **这条流也是按人取的**（多租户）：补发与订阅都必须走**他那一份**时间线，
     //   否则甲连上来的流会补发出乙的话。身份同样只从验过签的 `claim` 来。
-    const W = worldFor(claim.sub);
+    //   ★ **房间同理**（契约 `83-APP-WORKSPACE.md` §三·3）：某个 app 的流只补发
+    //     与订阅**那一条日志** —— 一条流一个房间，订阅的是那间房的时间线。
+    const W = room ?? worldFor(claim.sub);
     const rawSince = url.searchParams.get('sinceSeq');
     const sinceSeq = rawSince === null ? 0 : Number.parseInt(rawSince, 10);
     // ⚠️ **`dev=1` 与 `level` 是并存的，不是别名。** 两个理由：

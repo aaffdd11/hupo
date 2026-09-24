@@ -92,13 +92,22 @@ class TimelineStore {
   /// 把上一屏读回来。读不到、坏了、插件不可用 ⇒ **空**（不抛）。
   ///
   /// ⚠️ **一行坏不许拖垮整屏**：坏行跳过，好的照用。
-  Future<List<Map<String, dynamic>>> load() =>
-      _enqueue(_load, const <Map<String, dynamic>>[]);
+  ///
+  /// 🔴 **键在"叫这一声"的时候就钉住**（`final k = key`），不是轮到它执行了再算。
+  ///    队列是异步的（`_enqueue`），而 `namespace` 会在**切房间 / 换人**时被换掉
+  ///    （`ChatController._bindNamespace`）。照执行时那个值去写，就会出现：
+  ///    A 间那几条事实**晚一步落地**、正好落进 B 间的键里 ⇒ 切到 B 间看到的是
+  ///    A 间的话（`83-APP-WORKSPACE.md` 判据 A3：**A 房间说的一句，
+  ///    B 房间的流里不许出现**）。三个 store（timeline / drafts / compose）同一条规矩。
+  Future<List<Map<String, dynamic>>> load() {
+    final k = key;
+    return _enqueue(() => _load(k), const <Map<String, dynamic>>[]);
+  }
 
-  Future<List<Map<String, dynamic>>> _load() async {
+  Future<List<Map<String, dynamic>>> _load(String k) async {
     try {
       final p = await SharedPreferences.getInstance();
-      final lines = p.getStringList(key);
+      final lines = p.getStringList(k);
       if (lines == null) return const [];
       final out = <Map<String, dynamic>>[];
       for (final line in lines) {
@@ -116,10 +125,13 @@ class TimelineStore {
   }
 
   /// 存下这一屏。存不上就算了（**聊天本身绝不能因此不能用**）。
-  Future<void> save(Iterable<Map<String, dynamic>> events) =>
-      _enqueue(() => _save(events), null);
+  /// ⚠️ 键在"叫这一声"的时候钉住（同 [load]：切房间会把 `namespace` 换掉）。
+  Future<void> save(Iterable<Map<String, dynamic>> events) {
+    final k = key;
+    return _enqueue(() => _save(k, events), null);
+  }
 
-  Future<void> _save(Iterable<Map<String, dynamic>> events) async {
+  Future<void> _save(String k, Iterable<Map<String, dynamic>> events) async {
     try {
       final lines = <String>[];
       for (final e in events) {
@@ -131,7 +143,7 @@ class TimelineStore {
         }
       }
       final p = await SharedPreferences.getInstance();
-      await p.setStringList(key, trimLines(lines));
+      await p.setStringList(k, trimLines(lines));
     } catch (_) {
       // 盘满 / 没权限 / 插件不可用：当没缓存
     }
@@ -139,12 +151,16 @@ class TimelineStore {
 
   /// 清掉。**退出登录、以及服务端说"你这号不对了"时必须调**——
   /// 否则下次开机又会把那个**已经不存在的世界**画出来。
-  Future<void> clear() => _enqueue(_clear, null);
+  /// ⚠️ 键在"叫这一声"的时候钉住（同 [load]）。
+  Future<void> clear() {
+    final k = key;
+    return _enqueue(() => _clear(k), null);
+  }
 
-  Future<void> _clear() async {
+  Future<void> _clear(String k) async {
     try {
       final p = await SharedPreferences.getInstance();
-      await p.remove(key);
+      await p.remove(k);
     } catch (_) {}
   }
 

@@ -171,11 +171,11 @@
 | `/api/auth`、`/api/login` | GET / POST | 公开 | 登录；**没设口令时 fail-closed（503）** |
 | `/api/version` | GET | 公开 | `buildId` + `serverNow`（客户端据此判断要不要刷新） |
 | `/api/health` | GET | 需令牌 | 健康：`ok` / `timelineId` / `seq`（**代码事实**，2026-09-24 核）。⏳ **原表写的六项（disk / store / agents / memory / upstream / cert）从来没实现过** —— `grep upstream\|cert server.js` = 0 ⇒ 那一行曾经是「文档在说假话」（P1-12）。要那六项的话是**新功能**，不是修文档 |
-| `/api/say` | POST | 需令牌 | `{messageId, text, clientAt}`；⚠️ 原表里的 `conversationId` **是幽灵字段**（两侧代码都没有，2026-09-23 核）· `source` 早已删掉 |
+| `/api/say` | POST | 需令牌 | `{messageId, text, clientAt}` ＋ **可选 `scope`**（2026-09-25：那个 app 的 id；不带 = 主线 `main`）；⚠️ 原表里的 `conversationId` **是幽灵字段**（两侧代码都没有，2026-09-23 核）· `source` 早已删掉 |
 | `/api/apps` | GET | 需令牌 | ✅ **已实现**：我的小程序清单：`id` / `title` / `icon` / `version` / `rootHash` / `permissions` / `entryUrl`（**现签**）|
 | `/api/discover` | GET | 需令牌 | ✅ **已实现**：大家发出来的（**只读**；不给作者身份，只给昵称）|
 | `/api/app-ask` | POST | 需令牌 | ✅ **已实现**：小程序问一句。**四道闸在中心**（在他这儿 · 声明了 · 授予了 · 配额还有）· **花在他自己的环境里** |
-| `/api/timeline` | GET | 需令牌 | ✅ **已实现**（2026-09-23 · 批 C）：`?before=<seq>&limit=<n>` **往前取一页**（给"老消息往上翻着加载"用）。**只读** · 给的是**原始带号事件**（含墓碑 —— 去重/隐藏由客户端按同一套规则做，服务端**不替它筛**）· 回报 `{frames, oldestSeq, hasMore}`。一页默认/上限**住代码里**（`server.js` 的 `BACKFILL_PAGE`/`BACKFILL_MAX`）|
+| `/api/timeline` | GET | 需令牌 | ✅ **已实现**（2026-09-23 · 批 C）：`?before=<seq>&limit=<n>` **往前取一页**（给"老消息往上翻着加载"用）。**只读** · 给的是**原始带号事件**（含墓碑 —— 去重/隐藏由客户端按同一套规则做，服务端**不替它筛**）· 回报 `{frames, oldestSeq, hasMore}`。一页默认/上限**住代码里**（`server.js` 的 `BACKFILL_PAGE`/`BACKFILL_MAX`）＋ **可选 `?scope=`**（同上，不带 = 主线）|
 | `/api/send-code` | POST | 公开 | 要一个验证码。⚠️ **本部署还没有短信通道 ⇒ 503 + 一句人话**；🔴 **码永远不回给界面**（写在屏上就等于没有验证码）· 码本身是掩码 |
 | `/api/renew` | POST | 需令牌 | 续期（决策 A：滑动窗口与绝对上限都住在 `auth.js`）。⚠️ **可信那条路没有令牌可续** ⇒ 404（不去动宿主的撤销表）|
 | `/api/revoke-all` | POST | 需令牌 | 把**这个 `sub`** 签过的令牌**全部**撤掉（"别处还登着" / 注销那一步）。⚠️ 回执里**不说撤了几个**（本来也不知道）；可信口 404 |
@@ -190,7 +190,7 @@
 | `/api/trash` | GET | 需令牌 | 回收站清单 + `ttlDays` |
 | `/api/trash/plan` · `/api/trash/restore` | POST | 需令牌 | `plan` = **先看清单**（**只读、无门槛**：能白看的东西不许要 `confirm`）；`restore` = 拿回来 |
 | `/api/trash/remove` · `/api/trash/purge` | POST | 需令牌 | `remove` = 删进回收站（墓碑 + 到期真删）；`purge` = 立刻真删；都走 `handleTrashWrite` |
-| `/api/stream` | WS | 需令牌（子协议 `['bearer', token]`） | 下行事件；`sinceSeq` 续传；**`dev=1` 是附加通道不是替代** |
+| `/api/stream` | WS | 需令牌（子协议 `['bearer', token]`） | 下行事件；`sinceSeq` 续传；**`dev=1` 是附加通道不是替代**；＋ **可选 `&scope=`**（**连接级**，照 `level` 那先例；不带 = 主线）|
 | `/api/asr` | WS | 需令牌（**同一个子协议 `['bearer', token]`**） | **语音那条**（主人 2026-09-23）：上行**二进制帧 = 16k 单声道 16bit PCM**，文本帧只是 `asr/start` / `asr/stop`；下行 `asr/ready` · `asr/partial{text}` · `asr/final{text}` · `asr/end{text}` · `asr/capped` · `asr/error{reason,message,code?}` · `asr/unavailable{reason}`。🔴 **另开一条、不动已冻结的 `/api/stream`**；🔴 **SecretKey 只在服务端**（音频经这台机转给上游，绝不把签名下发给浏览器）；**没配钥匙时接上就如实回 `asr/unavailable`**。契约 `docs/dev/71-MIC-ASR.md` |
 | `/api/harness` | WS | 需令牌（**同一个子协议 `['bearer', token]`**） | **"那台 DSH 本人"那条路**（主人 2026-09-24）：一个 WS 连接 = 一个 DSH 进程；线上消息只有 `say` / `stop` / `state` / `raw` —— 容器**不做任何投影**（`raw` = DSH stdout 原样转发，"什么意思"全在客户端解）。🔴 **不挂人格、不挂能力层**（`--profile sdk` + 模型那条 patch）；🔴 **公网口（`trusted === false`）一律拒**，只有容器里那条 UDS 接得上。契约 `docs/dev/81-HARNESS-ENTRY.md` §5.1 |
 | `/api/dev-harness` | GET | 需令牌 | **要一条开发者入口的签名链接**（契约 `docs/dev/82-DEV-MODE.md` §六 D6）：回 `{ok, dev, url, expiresAt}`，`url` 是短时效的 `https://dsh<手机号>.<base>/__enter?…`。只给**自己**，`owner` 可带 `?phone=` 点名别人（别人 403）；**没被标成开发者 ⇒ 如实回"还没有入口"**（不是 403）。⚠️ 可信口（容器里）404 |

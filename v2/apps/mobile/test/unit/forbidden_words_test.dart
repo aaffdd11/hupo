@@ -17,6 +17,7 @@ import 'package:hupo_app/models/notice_words.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/process_words.dart';
 import 'package:hupo_app/models/source_words.dart';
+import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/speak_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
 
@@ -84,6 +85,12 @@ void main() {
       '没发出去',
       '重发',
       '说点什么',
+      // ★ 2026-09-25（批 4 · 一个图标 = 一条对话 · `83-APP-WORKSPACE.md` §五·甲）：
+      //    某个小程序那一间**还空着**时那两句 —— **直接引数据源**（手抄会漂）。
+      //    ⚠️ 这一批最容易混进来的就是「工作区」那个词（它是禁用词，一个都不许上屏）。
+      roomEmptyTitle,
+      roomEmptyLine('奥数题'),
+      roomEmptyLine('随手记一笔'),
       '在处理…',
       '这条没说完',
       '你不在的时候',

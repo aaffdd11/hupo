@@ -9,6 +9,7 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/process_levels.dart';
+import 'package:hupo_app/models/scope.dart';
 import 'package:hupo_app/services/stream_uri.dart';
 
 Uri page(String s) => Uri.parse(s);
@@ -21,7 +22,7 @@ void main() {
       expect(u.host, 'w.stalkerai.cn');
       expect(u.path, '/api/stream');
       expect(u.queryParameters['sinceSeq'], '0');
-      expect(u.toString(), 'wss://w.stalkerai.cn/api/stream?sinceSeq=0&level=doing');
+      expect(u.toString(), 'wss://w.stalkerai.cn/api/stream?sinceSeq=0&level=doing&scope=main');
     });
 
     test('🔴 金丝雀：https 页面上**永远不许**降级成 ws://', () {
@@ -41,12 +42,12 @@ void main() {
 
     test('同源 + http 页面 ⇒ ws（局域网明文调试这条路要留着）', () {
       final u = streamUri(base: '', page: page('http://127.0.0.1:8020/'), sinceSeq: 0);
-      expect(u.toString(), 'ws://127.0.0.1:8020/api/stream?sinceSeq=0&level=doing');
+      expect(u.toString(), 'ws://127.0.0.1:8020/api/stream?sinceSeq=0&level=doing&scope=main');
     });
 
     test('同源 + 非默认端口：端口要带上', () {
       final u = streamUri(base: '', page: page('https://w.stalkerai.cn:8443/'), sinceSeq: 0);
-      expect(u.toString(), 'wss://w.stalkerai.cn:8443/api/stream?sinceSeq=0&level=doing');
+      expect(u.toString(), 'wss://w.stalkerai.cn:8443/api/stream?sinceSeq=0&level=doing&scope=main');
     });
 
     test('同源 + 默认端口：**不许**多写 :443 / :80', () {
@@ -59,15 +60,15 @@ void main() {
 
     test('跨源（调试用）：协议和主机都听 base 的', () {
       final a = streamUri(base: 'https://w.stalkerai.cn', page: page('http://127.0.0.1:8020/'), sinceSeq: 7);
-      expect(a.toString(), 'wss://w.stalkerai.cn/api/stream?sinceSeq=7&level=doing');
+      expect(a.toString(), 'wss://w.stalkerai.cn/api/stream?sinceSeq=7&level=doing&scope=main');
 
       final b = streamUri(base: 'http://127.0.0.1:9000/', page: page('https://w.stalkerai.cn/'), sinceSeq: 7);
-      expect(b.toString(), 'ws://127.0.0.1:9000/api/stream?sinceSeq=7&level=doing');
+      expect(b.toString(), 'ws://127.0.0.1:9000/api/stream?sinceSeq=7&level=doing&scope=main');
     });
 
     test('跨源：只写主机名（本机调试常见）⇒ 当明文，主机要认出来', () {
       final u = streamUri(base: '127.0.0.1:8020', page: page('https://w.stalkerai.cn/'), sinceSeq: 0);
-      expect(u.toString(), 'ws://127.0.0.1:8020/api/stream?sinceSeq=0&level=doing');
+      expect(u.toString(), 'ws://127.0.0.1:8020/api/stream?sinceSeq=0&level=doing&scope=main');
     });
 
     test('续传游标：断线重连时带上，服务端才知道从哪儿补', () {
@@ -125,7 +126,77 @@ void main() {
         sinceSeq: 0,
         level: ProcessLevel.quiet,
       );
-      expect(u.toString(), 'wss://w.stalkerai.cn/api/stream?sinceSeq=0&level=quiet');
+      expect(u.toString(), 'wss://w.stalkerai.cn/api/stream?sinceSeq=0&level=quiet&scope=main');
+    });
+  });
+
+  // ── 批 4：一个图标 = 一条对话（契约 `docs/dev/83-APP-WORKSPACE.md` §五·甲）──
+  //
+  // ⚠️ 这一组和上面那条金丝雀**同一个理由**：地址是**客户端自己算的**，
+  //    所以闸必须打在客户端这一侧。`scope` 又正好是"切房间"唯一的落点 ——
+  //    它带错了，用户在 A 房间说的话会进 B 房间，而屏幕上一点都看不出来。
+  group('房间（scope）：地址上要带 scope', () {
+    test('★ 不给 scope ⇒ 默认 `main`（契约：不带 = main）', () {
+      final u = streamUri(base: '', page: page('https://w.stalkerai.cn/'), sinceSeq: 0);
+      expect(u.queryParameters['scope'], 'main');
+      expect(u.queryParameters['scope'], mainScope);
+    });
+
+    test('★ 给了 scope ⇒ 地址上是它，而且 `level` / `sinceSeq` 一个都不许被挤掉', () {
+      final u = streamUri(
+        base: '',
+        page: page('https://w.stalkerai.cn/'),
+        sinceSeq: 42,
+        level: ProcessLevel.steps,
+        scope: 'dice',
+      );
+      expect(u.queryParameters['scope'], 'dice');
+      expect(u.queryParameters['level'], 'steps');
+      expect(u.queryParameters['sinceSeq'], '42');
+      expect(
+        u.toString(),
+        'wss://w.stalkerai.cn/api/stream?sinceSeq=42&level=steps&scope=dice',
+      );
+    });
+
+    test('🔴 换房间**不许**动协议（https 页面上还是 wss，见那条事故）', () {
+      for (final s in [mainScope, 'dice', 'city-weather']) {
+        final u = streamUri(
+          base: '',
+          page: page('https://w.stalkerai.cn/'),
+          sinceSeq: 0,
+          scope: s,
+        );
+        expect(u.scheme, 'wss', reason: 'scope=$s 时拼出了 ${u.scheme}://');
+      }
+    });
+
+    test('🔴 地址上**不带令牌**（多了一个 scope 也不许多带别的）', () {
+      // 令牌走**子协议** `['bearer', token]`（手册 §2.1）——不进 URL，
+      // 加 `scope` 这一刀也不许顺手把令牌塞进来。
+      const token = 'eyJzdWIiOiJ1MSJ9.signature-not-a-real-one';
+      final u = streamUri(
+        base: '',
+        page: page('https://w.stalkerai.cn/'),
+        sinceSeq: 1,
+        scope: 'dice',
+      );
+      expect(u.toString().contains(token), isFalse);
+      expect(u.toString().contains('bearer'), isFalse);
+      expect(u.toString().contains('token'), isFalse);
+      // 查询参数**只有**约定的那三个
+      expect(u.queryParameters.keys.toSet(), {'sinceSeq', 'level', 'scope'});
+    });
+
+    test('★ scope 里的怪字符要转义（别让一个 id 把地址结构改了）', () {
+      final u = streamUri(
+        base: '',
+        page: page('https://w.stalkerai.cn/'),
+        sinceSeq: 0,
+        scope: 'a b&c=d',
+      );
+      expect(u.queryParameters['scope'], 'a b&c=d', reason: '转义之后要能原样读回来');
+      expect(u.queryParameters.length, 3, reason: '不许被拆出多余的参数');
     });
   });
 

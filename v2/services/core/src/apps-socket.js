@@ -22,6 +22,7 @@ import { NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
 import { NEEDS_ASK_IMAGE, asksToDrawImage } from './image.js';
 import { PublishedError, authorHashOf } from './published.js';
 import { handSocketToAgent } from './socket-owner.mjs';
+import { mirrorArtifactIntoWorkspace, snapshotWorkspace } from './workspace.js';
 
 /** 小程序那条口放哪。**跟着那个人的目录走**（`<他那一格>/apps.sock`）。 */
 export function appsSocketPath(dir) {
@@ -48,6 +49,9 @@ const MAX_LINE_BYTES = 512 * 1024;
  *   · `turnInput()` **这一轮他自己说的那句话**（P1-22：造东西那条闸要看它）。
  *     🔴 它是**服务端自己记的**（`dispatcher.turnInput`），**绝不从请求里读**；
  *     没接线 ⇒ 当作"没有明说"（**fail-closed**，见 `apps-consent.js` 顶上）。
+ *   · `workspace` **子工作区那一刀**（`AppWorkspaces` · 契约 `83-APP-WORKSPACE.md`）：
+ *     造/装的时候由**服务端**建 `<dir>/workspaces/<scope>/` 并把产物落进去，
+ *     制品库那一份是**从工作区读回来的快照**。没接线 ⇒ 老路照旧（不建工作区）。
  * @returns {object} 永远 `{ok:true,…}` 或 `{ok:false,error,…}`（**绝不抛**）
  */
 export async function handleAppsOp(apps, req, ctx = {}) {
@@ -63,16 +67,49 @@ export async function handleAppsOp(apps, req, ctx = {}) {
           return { ok: false, error: NEEDS_ASK, refused: 'needs-ask' };
         }
         const a = req.app ?? {};
-        const m = apps.create({
-          id: a.id,
-          title: a.title,
-          icon: a.icon,
-          entry: a.entry,
-          files: a.files,
-          permissions: a.permissions ?? [],
-          createdBy: 'agent',
-          createdTurn: Number.isInteger(req.turn) ? req.turn : null,
-        });
+        // ★★ **服务端那一刀**（契约 `83-APP-WORKSPACE.md` §三·4）：
+        //   造 app 的第一步是**服务端**把这个 scope 的工作区建出来 ＋ 把产物落进去，
+        //   然后制品库那一份是**从工作区拷过去的快照**（§三·5）。
+        //   ⚠️ 这一刀**不靠模型记得** —— 它只要把内容交给工具就够了。
+        //      （"模型自己记得建目录"正是今天文件躺回主目录的原因。）
+        let created;
+        if (ctx.workspace) {
+          ctx.workspace.ensure(a.id, { title: a.title, entry: a.entry });
+          ctx.workspace.write(a.id, a.files);
+          created = snapshotWorkspace({
+            apps,
+            workspaces: ctx.workspace,
+            id: a.id,
+            title: a.title,
+            icon: a.icon,
+            // ⚠️ 入口以**工作区里真实存在的那个**为准（工作区可能不是模型刚交的那份）
+            entry: null,
+            permissions: a.permissions ?? [],
+            createdBy: 'agent',
+            createdTurn: Number.isInteger(req.turn) ? req.turn : null,
+          }).manifest;
+        } else {
+          // ⚠️ **老路照旧**：没接工作区那一刀时（单测/旧部署）行为一个字不变。
+          created = apps.create({
+            id: a.id,
+            title: a.title,
+            icon: a.icon,
+            entry: a.entry,
+            files: a.files,
+            permissions: a.permissions ?? [],
+            createdBy: 'agent',
+            createdTurn: Number.isInteger(req.turn) ? req.turn : null,
+          });
+        }
+        const m = created;
+        // ★ **这一轮真的造了一个 app**（A1·「发现就报」）：说给调度器听。
+        //   ⚠️ 它只**记账**（那一轮里造过什么），报不报由调度器在收口时比主目录。
+        //   ⚠️ 回调失败不许让"造出来了"这件事失败（东西已经在盘上了）。
+        try {
+          ctx.onAppBuilt?.({ id: m.id, title: m.title, op: 'create' });
+        } catch {
+          /* 记账失败不影响制品 */
+        }
         // ⚠️ **`icon` 要带回去**（2026-09-23）：造它的人可能**没给图标**（或者给错了），
         //    而服务端会自动配一个 —— 那边得知道**最后配的是哪个**，才说得出一句实话
         //    （第一版漏了这个字段 ⇒ 工具回执会把 `undefined` 念给模型听）。
@@ -122,11 +159,31 @@ export async function handleAppsOp(apps, req, ctx = {}) {
       case 'install': {
         if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
         const r = ctx.published.installInto(apps, req.id);
+        // ★ **装上来也要有自己的工作区**（契约 §三·1：一个图标 = 一个工作区，
+        //   不分成"自己造的"和"装来的"）——把刚装好的那一版镜像进去。
+        //   ⚠️ 读的是**制品库那一版**（不是共享库）：复制模型下它已经是他的了。
+        try {
+          if (ctx.workspace) mirrorArtifactIntoWorkspace({ apps, workspaces: ctx.workspace, id: r.id });
+        } catch (err) {
+          // ⚠️ 制品装上了、工作区没镜像成 —— **如实说**（别回一句"好了"让他们以为
+          //    那间房里也有东西）。制品本身是好的，所以这不算整件事失败。
+          return {
+            ok: false,
+            error: `装上了，但它那间工作区没建好：${err?.message ?? err}`,
+          };
+        }
         // ★ 装上了 ⇒ **让他的桌面自己刷新**（流里推一条；客户端收到就重拉清单）
         try {
           ctx.onInstalled?.({ id: r.id, title: r.title });
         } catch {
           /* 推送失败不许让"装上"这件事失败（他下次开机也会拉到） */
+        }
+        // ★ **装上来也算"这一轮造了一个 app"**（A1·「发现就报」）：
+        //   装它的时候同样会在工作区之外写东西（一个图标 = 一个工作区，不分来源）。
+        try {
+          ctx.onAppBuilt?.({ id: r.id, title: r.title, op: 'install' });
+        } catch {
+          /* 同上：记账失败不影响制品 */
         }
         return { ok: true, id: r.id, version: r.version, title: r.title };
       }

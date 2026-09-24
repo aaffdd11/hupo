@@ -368,6 +368,19 @@ const String chatScopeDesktop = '在桌面上问（全局）';
 /// 进了某个小程序时那一句（`app` = 那个小程序叫什么）。
 String chatScopeInApp(String app) => '在「$app」里问';
 
+/// ── **一个图标 = 一条对话**（契约 `docs/dev/83-APP-WORKSPACE.md` §五·甲）──
+///
+/// 某个小程序的房间**还一句话都没说过**时，屏幕上那两句。
+/// ⚠️ **不许白屏**（§六·4 的判据点名"真机截图"）：白屏 = 用户不知道
+///    "这里是不是坏了 / 我说的话去哪儿了"。⇒ 说清**这是哪间**（那个小程序的名字），
+///    以及"说了会记在哪儿"。
+/// ⚠️ 用词纪律照旧（`forbidden_words.dart`）：**"工作区"那类内部词一个都不许有** ——
+///    这里只用"这个小程序自己的名字"这种普通说法。
+const String roomEmptyTitle = '这里还空着';
+
+/// `app` = 那个小程序的名字（服务端给的 `title`，和桌面上那一格、聊天条那个图标同源）。
+String roomEmptyLine(String app) => '在「$app」里说的话，会记在这儿。';
+
 /// 顶栏那个「过程多少」的入口（原来只是 `chat_screen` 里一句写死的 tooltip）。
 /// ⚠️ 界面上就写这两个字（用户看得懂），完整那句留给 tooltip。
 const String levelActionWords = '过程';

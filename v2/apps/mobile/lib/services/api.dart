@@ -18,6 +18,7 @@ import 'package:http/http.dart' as http;
 import '../models/dev_harness.dart';
 import '../models/export.dart';
 import '../models/app_spec.dart';
+import '../models/scope.dart';
 import '../models/space.dart';
 import '../models/trash.dart';
 
@@ -157,11 +158,18 @@ class Api {
 
   /// 说一句。**幂等靠 messageId**——重发要用同一个 id，
   /// 否则服务端会把它当新的一句，于是 **agent 干两遍**。
+  ///
+  /// [scope] = **这一句是说给哪个房间的**（契约 `83-APP-WORKSPACE.md` §五·甲）。
+  /// ⚠️ 协议是**加一个可选字段**，不是新端点：不带 = `main`（老客户端照旧）。
+  ///    已有那几个字段的语义**一个都不许动**（`03-DEVELOPMENT.md` §三：字段冻结）。
+  /// ⚠️ 客户端**永远带上**（和流上那个 `scope` 同一份值）——
+  ///    "说给哪一间"与"听哪一间"必须是同一间，不许一处带一处不带。
   Future<SayOutcome> say({
     required String messageId,
     required String text,
     required String token,
     int? clientAt,
+    String scope = mainScope,
   }) async {
     try {
       final r = await _c
@@ -172,6 +180,7 @@ class Api {
               'messageId': messageId,
               'text': text,
               if (clientAt != null) 'clientAt': clientAt,
+              'scope': scope,
             }),
           )
           .timeout(const Duration(seconds: 20));
@@ -324,15 +333,23 @@ class Api {
   ///    `Timeline` 那一层按同一套规则做（服务端**不替我们筛**，免得两处口径）。
   /// ⚠️ 失败 ⇒ **空的一页 + `hasMore:false`**：宁可"取不到"（界面上如实说），
   ///    也不许抛到界面那一层变成一句看不懂的错。
+  ///
+  /// [scope] = **哪一间的老消息**（契约 `83-APP-WORKSPACE.md` §六·4）。
+  /// ⚠️ 它和"翻老消息"是**同一件事的那个门槛**：切了房间还按上一间的号去翻，
+  ///    屏幕上就会把**别人房间**的老话接进来。默认 `main` = 不带的老行为。
   Future<OlderPage> older({
     required String token,
     required int before,
     int limit = 50,
+    String scope = mainScope,
   }) async {
     try {
       final r = await _c
           .get(
-            _u('/api/timeline?before=$before&limit=$limit'),
+            _u(
+              '/api/timeline?before=$before&limit=$limit'
+              '&scope=${Uri.encodeQueryComponent(scope)}',
+            ),
             headers: {'authorization': 'Bearer $token'},
           )
           .timeout(const Duration(seconds: 12));

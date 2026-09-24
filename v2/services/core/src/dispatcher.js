@@ -106,6 +106,20 @@ export class Dispatcher {
   #notice;
 
   /**
+   * ★ **A1·「发现就报」**（契约 `83-APP-WORKSPACE.md` §四 · 主人 2026-09-25）：
+   *   造 app 的那一轮，主目录**多了文件** ⇒ 必须报出来（不许静默）。
+   *
+   * 🔴 为什么挂在**调度器**上：轮的起讫只有它知道，而"正常结束 / 失败 / 超时"
+   *    是**三条不同的路**——只在"正常结束"那条路上比，等于漏掉最可能出事的两条。
+   *    三处都在这儿收口（`turn-end` / `turn-deadline` / `force-close`）。
+   *
+   * ⚠️ 只有**主线那个调度器**拿到它（房间里的 cwd 就是它自己的工作区，
+   *    相对路径写在那儿本来就是对的）。没拿到 ⇒ 这条判据整个不存在。
+   * ⚠️ 逻辑住在 `main-leak.js`（纯函数 + 那个 watcher），这里只负责**在正确的时刻叫它**。
+   */
+  #mainLeak;
+
+  /**
    * agent 那个**进程池的键**。
    *
    * ⚠️ 为什么它**不是** `scopeId`（2026-09-21，多租户接线时定的）：
@@ -147,6 +161,8 @@ export class Dispatcher {
     recap = {},
     turnDeadlineMs = TURN_DEADLINE_MS,
     notice = null,
+    /** 见 [#mainLeak]（`MainLeakWatch`；只挂在主线那个调度器上）。 */
+    mainLeak = null,
   }) {
     if (!store) {
       // ⚠️ **不许默认没有 recap 就悄悄开工。**
@@ -162,6 +178,7 @@ export class Dispatcher {
     this.#recapOptions = { ...RECAP_DEFAULTS, ...recap };
     this.#turnDeadlineMs = turnDeadlineMs;
     this.#notice = notice;
+    this.#mainLeak = mainLeak;
     this.#onAuthFailure = onAuthFailure;
     this.#translator = new TurnTranslator({ timeline, scopeId, notice });
 
@@ -174,6 +191,8 @@ export class Dispatcher {
       this.#turnInput = owner?.text ?? '';
       this.#armDeadline(turn);
       this.#announceTurn(turn);
+      // ★ A1·「发现就报」：这一轮开始 ⇒ 记一份主目录的清单（**只记路径**）
+      this.#mainLeak?.start();
     });
 
     // ★ 这一轮动过东西 ⇒ **落一条盘**。重启之后只有盘上这份能告诉对账：
@@ -191,13 +210,26 @@ export class Dispatcher {
         this.#lastError = `动过东西这件事没记下来：${err?.message ?? err}`;
       }
     });
-    this.#translator.on('turn-end', ({ turn }) => {
+    this.#translator.on('turn-end', ({ turn, kind }) => {
       this.#clearDeadline(turn);
       // ★ P1-22：**这一轮结束了 ⇒ 当轮输入立刻作废。**
       //   ⚠️ 这条不是"顺手清理"：一轮结束到下一句之间，**助手自己发起的那一轮**
       //      （定时 / 重做 / 别人代投）用的是**同一个派发器**。
       //      不清的话它看到的是**上一句他说过的话** ⇒ 造东西那条闸会拿旧话当"他明说了"。
       this.#turnInput = '';
+      // ★ A1·「发现就报」：**正常结束**这条路也要比（三条路缺一不可）
+      this.#mainLeak?.finish({ turn, reason: kind });
+    });
+
+    // ★ A1·「发现就报」：**失败 / 超时**那两条路同样要比 ——
+    //   只在"正常结束"那条路上比，等于漏掉最可能出事的两条。
+    //   ⚠️ `force-close` 不带轮号（它一次收掉**所有**开着的轮，见 `forceClose`），
+    //      所以这里 `turn` 给 `null`；判据要的是"这一轮前后比过"。
+    this.#translator.on('turn-deadline', ({ turn }) => {
+      this.#mainLeak?.finish({ turn, reason: 'timeout' });
+    });
+    this.#translator.on('force-close', ({ reason }) => {
+      this.#mainLeak?.finish({ turn: null, reason: reason ?? 'failed' });
     });
   }
 
@@ -222,6 +254,18 @@ export class Dispatcher {
   /** 现在挂着几个超时计时器（诊断用）。 */
   get armedDeadlines() {
     return this.#deadlines.size;
+  }
+
+  /**
+   * ★ **这一轮里造了一个 app**（A1·「发现就报」）。
+   *
+   * ⚠️ 叫它的是**造东西那条路**（`apps-socket.js` 的 `create` / `install`
+   *    成功之后，`worlds.js` 把回调接过来）——**不是**模型自己报的：
+   *    模型说"我造了"不作数，工具真写下去了才作数。
+   * ⚠️ 没接 `mainLeak` / 现在不在某一轮里 ⇒ **什么都不做**（老行为不变）。
+   */
+  noteAppBuilt(info) {
+    return this.#mainLeak?.noteBuilt(info) ?? false;
   }
 
   /**

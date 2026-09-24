@@ -103,6 +103,63 @@ Future<void> _openDiscover(WidgetTester tester, double scale) async {
   expect(find.byType(DiscoverScreen), findsOneWidget, reason: '★ 没进发现那一屏 ⇒ 判据扫错了屏幕');
 }
 
+// ── ★ 2026-09-25（批 4 · 一个图标 = 一条对话 · `docs/dev/83-APP-WORKSPACE.md` §五·甲）──
+//
+// ⚠️ 和关于页 / 发现 / 「我自己那台」同一条理由：**新加的界面（这里是"空房间"那一屏）
+//    必须也过那两道硬闸**，不然"五档不溢出 + 命中区 ≥44"会随时间失效。
+// ⚠️ 契约 §六·4 点名的那一档就是它：某个小程序**还没有任何对话** ⇒
+//    **一句普通话，不是白屏**。这一档是新加的字，所以它自己要被量一次。
+
+/// 那个"我的小程序"（假服务端给的那一条）。
+const roomAppId = 'dice';
+const roomAppTitle = '掷骰子';
+
+/// 一份"桌面会长出一个我的小程序"的假服务端（不开端口、不碰真网）。
+///
+/// ⚠️ **不调 `start()`** ⇒ 一条真 socket 都不会开（那条流只在登录之后才有）。
+ChatController _roomController() {
+  final api = Api(
+    client: MockClient((r) async {
+      if (r.url.path == '/api/apps') {
+        return _json(
+          jsonEncode({
+            'apps': [
+              {
+                'id': roomAppId,
+                'title': roomAppTitle,
+                'icon': 'casino',
+                'version': 1,
+                'entryUrl': 'https://apps.example/dice/index.html?sig=x',
+                'expiresAt': 0,
+              },
+            ],
+          }),
+        );
+      }
+      return _json('{}');
+    }),
+  );
+  return ChatController(api: api, tokens: TokenStore(), token: 'tok');
+}
+
+/// **像用户那样**走进某个"我的小程序"的**空房间**。
+///
+/// 两步都是真实路径：① 点桌面上那个图标（打开它 ⇒ 房间跟着切）；
+/// ② 点抓手展开那条聊天（**收起档根本不建时间线**，见 `chat_floater.dart`
+/// 那句 `if (collapsed) … else Expanded(child: widget.child)` ——
+/// 不展开的话这一屏量的是别的东西，那就是"闸变弱了"）。
+Future<void> _openEmptyRoom(WidgetTester tester, double scale) async {
+  await _pump(tester, ChatScreen(controller: _roomController(), onLoggedOut: () {}), scale);
+  await tester.pumpAndSettle(); // 等 `/api/apps` 回来（桌面才长出那个图标）
+  await tester.tap(find.text(roomAppTitle));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(chatHandleKey));
+  await tester.pumpAndSettle();
+  // 负向对照：**那一句真的画出来了**才算数（没画出来的话这道闸扫的是别的屏）
+  expect(find.text(roomEmptyTitle), findsOneWidget, reason: '★ 空房间那句没进这棵树 ⇒ 这道闸扫错了屏');
+  expect(find.text(roomEmptyLine(roomAppTitle)), findsOneWidget, reason: '★ 那句普通话必须说出"这是哪间"');
+}
+
 /// **像用户那样**打开「奥数题」小程序（桌面上的图标 ⇒ 主人 2026-09-22 新加的第二个小程序）。
 ///
 /// ⚠️ 和配置页同一条理由：**新加的界面必须也过五档不溢出那道硬闸**，
@@ -791,6 +848,12 @@ void main() {
         await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _controller(), onLoggedOut: () {}), s);
         expect(_drain(tester), isEmpty, reason: '空屏在 ${s}x 溢出了');
       });
+
+      testWidgets('我的小程序·空房间（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-25（批 4）：那一间还没有任何对话时那两句是**新加的字** ⇒ 也要过五档。
+        await _openEmptyRoom(tester, s);
+        expect(_drain(tester), isEmpty, reason: '空房间在 ${s}x 溢出了');
+      });
     }
 
     // ⚠️ "不封顶"这条分**三个测试**量：同一个测试里连续 pump 两棵树时，
@@ -1027,6 +1090,13 @@ void main() {
         //   不许因为它现在在屏幕外面就悄悄漏过去。
         expect(find.text('重发'), findsOneWidget, reason: '★ "重发"入口没进到这棵树里 ⇒ 这条闸漏了它');
         await sweep(tester, '主界面 @${s}x');
+      });
+
+      testWidgets('我的小程序·空房间（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-25（批 4）：进了某个"我的小程序"、聊天展开着 —— 那一组合下
+        //    时间线、抓手、顶栏那三个动作、输入条都在屏幕上 ⇒ 它们的命中区也得量一次。
+        await _openEmptyRoom(tester, s);
+        await sweep(tester, '空房间 @${s}x');
       });
     }
 

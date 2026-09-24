@@ -39,12 +39,21 @@ class ComposeStore {
   }
 
   /// 读回来。读不到 / 插件不可用 ⇒ `null`（不抛）。
-  Future<String?> load() => _enqueue(_load, null);
+  ///
+  /// ⚠️ **键在"叫这一声"的时候就钉住**（`final k = key`），不是轮到它执行了再算：
+  ///    `namespace` 会在**切房间 / 换人**时被换掉（`ChatController._bindNamespace`），
+  ///    而队列是异步的 ⇒ 照执行时那个值读，会把**这一间**打了一半的话
+  ///    读成另一间的（或者反过来）。三个 store 同一条规矩，理由见
+  ///    `TimelineStore.load` 顶上那一段。
+  Future<String?> load() {
+    final k = key;
+    return _enqueue(() => _load(k), null);
+  }
 
-  Future<String?> _load() async {
+  Future<String?> _load(String k) async {
     try {
       final p = await SharedPreferences.getInstance();
-      final s = p.getString(key);
+      final s = p.getString(k);
       if (s == null || s.isEmpty) return null;
       return s;
     } catch (_) {
@@ -54,16 +63,20 @@ class ComposeStore {
 
   /// 存下这串字。空串 ⇒ **清掉**（"没有草稿"和"草稿是空"是一回事）。
   /// ⚠️ 存不上就算了 —— **聊天本身绝不能因此不能用**（同 `DraftStore`）。
-  Future<void> save(String text) => _enqueue(() => _save(text), null);
+  /// ⚠️ 键在"叫这一声"的时候钉住（同 [load]）。
+  Future<void> save(String text) {
+    final k = key;
+    return _enqueue(() => _save(k, text), null);
+  }
 
-  Future<void> _save(String text) async {
+  Future<void> _save(String k, String text) async {
     try {
       final p = await SharedPreferences.getInstance();
       final t = text.length > capChars ? text.substring(0, capChars) : text;
       if (t.trim().isEmpty) {
-        await p.remove(key);
+        await p.remove(k);
       } else {
-        await p.setString(key, t);
+        await p.setString(k, t);
       }
     } catch (_) {
       // 盘满 / 没权限 / 插件不可用：当没存
@@ -71,12 +84,16 @@ class ComposeStore {
   }
 
   /// 清掉。⚠️ **退出登录时必须调**（换个人不许看见上一个人打了一半的话）。
-  Future<void> clear() => _enqueue(_clear, null);
+  /// ⚠️ 键在"叫这一声"的时候钉住（同 [load]）。
+  Future<void> clear() {
+    final k = key;
+    return _enqueue(() => _clear(k), null);
+  }
 
-  Future<void> _clear() async {
+  Future<void> _clear(String k) async {
     try {
       final p = await SharedPreferences.getInstance();
-      await p.remove(key);
+      await p.remove(k);
     } catch (_) {}
   }
 }

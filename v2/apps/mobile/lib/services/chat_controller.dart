@@ -28,9 +28,23 @@ import 'speech_store.dart';
 import 'process_level_store.dart';
 import 'stream.dart';
 import 'stream_uri.dart';
+import '../models/scope.dart';
 import '../models/token_sub.dart';
 import 'timeline_store.dart';
 import 'token_store.dart';
+
+/// **那条流怎么造**（只为判据存在的注入口 —— 见 `ChatController.newStream`）。
+///
+/// ⚠️ 四个参数**一个都不能少**：`scope` 和 `level` 都是**连接级**的
+///    （服务端按每条连接决定订阅哪一间、发多少过程）——漏传一个，
+///    "切房间 / 换档要重连"这件事就会静默地只对了一半。
+typedef NewStream =
+    StreamClient Function({
+      required String base,
+      required String token,
+      required ProcessLevel level,
+      required String scope,
+    });
 
 class ChatController extends ChangeNotifier {
   ChatController({
@@ -55,12 +69,18 @@ class ChatController extends ChangeNotifier {
       required void Function(Map<String, dynamic>) onEvent,
     })? startHear,
     void Function()? stopHear,
+    /// **那条流怎么造**（可注入 —— 判据要能验"切房间真的重连了、新连接带的是新房间"）。
+    /// `null` = 生产那一条（`StreamClient` → `/api/stream`）。
+    /// ⚠️ 判据里注一个假的进去 ⇒ 不用真开 socket 也验得了 `setScope` 那三件事
+    ///    （旧连接被收掉 / 新连接带上新 scope / 从那一间自己的游标续）。
+    NewStream? newStream,
   }) : _token = token,
        local = local ?? TimelineStore(),
        drafts = drafts ?? DraftStore(),
        compose = compose ?? ComposeStore(),
        levels = levels ?? ProcessLevelStore(),
        speech = speech ?? SpeechStore(),
+       _newStream = newStream,
        _speak = speak ?? speech_service.speakAloud,
        _stopSpeaking = stop ?? speech_service.stopSpeaking,
        _startHear = startHear ?? hearing_service.startHearing,
@@ -70,19 +90,24 @@ class ChatController extends ChangeNotifier {
     _bindNamespace(token);
   }
 
-  /// **把两个缓存的命名空间绑到"这是谁"**（多租户 · `38-ISOLATION-SPLIT.md` §8.1）。
+  /// **把两个缓存的命名空间绑到"这是谁"＋"在哪一间"**
+  /// （多租户 · `38-ISOLATION-SPLIT.md` §8.1；房间 · `83-APP-WORKSPACE.md` §五·甲）。
   ///
   /// ⚠️ 时机是硬要求：**必须在读缓存之前**（`_restoreLocal()` 之前）。
-  ///    晚一步，那一屏画的就还是上一个人的世界。
+  ///    晚一步，那一屏画的就还是上一个人的世界（或者上一个房间的）。
   /// ⚠️ 令牌读不出 `sub` 时退回一个**谁都不属于**的名字（`cacheNamespaceFallback`），
   ///    **绝不**退回某个可能撞上真人的值。
   /// ⚠️ `levels`（过程档位）**故意不绑**：它是**设备级偏好**，按账号分反而会让
   ///    同一个人换台设备就丢设置。见 §8.2 最后一句。
+  /// ⚠️ **一间一份**（[scopedCacheNamespace]）：不分开的话，切房间就是拿新房间那一屏
+  ///    把老房间那份缓存**覆写掉** —— 回到桌面就再也看不到主线原来的对话了。
+  ///    主对话沿用老键（理由见 `models/scope.dart`）。
   void _bindNamespace(String? token) {
     final ns = cacheNamespaceOf(token);
-    local.namespace = ns;
-    drafts.namespace = ns;
-    compose.namespace = ns;
+    final scoped = scopedCacheNamespace(ns, _scope);
+    local.namespace = scoped;
+    drafts.namespace = scoped;
+    compose.namespace = scoped;
   }
 
   final Api api;
@@ -126,6 +151,9 @@ class ChatController extends ChangeNotifier {
   final bool Function(String text, {void Function()? onEnd}) _speak;
   final void Function() _stopSpeaking;
 
+  /// 那条流怎么造（注入点见构造函数）。`null` = 生产那一条。
+  final NewStream? _newStream;
+
   /// 真正去开麦、真正去收手的那两个（注入点见构造函数）。
   final Future<String?> Function({
     required Uri url,
@@ -142,9 +170,34 @@ class ChatController extends ChangeNotifier {
   ///
   /// ⚠️ 不 `final`：**删除**要把属于那几个 id 的事实整批换掉
   ///    （`withoutMessages`；纯函数，进 `test/unit`）。
-  List<Map<String, dynamic>> _facts = [];
+  /// ⚠️ 它现在**按房间分开住**（[`_Room`]）—— 见 [`scope`]。
+  List<Map<String, dynamic>> get _facts => _room.facts;
+  set _facts(List<Map<String, dynamic>> value) => _room.facts = value;
 
-  final Timeline timeline = Timeline();
+  /// **现在在哪个房间**（契约 `83-APP-WORKSPACE.md` §五·甲：跟着图标走）。
+  ///
+  /// * 桌面上没打开任何小程序 ⇒ [mainScope]（主对话）；
+  /// * 打开一个"我的小程序" ⇒ **那个 app 的 id**；
+  /// * 关掉 / 退回桌面 ⇒ 回 [mainScope]。
+  ///
+  /// ⚠️ 判定是纯函数（`models/scope.dart` 的 `scopeOfOpenApp`），界面那一层拿
+  ///    `_openApp` 喂它。这一层**不猜**"现在开着哪个图标"——它只记住被告诉的那个值。
+  String _scope = mainScope;
+
+  /// **每一个房间在内存里的那一份**（键 = scope）。
+  ///
+  /// 🔴 为什么必须**一间留一份**，而不是切过去就把上一间丢掉：
+  ///    `83-APP-WORKSPACE.md` 的判据 A4 —— *"主线（`main`）**不受影响**
+  ///    （老对话还在、还能说）"*。丢了这一份就等于"切一趟房间，主线的对话没了"，
+  ///    而没有网的时候它**再也回不来**（流补不回来、缓存也被下一间覆写过）。
+  final Map<String, _Room> _rooms = {};
+
+  _Room get _room => _rooms.putIfAbsent(_scope, () => _Room(_scope));
+
+  /// **现在这条聊天是跟谁说的**（界面用不上它算，但判据要读得到）。
+  String get scope => _scope;
+
+  Timeline get timeline => _room.timeline;
   String? _token;
   StreamClient? _stream;
   ConnState _conn = ConnState.idle;
@@ -257,12 +310,19 @@ class ChatController extends ChangeNotifier {
   //    它的裁剪会把这些**刚从服务端取回来的**老消息又丢掉（于是下次还得再取一遍，
   //    而且用户会看到"我刚翻上去的那几条又没了"）。⇒ 分开：`_facts` = 落盘的，
   //    `_olderItems` = 现在屏幕上多出来的那几页。
-  final List<TimelineItem> _olderItems = [];
-  final Set<int> _olderSeqs = {};
-  bool _olderLoading = false;
-  bool _olderDone = false;
-  bool _olderFailed = false;
-  int _olderPages = 0;
+  //
+  // ⚠️ 和 `_facts` 一样，它**按房间分开住**（[`_Room`]）：A 房间翻上去的那几页
+  //    不许出现在 B 房间（那是**别人的老话**）。
+  List<TimelineItem> get _olderItems => _room.olderItems;
+  Set<int> get _olderSeqs => _room.olderSeqs;
+  bool get _olderLoading => _room.olderLoading;
+  set _olderLoading(bool value) => _room.olderLoading = value;
+  bool get _olderDone => _room.olderDone;
+  set _olderDone(bool value) => _room.olderDone = value;
+  bool get _olderFailed => _room.olderFailed;
+  set _olderFailed(bool value) => _room.olderFailed = value;
+  int get _olderPages => _room.olderPages;
+  set _olderPages(int value) => _room.olderPages = value;
 
   /// 一页取多少条 / 本机最多留几页（**住代码里**：阈值不进文档）。
   static const int olderPageSize = 50;
@@ -280,22 +340,33 @@ class ChatController extends ChangeNotifier {
   bool get olderCapped => _olderDone && _olderPages >= olderMaxPages;
 
   /// 往前取一页更早的。**幂等/防重入**：正在取、已经到头 ⇒ 直接返回。
+  ///
+  /// ⚠️ **它钉住"从哪一间翻"**（进来的那一刻那一间）：翻页要等网络，而用户
+  ///    完全可能在这一问还没回来时切了房间 —— 那几帧属于**原来那一间**，
+  ///    落进新房间就是把别人的老话接进来。⇒ 全部状态读写的都是那个 [`_Room`]。
   Future<void> loadOlder() async {
-    if (_olderLoading || _olderDone) return;
+    final room = _room;
+    if (room.olderLoading || room.olderDone) return;
     final before = _oldestKnownSeq();
     if (before == null || before <= 1) {
-      _olderDone = true;
+      room.olderDone = true;
       notifyListeners();
       return;
     }
-    _olderLoading = true;
-    _olderFailed = false;
+    room.olderLoading = true;
+    room.olderFailed = false;
     notifyListeners();
-    final page = await api.older(token: token ?? '', before: before, limit: olderPageSize);
-    _olderLoading = false;
+    final page = await api.older(
+      token: token ?? '',
+      before: before,
+      limit: olderPageSize,
+      // ★ **哪一间的老消息**（契约 `83` §六·4）——和那条流、那句 say 同一个 scope
+      scope: room.scope,
+    );
+    room.olderLoading = false;
     if (!page.ok) {
       // ⚠️ 没问到 ⇒ **不说"到头了"**（那会把"网络不好"说成"没有更早的了"）
-      _olderFailed = true;
+      room.olderFailed = true;
       notifyListeners();
       return;
     }
@@ -307,11 +378,11 @@ class ChatController extends ChangeNotifier {
     }
     final fresh = <TimelineItem>[];
     for (final it in tmp.items) {
-      if (_olderSeqs.add(it.seq)) fresh.add(it);
+      if (room.olderSeqs.add(it.seq)) fresh.add(it);
     }
-    _olderItems.insertAll(0, fresh);
-    _olderPages += 1;
-    if (!page.hasMore || _olderPages >= olderMaxPages) _olderDone = true;
+    room.olderItems.insertAll(0, fresh);
+    room.olderPages += 1;
+    if (!page.hasMore || room.olderPages >= olderMaxPages) room.olderDone = true;
     notifyListeners();
   }
 
@@ -393,6 +464,49 @@ class ChatController extends ChangeNotifier {
     _stream = null;
     await old?.dispose();
     _ensureStream();
+  }
+
+  /// **换房间**（契约 `83-APP-WORKSPACE.md` §五·甲：跟着图标走）。
+  ///
+  /// 界面那一层在"打开某个小程序 / 关掉退回桌面"时叫它，参数是纯函数
+  /// `scopeOfOpenApp(...)` 算出来的那个房间名。
+  ///
+  /// 三件事，一件都不能少：
+  ///   ① **上一间原地留着**（[`_rooms`] 就是它的家）—— 主线那一屏、翻上去的那几页、
+  ///      打字框里那半句全都不动。切回来时它们还在（判据 A4）。
+  ///   ② **本机那一屏先画出来**（新房间没来过 ⇒ 读它的缓存；S5c：先本机、再网络），
+  ///      然后 `notifyListeners()` —— 屏幕立刻换成新房间的，不留一段白屏。
+  ///   ③ **那条流重连**（`scope` 和 `level` 一样是**连接级**的），而且新连接从
+  ///      **这一间的 `lastSeq`** 续 —— 没来过的那一间是 0 ⇒ 服务端把它那一间的
+  ///      历史整段补发过来（这就是"按新 scope 重新加载历史"）。
+  ///
+  /// ⚠️ 换房间**不许**动 `level`（两件事各管各的：一个管"说多少过程"、
+  ///    一个管"哪一间"），也不许把房间存到盘上（刷新之后回到桌面那条主对话
+  ///    才是对的：房间是"我现在开着哪个图标"的影子，图标不在就回主线）。
+  Future<void> setScope(String scope) async {
+    final want = scope.trim().isEmpty ? mainScope : scope;
+    if (want == _scope) return;
+    // ② 先切过去（缓存命名空间跟着走），把那一间读出来再让屏幕换
+    _scope = want;
+    _bindNamespace(_token);
+    // ⚠️ "上一次交给磁盘的那份"不作数了（换了一间 = 换了一个键，
+    //    不重置的话新房间的重算结果会和旧房间那份"看起来一样"而被跳过）。
+    _draftsHandedOff = null;
+    final room = _room;
+    if (!room.restored) await _restoreLocal();
+    // ① 屏幕先换成这一间 —— 网络那一步在下面，不许挡在它前面
+    notifyListeners();
+    // ③ 流是连接级的 ⇒ 只能重连（旧的连它那两个 controller 一起收掉）。
+    //    ⚠️ **没在跑就不"顺手开一条"**（和 `setLevel` 同一条规矩）：真实路径上
+    //       `start()` 之后它一定在跑；而"没跑"的场合（还没登录完 / 判据里
+    //       `openStream:false`）凭空开一条会去连一个不该连的地址。
+    final old = _stream;
+    if (old != null) {
+      _stream = null;
+      await old.dispose();
+      _ensureStream();
+    }
+    notifyListeners();
   }
 
   /// **自动念开着吗**。
@@ -541,8 +655,23 @@ class ChatController extends ChangeNotifier {
   }
 
   /// 把上一屏读回来（读不到就什么都不做 —— **空屏是允许的，乱画不允许**）。
+  ///
+  /// ⚠️ 它读的是**现在这一间**的缓存（命名空间由 [`_bindNamespace`] 绑好）。
+  ///    进来先把这一间标成 `restored`（防重入：同一间不许读两遍 ——
+  ///    读两遍 = 把已经在内存里的那一屏又 `seedFromCache` 一次，画两遍）。
+  ///    ⚠️ **没读成就把标记退回去**：房间在这两个 `await` 之间被换掉时，
+  ///    这一份属于原来那一间、一个字都不许落进新房间 ——
+  ///    而原来那一间也**没真读成**，下次切回去必须重新读一遍。
   Future<void> _restoreLocal() async {
+    final room = _room;
+    room.restored = true;
     final events = await local.load();
+    // ⚠️ 读完这一句之后**房间可能已经换了**（`local.load()` 是异步的）——
+    //    那一份就属于原来那一间，一个字都不许落进新房间。
+    if (!identical(room, _room)) {
+      room.restored = false; // 没读成 ⇒ 下次切回那一间要重新读
+      return;
+    }
     if (events.isNotEmpty) {
       _facts.addAll(events);
       timeline.seedFromCache(events);
@@ -557,15 +686,24 @@ class ChatController extends ChangeNotifier {
   ///
   /// 放回去之后它们仍走**同一条渲染路径**（`UserBubble`）⇒ 屏幕上还是
   /// 「没发出去」+「重发」那条路（N11：可重试），而不是凭空变成"已收到"。
+  ///
+  /// ⚠️ **每一间各读各的**（命名空间按房间分，理由见 [`_bindNamespace`]）：
+  ///    不分开的话，在 A 间打了一半的话会出现在 B 间的时间线上（那是假话）。
+  /// ⚠️ 两个 `await` 之间**房间可能已经换了** ⇒ 每一步都要回头看还是不是原来那一间。
   Future<void> _restoreDrafts() async {
+    final room = _room;
     // ★ 打字框里那份草稿（第三本账）：**只读进内存**，不往时间线上放
     //   （它一个字都没发出去 —— 放上去就是"画一条假历史"）。
-    composeDraft = await compose.load();
+    final draft = await compose.load();
+    if (!identical(room, _room)) return;
+    composeDraft = draft;
 
-    for (final d in await drafts.load()) {
-      timeline.addLocalUtterance(d.text, d.messageId);
+    final saved = await drafts.load();
+    if (!identical(room, _room)) return;
+    for (final d in saved) {
+      room.timeline.addLocalUtterance(d.text, d.messageId);
       // 回到它原来的态（`sent` 读回来是 `failed`，理由见 [storableState]）
-      timeline.setLocalState(d.messageId, d.state);
+      room.timeline.setLocalState(d.messageId, d.state);
     }
   }
 
@@ -594,6 +732,12 @@ class ChatController extends ChangeNotifier {
     _token = null;
     // ⚠️ 浮窗跟着账号走：换个人登录不许还看见上一位那条通知
     _dismissNotice();
+    // 🔴 **所有房间一起丢，而且回到主线**（契约 `83` §五·甲）：下一个人进来看到的
+    //    必须是**桌面上那条主对话** —— 上一位开着的那个小程序那一间一个人都不许剩下
+    //    （`38-ISOLATION-SPLIT.md` §8.2 那条"共用设备"的规矩，只是这回分的是房间）。
+    _rooms.clear();
+    _scope = mainScope;
+    _bindNamespace(_token);
     // ⚠️ 缓存跟着账号走：这台机器换了个人登录，**不许再看见上一个人的一屏**，
     //    也**不许看见上一个人打了一半的话**（欠账 18）
     _invalidateLocal();
@@ -611,8 +755,19 @@ class ChatController extends ChangeNotifier {
     final t = _token;
     if (t == null) return;
     if (_stream != null) return;
-    final s = StreamClient(base: '', token: t, api: api, level: _level);
+    // ⚠️ 这条流钉住**开它的时候那一间**：切房间之后旧连接可能还有几帧在路上，
+    //    那些帧（和它报的连接状态）属于上一间 ⇒ 一律丢掉（见下面两个 listen）。
+    final scopeAtOpen = _scope;
+    final s =
+        _newStream?.call(
+          base: '',
+          token: t,
+          level: _level,
+          scope: scopeAtOpen,
+        ) ??
+        StreamClient(base: '', token: t, api: api, level: _level, scope: scopeAtOpen);
     s.states.listen((st) {
+      if (scopeAtOpen != _scope) return; // 上一间那条连接报的，不作数
       _conn = st;
       if (st == ConnState.unauthorized) {
         // ⚠️ 只有这一种情况才清令牌。**网络失败不清**（B1 的修法）
@@ -620,7 +775,10 @@ class ChatController extends ChangeNotifier {
       }
       notifyListeners();
     });
-    s.events.listen(ingest);
+    s.events.listen((e) {
+      if (scopeAtOpen != _scope) return; // 上一间的帧不许落进这一间的时间线
+      ingest(e);
+    });
     // 每开一条新连接都从「在读历史」开始（读到 `client/hello` 才算读到「现在」）
     _readingHistory = true;
     s.open(sinceSeq: timeline.lastSeq);
@@ -907,20 +1065,25 @@ class ChatController extends ChangeNotifier {
   /// 再发请求，拿到结果再改状态。
   /// 反过来（先等请求回来再上屏）会让"按下发送"到"看见自己的字"之间是空的——
   /// 而那正是 8/10 的放弃点。
+  ///
+  /// ⚠️ **它带着当前房间一起走**（契约 `83` §五·甲）：这一句发给**现在这一间**，
+  ///    而且从按下那一刻起就钉住 —— 请求在路上时用户切了房间，
+  ///    这一句也不许改投到另一间（"我在 A 间说的话跑进 B 间"是最坏那种串号）。
   Future<void> send(String text) async {
     final t = _token;
     if (t == null || text.trim().isEmpty) return;
+    final room = _room;
 
     _localSeq += 1;
     final messageId = 'u_${DateTime.now().millisecondsSinceEpoch}_$_localSeq';
-    timeline.addLocalUtterance(text, messageId);
+    room.timeline.addLocalUtterance(text, messageId);
     _lastError = null;
     // ⚠️ **在发出去之前先落存档**（欠账 18）：用户按下发送之后马上切出去、
     //    或者这一次请求就挂在网上，那这句话也必须还在。
     _saveDrafts();
     notifyListeners();
 
-    await _deliver(messageId, text, t);
+    await _deliver(room, messageId, text, t);
   }
 
   /// 重发。**必须用同一个 messageId**——否则服务端会当成新的一句，
@@ -930,18 +1093,21 @@ class ChatController extends ChangeNotifier {
     if (t == null) return;
     final text = _textOf(messageId);
     if (text == null) return;
-    timeline.retry(messageId);
+    final room = _room;
+    room.timeline.retry(messageId);
     _saveDrafts(); // 态变了 ⇒ 存档跟着变（重发中也是 `queued`，刷新后仍可重发）
     notifyListeners();
-    await _deliver(messageId, text, t);
+    await _deliver(room, messageId, text, t);
   }
 
-  Future<void> _deliver(String messageId, String text, String token) async {
+  Future<void> _deliver(_Room room, String messageId, String text, String token) async {
     final outcome = await api.say(
       messageId: messageId,
       text: text,
       token: token,
       clientAt: DateTime.now().millisecondsSinceEpoch,
+      // ★ **说给哪一间**（契约 `83` §六·4）：和那条流、那一问老消息是同一个 scope
+      scope: room.scope,
     );
 
     switch (outcome) {
@@ -949,39 +1115,41 @@ class ChatController extends ChangeNotifier {
         // 走到 `sent`。真正的 `confirmed` 要等 WS 上那句回声——
         // **不能拿 HTTP 200 冒充"服务端收到了我这句"**：
         // 那只能说"请求到过"，不能说"我看见了"。
-        timeline.setLocalState(messageId, MessageState.sent);
+        room.timeline.setLocalState(messageId, MessageState.sent);
       case SayUnauthorized():
-        timeline.setLocalState(messageId, MessageState.failed);
+        room.timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '登录过期了，重新登录一下';
         // 令牌确实失效了（服务端明说 401）⇒ 这才清
         await tokens.clear();
         _token = null;
       case SayNotSetup():
-        timeline.setLocalState(messageId, MessageState.failed);
+        room.timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '这台机器还没设密码';
       case SayLocked(:final retryAfterSec):
-        timeline.setLocalState(messageId, MessageState.failed);
+        room.timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '试得太频繁，${(retryAfterSec / 60).ceil()} 分钟后再试';
       case SayBusy():
         // 服务端**明说这一句没收下**（它满了，不是网的事、也不是令牌的事）
         // ⇒ 落 `failed`：屏幕上就是「没发出去」+「重发」，
         //   **用户可以就地重来**——那正是 N11 要的"可重试"。
-        timeline.setLocalState(messageId, MessageState.failed);
+        room.timeline.setLocalState(messageId, MessageState.failed);
         // 顶部状态条要说出**为什么**（N11：拒绝必须给人话，不是静默）。
         // ⚠️ 用词两条线：① 不许有内部词（`forbidden_words.dart` 那道闸守着）；
         //    ② **不许说成"网断了"**——网是通的，那是另一回事，说错了就是把排查带偏。
         //    阈值/占用比**只说在服务端**，这里一个字都不提。
         _lastError = '它现在忙不过来，过一会儿再发一次';
       case SayRejected(:final message):
-        timeline.setLocalState(messageId, MessageState.failed);
+        room.timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '没收下：$message';
       case SayNetworkError():
-        timeline.setLocalState(messageId, MessageState.failed);
+        room.timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '网没通，这条没发出去';
     }
     // ⚠️ 上面每一条分支都改了那条的态（`sent` 或 `failed`）⇒ 存档要跟着走。
     //    `sent` 存进去时会被降成 `failed`（理由见 `draft_store.storableState`）：
     //    刷新之后回执不会再来，屏幕上必须有「重发」那条路，不能停在"已送到"。
+    //    ⚠️ 存档只存**现在这一间**的（切走了的话，被改的那间由 WS 上那句回声兜住：
+    //       它一到就把那条推成 `confirmed`，而 `confirmed` 本来就不进存档）。
     _saveDrafts();
     notifyListeners();
   }
@@ -1118,4 +1286,37 @@ class ChatController extends ChangeNotifier {
     _stream = null;
     super.dispose();
   }
+}
+
+/// **一个房间在内存里的全部状态**（契约 `83-APP-WORKSPACE.md` §五·甲）。
+///
+/// 一个 scope（`main` / 某个小程序的 id）一份：时间线、收进来的服务端事实、
+/// 往上翻回来的那几页。⚠️ **一间一份**不是优化，是**判据 A4** ——
+/// "切一趟房间，主线那一边的对话还在、还能说"。
+///
+/// ⚠️ 它是 `services/` 里的私有形状（不 import 任何东西）：[`ChatController`]
+///    是唯一碰它的地方。
+class _Room {
+  _Room(this.scope);
+
+  /// 这一间的名字（= `/api/say`、那条流、`/api/timeline` 上带的那个 `scope`）。
+  final String scope;
+
+  /// 画出来的那些条目（和从前那个全局的 `Timeline` 是同一个类，同一套规则）。
+  final Timeline timeline = Timeline();
+
+  /// 收进来的服务端事实（带号的才进得来）。存缓存就是从这一份存。
+  List<Map<String, dynamic>> facts = [];
+
+  /// 往上翻回来的那几页（**不进本机缓存**，见 `_olderItems` 那一段的理由）。
+  final List<TimelineItem> olderItems = [];
+  final Set<int> olderSeqs = {};
+  bool olderLoading = false;
+  bool olderDone = false;
+  bool olderFailed = false;
+  int olderPages = 0;
+
+  /// **这一间的本机一屏读过了没有**（`_restoreLocal` 置位）。
+  /// ⚠️ 切回来时不许再读一遍 —— 再读一遍会把已经画出来的那一屏又画一次。
+  bool restored = false;
 }

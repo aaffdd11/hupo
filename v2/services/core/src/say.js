@@ -17,13 +17,21 @@ export class SayService {
   #timeline;
   #store;
   #timelineId;
+  #scopeId;
   #seen = new Set();
 
-  constructor({ timeline, store, timelineId }) {
+  /**
+   * @param {object} o
+   * @param {string} [o.scopeId] 这一间是哪个 scope（契约 `83-APP-WORKSPACE.md` §三·3）。
+   *   ⚠️ **缺省 / `'main'` ⇒ 事件上不带这个字段** —— 盘上已有的 `user/echo`
+   *      本来就没有它，主线必须**逐字不变**；只有某个 app 的房间才带上真的 scope。
+   */
+  constructor({ timeline, store, timelineId, scopeId = null }) {
     if (!timeline || !store) throw new StoreError('timeline 与 store 必填');
     this.#timeline = timeline;
     this.#store = store;
     this.#timelineId = timelineId ?? timeline.id;
+    this.#scopeId = scopeId && scopeId !== 'main' ? scopeId : null;
     this.#rebuildFromLog();
   }
 
@@ -78,6 +86,9 @@ export class SayService {
       type: 'user/echo',
       messageId,
       text,
+      // ★ **这一句是在哪间房说的**（契约 §三·3）：只有真的 scope 才带这个字段。
+      //   ⚠️ 主线不带它 ⇒ 主线事件与今天**逐字一样**（协议字段冻结 + A4）。
+      ...(this.#scopeId ? { scopeId: this.#scopeId } : {}),
       // ⚠️ 客户端钟**只记录**。排序用服务端的 `at`（每事件由 emit 统一盖）。
       //    混钟当排序键会乱——现网是刻意避免的。
       clientAt: typeof clientAt === 'number' ? clientAt : null,

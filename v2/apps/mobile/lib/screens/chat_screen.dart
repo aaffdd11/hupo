@@ -30,6 +30,7 @@ import '../models/app_words.dart';
 import '../models/harness.dart';
 import '../models/harness_words.dart';
 import '../models/math_words.dart';
+import '../models/scope.dart';
 import '../models/space_words.dart';
 import '../models/timeline.dart';
 import '../models/trash_words.dart';
@@ -138,7 +139,11 @@ class _ChatScreenState extends State<ChatScreen> {
   final _floaterKey = GlobalKey<ChatFloaterState>();
 
   /// **"我的小程序"在 `_openApp` 里的前缀**（跟内置那两个区分开：`'settings'` / `'math'`）。
-  static const _minePrefix = 'mine:';
+  ///
+  /// ⚠️ 前缀本身搬去了 `models/scope.dart`（`mineAppPrefix`）——因为"现在在哪个房间"
+  ///    那条判定是**纯函数**，它得看得见这个前缀（判据在 `test/unit/scope_test.dart`）。
+  ///    这里留个别名，好让这一屏里那些 `'$_minePrefix${a.id}'` 照旧读得通。
+  static const _minePrefix = mineAppPrefix;
 
   /// **收回动画期间接着画的那一屏 + 顶上那行字**。
   ///
@@ -222,9 +227,22 @@ class _ChatScreenState extends State<ChatScreen> {
       _appsRevision = rev;
       unawaited(_loadMyApps());
     }
+    // ★ **换了房间 ⇒ 换句话说，现在该看的是另一条对话**（契约 `83` §五·甲）。
+    //   ⚠️ 两件跟着走的事：
+    //     ① "用户自己往上翻过"那个标志**不作数了** —— 那是**上一间**里的动作，
+    //        拿它挡着的话，切进新房间会停在**最老**那一条（`27-SCROLL.md` 那类缺陷）；
+    //     ② 钉到最新（新视口里没有"他刚才在看哪儿"可言）。
+    if (widget.controller.scope != _shownScope) {
+      _shownScope = widget.controller.scope;
+      _userScrolledAway = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToLatest());
+    }
     // 新东西进来时重绘 + 滚到底；**用户正在往上翻时不打断他**
     WidgetsBinding.instance.addPostFrameCallback((_) => _followBottom());
   }
+
+  /// **上一次画出来的那个房间**（用来认出"房间换了" —— 见 [_onChanged]）。
+  late String _shownScope = widget.controller.scope;
 
   /// **钉到最新**（`jumpTo`，不带条件）。
   ///
@@ -378,6 +396,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   _openApp = null;
                   _appSettled = false; // 收回动效开始 ⇒ 图标先别回来
                 });
+                // 🔴 **退回桌面 ⇒ 回到主线那条对话**（契约 `83` §五·甲：
+                //    "关掉/退回桌面 ⇒ 回到 `main`"）。⚠️ 主线那一份**一直在**
+                //    （控制器按房间分开留着），所以这一下只是"换回它"，
+                //    不是"重新拉一遍"。
+                unawaited(widget.controller.setScope(mainScope));
               },
               onSettled: () {
                 if (mounted) setState(() => _appSettled = true);
@@ -578,6 +601,21 @@ class _ChatScreenState extends State<ChatScreen> {
     return _openApp == builtInMathId ? mathTitle : configTitle;
   }
 
+  /// **现在这一间是哪一个小程序**（空房间那一句要用它的名字）；`null` = 不是
+  /// 某一个"我的小程序"（主对话 / 名字一时查不到）。
+  ///
+  /// ⚠️ 从 **`c.scope` 反查清单**，不是从 `_openApp` 推：
+  ///    `_openApp` 在收回动效那一瞬间已经是 `null` 了，而房间那一会儿才刚切回去 ——
+  ///    照 `_openApp` 推会推出**「设置」**这个名字（一句假话）。查不到就 `null`，
+  ///    那一句**宁可不显示**，也不许报错一个名字。
+  String? _roomAppTitle(ChatController c) {
+    if (c.scope == mainScope) return null;
+    for (final a in _myApps) {
+      if (a.id == c.scope) return a.title;
+    }
+    return null;
+  }
+
   /// **一个内置小程序的图标**。
   ///
   /// ⚠️ 桌面那个图标与**聊天条前面那个**必须是**同一个**（不然"进去了"这件事
@@ -721,6 +759,13 @@ class _ChatScreenState extends State<ChatScreen> {
       _appFrom = from;
       _openApp = which;
     });
+    // 🔴 **跟着图标走**（契约 `83-APP-WORKSPACE.md` §五·甲）：
+    //    打开哪个小程序，**下面那条聊天就是它的对话**。
+    //    ⚠️ 判定是**纯函数**（`models/scope.dart`）：只有"我的小程序"有自己的房间，
+    //      内置那几个（设置 / 奥数题 / 发现 / 「我自己那台」）**不在** `/api/apps` 里，
+    //      服务端没有它们的 id ⇒ 那期间房间**仍然是主线**（理由写在那个文件顶上）。
+    //    ⚠️ 它**不挡打开**：先把那一屏画出来（上面那个 `setState`），再换房间。
+    unawaited(widget.controller.setScope(scopeOfOpenApp(which)));
   }
 
   /// 这一条的入口 URL 是不是**快过期或已经过期**了（留 60 秒余量）。
@@ -917,7 +962,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _body(ChatController c) {
-    if (c.items.isEmpty && !c.hasProcess) return const _EmptyState();
+    if (c.items.isEmpty && !c.hasProcess) {
+      // ★ **空房间要说清"这是哪间"**（契约 `83` §六·4："某个 app 还没有任何对话 ⇒
+      //   给一句普通话（不是白屏）"）。⚠️ 同一个渲染口、同一套画法 ——
+      //   只是**主对话**那一屏还是原来那句（那一间不属于任何小程序，没有名字可报）。
+      return _EmptyState(roomApp: _roomAppTitle(c));
+    }
     // ★ **更早那句提示当第一项**（放外面会改变视口 —— 见 `_sheetBody` 那条注释）
     final olderLine = _olderLine(c);
     final header = olderLine == null ? 0 : 1;
@@ -1192,12 +1242,20 @@ class _StatusStrip extends StatelessWidget {
 /// ⇒ `RenderFlex overflowed by 168 pixels`（五档不溢出那道硬闸抓的）。
 /// 修法不是"把字写小"，而是**让它在没地方时能滚**（有地方时仍然居中）：
 /// 容器跟字算，地方不够就滚 —— 这跟 `ListView` 那条时间线是同一个姿势。
+///
+/// ⚠️ **2026-09-25（批 4）**：多了一个 [roomApp] —— 空的是**某个小程序那一间**时，
+///    要说清"这是哪间"（契约 `83` §六·4：不是白屏、也不是一句放到哪儿都对的话）。
+///    主对话（`roomApp == null`）那一屏**一个字都不变**。
 class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+  const _EmptyState({this.roomApp});
+
+  /// 空着的是哪一个小程序那一间（`null` = 主对话 / 名字一时查不到）。
+  final String? roomApp;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final app = roomApp;
     return LayoutBuilder(
       builder: (ctx, cons) => SingleChildScrollView(
         padding: const EdgeInsets.all(32),
@@ -1207,12 +1265,19 @@ class _EmptyState extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text('说点什么', style: theme.textTheme.titleMedium),
+              Text(
+                app == null ? '说点什么' : roomEmptyTitle,
+                style: theme.textTheme.titleMedium,
+              ),
               const SizedBox(height: 12),
               Text(
                 // 说清"能干什么"，不是"我是什么"
-                '记一笔账、问一件事、让它去查个东西。\n'
-                '它会把做过的事说给你听。',
+                // ⚠️ 空的是某个小程序那一间 ⇒ 说清"在这间说话会记在哪儿"
+                //    （这一句在 `space_words.dart`，和别的界面文案一起过禁词闸）
+                app == null
+                    ? '记一笔账、问一件事、让它去查个东西。\n'
+                          '它会把做过的事说给你听。'
+                    : roomEmptyLine(app),
                 style: theme.textTheme.bodyMedium,
                 textAlign: TextAlign.center,
               ),
