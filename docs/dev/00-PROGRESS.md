@@ -323,6 +323,8 @@
 | `docs/handbook/08-SPEC.md` **§2.1 接口表** | 加一行 `POST /api/creds`（一次写一屏；`{creds:{…}}`）＋ `/api/space` 回 `creds:{model,voice,image,video}`（**只有有没有，永不回值**）；⚠️ 老的 `POST /api/model-key` **一字未动**（协议冻结） | 同上（接口表是"线上有哪些路"的权威）|
 | `docs/handbook/CHANGELOG.md` | 升 **v1.70** 记一笔（上面两条） | 规矩：定档之后任何改动都要升版本 + 说明 |
 
+| `v2/services/core/hupo-capabilities.yml` **（strict）** | **把画图那条工具从借住的通道里拆出来**：现在 `image_generate` 与九件小程序工具**共用** `mcp-apps` 那一条（写成 `mcp-image` ＋ `HUPO_IMAGE_SERVER`/`HUPO_IMAGE_SOCKET` 那样的独立一条） | 它当初借住是因为能力层是 strict（改它要重建）⇒ **这次重建顺手做掉**，两件事共用同一条 `sudo`（`79-CREDS-TABS.md` §9.5 写着"下次重建时再拆出去"） |
+
 🔴 **重建命令**（`docs/handbook/**` 是 `strict` ⇒ 不重建的话**下次重启会拒绝启动**）：
 
 ```bash
