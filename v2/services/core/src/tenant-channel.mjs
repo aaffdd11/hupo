@@ -472,10 +472,27 @@ export class TenantChannel {
     return true;
   }
 
-  pushKey(userId, key) {
+  /**
+   * 把凭据推给那台盒子。
+   *
+   * ⚠️ **两种形状一起带**（P1-29 · 2026-09-24）：
+   *   · `key`   —— 老形状（只一把模型钥匙）：**还没重新发布产品层的盒子认它**；
+   *   · `creds` —— 新形状（一整包：模型 ＋ 语音三样 ＋ 图片/视频）：新盒子认它，写的时候**合并**。
+   * ⇒ 两边都在跑的时候**谁都不坏**（这就是"加不破"那条纪律落到这条通道上）。
+   *
+   * @param {string} userId
+   * @param {string|null} key  模型那一把（没有就传 null —— 只送别的那几样）
+   * @param {Record<string,string>} [creds] 短名 → 值（`src/creds.mjs` 的字段名）
+   */
+  pushKey(userId, key, creds = null) {
     let n = 0;
+    const pack = creds && typeof creds === 'object' && Object.keys(creds).length > 0 ? creds : null;
     for (const conn of this.#conns.get(userId) ?? []) {
-      this.#send(conn, { state: 'ready', key });
+      this.#send(conn, {
+        state: 'ready',
+        ...(typeof key === 'string' && key.length > 0 ? { key } : {}),
+        ...(pack ? { creds: pack } : {}),
+      });
       n += 1;
     }
     // ⚠️ **要如实报"推出去了几条"**（2026-09-22 加）：投递那条路靠它判断

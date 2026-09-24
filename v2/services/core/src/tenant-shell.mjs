@@ -17,6 +17,7 @@
 import nodeFs from 'node:fs';
 import nodeNet from 'node:net';
 
+import { mergeCreds } from './creds.mjs';
 import { adoptKeyFile } from './key-path.mjs';
 
 /** `creds.yaml` 里那个字段名（`model-proxy.mjs` 的 `parseKey` 认得它）。 */
@@ -31,6 +32,32 @@ export const KEY_FIELD = 'HUPO_MODEL_KEY';
 export function writeKeyFile(keyFile, key, fs = nodeFs) {
   const tmp = `${keyFile}.tmp`;
   fs.writeFileSync(tmp, `${KEY_FIELD}: ${key}\n`, { mode: 0o600 });
+  fs.chmodSync(tmp, 0o600);
+  fs.renameSync(tmp, keyFile);
+  return true;
+}
+
+/**
+ * **一整包凭据写进去**（P1-29 · 2026-09-24）：模型钥匙 ＋ 语音三样 ＋ 图片/视频。
+ *
+ * ── 为什么必须"合并"而不是"重写" ────────────────────────────
+ *   `writeKeyFile` 是**整份重写**（只写 `HUPO_MODEL_KEY` 那一行）——
+ *   ⇒ 每次送钥匙都会把**别的几样抹掉**（这正是"租户那半接不上"的第二个原因）。
+ *   这里改成：先读现有的，**只改要给的那几个字段**，别的行原样留着。
+ *
+ * ⚠️ 规则只住一处：字段名与"什么值算数"都在 `creds.mjs`（`mergeCreds` / `parseCreds`）。
+ * ⚠️ 原子写 + 0600（盒子里的代理是**每次请求现读**的 ⇒ 不能让它读到半个文件）。
+ */
+export function mergeKeyFile(keyFile, patch, fs = nodeFs) {
+  let text = '';
+  try {
+    text = fs.readFileSync(keyFile, 'utf8');
+  } catch {
+    text = '';
+  }
+  const next = mergeCreds(text, patch);
+  const tmp = `${keyFile}.tmp`;
+  fs.writeFileSync(tmp, next, { mode: 0o600 });
   fs.chmodSync(tmp, 0o600);
   fs.renameSync(tmp, keyFile);
   return true;
@@ -204,6 +231,21 @@ export function fetchKeyFromHost({
         if (msg?.state !== 'ready' && msg?.state !== 'waiting' && msg?.state !== 'error') {
           log('  ⚠️ 宿主那条通道说了个认不出的状态 —— 先不配凭据了');
           return finish(false);
+        }
+        // ★ **一整包优先**（P1-29）：宿主现在会**同时**带 `key`（老盒子认它）与 `creds`（新盒子认它）
+        //   ⇒ 认得出 `creds` 就用合并那条路（多几样一起存），认不出就退回"就一把钥匙"。
+        const pack = msg?.state === 'ready' && msg.creds && typeof msg.creds === 'object' ? msg.creds : null;
+        if (pack && Object.keys(pack).length > 0) {
+          try {
+            mergeKeyFile(keyFile, pack);
+          } catch (err) {
+            log(`  ⚠️ 凭据写不进去：${err?.message ?? err}`);
+            conn.write(`${JSON.stringify({ v: 1, type: 'error', why: 'key-write-failed' })}\n`);
+            return finish(false);
+          }
+          log(`  ✓ 拿到凭据了（${Object.keys(pack).length} 样：放在它该在的地方）`);
+          conn.write(`${JSON.stringify({ v: 1, type: 'ready' })}\n`);
+          return finish(true);
         }
         if (msg?.state === 'ready' && typeof msg.key === 'string' && msg.key.length > 0) {
           try {

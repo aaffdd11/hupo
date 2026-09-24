@@ -22,7 +22,7 @@ import nodePath from 'node:path';
 
 import { asrConfigFromEnv } from './asr.js';
 import { VOICE_FIELDS } from './creds.mjs';
-import { readUserCreds } from './creds-store.js';
+import { credsFor } from './creds-store.js';
 
 /** 那三样的名字（**只此一处**：读文件与读环境变量用的是同一组）。 */
 export const VOICE_ENV_NAMES = ['TENCENT_APPID', 'TENCENT_SECRET_ID', 'TENCENT_SECRET_KEY'];
@@ -132,7 +132,8 @@ export function voiceCredsFor({ sub = null, dataDir, env = process.env, fs = nod
   //   （`creds-store.js` 的 `data/creds/<他>.yaml`，键名 `HUPO_VOICE_*`）。
   //   ⚠️ **三样齐了才算数**（缺一样就是没填过）—— 与页面回报的口径**同一个规则**
   //      （`creds.mjs` 的 `credStatus`），不然会出现"页面说有、发出去是空的"。
-  const mine = who ? readUserCreds(dataDir, who).values : {};
+  // ⚠️ 用 `credsFor`（不是 `readUserCreds`）：**盒子里那份是单文件**（P1-29）
+  const mine = who ? credsFor({ dataDir, sub: who }).values : {};
   const mineOk = VOICE_ENV_NAMES.every((n) => typeof mine[VOICE_FIELD_OF[n]] === 'string'
     && mine[VOICE_FIELD_OF[n]].length > 0);
   if (mineOk) {

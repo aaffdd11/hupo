@@ -557,7 +557,9 @@ function setCreds(userId, patch) {
 
   if (modelKey !== null) {
     if (tenantOf(userId)) {
-      const r = setModelKey(userId, modelKey);
+      // ★ **整包一起推**（P1-29）：模型那一把 ＋ 它这次给的所有字段（语音/图片/视频）
+      //   ⇒ 盒子里那个服务（识别路、画图工具）才拿得到。老的 `setModelKey` 只推一把。
+      const r = setModelKey(userId, modelKey, patch);
       if (!r?.ok) return { ok: false, why: r?.why ?? 'cannot-set', status: 409 };
     } else {
       // 主人（`local`）—— 只有他这一种人会被写这一份
@@ -602,13 +604,14 @@ function credStatusOf(userId) {
   return { model, voice: mine.voice, image: mine.image, video: mine.video };
 }
 
-function setModelKey(userId, key) {
+function setModelKey(userId, key, creds = null) {
   const tenant = tenantOf(userId);
   if (!tenant) return { ok: false, why: 'no-tenant' };
   // ★ 他又填了一把 ⇒ 上一把"用不了"的账**当场清掉**
   badKeys.delete(userId);
   tenantKeys.set(userId, key);
-  const pushed = channel.pushKey(tenant, key);
+  // ⚠️ 老形状（key）与新形状（creds）**一起送**（`pushKey` 顶上写着理由）
+  const pushed = channel.pushKey(tenant, key, creds);
   // ⚠️ **这句话 2026-09-22 改过**：原来写"**不落盘**"，而钥匙现在会落在他自己那台
   //    容器的**卷**里（`46-KEY-DELIVERY.md` §二）⇒ 那句话当时起就是**假话**了。
   //    中心这一侧仍然不落盘（内存里那份宿主一重启就没了），落盘的是**他那台自己**。

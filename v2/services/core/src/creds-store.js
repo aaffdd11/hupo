@@ -79,3 +79,34 @@ export function writeUserCreds(dataDir, sub, patch, fs = nodeFs) {
   const { values } = parseCreds(next);
   return { ok: true, why: 'saved', status: credStatus(values) };
 }
+
+/**
+ * **这一份凭据从哪读** —— 按人分目录 **或** 盒子那份单文件（P1-29 · 2026-09-24）。
+ *
+ * ── 为什么要有这条兜底 ──────────────────────────────────────
+ *   宿主上：一个人一份（`data/creds/<他>.yaml`）—— 中心要管很多人。
+ *   **盒子里**：`/data/creds.yaml` 是**单文件**（那台只有它的主人），
+ *   而它的写入者（`tenant-shell.js` 的 `mergeKeyFile`）写的就是这个单文件。
+ *   ⇒ 盒子里的识别路（`asr-creds.js`）与画图（`image-use.js`）**必须也认它**，
+ *     否则"钥匙推进去了、里面读不到"（那正是 B10 的第二个原因）。
+ *
+ * ⚠️ **只在 `HUPO_ROLE=tenant` 时才认那份单文件**：宿主上认它没意义，
+ *    而且会让一个陈旧的 `data/creds.yaml` 悄悄影响主人自己（那种"看不出原因"的毛病不要）。
+ *
+ * @returns {{values: Record<string,string>, status: object, from: 'mine'|'box'|'none'}}
+ */
+export function credsFor({ dataDir, sub, env = {}, fs = nodeFs } = {}) {
+  const mine = readUserCreds(dataDir, sub, fs);
+  if (Object.keys(mine.values).length > 0) return { ...mine, from: 'mine' };
+  if (env.HUPO_ROLE === 'tenant') {
+    let text = '';
+    try {
+      text = fs.readFileSync(nodePath.join(dataDir, 'creds.yaml'), 'utf8');
+    } catch {
+      text = '';
+    }
+    const { values } = parseCreds(text);
+    if (Object.keys(values).length > 0) return { values, status: credStatus(values), from: 'box' };
+  }
+  return { ...mine, from: 'none' };
+}

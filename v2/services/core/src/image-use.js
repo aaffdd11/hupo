@@ -11,7 +11,7 @@
 //      没有就是"没填"，**不许**偷偷用别人那份（多租户要防的第一件事）；
 //   ③ 失败**说人话**（`imageErrorWords`），而且**认不出就如实说认不出**。
 
-import { readUserCreds } from './creds-store.js';
+import { credsFor } from './creds-store.js';
 import { DEFAULT_IMAGE_MODEL, DEFAULT_IMAGE_URL, generateImage, imageErrorWords } from './image.js';
 
 /**
@@ -26,7 +26,8 @@ import { DEFAULT_IMAGE_MODEL, DEFAULT_IMAGE_URL, generateImage, imageErrorWords 
  */
 export function makeDrawImage({ dataDir, env = process.env, fetch = globalThis.fetch, log = () => {} } = {}) {
   return async function drawImage(userId, prompt) {
-    const mine = readUserCreds(dataDir, userId).values;
+    // ⚠️ 用 `credsFor`：盒子里那份是**单文件**（P1-29）
+    const mine = credsFor({ dataDir, sub: userId }).values;
     const key = typeof mine.image === 'string' ? mine.image.trim() : '';
     if (key === '') {
       return { ok: false, why: 'no-key', text: imageErrorWords({ why: 'no-key' }) };
