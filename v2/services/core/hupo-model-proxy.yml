@@ -1,4 +1,4 @@
-# 让模型那条路走**盒内的 root 小代理**（多租户 ②-3 · `src/model-proxy.mjs`）。
+# 让**模型**与**搜索**两条路都走**盒内的 root 小代理**（多租户 ②-3 · `src/model-proxy.mjs`）。
 #
 # 为什么这样写：决策 ① 要求"**agent 读不到自己的 key**"，可 dsh 调模型必须有 key。
 # ⇒ 把"持有"与"使用"分开：明文只在 `/run/hupo/creds.yaml`（tmpfs · root 0600），
@@ -8,7 +8,27 @@
 # ⚠️ **它没有任何按人不同的东西** ⇒ 属于**产品层**（`docs/dev/45-TENANT-UPDATE.md`）。
 #    2026-09-21 之前它是 `build-tenant-image.sh` 里的一段 heredoc（**生成出来的**）——
 #    生成出来的东西**没进指纹、也没进评审**，所以搬成一个真的仓库文件。
+#
+# ── ★ 2026-09-25：搜索那条路也接上来了（原来它是坏的）──────────────
+# 🔴 **真机报错**（盒里 `web_search` 一调就红，原始事件抓到的）：
+#      `WebError WEB_PROVIDER_CREDENTIAL_MISSING`
+#      「DeepSeek search has no API key for "DEEPSEEK_API_KEY"」
+#    ⇒ 工具在、后端没有：**搜索那条路从来没配过**（全仓 `grep search` 在配置里 0 命中）。
+#    而插件建议的那个名字 `DEEPSEEK_API_KEY` **正好在 V4b 的扫描名单里**
+#    （盒里 agent 的 env 不许出现它）⇒ **不能**往盒里塞一把 key。
+#    ⇒ 正解与模型那条路同款：**让搜索也走这个小代理**。
+#
+# ⚠️ **base 里那个 `/anthropic/v1` 不能少**：搜索走的是**Anthropic 兼容**的 Messages API
+#    （插件发 `{baseURL}/messages`，默认就是 `https://api.deepseek.com/anthropic/v1`），
+#    而**模型**那条走的是 `/chat/completions`（同一个代理、不同路径）。
+#    少了它就会打到 `https://api.deepseek.com/messages` 上去。
+# ⚠️ 由此的一个**产品事实**（要如实说）：DeepSeek **没有独立的搜索端点** ⇒
+#    **一次搜索 = 跑一整轮模型**（延迟与 token 都算他的）。
 - id: llm-deepseek
   config:
     baseURL: http://127.0.0.1:8787
+    apiKeyEnv: HUPO_MODEL_TICKET
+- id: web-search-deepseek
+  config:
+    baseURL: http://127.0.0.1:8787/anthropic/v1
     apiKeyEnv: HUPO_MODEL_TICKET
