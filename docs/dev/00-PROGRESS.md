@@ -295,7 +295,7 @@
 
 | 在飞 | 谁 | 状态 | 收尾要做什么 |
 |---|---|---|---|
-| 🔴 **P2-7 的真判据：机器重启后仍 200**（主人 2026-09-25 授权的重启；**重启前已备好这份清单**）| —— | 🚀 **正在重启**（重启会杀掉我这个会话；`dsh-live.service` + `frpc-dsh-u` 都 enabled ⇒ 他还能在 `u.stalkerai.cn` 找到我）| **重启后立刻验四件**：① `curl -s -o /dev/null -w '%{http_code}' https://w.stalkerai.cn/api/version` ⇒ **200**（且 `buildId` 是真指纹不是 `dev`）② `systemctl --user list-units 'hupo*'` 三条 active + **服务日志里 `✓ hupo-a 的隧道通了`、`✓ hupo-b 的隧道通了`**（两个租户容器走各自的 `hupo-tenant.service`，`Linger=yes` 已验）③ `curl -sI https://apps.stalkerai.cn/` 有响应（制品口在）④ cgroup 是 `…/app.slice/hupo-core.service`（不是 dsh scope）。**四件全过 ⇒ P2-7 收口；缺哪件就先修哪件** |
+| ✅ **P2-7 已收口：机器重启后四件全过**（主人 2026-09-25 授权的重启）| —— | ✅ **验完** | ① 公网 **200** ＋ `buildId d21586a27a4e`（**真指纹 —— drop-in 扛过了重启**）② `hupo-core`/`hupo-frpc-w`/`hupo-frpc-apps` 全 **active** ＋ 日志 **`✓ hupo-a 的隧道通了`、`✓ hupo-b 的隧道通了`** ⇒ **两台租户容器自己回来了**（这条以前没人验过；答案：hupo-a/b 各有 `Linger=yes` ＋ `hupo-tenant.service` enabled）③ `apps.stalkerai.cn` ⇒ 404（与重启前同形状 = 制品服务在答）④ cgroup `…/app.slice/hupo-core.service`。⚠️ **顺带记一次 OS crash**（主人："Ubuntu crash 了一下"）：上次开机结尾 **12:12:15 有序退出**，之后约 3 小时机器没起来；本次开机**盘/文件系统零报错**、**租户数据完好**（`main.jsonl 31559B`、工作区与小程序库都在）；**内核日志里没有 OOM/panic 行 ⇒ 原因定不出来**。可疑时间点＝12:00–12:03 那批"容器里试 bwrap"的探测（同时跑容器＋buildah，而本机每层 `memory.max=max`）——**推测，非结论**；再犯就查内存/温度 |
 | ~~**一个图标 = 一个工作区 = 一条对话**（`#121`）~~ | —— | ✅ **已收尾**（两闸绿 · 真机验过 · 已推 `b9d4c9c`）| **但见下面那条：其中三处与手册相反，要按 `84-DISPATCHER-FOCUS.md` 改回来** |
 
 > ⚠️ **它不是新概念**：手册 `02-ARCHITECTURE.md` §2.1 早就写着 `workspaces/<scope-name>/ ← 子工作区（= 桌面上的一个图标）`，
