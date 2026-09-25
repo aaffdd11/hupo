@@ -157,6 +157,7 @@ function quantities(text) {
     .replace(/\b[DNT][0-9]+(\.[0-9]+)*\b/g, ' ')                // 判据/决策 ID
     .replace(/\bv[0-9]+(\.[0-9]+)*\b/g, ' ')                    // 版本号
     .replace(/\bL[0-9]+\b/g, ' ')                               // 层名 L0…L4
+    .replace(/\bV[0-9]+\b/g, ' ')                               // 人格那套层名 V0…V3（2026-09-25 起）
     .replace(/\b[0-9]{4}-[0-9]{2}-[0-9]{2}\b/g, ' ');           // 日期
   const hits = [];
   const re = /[^\n]{0,28}\d[^\n]{0,28}/g;

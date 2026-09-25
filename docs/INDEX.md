@@ -33,7 +33,7 @@
 | **小程序的图标是哪来的 · 怎么加一个** | [`dev/70-APP-ICONS.md`](dev/70-APP-ICONS.md)（**唯一出处** · 挑图标的规矩 · 加一个要动哪两处 · 判据）| 动图标 / 加一个小程序类型之前 |
 | **"读出来"（把它说的话念出来）** | [`dev/68-SPEAK.md`](dev/68-SPEAK.md)（形状 + 三条边界 + 判据 + 没做的）· 决策 [`handbook/05-DECISIONS.md`](handbook/05-DECISIONS.md) `D5.16` | 动朗读 / 语音输出之前 |
 | **它说的那句是哪来的（出处）** | [`dev/67-SOURCES.md`](dev/67-SOURCES.md)（形状 + 判据 + 怎么接上游的）· 字段语义在 [`handbook/03-DEVELOPMENT.md`](handbook/03-DEVELOPMENT.md) §五 | 动"出处 / 引用"之前 |
-| **它是谁 · 说话的样子是哪来的 · 哪些是"绝不动"的核心** | [`dev/09-PERSONA.md`](dev/09-PERSONA.md)（人格怎么落地、硬规则、那两条闸）· [`dev/97-PERSONA-L0.md`](dev/97-PERSONA-L0.md)（**L0「绝不动」草案**：七个社会角色各自提案与收敛、每条带"反着验"的判据）· 本体在 `v2/services/core/hupo-persona.yml`（**strict**：改它要主人补一条重建命令）| 改人格 / 加一条"必须"之前 |
+| **它是谁 · 说话的样子是哪来的 · 哪些是"绝不动"的核心** | [`dev/09-PERSONA.md`](dev/09-PERSONA.md)（人格怎么落地、硬规则、那两条闸）· [`dev/97-PERSONA-V0.md`](dev/97-PERSONA-V0.md)（**人格「绝不动」那一层的草案**：七个社会角色各自提案与收敛、每条带"反着验"的判据 —— 那一套层名见该页）· 本体在 `v2/services/core/hupo-persona.yml`（**strict**：改它要主人补一条重建命令）| 改人格 / 加一条"必须"之前 |
 | **聊天窗口为什么长这样**（输入条的发送钮与听筒 / 上方那条计划条 / 老消息往上翻着加载） | `dev/64-CHAT-REDESIGN.md`（方案 + **主人逐条定案** + 三批的状态）· 判据在 `test/` 各份 | 动聊天界面之前 |
 | **接下来先做哪一件 · 三位工程师讨论出什么** | [`dev/66-NEXT-STEPS.md`](dev/66-NEXT-STEPS.md)（三份方案 + 一致与分歧 + **带取舍的合成建议**：我做什么 / 你签什么 / 建议砍什么） | 要开工之前 |
 | **失败了该跟用户说哪句话 / 想加一类失败** | [`dev/62-FAILURE-CLASSES.md`](dev/62-FAILURE-CLASSES.md)（五类里**哪两档有判据、凭什么认**，以及**还没有信号**的那三档）+ [`handbook/05-DECISIONS.md`](handbook/05-DECISIONS.md) `D10.3` | 改失败文案 / 加分类器之前 |
