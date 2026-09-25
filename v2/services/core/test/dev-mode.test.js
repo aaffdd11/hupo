@@ -59,6 +59,8 @@ import {
   DEV_ENTER_PATH,
   DEV_BOARD_NOT_HUPO,
   DEV_BOARD_WHY_NOT,
+  DEV_FAIL_COOLDOWN_TEXT,
+  DEV_NO_MEMORY_TEXT,
   DEV_ROOMS_PATH,
   DEV_WEB_PROFILE,
   createDevWebRelay,
@@ -70,9 +72,12 @@ import {
   devWebArgs,
   ensureRoomRegistered,
   injectDevBanner,
+  isWebProfileArgs,
+  listWebProfilePids,
   normalizeRooms,
   parseDevHost,
   parseDshWebLine,
+  readMemoryHeadroom,
   redactSecrets,
   readCookie,
   verifyDevCookie,
@@ -1680,6 +1685,11 @@ test('★ 那台起不来 ⇒ **失败的那一台要被真的收掉**（不留�
     bootTimeoutMs: 120,
     // 起之前 3、起之后 5 ⇒ "被系统杀了（内存不够）"这句要**读得出来**
     oomKillsFn: () => oomKills,
+    // ⚠️ 失败之后有冷却（K5/K6）⇒ 判据里给个短的，第二半才试得动
+    failCooldownMs: 50,
+    exitWaitMs: 40,
+    pidGoneWaitMs: 20,
+    memFn: () => null,
   });
   try {
     assert.equal((await selectRoom(relay, 'main')).status, 302);
@@ -1693,6 +1703,8 @@ test('★ 那台起不来 ⇒ **失败的那一台要被真的收掉**（不留�
     assert.equal(kids[0].exited, true, '🔴 收完要真的退出');
 
     // ★ **第二半：OOM 读数要能把它说具体**（读不到就一个字都不编）
+    //   ⚠️ 先等冷却过（里面那一半 `K6` 钉的是"冷却期里如实 503"这件事）
+    await sleep(60);
     const r2 = fakeReqRes({ url: '/' });
     await relay.handle(r2.req, r2.res, '/');
     for (let i = 0; i < 200 && r2.res.status === null; i += 1) await sleep(5);
@@ -1817,4 +1829,586 @@ test('🔴 那一层 patch：inject 只有 `loader`，**没有** `sdkAppStartup`
     '`loader` 必须在（`initialize` 里要 `loader.await()`）',
   );
   assert.match(yml, /disabled: true/u, '官方那支（只 create、不能 resume）必须关掉');
+});
+
+// ════════════════════════════════════════════════════════════
+// 🔴 **B43 第二版：光"等它退"不够 —— 它**杀不动**（2026-09-26 真机）
+//
+// 真机读数（u2 的盒子）：盒里那个服务是**容器 root，却只有五条能力**
+// （`podman run --cap-drop=ALL --cap-add=CHOWN,DAC_OVERRIDE,SETUID,SETGID,FOWNER`），
+// **没有 `CAP_KILL`**；而 `dsh web` 是**换手到 uid 1000** 起的（安全决策①）。
+// ⇒ `c.kill(...)` 一律 `EPERM`（真机原话 `kill: (14) - Operation not permitted`），
+//   被 `try/catch` 吞掉 ⇒ 旧那台一直活着（`/proc` 里 RSS ~390MB），
+//   两台叠一起 ⇒ 内核杀**新起来的那台** ⇒ 那一间 502（`oom_kill` 每换一次 +1）。
+//
+// ⇒ 判据：**发信号要走"同 uid 的小 helper"**（`killPid`）、**发完要核实真死**、
+//   **没杀掉要如实说**、**起新台前扫孤儿（只 `--profile web`）**、**内存不够就 503 人话**。
+// ⚠️ 每一刀都要能反着验（变异读数见 `docs/dev/110-…` 与 `00-PROGRESS.md`）。
+// ════════════════════════════════════════════════════════════
+
+/**
+ * 假子进程（**带 pid**）：判据要看的是"信号到底发到哪儿去了"。
+ * `kill` 是**句柄那条路**（盒里不管用的那条）——判据要证明它**没被用**。
+ */
+function pidChild(pid, line) {
+  const c = new EventEmitter();
+  c.pid = pid;
+  c.stdout = new EventEmitter();
+  c.stdout.setEncoding = () => {};
+  c.stderr = new EventEmitter();
+  c.stderr.setEncoding = () => {};
+  c.stdin = new Writable({ write(_c, _e, cb) { cb(); } });
+  c.killedViaHandle = false;
+  c.kill = () => {
+    c.killedViaHandle = true;
+    c.emit('exit', null, 'SIGTERM');
+  };
+  setImmediate(() => c.stdout.emit('data', `${line}\n`));
+  return c;
+}
+
+/**
+ * 一个"发信号"的假实现：记下每一次调用，把目标从存活表里划掉并发 `exit`。
+ * @param {object} o
+ * @param {Set<number>} o.alive 现在还活着的 pid
+ * @param {Map<number, any>} o.byPid pid → 那个假子进程
+ * @param {boolean} [o.throwOnKill] 变异/反例用：发信号这一步直接抛
+ * @param {boolean} [o.keepAlive]   变异/反例用：说"发到了"，但进程**没死**
+ */
+function fakeKillPid({ alive, byPid, throwOnKill = false, keepAlive = false }) {
+  const calls = [];
+  const fn = (pid, sig) => {
+    calls.push([pid, sig]);
+    if (throwOnKill) throw new Error('EPERM: operation not permitted');
+    if (keepAlive) return true; // ← 谎报：其实没杀掉
+    alive.delete(pid);
+    byPid.get(pid)?.emit('exit', null, sig);
+    return true;
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+/** 一个假 `/proc`（只认 `/<pid>/cmdline`；别的路径一律 ENOENT）。 */
+function procFixture(entries) {
+  const map = new Map(entries.map(([pid, args]) => [String(pid), `${args.join('\0')}\0`]));
+  return {
+    readdirSync: () => [...map.keys()],
+    readFileSync: (p) => {
+      const m = /\/proc\/(\d+)\/cmdline$/u.exec(String(p));
+      if (m && map.has(m[1])) return map.get(m[1]);
+      throw new Error('ENOENT');
+    },
+    existsSync: (p) => {
+      const m = /^\/proc\/(\d+)$/u.exec(String(p));
+      return Boolean(m && map.has(m[1]));
+    },
+  };
+}
+
+const KCFG = {
+  dshBin: '/bin/dsh',
+  agentCwd: '/data/main',
+  dshHome: '/data/dsh',
+  agentUid: 1000,
+  agentGid: 1000,
+  agentBootTimeoutMs: 5000,
+};
+const KROOMS = [
+  { id: 'main', name: '主对话', cwd: '/data/main' },
+  { id: 'other', name: 'other', cwd: '/data/workspaces/other' },
+];
+
+/** 等一次 `handle('/')` 落地（`res.status` 有值就算落地）。 */
+async function hitHome(relay, tries = 200) {
+  const { req, res } = fakeReqRes({ url: '/' });
+  await relay.handle(req, res, '/');
+  for (let i = 0; i < tries && res.status === null; i += 1) await sleep(5);
+  return res;
+}
+
+test('🔴 K1：`killChild()` 走的是**注入的那个 `killPid`**（不是 `child.kill`）—— 变异：改回 `c.kill` ⇒ 红', async () => {
+  const alive = new Set([7001, 7002]);
+  const byPid = new Map();
+  const kills = fakeKillPid({ alive, byPid });
+  const kids = [];
+  const spawnFn = () => {
+    const pid = 7001 + kids.length;
+    const c = pidChild(pid, `dsh web: http://127.0.0.1:${43100 + kids.length}/?token=K${kids.length}`);
+    byPid.set(pid, c);
+    kids.push(c);
+    return c;
+  };
+  const { httpRequest } = fakeUpstream();
+  const relay = createDevWebRelay({
+    cfg: KCFG,
+    rooms: () => KROOMS,
+    spawnFn,
+    httpRequest,
+    killPid: kills,
+    pidAliveFn: (pid) => alive.has(Number(pid)),
+    killGraceMs: 20,
+    bootTimeoutMs: 2000,
+  });
+  try {
+    assert.equal((await selectRoom(relay, 'main')).status, 302);
+    assert.equal((await hitHome(relay)).status, 200);
+    // 换一间 ⇒ 旧的必须**经 killPid** 被收掉
+    assert.equal((await selectRoom(relay, 'other')).status, 302);
+    const after = await hitHome(relay);
+    assert.equal(after.status, 200, '换过去那一间也要起得来');
+    assert.equal(kids.length, 2, '换房间要新起一台');
+    assert.deepEqual(
+      kills.calls[0],
+      [7001, 'SIGTERM'],
+      '🔴 第一发信号必须是 `killPid(7001, SIGTERM)` —— 走的是**注入的那个**',
+    );
+    assert.equal(alive.has(7001), false, '收掉之后它不该还在存活表里');
+    // 🔴 **变异那一刀就在这儿**：改回 `c.kill(...)` ⇒ 这两条当场红
+    assert.equal(kids[0].killedViaHandle, false, '🔴 **不许**退回 `child.kill`（盒里没有 CAP_KILL，那条路静默失败）');
+    assert.ok(
+      kills.calls.some(([p, s]) => p === 7001 && s === 'SIGTERM'),
+      '旧那台必须经 killPid 收到 SIGTERM',
+    );
+  } finally {
+    relay.shutdown();
+  }
+});
+
+test('🔴 K2：`killPid` 抛错 / 进程没死 ⇒ **如实说一句**（点名 pid），而且**不许**当成"收干净了"', async () => {
+  // ── 反例 A：发信号这一步**抛**（真机那个 EPERM 的形状） ──
+  for (const [label, opts] of [
+    ['抛错', { throwOnKill: true }],
+    ['谎报发到了、其实没死', { keepAlive: true }],
+  ]) {
+    const alive = new Set([7101, 7102]);
+    const byPid = new Map();
+    const kills = fakeKillPid({ alive, byPid, ...opts });
+    const kids = [];
+    const said = [];
+    const spawnFn = () => {
+      const pid = 7101 + kids.length;
+      const c = pidChild(pid, `dsh web: http://127.0.0.1:${43200 + kids.length}/?token=K${kids.length}`);
+      byPid.set(pid, c);
+      kids.push(c);
+      return c;
+    };
+    const { httpRequest } = fakeUpstream();
+    const relay = createDevWebRelay({
+      cfg: KCFG,
+      rooms: () => KROOMS,
+      spawnFn,
+      httpRequest,
+      killPid: kills,
+      // ⚠️ 存活表**不跟着 killPid 走**：这就是"没杀掉"的形状
+      pidAliveFn: (pid) => alive.has(Number(pid)),
+      log: (m) => said.push(String(m)),
+      killGraceMs: 10,
+      // ⚠️ 两个"有上限的等"在判据里给小的：这一条考的是**说的话**，不是等多久
+      exitWaitMs: 30,
+      pidGoneWaitMs: 30,
+      bootTimeoutMs: 2000,
+      // ⚠️ 内存读数关掉：这一条只考"杀不动要说"，别让内存闸插进来
+      memFn: () => null,
+    });
+    try {
+      assert.equal((await selectRoom(relay, 'main')).status, 302);
+      assert.equal((await hitHome(relay)).status, 200);
+      assert.equal((await selectRoom(relay, 'other')).status, 302);
+      const after = await hitHome(relay);
+      // ★ **决定：照样起新台，但日志里说清**（理由写在下面那条注释里）
+      assert.equal(after.status, 200, '收不掉旧的**不许**把入口整个卡死（起，但如实说）');
+      const text = said.join('\n');
+      // 🔴 **必须点名 pid**，而且**必须说"没收掉"** —— 静默通过就是这一条要抓的缺陷
+      assert.match(text, /没收掉/u, `要如实说"没收掉"：${text.slice(-400)}`);
+      assert.match(text, /7101/u, `要点名那个 pid：${text.slice(-400)}`);
+      assert.match(text, /它还活着/u, '要把"它还活着"说明白（不许含糊过去）');
+    } finally {
+      relay.shutdown();
+    }
+  }
+  // ⚠️ **为什么"起，但日志里说清"**（而不是"不起"）：
+  //    如果收不掉就不起，那么只要盒里赖着一台收不掉的孤儿，这一整条入口就**永远**打不开
+  //    —— 而它**并不是**没救：①自己的内存闸会挡住硬起（余量不够 ⇒ 如实 503）；
+  //    ②起新台之前还会再扫一次孤儿。⇒ "起"是有闸的，"不起"是把一条能自愈的路堵死。
+  //    **但"杀不动"这句话一定要留下**：不然下一次排查又会以为"是 dsh 起不来"。
+});
+
+test('🔴 K3（纯函数）：认 `--profile web`，**不认** `--profile sdk` —— 变异：放宽成"带 --profile 就算" ⇒ 红', () => {
+  assert.equal(isWebProfileArgs(['/bin/node', '/bin/dsh', '--profile', 'web', '--host', '127.0.0.1']), true);
+  assert.equal(isWebProfileArgs(['/bin/node', '/bin/dsh', '--profile=web']), true);
+  // 🔴 这两条就是"扫错人"那一刀：调度器按轮那台 / 评审那台都是 sdk
+  assert.equal(isWebProfileArgs(['/bin/node', '/bin/dsh', '--profile', 'sdk']), false);
+  assert.equal(isWebProfileArgs(['/bin/node', '/bin/dsh', '--profile=sdk']), false);
+  assert.equal(isWebProfileArgs(['/bin/dsh', 'web']), false, '光有一个 web 字不算（那可能是别的参数）');
+  assert.equal(isWebProfileArgs([]), false);
+
+  const fs = procFixture([
+    [8001, ['/bin/node', '/bin/dsh', '--profile', 'web', '--host', '127.0.0.1']],
+    [8002, ['/bin/node', '/bin/dsh', '--profile', 'sdk', '--host', '127.0.0.1']],
+    [8003, ['/bin/bash', '-c', 'echo hi']],
+    [process.pid, ['/bin/node', '/app/entry.mjs']],
+  ]);
+  assert.deepEqual(
+    listWebProfilePids({ fs, procDir: '/proc' }),
+    [8001],
+    '🔴 只许认出 `--profile web` 那一台（`sdk` 一个都不许进来）',
+  );
+  assert.deepEqual(
+    listWebProfilePids({ fs, procDir: '/proc', skipPids: [8001] }),
+    [],
+    '跳过名单要生效（"现在这一台"就在里面）',
+  );
+});
+
+test('🔴 K3（行为）：孤儿只扫 `--profile web`、只扫**盒里**（默认关）、且**不动现在这一台**', async () => {
+  const WEB_ORPHAN = 8001;
+  const SDK_ALIVE = 8002;
+  /** 一个中继自己那一套假世界（**两个中继各一套** —— 共用一套会把"关掉时也杀了"看成"活着"）。 */
+  const world = ({ currentPid, port }) => {
+    const alive = new Set([WEB_ORPHAN, SDK_ALIVE, currentPid]);
+    const byPid = new Map();
+    const kills = fakeKillPid({ alive, byPid });
+    const spawned = [];
+    const spawnFn = () => {
+      const c = pidChild(currentPid, `dsh web: http://127.0.0.1:${port}/?token=K`);
+      byPid.set(currentPid, c);
+      spawned.push(c);
+      return c;
+    };
+    const procEntries = () => [
+      [WEB_ORPHAN, ['/bin/node', '/bin/dsh', '--profile', 'web', '--host', '127.0.0.1']],
+      [SDK_ALIVE, ['/bin/node', '/bin/dsh', '--profile', 'sdk']],
+      // ⚠️ **"现在这一台"只有起过之后才在 `/proc` 里**（真的一样：进程还没 spawn 就不存在）
+      ...(spawned.length > 0
+        ? [[currentPid, ['/bin/node', '/bin/dsh', '--profile', 'web', '--host', '127.0.0.1']]]
+        : []),
+      [process.pid, ['/bin/node', '/app/entry.mjs']],
+    ];
+    const table = () => new Map(procEntries().map(([pid, args]) => [String(pid), `${args.join('\0')}\0`]));
+    const procFs = {
+      readdirSync: () => [...table().keys()],
+      readFileSync: (p) => {
+        const m = /\/proc\/(\d+)\/cmdline$/u.exec(String(p));
+        const t = table();
+        if (m && t.has(m[1])) return t.get(m[1]);
+        throw new Error('ENOENT');
+      },
+      existsSync: (p) => {
+        const m = /^\/proc\/(\d+)$/u.exec(String(p));
+        return Boolean(m && table().has(m[1]));
+      },
+    };
+    return { alive, byPid, kills, spawned, spawnFn, procFs, currentPid };
+  };
+  const { httpRequest } = fakeUpstream();
+  const said = [];
+  const makeRelay = (w, extra) =>
+    createDevWebRelay({
+      cfg: KCFG,
+      rooms: () => KROOMS,
+      spawnFn: w.spawnFn,
+      httpRequest,
+      killPid: w.kills,
+      pidAliveFn: (pid) => w.alive.has(Number(pid)),
+      procFs: w.procFs,
+      procDir: '/proc',
+      log: (m) => said.push(String(m)),
+      killGraceMs: 10,
+      bootTimeoutMs: 2000,
+      memFn: () => null,
+      ...extra,
+    });
+
+  // ── ① **默认关**（= 宿主那一档）：一台都不许动 ──
+  const wHost = world({ currentPid: 8013, port: 43313 });
+  const hostSide = makeRelay(wHost, {});
+  try {
+    assert.equal((await selectRoom(hostSide, 'main')).status, 302);
+    assert.equal((await hitHome(hostSide)).status, 200);
+    assert.deepEqual(wHost.kills.calls, [], '🔴 默认（宿主那一档）**一次 killPid 都不许有**');
+    assert.equal(wHost.alive.has(WEB_ORPHAN), true, '🔴 宿主上"别的 dsh（哪怕带 --profile web）"不许被碰');
+  } finally {
+    hostSide.shutdown();
+  }
+
+  // ── ② 盒里那一档（`sweepOrphans:true`）：只收 web 孤儿，不动 sdk、不动自己、不动现在这一台 ──
+  const wBox = world({ currentPid: 8003, port: 43303 });
+  const boxSide = makeRelay(wBox, { sweepOrphans: true });
+  try {
+    assert.equal((await selectRoom(boxSide, 'main')).status, 302);
+    assert.equal((await hitHome(boxSide)).status, 200);
+    assert.equal(wBox.alive.has(WEB_ORPHAN), false, '🔴 盒里那台别的 `--profile web` 要收掉');
+    assert.equal(wBox.alive.has(SDK_ALIVE), true, '🔴 变异：把 `--profile sdk` 也扫 ⇒ 当场红');
+    assert.equal(wBox.alive.has(wBox.currentPid), true, '🔴 起完之后"现在这一台"必须还活着');
+    assert.equal(
+      wBox.kills.calls.filter(([p]) => p === WEB_ORPHAN).length,
+      1,
+      '那一台 web 孤儿**恰好**被发了一次信号',
+    );
+    assert.equal(
+      wBox.kills.calls.filter(([p]) => p === SDK_ALIVE).length,
+      0,
+      '🔴 `--profile sdk` 一次都不许被发信号',
+    );
+    assert.equal(
+      wBox.kills.calls.filter(([p]) => p === process.pid).length,
+      0,
+      '🔴 自己一次都不许被发信号',
+    );
+    // ★ **"不动现在这一台"**：再扫一次（此刻 `child` 就是 currentPid，而它也在假 /proc 里）
+    await boxSide.sweepOrphanWebs();
+    assert.equal(wBox.alive.has(wBox.currentPid), true, '🔴 变异：把当前那台也扫 ⇒ 当场红');
+    assert.equal(
+      wBox.kills.calls.filter(([p]) => p === wBox.currentPid).length,
+      0,
+      '🔴 现在这一台一次都不许被扫到',
+    );
+    assert.ok(
+      said.some((m) => /别的 dsh web/u.test(m) && /收掉/u.test(m)),
+      '收掉了几个要**如实说一句**',
+    );
+  } finally {
+    boxSide.shutdown();
+  }
+});
+
+test('🔴 K4：内存不够 ⇒ **503 ＋ 人话**（不硬起、也不说成"没起来"）—— 变异：硬起 ⇒ 红', async () => {
+  const spawnFn = () => {
+    throw new Error('🔴 内存不够的时候**一个进程都不该起**（这一刀就是变异）');
+  };
+  const { httpRequest } = fakeUpstream();
+  const said = [];
+  const relay = createDevWebRelay({
+    cfg: KCFG,
+    rooms: () => KROOMS,
+    spawnFn,
+    httpRequest,
+    // 余量一直不够（`max` 768MB、`current` 728MB ⇒ 余量 40MB < 阈值）
+    memFn: () => ({ max: 768 * 1024 * 1024, current: 728 * 1024 * 1024, free: 40 * 1024 * 1024 }),
+    memWaitMs: 60,
+    log: (m) => said.push(String(m)),
+    bootTimeoutMs: 2000,
+  });
+  try {
+    assert.equal((await selectRoom(relay, 'main')).status, 302);
+    const r = await hitHome(relay);
+    assert.equal(r.status, 503, '🔴 内存不够是 **503**（不是 502、更不是硬起之后被内核杀掉）');
+    assert.equal(r.body(), `${DEV_NO_MEMORY_TEXT}\n`, '要一句人话，不许是技术词');
+    const text = said.join('\n');
+    assert.match(text, /腾不出地方/u, `要如实说"腾不出地方"：${text.slice(-400)}`);
+    assert.doesNotMatch(text, /那台界面现在没起来/u, '🔴 不许把它说成"没起来"（那是另一件事）');
+    assert.doesNotMatch(text, /dsh web 没起来/u, '🔴 同上');
+    // 反例（正对照）：等一会儿**真的够了** ⇒ 照常起
+    const grow = [];
+    let free = 40 * 1024 * 1024;
+    const spawned = [];
+    const relay2 = createDevWebRelay({
+      cfg: KCFG,
+      rooms: () => KROOMS,
+      spawnFn: () => {
+        const c = pidChild(7401, 'dsh web: http://127.0.0.1:43400/?token=K');
+        spawned.push(c);
+        return c;
+      },
+      httpRequest,
+      memFn: () => {
+        const m = { max: 768 * 1024 * 1024, current: 768 * 1024 * 1024 - free, free };
+        free += 600 * 1024 * 1024; // 下一次读就够多了
+        return m;
+      },
+      memWaitMs: 500,
+      log: (m) => grow.push(String(m)),
+      bootTimeoutMs: 2000,
+    });
+    try {
+      assert.equal((await selectRoom(relay2, 'main')).status, 302);
+      const ok = await hitHome(relay2);
+      assert.equal(ok.status, 200, '余量够了就照常起（等，不是拒）');
+      assert.equal(spawned.length, 1);
+    } finally {
+      relay2.shutdown();
+    }
+    // 反例（读不到 ⇒ **不挡**）：算不出余量的时候拿假数挡人 = "看着有闸其实在猜"
+    const spawned3 = [];
+    const relay3 = createDevWebRelay({
+      cfg: KCFG,
+      rooms: () => KROOMS,
+      spawnFn: () => {
+        const c = pidChild(7501, 'dsh web: http://127.0.0.1:43500/?token=K');
+        spawned3.push(c);
+        return c;
+      },
+      httpRequest,
+      memFn: () => null,
+      memWaitMs: 60,
+      bootTimeoutMs: 2000,
+    });
+    try {
+      assert.equal((await selectRoom(relay3, 'main')).status, 302);
+      assert.equal((await hitHome(relay3)).status, 200, '读不到 cgroup ⇒ **不挡**（不猜）');
+      assert.equal(spawned3.length, 1);
+    } finally {
+      relay3.shutdown();
+    }
+  } finally {
+    relay.shutdown();
+  }
+});
+
+test('内存余量：读不出 cgroup ⇒ `null`（**不猜**；`max` 那一路不算数）', () => {
+  // v2：`max` 字面量 = 这一层没有上限 ⇒ 算不出余量（而且 **v1 那一套也不在** ⇒ 还是 `null`）
+  const noLimit = {
+    readFileSync: (p) => {
+      if (String(p).endsWith('memory.max')) return 'max\n';
+      throw new Error('ENOENT');
+    },
+  };
+  assert.equal(readMemoryHeadroom(noLimit), null, '`max` 字面量 ⇒ 算不出余量 ⇒ **不许**拿假数挡人');
+  const v2 = {
+    readFileSync: (p) => {
+      if (String(p).endsWith('/memory.max')) return '805306368\n';
+      if (String(p).endsWith('/memory.current')) return '428425216\n';
+      throw new Error('ENOENT');
+    },
+  };
+  assert.deepEqual(readMemoryHeadroom(v2), {
+    max: 805306368,
+    current: 428425216,
+    free: 805306368 - 428425216,
+  });
+  const nothing = {
+    readFileSync: () => {
+      throw new Error('ENOENT');
+    },
+  };
+  assert.equal(readMemoryHeadroom(nothing), null);
+});
+
+// ════════════════════════════════════════════════════════════
+// 🔴 **K5/K6：失败之后要有冷却**（2026-09-26 父 agent 在 u2 上量到的）
+//
+// 真机读数：他连着清了 3 次孤儿，每次清完过一会儿又冒出 `--profile web`
+// （一次 1 台、一次 2 台、一次 3 台，都是刚起的、RSS 才几 MB），而**没有人在点房间**。
+// ⇒ 入口那一页的 WebSocket **会自动重连**，每一次重连/取页在"没有活着的那台"时
+//   都走 `ensure()` ⇒ 又起一台 ⇒ 失败再起 ⇒ **spawn 风暴**。
+// ⇒ 判据：一次失败之后一段时间内**不许再起新的**（如实 503 ＋ 人话）。
+// ════════════════════════════════════════════════════════════
+
+/** 一个**永远不报端口、也不自己退**的假子进程（"起不来"那一档）。 */
+function neverUpChild() {
+  const c = slowFakeChild('', { exitAfterMs: 100000 });
+  c.stdout.emit = () => {}; // 永远不吐那一行
+  return c;
+}
+
+/** 一条**可信口**上的假 socket（只看 `rejectUpgradeSocket` 写出去的那几行）。 */
+function fakeUpgradeSocket() {
+  const s = new EventEmitter();
+  s.chunks = [];
+  s.write = (b) => {
+    s.chunks.push(String(b));
+    return true;
+  };
+  s.destroy = () => {};
+  return s;
+}
+
+test('🔴 K5：连续请求 ⇒ `spawnFn` **只被叫一次**（同一间不并发起多台 ＋ 失败后有冷却）—— 变异：去掉冷却 ⇒ 红', async () => {
+  let spawnCalls = 0;
+  const spawnFn = () => {
+    spawnCalls += 1;
+    return neverUpChild();
+  };
+  const { httpRequest } = fakeUpstream();
+  const relay = createDevWebRelay({
+    cfg: KCFG,
+    rooms: () => KROOMS,
+    spawnFn,
+    httpRequest,
+    bootTimeoutMs: 60,
+    killGraceMs: 10,
+    exitWaitMs: 20,
+    pidGoneWaitMs: 20,
+    // ★ 冷却：判据里给一个够长的（不是 15s），免得测试等
+    failCooldownMs: 3000,
+    // ⚠️ 内存读数关掉：这一条只考"起几次"，别让内存闸插进来
+    memFn: () => null,
+  });
+  try {
+    assert.equal((await selectRoom(relay, 'main')).status, 302);
+    // ── ① **同一间不并发起多台**：3 条同时来 ⇒ 只许起 1 台 ──
+    const many = await Promise.all([hitHome(relay), hitHome(relay), hitHome(relay)]);
+    assert.equal(spawnCalls, 1, '🔴 并发 3 条 ⇒ **只许起一台**（`starting` 那一道）');
+    assert.deepEqual(
+      many.map((r) => r.status),
+      [502, 502, 502],
+      '起不来 ⇒ 如实 502（三条都一样）',
+    );
+    // ── ② **失败之后（冷却期）再来 → 一条都不许再起** ──
+    const a = await hitHome(relay);
+    const b = await hitHome(relay);
+    assert.equal(spawnCalls, 1, '🔴 变异：去掉冷却 ⇒ 这里会变成 3 ⇒ 当场红');
+    assert.equal(a.status, 503);
+    assert.equal(b.status, 503);
+    // ── ③ 冷却**过了**之后要能再试（不是把入口锁死）──
+    await sleep(3200);
+    await hitHome(relay);
+    assert.equal(spawnCalls, 2, '冷却过了要能再试（冷却不是"永远不再起"）');
+  } finally {
+    relay.shutdown();
+  }
+});
+
+test('🔴 K6：冷却期内的请求**如实回 503 ＋ 人话**（不是静默、不是 200、也不是又去起一台）', async () => {
+  let spawnCalls = 0;
+  const spawnFn = () => {
+    spawnCalls += 1;
+    return neverUpChild();
+  };
+  const { httpRequest } = fakeUpstream();
+  const said = [];
+  const relay = createDevWebRelay({
+    cfg: KCFG,
+    rooms: () => KROOMS,
+    spawnFn,
+    httpRequest,
+    bootTimeoutMs: 60,
+    killGraceMs: 10,
+    exitWaitMs: 20,
+    pidGoneWaitMs: 20,
+    failCooldownMs: 3000,
+    memFn: () => null,
+    log: (m) => said.push(String(m)),
+  });
+  try {
+    assert.equal((await selectRoom(relay, 'main')).status, 302);
+    const first = await hitHome(relay);
+    assert.equal(first.status, 502, '第一次是真起、真失败 ⇒ 502');
+    // ── HTTP：冷却期 ⇒ **503 ＋ 那句人话**（有身体、不是空连接）──
+    const r = await hitHome(relay);
+    assert.equal(r.status, 503, '冷却期内不许再起 ⇒ **503**（不是 502、更不是 200）');
+    assert.equal(r.body(), `${DEV_FAIL_COOLDOWN_TEXT}\n`, '要一句人话（逐字）');
+    assert.notEqual(r.body().trim(), '', '不许静默（空身体）');
+    assert.equal(spawnCalls, 1, '冷却期内**一台都不许起**');
+    assert.ok(
+      said.some((m) => /冷却/u.test(m) && /503/u.test(m)),
+      `冷却那件事要如实记一句：${said.slice(-300).join(' / ')}`,
+    );
+    // ── 升级那条也一样（握手阶段 503，不是先 101 再关）──
+    const sock = fakeUpgradeSocket();
+    relay.handleUpgrade(
+      { method: 'GET', headers: { host: '127.0.0.1:1', connection: 'Upgrade', upgrade: 'websocket' } },
+      sock,
+      Buffer.alloc(0),
+      '/api/remote.mux',
+    );
+    for (let i = 0; i < 50 && sock.chunks.length === 0; i += 1) await sleep(5);
+    const raw = sock.chunks.join('');
+    assert.match(raw, /^HTTP\/1\.1 503 /u, `升级那条也要 503：${raw.slice(0, 120)}`);
+    assert.match(raw, new RegExp(DEV_FAIL_COOLDOWN_TEXT.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
+    assert.equal(spawnCalls, 1, '升级那条也不许起新的');
+  } finally {
+    relay.shutdown();
+  }
 });

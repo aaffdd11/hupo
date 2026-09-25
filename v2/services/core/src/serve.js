@@ -836,6 +836,20 @@ const { listen, listenTrusted, close } = createServer({
          * ⚠️ 那属于"写运行中的东西" ⇒ 默认**关**；这一行是主人点头之后才加上去的。
          */
         workspaceNudge: true,
+        /**
+         * 🔴 **扫盒里别的 `--profile web`**（B43 第二版 · 2026-09-26）。
+         *
+         * 起新台之前，盒里除了中继自己起的那台，**不该**有别的开发者入口界面
+         * ——多一台多 ~490MB，而这一层只有那么大（`memory.max` 就那么点）。
+         * 留着的孤儿就是下一次换房间被 OOM 杀掉的根。
+         *
+         * ⚠️ **这个开关只许在这一支里打开**：这个对象**只在容器里**建
+         *    （上面那一行 `cfg.trustedSocketPath ? … : null`，宿主上根本不建它）。
+         *    宿主上主人的 `dsh` 一堆，在那儿扫就是收掉别人的东西。
+         *    ⇒ `dev-mode.js` 里那个 `sweepOrphans` **默认是 `false`**，
+         *      判据 K3 钉的就是"默认关着的时候一台都不许动"。
+         */
+        sweepOrphans: true,
         log: (m) => console.log(`  ${m}`),
       })
     : null,

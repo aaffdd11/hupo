@@ -83,7 +83,7 @@ import nodeFs from 'node:fs';
 import nodeHttp from 'node:http';
 import nodeNet from 'node:net';
 import nodePath from 'node:path';
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from 'node:child_process';
 
 // ⚠️ 只借**三个纯函数**：
 //    `agentEnv()` 摘掉密钥 ＋ 给那**一个** `DSH_HOME` ＋ 能力层要的那几样环境变量；
@@ -156,6 +156,222 @@ export function readOomKills(fs = nodeFs) {
     }
   }
   return null;
+}
+
+/**
+ * 🔴 **收台不能靠句柄**（2026-09-26 真机 · B43 第二版）。
+ *
+ * **真机读数**（u2 的盒子）：`dsh web` 是盒里那个服务（容器 root）用
+ * `spawnFn(..., { uid: cfg.agentUid, gid: cfg.agentGid })` **换手**到 uid 1000 起的
+ * （安全决策①，不许改）。而那个容器是
+ * `podman run --cap-drop=ALL --cap-add=CHOWN,DAC_OVERRIDE,SETUID,SETGID,FOWNER`
+ * —— **没有 `CAP_KILL`** ⇒ 容器 root 对 **另一个 uid** 的进程发不了信号：
+ * 真机原话 `kill: (14) - Operation not permitted`。
+ * ⇒ `killChild()` 里那两个 `c.kill(...)` **静默失败**（被 `try/catch` 吞了），
+ *   "换房间先收旧的"**从来没真的收掉过**：旧那台还活着（`/proc/<pid>` RSS ~390MB），
+ *   两台叠在一起 ⇒ 内核杀**新起来的那台** ⇒ 那一间 **502**（`oom_kill` 每换一次 +1）。
+ *
+ * ★ **修法**：发信号这件事换成一个**以同一个 uid/gid 起的小 helper** 来做
+ *   —— 同 uid 的进程之间发信号**不需要** `CAP_KILL`。见 `makeKillPid()`。
+ *
+ * ⚠️ 判据 K1 的**变异**：把 `killChild()` 改回 `c.kill(...)` ⇒ 当场红。
+ */
+
+/** 那个"以同一个 uid 发信号"的小 helper 最多跑多久（**有上限**，不许挂住）。 */
+export const DEV_KILL_HELPER_TIMEOUT_MS = 3000;
+
+/** 发完信号之后，**核实它真的没了**的上限（不是"发了就算收干净"）。 */
+export const DEV_PID_GONE_WAIT_MS = 5000;
+
+/** 核实"真的没了"时的轮询间隔。 */
+export const DEV_PID_POLL_MS = 100;
+
+/** 孤儿清扫里，收掉一台之后等它消失的上限（每台）。 */
+export const DEV_SWEEP_GONE_WAIT_MS = 2000;
+
+/**
+ * **起一台 `dsh web` 之前，这一层至少要有多少空闲内存**（字节）。
+ *
+ * **真机读数**（u2 的盒子）：`memory.max = 768MB`；一台 `dsh web` 的 RSS ~348MB
+ * ＋ 它自己那三个 MCP 子进程 ~144MB ⇒ **一台要 ~490MB**；刚起时还要一点峰值。
+ * ⇒ 余量不到这个数就**不起**（等它够，或者如实回 503）——
+ *   硬起的结果是**被内核杀掉**，而那时报"没起来"就是把原因说错了。
+ *
+ * ⚠️ 阈值**住在代码里**（手册纪律 1：文档不写数值）。读不到 cgroup ⇒ **不挡**（不猜）。
+ */
+export const DEV_MEM_NEED_BYTES = 512 * 1024 * 1024;
+
+/** 内存不够时**最多等多久**（等到够；到点还不够就如实 503）。 */
+export const DEV_MEM_WAIT_MS = 15000;
+
+/**
+ * 🔴 **起台失败之后的冷却**（住代码）。
+ *
+ * 入口那一页的 WebSocket **会自动重连** ⇒ 没有冷却的话，一次失败会变成
+ * "起一台 → 被内核杀掉 → 前端重连 → 再起一台"的**风暴**（真机读数：父 agent
+ * 在 u2 上清完孤儿，过一会儿又冒出 1 台 / 2 台 / 3 台，而没人在点房间）。
+ */
+export const DEV_FAIL_COOLDOWN_MS = 15000;
+
+/** 冷却中那句人话（HTTP 与升级**逐字一样**）。 */
+export const DEV_FAIL_COOLDOWN_TEXT = '那一间刚没起来，等一会儿再试。';
+
+/** 内存腾不出地方那句人话（HTTP 与升级**逐字一样**）。 */
+export const DEV_NO_MEMORY_TEXT = '这一台现在腾不出地方开这一间，等一会儿再试。';
+
+/** 等内存时的轮询间隔。 */
+export const DEV_MEM_POLL_MS = 500;
+
+/**
+ * 造一个"**以同一个 uid/gid 发信号**"的 `killPid(pid, signal)`（默认实现）。
+ *
+ * 🔴 **为什么必须是同一个 uid**：盒里那个服务是**容器 root 却没有 `CAP_KILL`**
+ *    （`--cap-drop=ALL` ＋ 只加回五条）⇒ 它**杀不动**换手之后（uid 1000）那台 DSH。
+ *    真机原话：`kill: (14) - Operation not permitted`。
+ *    而**同 uid** 的进程之间发信号不需要任何能力 ⇒ 拿 `cfg.agentUid/Gid` 起一个
+ *    一次性的 node 小 helper，让**它**去 `process.kill`。
+ *
+ * ⚠️ **只把 `pid` 与信号名传进去**（`argv`，不经 shell）—— 别的什么都不传。
+ * ⚠️ `pid` 必须是**正整数且大于 1**（0 / 1 / 负数一律拒绝：`kill(0)` 会打到整个进程组，
+ *    `kill(1)` 会打到 init —— 这两条都是"手一滑就全灭"）。
+ * ⚠️ 信号只认那两个（`SIGTERM` / `SIGKILL`）—— 别的名字在这条路上没有意义。
+ * ⚠️ 认不出 / 起不来 / 超时 / 非零退出 ⇒ 回 `false`（**调用方据此如实说**，不猜）。
+ *
+ * @param {object} cfg `config.js` 那份（只要 `agentUid` / `agentGid`）
+ * @param {object} [o]
+ * @param {Function} [o.spawnSync] 注入用（判据里换成一个假的）
+ * @param {string} [o.nodeBin] 那个 helper 用哪支 node 跑（默认 `process.execPath`）
+ * @returns {(pid:number, signal?:string)=>boolean}
+ */
+export function makeKillPid(cfg = {}, { spawnSync = nodeSpawnSync, nodeBin = process.execPath } = {}) {
+  const uid = Number.isInteger(cfg?.agentUid) ? cfg.agentUid : null;
+  const gid = Number.isInteger(cfg?.agentGid) ? cfg.agentGid : null;
+  return (pid, signal = 'SIGKILL') => {
+    const n = Number(pid);
+    // ⚠️ 1 以下一律拒（`0` = 整个进程组；`1` = init）。
+    if (!Number.isInteger(n) || n <= 1) return false;
+    if (n === process.pid) return false;
+    const sig = signal === 'SIGTERM' || signal === 'SIGKILL' ? signal : null;
+    if (sig === null) return false;
+    /** @type {import('node:child_process').SpawnSyncOptions} */
+    const opts = {
+      stdio: 'ignore',
+      // ⚠️ **有上限**：helper 挂住的话，"换房间"会卡在这儿（那比杀不动更坏）。
+      timeout: DEV_KILL_HELPER_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+    };
+    // 🔴 **换手**：不带上这个，helper 就是 root，而 root 恰好是杀不动的那一个。
+    if (uid !== null) opts.uid = uid;
+    if (gid !== null) opts.gid = gid;
+    try {
+      const r = spawnSync(
+        nodeBin,
+        ['-e', 'process.kill(Number(process.argv[1]), process.argv[2])', String(n), sig],
+        opts,
+      );
+      return r?.status === 0 && !r?.error;
+    } catch {
+      return false;
+    }
+  };
+}
+
+/**
+ * `/proc/<pid>` 还在不在（**核实"真的没了"用**）。
+ *
+ * ⚠️ 认不出的 `pid` ⇒ `false`（不猜）。读不到 `/proc` ⇒ `false`
+ *    （调用方据此如实说"读不到"，**不许**把它说成"已经收干净了"）。
+ */
+export function pidExists(pid, fs = nodeFs) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 1) return false;
+  try {
+    return fs.existsSync(`/proc/${n}`);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 这一层的**内存余量**（`max - current`）；算不出 ⇒ `null`（**不猜、不挡**）。
+ *
+ * ⚠️ 两种 cgroup 都看（v2 的 `memory.max` / `memory.current`，
+ *    v1 的 `memory.limit_in_bytes` / `memory.usage_in_bytes`）——
+ *    盒里是哪一种由内核定，不是我们定的。
+ * ⚠️ `max` 字面量（这一层没有上限）⇒ `null`：**算不出余量**，
+ *    这时**不许**拿一个假数去挡人（手册纪律：算不出就说算不出）。
+ */
+export function readMemoryHeadroom(fs = nodeFs) {
+  const pairs = [
+    ['/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory.current'],
+    ['/sys/fs/cgroup/memory/memory.limit_in_bytes', '/sys/fs/cgroup/memory/memory.usage_in_bytes'],
+  ];
+  for (const [maxFile, curFile] of pairs) {
+    try {
+      const rawMax = String(fs.readFileSync(maxFile, 'utf8')).trim();
+      if (rawMax === '' || rawMax === 'max') continue;
+      const max = Number.parseInt(rawMax, 10);
+      const current = Number.parseInt(String(fs.readFileSync(curFile, 'utf8')).trim(), 10);
+      if (!Number.isFinite(max) || !Number.isFinite(current) || max <= 0) continue;
+      return { max, current, free: max - current };
+    } catch {
+      /* 没有那个文件 / 读不到 ⇒ 试下一种 */
+    }
+  }
+  return null;
+}
+
+/**
+ * 这条命令行**是不是**"我们那台 `--profile web`"。
+ *
+ * 🔴 孤儿清扫**只认这一种**（`docs/dev/110` 那台开发者入口的界面）。
+ *    调度器按轮起的是 **`--profile sdk`**（`agentArgs()`），评审那台也是 sdk
+ *    —— 扫错一个就是把正在干活的 agent 收掉。
+ *
+ * ⚠️ 判据 K3 的**变异**：把判据放宽成"带 `--profile` 就算" ⇒ 当场红。
+ */
+export function isWebProfileArgs(args) {
+  const list = Array.isArray(args) ? args : [];
+  for (let i = 0; i < list.length; i += 1) {
+    if (list[i] === '--profile' && list[i + 1] === DEV_WEB_PROFILE) return true;
+    if (list[i] === `--profile=${DEV_WEB_PROFILE}`) return true;
+  }
+  return false;
+}
+
+/**
+ * 盒里**别的** `--profile web` 的 pid（**读盒里的 `/proc`**）。
+ *
+ * 🔴 **只在盒里用**：宿主上主人的 `dsh` 一堆（还可能带着 `--profile web`），
+ *    在那儿扫就是"手一滑把主人的东西收掉"。所以
+ *    · 默认**关**（`sweepOrphans` 默认 `false`）；
+ *    · `serve.js` **只在容器那一支**（`cfg.trustedSocketPath` 那条，
+ *      宿主上根本不建这个中继）才把它打开。
+ * ⚠️ 判据里要能看出这条边界：默认关着的时候，**一台都不许动**。
+ */
+export function listWebProfilePids({ fs = nodeFs, procDir = '/proc', skipPids = [] } = {}) {
+  const skip = new Set((Array.isArray(skipPids) ? skipPids : []).map((p) => Number(p)));
+  const out = [];
+  let names = [];
+  try {
+    names = fs.readdirSync(procDir);
+  } catch {
+    return out;
+  }
+  for (const name of names) {
+    if (!/^\d+$/u.test(String(name))) continue;
+    const pid = Number.parseInt(String(name), 10);
+    if (skip.has(pid)) continue;
+    let raw;
+    try {
+      raw = fs.readFileSync(`${procDir}/${name}/cmdline`, 'utf8');
+    } catch {
+      continue; // 读不到（已经没了 / 不是我们的）⇒ 跳过，不猜
+    }
+    const args = String(raw).split('\0').filter((a) => a !== '');
+    if (isWebProfileArgs(args)) out.push(pid);
+  }
+  return out;
 }
 
 /** 等一会儿（`killChild` 那条路上用）。 */
@@ -931,12 +1147,66 @@ export function createDevWebRelay({
   log = () => {},
   killGraceMs = DEV_KILL_GRACE_MS,
   bootTimeoutMs = null,
+  /**
+   * 等旧那台**真的退**的上限（默认 `DEV_EXIT_WAIT_MS`；判据注入一个小的）。
+   * ⚠️ 换房间＝杀→**等它真死**→再起 —— 这个顺序不许变。
+   */
+  exitWaitMs = DEV_EXIT_WAIT_MS,
+  /** 发完信号之后**核实它真的没了**的上限（默认 `DEV_PID_GONE_WAIT_MS`；判据注入一个小的）。 */
+  pidGoneWaitMs = DEV_PID_GONE_WAIT_MS,
   /** 注入用：读"这一层被 OOM 杀了几个"（判据里给一个假的；默认读 cgroup）。 */
   oomKillsFn = readOomKills,
+  /**
+   * 🔴 **发信号那一步**（`(pid, signal) => boolean`）。
+   *
+   * 默认 = `makeKillPid(cfg)`：拿 **`cfg.agentUid/Gid` 起一个一次性 node helper**
+   * 去 `process.kill` —— **因为盒里那个服务（容器 root）没有 `CAP_KILL`，
+   * 杀不动换手到 uid 1000 的那台 DSH**（真机 `Operation not permitted`，见文件顶那段）。
+   * 判据注入一个假的（**能数出调了几次、带了什么信号**）。
+   * 变异 K1：把 `killChild()` 改回 `c.kill(...)` ⇒ 当场红。
+   */
+  killPid = null,
+  /** 注入用：`/proc/<pid>` 还在不在（默认读 `/proc`；判据里给个假的）。 */
+  pidAliveFn = null,
+  /**
+   * 🔴 **要不要扫盒里别的 `--profile web`**（默认 **`false`**）。
+   *
+   * 为什么默认关：**宿主上不能扫** —— 那儿主人的 `dsh` 一堆，扫到就是手一滑收掉别人的东西。
+   * `serve.js` **只在容器那一支**（`cfg.trustedSocketPath` 那条路，宿主上根本不建这个中继）
+   * 才传 `true`。⇒ 判据 K3 的边界就是"默认关着的时候，一台都不许动"。
+   */
+  sweepOrphans = false,
+  /** 扫 `/proc` 用的 fs（判据里给个假的）。 */
+  procFs = nodeFs,
+  /** `/proc` 在哪儿（判据里给个假的目录）。 */
+  procDir = '/proc',
+  /** 注入用：读这一层的**内存余量**（默认读 cgroup；读不到 ⇒ `null` ⇒ **不挡**）。 */
+  memFn = null,
+  /** 起一台之前至少要多少空闲内存（默认 `DEV_MEM_NEED_BYTES`）。 */
+  memNeedBytes = DEV_MEM_NEED_BYTES,
+  /** 内存不够时最多等多久（默认 `DEV_MEM_WAIT_MS`）。 */
+  memWaitMs = DEV_MEM_WAIT_MS,
+  /**
+   * 🔴 **起台失败之后的冷却**（默认 `DEV_FAIL_COOLDOWN_MS`；判据注入一个小的）。
+   *
+   * **为什么要有它**（2026-09-26 父 agent 在 u2 上量到的）：入口那一页的 WebSocket
+   * **会自动重连**，而每一次重连（/ 每一次取页、每一条 `/` 请求）在"没有活着的那台"时
+   * 都会走 `ensure()` ⇒ **又起一台**。⇒ 一个开着的标签页就足以把盒子拖进
+   * "反复起、反复被 OOM 杀"的循环（他清完孤儿，过一会儿又冒出 1/2/3 台，而没人在点房间）。
+   * ⇒ 失败之后**一段时间内不许再起新的**，冷却期里**如实回 503**。
+   */
+  failCooldownMs = DEV_FAIL_COOLDOWN_MS,
 } = {}) {
   if (!cfg) throw new Error('开发者中继需要 cfg');
   /** ⚠️ 日志一律先过 `redactSecrets`（进程令牌 / cookie 值不许进日志）。 */
   const say = (m) => log(redactSecrets(m));
+
+  /** 发信号（默认是"同 uid 的小 helper"，见 `makeKillPid` 那段）。 */
+  const killPidFn = typeof killPid === 'function' ? killPid : makeKillPid(cfg);
+  /** `/proc/<pid>` 还在不在。 */
+  const pidAlive = typeof pidAliveFn === 'function' ? pidAliveFn : (p) => pidExists(p);
+  /** 这一层的内存余量（读不到 ⇒ `null`）。 */
+  const readMem = typeof memFn === 'function' ? memFn : () => readMemoryHeadroom();
 
   const bootMs =
     Number.isFinite(bootTimeoutMs) && bootTimeoutMs > 0
@@ -974,6 +1244,12 @@ export function createDevWebRelay({
    *    （它会把自己那个端口写进 `upstream`）—— 那是"两个 dev 进程"的形状。
    */
   let gen = 0;
+  /**
+   * **上一次起台失败**（时刻 / 错码 / 那句话）；成功一次就清掉。
+   * 🔴 冷却（`DEV_FAIL_COOLDOWN_MS`）读的就是它 —— 没有它，
+   *    入口那条会自动重连的 WebSocket 会把盒子拖进 spawn 风暴。
+   */
+  let lastFailure = null;
 
   /** **房间清单的来源**（不给 ⇒ 只有 `main` 一间，cwd 就是 `cfg.agentCwd`）。 */
   const roomsOf = () => {
@@ -997,6 +1273,167 @@ export function createDevWebRelay({
     return listRooms().find((r) => r.id === id) ?? null;
   }
 
+  /** 一个子进程的 pid（认不出 ⇒ `null`；**不猜**）。 */
+  function pidOf(c) {
+    const n = c?.pid;
+    return Number.isInteger(n) && n > 1 ? n : null;
+  }
+
+  /** 冷却还剩多少毫秒（`0` = 没在冷却）。 */
+  function cooldownLeft() {
+    if (!lastFailure) return 0;
+    const ms = Number.isFinite(failCooldownMs) && failCooldownMs > 0 ? failCooldownMs : DEV_FAIL_COOLDOWN_MS;
+    const left = lastFailure.at + ms - Date.now();
+    return left > 0 ? left : 0;
+  }
+
+  /**
+   * 冷却期里那些请求：**不许再起新的** ⇒ 抛这个，调用方**如实 503 ＋ 人话**。
+   * ⚠️ `lastCode` 是上一次失败那个错码：上一次是"内存腾不出地方"时，
+   *    回的话也应当是那一句（**不许**把内存不够说成"没起来"）。
+   */
+  function cooldownError() {
+    const e = new Error(
+      `上一次起台刚失败（${lastFailure?.message ?? '原因不明'}），还要等 ${cooldownLeft()}ms`,
+    );
+    e.code = 'DEV_COOLDOWN';
+    e.lastCode = lastFailure?.code ?? null;
+    return e;
+  }
+
+  /**
+   * 给一个子进程发信号：**有 pid 就走注入的那个 `killPid`**（同 uid 的小 helper）。
+   *
+   * ⚠️ 没有 pid（spawn 失败那一档 / 判据里的假子进程）⇒ 只剩句柄这一条路。
+   *    那条路在盒里**不管用**（没有 `CAP_KILL`），所以它走的时候**一句话都不许省** ——
+   *    由 `killChild()` 的"核实"那一步如实说。
+   */
+  function signalChild(c, sig) {
+    const pid = pidOf(c);
+    if (pid === null) {
+      try {
+        c?.kill?.(sig);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    try {
+      return killPidFn(pid, sig) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 等 `/proc/<pid>` 真的没了（**有上限**；到点还在 ⇒ `false`，不无限等）。 */
+  async function waitPidGone(pid, waitMs = DEV_PID_GONE_WAIT_MS) {
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      let alive = true;
+      try {
+        alive = pidAlive(pid) === true;
+      } catch {
+        // 读不到 ⇒ **不猜**：当成"还活着"，让调用方如实说
+        alive = true;
+      }
+      if (!alive) return true;
+      if (Date.now() >= deadline) return false;
+      await delay(Math.min(DEV_PID_POLL_MS, waitMs));
+    }
+  }
+
+  /**
+   * 🔴 **起新台之前，把盒里别的 `--profile web` 收掉**（一次只开一间）。
+   *
+   * **为什么要有它**：`killChild()` 失败的年代（B43 第二版之前）留下的孤儿 ——
+   * 盒里除了"现在这一台"之外**不该**有别的 `--profile web`；多一台就多 ~490MB，
+   * 而这一层只有那么点地方。换房间那条路上，孤儿就是下一次 OOM 的来源。
+   *
+   * ⚠️ **三条不许破**：
+   *   ① 只在**盒里**扫（`sweepOrphans` 默认 `false`；`serve.js` 只在容器那一支打开）
+   *      —— 宿主上主人的 `dsh` 一堆，扫到就是收掉别人的东西；
+   *   ② **只认 `--profile web`**（调度器按轮那台是 `--profile sdk`，评审那台也是）；
+   *   ③ **不动"现在这一台"**（`child` 的 pid 与自己的 pid 都在跳过名单里）。
+   *
+   * ⚠️ 判据 K3 的两个变异：把 `sdk` 也扫 ⇒ 红；把当前那台也扫 ⇒ 红。
+   */
+  async function sweepOrphanWebs() {
+    if (sweepOrphans !== true) return { swept: 0 };
+    const keep = [process.pid];
+    const cur = pidOf(child);
+    if (cur !== null) keep.push(cur);
+    let pids = [];
+    try {
+      pids = listWebProfilePids({ fs: procFs, procDir, skipPids: keep });
+    } catch (err) {
+      say(`盒里别的 dsh web 没扫成：${err?.message ?? err}（不敢乱动，这一台照常起）`);
+      return { swept: 0 };
+    }
+    const swept = [];
+    const left = [];
+    for (const p of pids) {
+      if (signalChild({ pid: p }, 'SIGKILL')) swept.push(p);
+      else left.push(p);
+    }
+    if (swept.length > 0) {
+      const still = [];
+      for (const p of swept) {
+        if (!(await waitPidGone(p, DEV_SWEEP_GONE_WAIT_MS))) still.push(p);
+      }
+      say(
+        `⚠️ 盒里还留着 ${swept.length} 台别的 dsh web（不是现在这一台）⇒ 已经收掉` +
+          `${still.length > 0 ? `（其中 ${still.length} 台还没收掉：pid ${still.join('、')}）` : ''}（一次只开一间）`,
+      );
+    }
+    if (left.length > 0) {
+      say(`⚠️ 盒里有 ${left.length} 台别的 dsh web 没收动（pid ${left.join('、')}）—— 它们还在占内存`);
+    }
+    return { swept: swept.length, left };
+  }
+
+  /**
+   * 🔴 **起新台之前先确认"这一层腾得出地方"**（内存闸）。
+   *
+   * 真机读数：这一层 `memory.max` 只有那么大，而一台 `dsh web` ＋ 它那三个 MCP
+   * 就是 ~490MB。硬起的下场是**被内核杀掉**（`oom_kill` +1），
+   * 而那时报"没起来"就是把原因说错了。
+   * ⇒ 余量不够就**等**（有上限）；到点还不够 ⇒ 抛一个带 `DEV_NO_MEMORY` 的错，
+   *    调用方**如实回 503 ＋ 一句人话**。
+   *
+   * ⚠️ 读不到 cgroup（宿主上 `memory.max` 是 `max` / 没有那个文件）⇒ `null` ⇒ **不挡**：
+   *    算不出余量时拿一个假数去挡人，就是"看着有闸、其实在猜"。
+   */
+  async function waitForMemory() {
+    const need = Number.isFinite(memNeedBytes) && memNeedBytes > 0 ? memNeedBytes : DEV_MEM_NEED_BYTES;
+    const now = () => {
+      try {
+        const m = readMem();
+        return m && Number.isFinite(m.free) ? m : null;
+      } catch {
+        return null;
+      }
+    };
+    const first = now();
+    if (!first) return null; // 算不出 ⇒ 不挡（不猜）
+    if (first.free >= need) return first;
+    const deadline = Date.now() + (Number.isFinite(memWaitMs) ? memWaitMs : DEV_MEM_WAIT_MS);
+    let last = first;
+    while (Date.now() < deadline) {
+      // ⚠️ **别睡过截止那一刻**（超时是"有上限"，不是"每次多睡一会儿"）。
+      await delay(Math.max(1, Math.min(DEV_MEM_POLL_MS, deadline - Date.now())));
+      const m = now();
+      if (!m) return null; // 等的过程里读不到了 ⇒ 不挡（不猜）
+      last = m;
+      if (m.free >= need) return m;
+    }
+    const mb = (n) => Math.round(n / (1024 * 1024));
+    const e = new Error(
+      `这一层现在腾不出地方：余量 ${mb(last.free)}MB < 要 ${mb(need)}MB（等了 ${Number.isFinite(memWaitMs) ? memWaitMs : DEV_MEM_WAIT_MS}ms）`,
+    );
+    e.code = 'DEV_NO_MEMORY';
+    throw e;
+  }
+
   /**
    * 收掉现在这一台。**返回一个 promise：它真的没了（或者等到了上限）**。
    *
@@ -1004,32 +1441,48 @@ export function createDevWebRelay({
    *    ~348MB ＋ 三个 MCP 子进程）**不是一下就没了**的 —— 原来不等 ⇒ 两台的峰值叠在
    *    一起 ⇒ 盒子的内存上限顶不住 ⇒ 内核把**新起来的那台**杀掉（真机：`oom_kill` 3→5）。
    *    ⇒ 调用方（`ensure()`）**起新台之前先 `await` 它**。
+   *
+   * 🔴 **第二版（2026-09-26）：光"等"不够 —— 它**杀不动**。**
+   *    真机读数：`c.kill()` 在盒里**静默失败**（容器 root 没有 `CAP_KILL`，而那台是 uid 1000
+   *    起的）⇒ 等的是一个**永远不会来的** `exit`，等到上限就当"收完了"，旧那台照旧占着 ~390MB。
+   *    ⇒ 现在①发信号走 `killPidFn`（同 uid 的小 helper）；②发完**核实真的没了**
+   *      （读 `/proc/<pid>`，有上限）；③没杀掉就**如实说一句**（不许静默、不许当收干净了）。
    */
   function killChild() {
     gen += 1;
     const c = child;
     const gone = childGone;
+    const pid = pidOf(c);
     child = null;
     childGone = null;
     upstream = null;
     starting = null;
     if (!c) return tearing;
-    try {
-      c.kill('SIGTERM');
-    } catch {
-      /* 已经没了 */
-    }
+    signalChild(c, 'SIGTERM');
     const t = setTimeout(() => {
-      try {
-        c.kill('SIGKILL');
-      } catch {
-        /* 已经没了 */
-      }
+      signalChild(c, 'SIGKILL');
     }, killGraceMs);
     t.unref?.();
     tearing = (async () => {
-      await Promise.race([gone ?? Promise.resolve(), delay(DEV_EXIT_WAIT_MS)]);
+      // ★ **等 `exit`**（B43 那条不变：换房间＝杀→等它真死→再起）。
+      await Promise.race([
+        gone ?? Promise.resolve(),
+        delay(Number.isFinite(exitWaitMs) && exitWaitMs >= 0 ? exitWaitMs : DEV_EXIT_WAIT_MS),
+      ]);
       clearTimeout(t);
+      // 🔴 **核实**：发过信号 ≠ 收干净了。没死就如实说（这条以前是静默的）。
+      if (pid !== null) {
+        const reallyGone = await waitPidGone(
+          pid,
+          Number.isFinite(pidGoneWaitMs) && pidGoneWaitMs >= 0 ? pidGoneWaitMs : DEV_PID_GONE_WAIT_MS,
+        );
+        if (!reallyGone) {
+          say(
+            `⚠️ 换房间：旧那台 dsh web（pid ${pid}）**没收掉** —— 它还活着（同 uid 那个 helper ` +
+              `也没能收掉它），它还在占内存。**别当成收干净了。**`,
+          );
+        }
+      }
     })();
     return tearing;
   }
@@ -1221,12 +1674,15 @@ export function createDevWebRelay({
    */
   async function ensure(room) {
     if (closed) throw new Error('开发者中继已经关了');
+    // ★ 已经有一台活着 ⇒ 永远照常服务（冷却只管"要不要**再起一台**"）
+    if (upstream) return upstream;
+    // 🔴 **冷却期：不许再起新的**（有在飞的启动就让它接着飞 —— 那是同一台）
+    if (!starting && cooldownLeft() > 0) throw cooldownError();
     if (currentId !== room.id) {
       killChild(); // 换房间：旧的收掉（"一次只开一间"）
       currentId = room.id;
       currentCwd = room.cwd;
     }
-    if (upstream) return upstream;
     if (!starting) {
       const myGen = gen;
       const p = (async () => {
@@ -1239,32 +1695,41 @@ export function createDevWebRelay({
         //    它赖在容器里占着 ~348MB，而中继自己以为"什么都没有在跑"。
         let hit = null;
         try {
+          // 🔴 **先扫孤儿**（B43 第二版）：盒里除了中继自己起的那台，**不该**有别的
+          //    `--profile web`。留着就是下一次 OOM 的来源。见 `sweepOrphanWebs()`。
+          await sweepOrphanWebs();
+          // 🔴 **再看这一层腾不腾得出地方**：不够就等（有上限），到点还不够就
+          //    **如实 503**（不硬起、也不把它说成"没起来"）。见 `waitForMemory()`。
+          await waitForMemory();
           hit = await spawnWeb(room);
           const cookie = await exchangeToken(hit.port, hit.token);
           if (myGen !== gen) {
             // 这期间被换掉了 ⇒ 刚起来的这一台**不留**（不然盒里就有两台了）。
             // ⚠️ 收的是**我这一台**（`hit.child`），不是 `child` —— 后者现在
             //    可能已经指向**新那一间**的进程了。
-            try {
-              hit.child?.kill('SIGTERM');
-            } catch {
-              /* 已经没了 */
-            }
-            throw new Error('这一台刚起来就被换掉了');
+            signalChild(hit.child, 'SIGTERM');
+            const superseded = new Error('这一台刚起来就被换掉了');
+            superseded.code = 'DEV_SUPERSEDED';
+            throw superseded;
           }
           // ⚠️ **令牌与 cookie 都不进日志**（只说端口、房间与"通了"）
           say(`盒里那台 dsh web 起来了（127.0.0.1:${hit.port}，房间 ${room.name}，只听回环；cookie 已存住）`);
           upstream = { port: hit.port, cookie };
+          lastFailure = null; // ★ 成功一次就把冷却清掉
           return upstream;
         } catch (err) {
           // 🔴 **失败的那一台要被真的收掉**（不留孤儿赖着内存）：按**句柄**收
           //    （全局那个 `child` 可能已经指向新的一间），再走一遍 `killChild()`。
-          try {
-            (err?.child ?? hit?.child)?.kill?.('SIGKILL');
-          } catch {
-            /* 已经没了 */
+          //    ⚠️ 内存闸那一档（`DEV_NO_MEMORY`）**本来就没起过台**，什么都不用收。
+          if (err?.code !== 'DEV_NO_MEMORY') {
+            signalChild(err?.child ?? hit?.child, 'SIGKILL');
+            killChild();
           }
-          killChild();
+          // 🔴 **记下失败时刻**（冷却用它）。⚠️ "刚起来就被换掉了"不算失败 ——
+          //    那是换房间把在飞的那台收掉；记了会让**新那一间**白等一段冷却。
+          if (err?.code !== 'DEV_SUPERSEDED') {
+            lastFailure = { at: Date.now(), code: err?.code ?? null, message: err?.message ?? String(err) };
+          }
           throw err;
         }
       })();
@@ -1321,6 +1786,13 @@ export function createDevWebRelay({
         return devUnavailable(res, 404, '没有这一间。回房间清单看一眼。');
       }
       if (currentId !== room.id) {
+        // 🔴 **冷却期里不许"换"**：换了就要起新的一台，而冷却正是为了不起。
+        //    ⚠️ 顺序也重要：**先看冷却、再收旧的** —— 反了的话，冷却期里点一下
+        //       就会把**现在正跑着的那台**收掉，然后 503（用户白丢一台）。
+        if (cooldownLeft() > 0) {
+          say(`开发者入口：还在冷却（${cooldownLeft()}ms）⇒ 不换间、也不起新的`);
+          return devUnavailable(res, 503, DEV_FAIL_COOLDOWN_TEXT);
+        }
         killChild(); // 换房间 ⇒ 旧的收掉（"一次只开一间"）
         currentId = room.id;
         currentCwd = room.cwd;
@@ -1354,6 +1826,18 @@ export function createDevWebRelay({
     try {
       up = await ensure(room);
     } catch (err) {
+      // 🔴 **内存不够是一句不同的话**（不是"没起来"）：那一台**根本没起**
+      //    （我们主动没起），硬起只会被内核杀掉。⇒ **503 ＋ 一句人话**。
+      if (err?.code === 'DEV_NO_MEMORY' || err?.lastCode === 'DEV_NO_MEMORY') {
+        say(`盒里那一间现在腾不出地方（房间 ${room.name}）：${err?.message ?? err} ⇒ 503（不硬起）`);
+        return devUnavailable(res, 503, DEV_NO_MEMORY_TEXT);
+      }
+      // 🔴 **刚失败过 ⇒ 冷却期里不许再起新的**（入口那条 WebSocket 会自动重连 ——
+      //    不冷却就是一个开着的标签页把盒子拖进 spawn 风暴）。**如实 503 ＋ 人话**。
+      if (err?.code === 'DEV_COOLDOWN') {
+        say(`盒里那一间刚没起来（房间 ${room.name}）：${err?.message ?? err} ⇒ 503（冷却中，不重复起）`);
+        return devUnavailable(res, 503, DEV_FAIL_COOLDOWN_TEXT);
+      }
       say(`盒里那台 dsh web 没起来（房间 ${room.name}）：${err?.message ?? err}`);
       return devUnavailable(res, 502, '那台界面现在没起来，等会儿再试。');
     }
@@ -1543,6 +2027,16 @@ export function createDevWebRelay({
       })
       .catch((err) => {
         // **握手阶段**如实拒 + 人话（不是先 101 再关）
+        if (err?.code === 'DEV_NO_MEMORY' || err?.lastCode === 'DEV_NO_MEMORY') {
+          say(`盒里那一间现在腾不出地方（升级）：${err?.message ?? err} ⇒ 503（不硬起）`);
+          rejectUpgradeSocket(socket, 503, 'Service Unavailable', DEV_NO_MEMORY_TEXT);
+          return;
+        }
+        if (err?.code === 'DEV_COOLDOWN') {
+          say(`盒里那一间刚没起来（升级）：${err?.message ?? err} ⇒ 503（冷却中，不重复起）`);
+          rejectUpgradeSocket(socket, 503, 'Service Unavailable', DEV_FAIL_COOLDOWN_TEXT);
+          return;
+        }
         say(`盒里那台 dsh web 没起来（升级）：${err?.message ?? err}`);
         rejectUpgradeSocket(socket, 502, 'Service Unavailable', '那台界面现在没起来，等会儿再试。');
       });
@@ -1565,6 +2059,13 @@ export function createDevWebRelay({
     rooms() {
       return listRooms();
     },
+    /**
+     * 收掉盒里**别的** `--profile web`（**不是现在这一台**）—— 给排障/运维用。
+     *
+     * ⚠️ 与 `ensure()` 里那一步是**同一个函数**：`sweepOrphans` 关着（默认）⇒
+     *    这里**一台都不动**（宿主上跑它 = 空操作，这是刻意的）。
+     */
+    sweepOrphanWebs,
     /** 现在什么状态（**不含任何秘密**；给横幅/排障用）。 */
     state() {
       return {
@@ -1574,6 +2075,8 @@ export function createDevWebRelay({
         // ★ 现在这一台开的是哪一间（排障第一眼要看的就是它）
         room: currentId,
         cwd: currentCwd,
+        /** 现在这一台那个 pid（排障用；没有 ⇒ `null`）。 */
+        pid: pidOf(child),
       };
     },
     /** 收干净（`server.close()` 之后兜底 —— 不许留孤儿）。 */

@@ -283,3 +283,148 @@ sdk 那台照样由我们这份 `serverInfo: hupo-sdk-runtime` 作答；web 那�
 `inject: [sdkAppStartup, loader]` **当成正确形状钉住**（写它的人照官方抄的）⇒
 修完 patch 之后那条当场红 —— **它钉的是缺陷**。⇒ 教训：判据要写"**为什么**是这个形状"，
 不许把"照抄来的形状"当结论。
+
+### 八·补3 · 🔴 **B43 第二版：为什么"等它退"不够 —— 它杀不动**（`#156` · 2026-09-26）
+
+**主人报的原话**：*"dsh19145526557 的 dsh 没有接通 websocket"*。
+
+**现象**：开发者入口那一页能打开、房间清单列得出；**换一间就 502**（于是那一页的
+WebSocket 永远连不上 —— 主人看到的就是"没接通 websocket"）。**第一间**（刚重启/刚换版
+之后点的第一间）是好的。
+
+**修前真机读数（父 agent 在 u2 的盒子上量的 · 原话）** —— `/tmp/switch3.mjs main aoshu-bank main`：
+```
+main        选=302 取页=200(有 boot) 升级=101
+aoshu-bank  选=302 取页=502          升级=101
+main        选=302 取页=502          升级=HTTP 502
+换完内存：299MB · oom_kill 8→13（涨 5）
+/web 进程两台：pid=3067 rss=286432KB ＋ pid=3124 rss=3348KB
+```
+⇒ **每换一次 `oom_kill` 就涨、换完之后旧那一台还活着、页是 502**。
+（⚠️ 中间那条 `升级=101` 是"重试那次碰巧赶在被杀之前把端口行报出来了"，
+不是"好了" —— 同一形状下第一次取页仍然是 502。）
+
+**根因（真机读数，不是推断）**：`dsh web` 是盒里那个服务（**容器 root**）用
+`spawnFn(..., { uid: cfg.agentUid, gid: cfg.agentGid })` **换手到 uid 1000** 起的
+（安全决策①，不许改）。而那个容器是
+```
+podman run --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID \
+           --cap-add=SETGID --cap-add=FOWNER
+```
+⇒ 容器 root 的 `CapEff = 0xcb`，**没有 `CAP_KILL`** ⇒ 它给**另一个 uid** 的进程发不了信号：
+真机原话 `kill: (14) - Operation not permitted`。
+⇒ `killChild()` 里那两个 `c.kill(...)` **静默失败**（被 `try/catch` 吞了）：
+"换房间先收旧的"**从来没真的收掉过** —— 旧那台还活着（`/proc` 里 RSS ~390MB），
+两台叠在一起 ⇒ 内核杀**新起来的那台** ⇒ 那一间 **502**。
+
+⚠️ **为什么以前看着是好的**：每次发布产品层 ⇒ 容器重建 ⇒ 旧的 `dsh web` 全没了
+（干净的第一次）；检查又总是在"刚重建之后"选第一间 ⇒ **全绿**。**主人自己换房间就必挂**
+—— "夹具/时机假绿"的又一例。
+
+**修法（守正：不改安全决策①、不改协议、不加新 `/api/…` 路由）**：
+
+| # | 修的是什么 | 落在哪 |
+|---|---|---|
+| ① | **发信号走"同 uid 的小 helper"**：`spawnSync(process.execPath, ['-e', 'process.kill(Number(process.argv[1]), process.argv[2])', pid, sig], { uid, gid, timeout })` —— 同 uid 之间发信号**不需要** `CAP_KILL` | `makeKillPid(cfg)` ＋ `createDevWebRelay({ killPid })`（**可注入**） |
+| ② | **杀完要核实真的死了**（读 `/proc/<pid>`，有上限） | `killChild()` 的 `waitPidGone()` |
+| ③ | **没杀掉要如实说**（点名 pid；**不许**静默、不许当"收干净了"） | `killChild()` 里那一句 `⚠️ …没收掉 —— 它还活着` |
+| ④ | **起新台之前扫一遍孤儿**（只 `--profile web`、只有盒里那一支才开、不动"现在这一台"） | `sweepOrphanWebs()`；`serve.js` **只在容器那一支**传 `sweepOrphans: true` |
+| ⑤ | **内存闸**：余量不够（阈值住代码）就等（有上限），到点还不够 ⇒ **如实 503 ＋ 人话** | `readMemoryHeadroom()` ＋ `waitForMemory()` ＋ `DEV_NO_MEMORY_TEXT` |
+| ⑥ | **失败之后的冷却**：入口那条 WebSocket 会自动重连 ⇒ 不冷却就是 **spawn 风暴**（父 agent 在 u2 上清完孤儿又冒出 1/2/3 台，而没人在点房间） | `lastFailure` ＋ `DEV_FAIL_COOLDOWN_MS` ＋ `DEV_FAIL_COOLDOWN_TEXT` |
+
+**"杀不动的时候要不要接着起新台" —— 决定：起，但日志里说清。**
+理由（写在代码注释里）：不起的话，只要盒里赖着一台收不掉的孤儿，整条入口就**永远**打不开；
+而起是有闸的 —— ⑤ 内存闸会挡住硬起（不够就如实 503）、④ 起之前还会再扫一次孤儿。
+**但"杀不动"这句话一定要留下**：不然下一次排查又会以为"是 dsh 起不来"（这一轮修的就是这个）。
+
+**判据（`test/dev-mode.test.js` · 每条都能反着验）**：
+- **K1** `killChild()` 走的是**注入的那个 `killPid`**（不是 `child.kill`）；
+- **K2** `killPid` 抛错 / 进程没死 ⇒ **如实说一句**（点名 pid），而且**照样起新台**（有闸兜着）；
+- **K3** 孤儿清扫**只认 `--profile web`**、**默认关**（宿主那一档一台都不许动）、**不动现在这一台**；
+- **K4** 内存不够 ⇒ **503 ＋ 人话**（不硬起、也不说成"没起来"）；读不到 cgroup ⇒ **不挡**（不猜）；
+- **K5** 连续请求 ⇒ `spawnFn` **只被叫一次**（并发 3 条也只 1 台 ＋ 失败后有冷却；冷却过了要能再试）；
+- **K6** 冷却期内**如实 503 ＋ 那句人话**（HTTP 与升级两条路都是 503）。
+
+**变异读数（每一刀都真跑过 · 只改 `src/dev-mode.js` 一处 · 跑完逐字节还原 md5 一致）**：
+
+| 刀 | 改回什么 | 读数 |
+|---|---|---|
+| M1 | `killChild` 改回 `child.kill` | K1 **红** |
+| M2 | 杀完不核实、不吭声（`if (!reallyGone)` 关掉） | K2 **红** |
+| M3 | 孤儿判据放宽成"带 `--profile` 就算" | K3 纯 **＋** K3 行为 **两条红** |
+| M4 | 不跳过"现在这一台" | K3 行为 **红** |
+| M5 | 孤儿清扫默认改成开（= 宿主上也扫） | K3 行为 **红** |
+| M6 | 起新台前不扫孤儿 | K3 行为 **红** |
+| M7 | 内存闸关掉（硬起） | K4 **红** |
+| M8 | 冷却去掉 | K5 **＋** K6 **两条红** |
+| M9 | 冷却期照样回 502"没起来" | K6 **红** |
+
+**真机读数（`#156` · 2026-09-26 · 一次性容器 · 真内核/真 cgroup/真 dsh）**：
+镜像 `localhost/hupo-tenant:local`，参数照 `create-tenant-pool.sh` 抄
+（`--cap-drop=ALL` 只加回五条、`--memory=768m`、`--pids-limit=512`），
+挂一份**未发布**的产品层；盒里真起 `dsh web`、真换房间。**不碰 u2、不发布、不重启任何东西。**
+
+⚠️ **这一套是能重跑的**（脚本进了仓库，跑完什么都不留）：
+```bash
+bash scripts/build-tenant-code.sh                       # 造一份**未发布**的产品层，打印指纹
+bash scripts/check-dev-mode-container.sh --layer /srv/hupo/tenant-code/<指纹>
+bash scripts/check-dev-mode-container.sh --layer <修前那一份> --seq main,aoshu-bank,main,aoshu-bank
+bash scripts/check-dev-mode-container.sh --layer <指纹> --seq ghost,ghost,ghost,ghost   # spawn 风暴那一件
+```
+（修前那一份怎么来：把 `src/dev-mode.js` 换成 `git show HEAD:…` 的副本，再用
+`HUPO_CORE=<那份副本> bash scripts/build-tenant-code.sh` 造一格 —— **仍然不 publish**。）
+
+先量**根因那一句**（同一个容器）：
+```
+容器 root 的 CapEff： 00000000000000cb          ← 与真盒里 /app/entry.mjs 逐位一样（没有 CAP_KILL）
+① 容器 root process.kill(14, SIGTERM) ⇒ EPERM；它还活着=true      ← 生产里 c.kill(...) 走的就是这条
+② 同 uid helper process.kill(14, SIGKILL) ⇒ status=0；它还活着=false ← 修法
+```
+
+**换 3 次房间（`main ⇄ aoshu-bank`，共 4 次进入）**：
+
+| | 选 | 取页 | 升级 | 换完之后盒里的 `--profile web` | `oom_kill` |
+|---|---|---|---|---|---|
+| **修前**（`git show HEAD` 那份 `dev-mode.js`） | 302 | 200 → **502 → 502 → 502** | 101 → **502 → 502 → 502** | **永远 1 台，而且是旧那台**：`pid 14 · cwd /data/main`（四次都一样） | **0 → 2 → 4 → 6** |
+| **修后**（这一次这一版） | 302 | **200 · 200 · 200 · 200**（都有 `__DSH_BOOT__`） | **101 · 101 · 101 · 101** | **每换一次只剩 1 台，而且 cwd 就是新那一间**：`14:/data/main` · `61:/data/workspaces/aoshu-bank` · `108:/data/main` · `155:/data/workspaces/aoshu-bank` | **0 → 0 → 0 → 0** |
+
+⚠️ **cwd 是怎么读到的（如实说）**：容器 root **没有 `CAP_SYS_PTRACE`** ⇒ 直接
+`readlink /proc/<pid>/cwd` 是 **EACCES**；用的是**同 uid 的小 helper** 读的
+（`via: uid1000-helper`）—— 与修法①同一个道理。**读不到就会如实写"读不到"**（不走内存推算）。
+
+**"失败之后会不会反复起"（spawn 风暴那一件，同一个容器）**：连点 **4 次**一间起不来的房间
+（cwd 不存在 ⇒ 起台必失败）：
+
+| | 起台尝试次数 | 四次的状态 |
+|---|---|---|
+| **修前** | **8** | 取页 502 · 502 · 502 · 502 ＋ 每次升级再 502（**一次点击 = 两次起台**） |
+| **修后** | **1** | 取页 **502**（真失败）→ **503 · 503 · 503**（冷却期那句人话「那一间刚没起来，等一会儿再试。」；升级那条也是 503） |
+
+**还欠什么（如实说）**：
+- **u2 的盒子里那三条后修读数，是父 agent 做的**（要先 `--publish` ＋ 让容器重开 ——
+  子 agent 不许发布/重启）。这一节里的真机读数全部来自**一次性容器**；
+- 孤儿清扫**只在这个一次性容器里验过"只动 `--profile web`、不动现在这一台"**
+  （夹具 K3 是注入式的那一半）——**u2 上真有一台 `--profile sdk` 在跑时的读数还没打**；
+- 内存闸那一档在容器里**没被逼到过**（换房间时余量一直够）——夹具 K4 是注入式的读数。
+
+### 八·补3·u2 · ✅ 发布后的**真机读数**（父 agent 打 · 2026-09-26 · u2 的盒子 · 产品层 `af752e466843`）
+
+一次性容器里那两条读数（修前 502×3 ＋ `oom_kill` 0→2→4→6 ／ 修后四次全 200/101 ＋ `oom_kill` 0→0）
+在**主人的盒子**上复现并验通了：
+
+```
+── 换 4 次（main ⇄ aoshu-bank），宿主侧：选一间 ⇒ 取页 ⇒ 真升一次级 ──
+  main         选=302 取页=200(有 boot) 升级=101
+  aoshu-bank   选=302 取页=200(有 boot) 升级=101
+  main         选=302 取页=200(有 boot) 升级=101
+  aoshu-bank   选=302 取页=200(有 boot) 升级=101
+── 换完 ──
+  内存 396MB · oom_kill 0 → 0（**没涨**）
+  /proc 里 --profile web 的进程：**只有一台** pid=145 rss=385764KB
+  它现在是哪一间：pid=145 cwd=**/data/workspaces/aoshu-bank**（＝最后点的那一间）
+```
+
+⚠️ **读数里两个坑，如实记**（都是探针自己的）：
+1. 容器 root **没有 `CAP_SYS_PTRACE`** ⇒ `readlink /proc/<pid>/cwd` 是 EACCES ⇒ 要用**同 uid（1000）的 helper** 去读；
+2. 那个 helper 的**命令行里也有 "profile web" 这串字** ⇒ 第一版探针**把自己认成了目标**（读到 `pid=201 cwd=/app`）——
+   这就是 `pgrep -f` 那个老坑的同一形状：**探针要先把自己排除**（`/tmp/cwd.cjs` 里的 `Number(d)===process.pid` 那一行）。
