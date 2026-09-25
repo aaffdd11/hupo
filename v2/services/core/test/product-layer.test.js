@@ -43,16 +43,36 @@ test('🔴 读得到就是读得到：指纹从 manifest 来，目录是软链�
 });
 
 test('🔴 读不到就是 `null`，**不许**猜一个默认值糊过去', () => {
+  // ⚠️ **显式给 `mount: null`**：不然这几条会随跑测试那个进程的 `HUPO_CODE_DIR` 变
+  //    （盒里跑的时候它是有值的）—— 判据不许依赖环境（"跑一次绿跑一次红"最坏）。
   // ① 压根没翻过
-  assert.equal(readProductLayer({ root: fakeRoot({ fp: null }) }), null);
+  assert.equal(readProductLayer({ root: fakeRoot({ fp: null }), mount: null }), null);
   // ② 软链在、但那一版里没有 manifest
-  assert.equal(readProductLayer({ root: fakeRoot({ manifest: false }) }), null);
+  assert.equal(readProductLayer({ root: fakeRoot({ manifest: false }), mount: null }), null);
   // ③ 目录都不在
-  assert.equal(readProductLayer({ root: nodePath.join(tmp(), '没有这个') }), null);
+  assert.equal(readProductLayer({ root: nodePath.join(tmp(), '没有这个'), mount: null }), null);
   // ④ manifest 是坏的 JSON
   const root = fakeRoot({ fp: 'badbadbadbad' });
   nodeFs.writeFileSync(nodePath.join(root, 'badbadbadbad', 'manifest.json'), '{不是 JSON');
-  assert.equal(readProductLayer({ root }), null);
+  assert.equal(readProductLayer({ root, mount: null }), null);
+});
+
+test('🔴 盒里那一份也**读得到**（`$HUPO_CODE_DIR`）—— 横幅不许再说"读不到／停在镜像那份兜底上"', () => {
+  // 盒里没有 `/srv/hupo/tenant-code`、也没有 `current` 软链；**挂进来的那一份自己**就是那一版。
+  // 🔴 修前这里读的是 null ⇒ 盒里的启动横幅写着「读不到产品层（……容器会停在镜像里那份兜底上）」，
+  //    而**旁边那一行**就打着 `构建 <指纹>`（两半都是假话，而且那份"兜底"2026-09-23 就没了）。
+  const mount = nodePath.join(fakeRoot({ fp: 'boxboxboxbox' }), 'boxboxboxbox');
+  const noRoot = nodePath.join(tmp(), '没有这个');
+  const got = readProductLayer({ root: noRoot, mount });
+  assert.equal(got?.fingerprint, 'boxboxboxbox');
+  assert.equal(got?.dir, mount);
+  // 宿主那一份在的时候**仍然是它优先**（顺序不许反：宿主才是"该不该叫它重开"的权威）
+  const root = fakeRoot({ fp: 'hosthosthost' });
+  assert.equal(readProductLayer({ root, mount }).fingerprint, 'hosthosthost');
+  // 两处都没有 ⇒ 还是 null（如实说读不到）
+  assert.equal(readProductLayer({ root: noRoot, mount: null }), null);
+  // 挂上去了、但那一份里没有 manifest ⇒ 也读不到（不许拿一个空壳糊过去）
+  assert.equal(readProductLayer({ root: noRoot, mount: tmp() }), null);
 });
 
 test('🔴 同一版 ⇒ 不叫它重开（**这一条最要紧**：判错就是每台容器被反复重开）', () => {

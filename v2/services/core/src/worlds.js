@@ -668,10 +668,15 @@ export class Worlds {
 
     // ★ 账本那条本地通道：**套接字路径由这个人的目录派生** ⇒ 天然跟人走
     //   （契约 §7.2：模型那侧的工具经它过来，写盘只有这一处）。
+    // ★ **P1 §三④ 那条出口**（`88` §三·④）：`work` 那一条问的是"哪几件还挂着"，
+    //   而**活账挂在调度器上**（上面那句 `dispatcher = new Dispatcher(…)` 已经建好了）
+    //   ⇒ 这里给一个**惰性取**的函数（收口时它可能已经被换掉/卸下）。
+    //   ⚠️ 传的是**函数**不是对象：将来若调度器换成"按需建"，这里也不会拿到一个旧的。
     const ledgerSocket = new LedgerSocket({
       ledger,
       socketPath: paths.ledgerSocketPath,
       log: (m) => this.#warn(m),
+      ctx: { dispatcher: () => dispatcher },
     }).listen();
 
     // ★ 开机那几件（**按人各算一份**）：崩溃环、对账。

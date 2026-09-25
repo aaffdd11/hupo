@@ -477,6 +477,37 @@ class Session {
     return this.#deadlines.size;
   }
 
+  /**
+   * **这一轮现在是不是"正在跑的那一轮"**（`(generation, turn)` 对得上就是）。
+   *
+   * 用处只有一个，但很要紧：★ P1 §三④ 那条出口**要把"正在问的那一轮"排除掉**
+   * ——他问"那件怎么样了"的时候，**这句提问自己**也在这本账上（状态 `running`），
+   * 不排掉的话答案永远是"那件还在做"，而那件就是这句话本身（**看着像在说假话**）。
+   * ⚠️ 轮的起讫由翻译层给（`turn-start` 记、`turn/end` 删）⇒ 这条判据跟它同一处出处。
+   */
+  isTurnOpen(generation, turn) {
+    if (!Number.isInteger(turn)) return false;
+    if (!this.#turnGeneration.has(turn)) return false;
+    return generation === undefined || generation === null || this.#turnGeneration.get(turn) === generation;
+  }
+
+  /**
+   * ★ **正在跑的那几轮分别是哪句话引起来的**（票 / `ref` 那一串）。
+   *
+   * 为什么还要这个（`isTurnOpen` 不够）：一件活**刚投出去还没轮到它跑**时
+   * （状态 `waiting`）**还没有 `(generation, turn)`**（那两个字段是 `null`），
+   * 可它**照样是"正在问的那一轮"**（用户刚说完、正在等）。只按 `(gen,turn)` 排
+   * 会把这一档漏掉 —— 判据当场抓到了（T4④c ②）。
+   */
+  get openTurnRefs() {
+    const out = new Set();
+    for (const [turn, gen] of this.#turnGeneration.entries()) {
+      const ref = this.#turnOwner.get(pairKey(gen, turn));
+      if (typeof ref === 'string' && ref !== '') out.add(ref);
+    }
+    return out;
+  }
+
   /** 这一间叫什么（事件上的标签）。 */
   get scopeId() {
     return this.#scopeId;
@@ -1303,6 +1334,47 @@ export class Dispatcher {
   workItems() {
     const out = [];
     for (const s of this.#sessions.values()) out.push(...s.workItems);
+    return out;
+  }
+
+  /**
+   * ★ P1 §三④：**一次把挂着的每一件都答成人话**（"那件怎么样了"那条出口用）。
+   *
+   * 与 `workReport()` 的关系：那个**按票/轮答一件**（而且认不出就 `null`）；
+   * 这个**逐件都答**，每件一条 —— 给模型的是**人话**（`workAnswerLine` ＋
+   * "在哪一间"那半句用的是**那一间的名字**），所以它转述给用户时**不会**
+   * 把内部 id 抄出去（`06` 禁用词那条）。
+   *
+   * 🔴 **`excludeScope` 那一条不能省**：账本那支工具是在**某一轮里**被调的
+   * ⇒"正在问的那一轮"自己也在账上（`running`）⇒ 不排掉就永远是
+   * "那件还在做"，而那件**就是这句提问**（真机第一次就是这么答的）。
+   * 只排**问话那一间**的正在跑的那一轮：别的房间挂着的活**照报**（那正是他要问的）。
+   *
+   * ⚠️ **一件都没有 ⇒ 空数组**（不是空话）：调用方自己决定怎么说"没有"。
+   * ⚠️ 认不出 scope 的那些件（会话已经卸了）**照样列出来**，答案用 `unknown`
+   * —— 它们**确实**在这本账上，不许因为"说不清"就当没有。
+   *
+   * @param {object} [o]
+   * @param {string|null} [o.excludeScope] 问话那一间（`null` = 不排任何一件）
+   */
+  workList({ excludeScope = null } = {}) {
+    const out = [];
+    for (const it of this.workItems()) {
+      const scopeOfIt = it.scopeId ?? 'main';
+      if (excludeScope !== null && scopeOfIt === excludeScope) {
+        const s = this.sessionFor(excludeScope);
+        // ★ 正在问的那一轮：**两种形态都要排** ——
+        //   ① 还没轮到跑的（`waiting`，`(gen,turn)` 还是 null）⇒ 按"哪句话引起来的"排；
+        //   ② 正在跑的 ⇒ 按 `(generation, turn)` 排。
+        if (it.ref && s?.openTurnRefs?.has(it.ref)) continue;
+        if (s?.isTurnOpen?.(it.generation, it.turn)) continue;
+      }
+      const s = this.sessionFor(scopeOfIt);
+      const text = s
+        ? s.workReport({ scopeId: scopeOfIt, ref: it.ref ?? null, turn: it.turn ?? null })
+        : workAnswerLine('unknown');
+      out.push({ ...it, text: text ?? workAnswerLine('unknown') });
+    }
     return out;
   }
 

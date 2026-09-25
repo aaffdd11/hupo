@@ -31,6 +31,11 @@ const DEFAULT_VERSION = '2024-11-05';
 
 const SOCKET = process.env.HUPO_LEDGER_SOCKET ?? '';
 const TIMEOUT_MS = Number.parseInt(process.env.HUPO_LEDGER_TIMEOUT_MS ?? '15000', 10);
+/**
+ * **我这一轮是在哪一间里跑的**（调度器按房间给的；主线是 `main`）。
+ * 只用来让服务端把"正在问的那一轮"排掉（P1 §三④），**不是身份、也不是秘密**。
+ */
+const SCOPE = process.env.HUPO_SCOPE ?? 'main';
 
 /** 一行一条的那个口。问一句、拿一句、挂断（服务端重启之后自己就好）。 */
 function ask(payload) {
@@ -147,6 +152,27 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    // ★ **P1 §三④**（`docs/dev/88-P1-TIME-WAIT.md`）：**他随时能问"那件怎么样了"**。
+    //   ⚠️ 这条**不许靠记忆答**：一开始的活是放后台跑的（P1 §三），
+    //      重启之后你多半不记得了 ⇒ **必须**先问这本账，再照它给的句子说。
+    //   ⚠️ 拿回来的 `text` 是**服务端拼好的人话**（含"在哪一间"）：
+    //      转述它，**不要**自己编号、也不要提内部名字。
+    name: 'work_status',
+    description:
+      '问一句"现在哪几件活还挂着、各到哪一步了"。'
+      + '主人问"那件怎么样了""刚才那个做完了吗""还有几件没做完"这一类时，**先调它**，'
+      + '再把他那几件的实情说给他听（**不要**凭记忆答：长活是放后台跑的，你未必记得）。'
+      + '想只问某一件事就传 ref（他原来那句话的原话），不传就把挂着的都列出来。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: ['string', 'null'], description: '只问某一件事时，传他原来那句话的原话；不传就全列' },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /** 把一次工具调用的结果折成 MCP 的 content。**失败也是一条正常回答**（`isError`）。 */
@@ -197,6 +223,17 @@ async function callTool(name, args) {
     const r = await ask({ op: 'list', month: args?.month ?? null });
     if (!r.ok) return textResult(`账本这一侧没答上来：${r.error}`, true);
     return textResult(r.text ?? '账本这一侧没给出文字。');
+  }
+
+  if (name === 'work_status') {
+    // ★ **P1 §三④**：文字同样**在服务端拼**（那边才知道"在哪一间"叫什么名字）。
+    //   ⚠️ 一条都查不到 / 那边没接上 ⇒ **如实说**，不许编一句"应该快好了"。
+    // 🔴 **带上"我这一轮是在哪一间里跑的"**（`HUPO_SCOPE`，调度器按房间给的）：
+    //    服务端要拿它**排掉"正在问的那一轮"自己** —— 不然答案永远是
+    //    "那件还在做"，而那件就是这句提问（真机第一次就是这么答的）。
+    const r = await ask({ op: 'work', ref: args?.ref ?? null, scope: SCOPE });
+    if (!r.ok) return textResult(`那几件的实情我这边问不到：${r.error}`, true);
+    return textResult(r.text ?? '（那边没给出文字）');
   }
 
   if (name === 'ledger_delete') {

@@ -37,9 +37,15 @@ const MAX_LINE_BYTES = 64 * 1024;
  *
  * @param {import('./ledger.js').Ledger} ledger
  * @param {object} req
+ * @param {{dispatcher?: () => object|null}} [ctx]
+ *        ★ **P1 §三④ 那条出口**（`docs/dev/88-P1-TIME-WAIT.md`）：这个人的**活账**
+ *        挂在**调度器**上（`WorkLog.live()` / `Dispatcher.workReport()`），而调度器
+ *        是 `worlds.js` 后建的 ⇒ 这里收一个**惰性取**的函数（`() => dispatcher`），
+ *        造这条通道的时候还拿不到它。
+ *        ⚠️ **没给 / 取不到 ⇒ 如实说"没接上"**（`{ok:false}`），**不许**编一句空答案。
  * @returns {object}  永远是 `{ok:true,…}` 或 `{ok:false,error,…}`（**绝不抛**）
  */
-export function handleLedgerOp(ledger, req) {
+export function handleLedgerOp(ledger, req, ctx = null) {
   const op = req?.op;
   if (typeof op !== 'string') return { ok: false, error: '没说要做什么' };
   try {
@@ -49,6 +55,39 @@ export function handleLedgerOp(ledger, req) {
       case 'write': {
         const rec = ledger.write(req.fields, { said: req.said });
         return { ok: true, entry: rec, echo: null };
+      }
+      // ── ★ **"那件怎么样了"**（P1 §三④）────────────────────────────
+      //
+      // 为什么这条口在**账本**这一支：契约 §二.1 那句 —— **票＝欠条**。
+      // "哪几件还挂着"本来就是这本账的事，另开一条 MCP 反而要动**能力层**
+      // （那是 `strict`，动一次要主人补一条重建清单）。
+      //
+      // ⚠️ 人话**在服务端拼**（`Dispatcher.workReport()` → `workAnswerLine` ＋
+      //    `workWhereWords`）：这样"在哪一间"那半句用的是**那一间的名字**，
+      //    而模型手上拿到的是**人话**——它没有理由（也没有机会）把内部 id 抄给用户。
+      case 'work': {
+        const d = (() => {
+          try {
+            return ctx?.dispatcher?.() ?? null;
+          } catch {
+            return null;
+          }
+        })();
+        if (!d || typeof d.workReport !== 'function') {
+          return { ok: false, error: '这一台还没接上"活账"，问不出那几件' };
+        }
+        const ref = typeof req.ref === 'string' && req.ref !== '' ? req.ref : null;
+        const scope = typeof req.scope === 'string' && req.scope !== '' ? req.scope : null;
+        if (ref) {
+          const text = d.workReport({ scope, ref });
+          if (text === null || text === undefined) return { ok: false, error: '这本账里没有这一件' };
+          return { ok: true, count: 1, items: [{ scopeId: scope, ref, text }], text };
+        }
+        // ⚠️ **把"问话那一间"带进去**：那一间的**正在跑的那一轮**要被排掉
+        //    （它就是这句提问自己），见 `Dispatcher.workList` 的说明。
+        const items = typeof d.workList === 'function' ? d.workList({ excludeScope: scope }) : [];
+        if (items.length === 0) return { ok: true, count: 0, items: [], text: '现在没有挂着的活。' };
+        return { ok: true, count: items.length, items, text: items.map((it) => it.text).join('\n') };
       }
       case 'list': {
         // ⚠️ **文字在服务端渲染**（契约 §八 第 3 件）：口径只有一处
@@ -104,6 +143,7 @@ export class LedgerSocket {
   #ledger;
   #path;
   #log;
+  #ctx;
   #server = null;
   #ready = null;
 
@@ -112,13 +152,18 @@ export class LedgerSocket {
    * @param {import('./ledger.js').Ledger} o.ledger
    * @param {string} o.socketPath
    * @param {(m:string)=>void} [o.log]
+   * @param {{dispatcher?: () => object|null}} [o.ctx]
+   *        ★ P1 §三④ 那条出口要的东西（见 `handleLedgerOp` 的 `ctx` 说明）。
+   *        ⚠️ 缺省 `null` ⇒ `work` 那条如实回"没接上"（**fail-closed**，
+   *        不许因为"忘了接"就变成一句空答案）。
    */
-  constructor({ ledger, socketPath, log = () => {} }) {
+  constructor({ ledger, socketPath, log = () => {}, ctx = null }) {
     if (!ledger) throw new LedgerError('ledger 必填');
     if (!socketPath) throw new LedgerError('socketPath 必填');
     this.#ledger = ledger;
     this.#path = socketPath;
     this.#log = log;
+    this.#ctx = ctx;
   }
 
   get path() {
@@ -214,7 +259,7 @@ export class LedgerSocket {
           this.#reply(conn, { ok: false, error: '这条请求读不懂' });
           continue;
         }
-        this.#reply(conn, handleLedgerOp(this.#ledger, req));
+        this.#reply(conn, handleLedgerOp(this.#ledger, req, this.#ctx));
       }
     });
     // ⚠️ 连上来又断掉是正常的（那边每次只问一句就挂断）——不报错。

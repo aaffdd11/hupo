@@ -24,6 +24,7 @@ import { Store } from '../src/store.js';
 import { Worlds, titleOfApp } from '../src/worlds.js';
 import { WorkLog } from '../src/worklog.js';
 import { workWhereWords } from '../src/work-words.js';
+import { handleLedgerOp } from '../src/ledger-socket.js';
 
 const HERE = nodePath.dirname(fileURLToPath(import.meta.url));
 const FAKE = nodePath.join(HERE, 'fake-agent.mjs');
@@ -268,6 +269,64 @@ test('T4②b 房间那条完成提醒要说**它自己的名字**（反例：名
       !w.timeline.readAll().some((e) => e.type === 'message/text'),
       '🔴 房间的正文一个字都不许漏进主线',
     );
+  } finally {
+    await h.close();
+  }
+});
+
+test('T4④c（真 Worlds）`work` 那条口问的是**这个人的活账**，答的是**人话**；🔴 正在问的那一轮要排掉', async () => {
+  const h = await boot({ scenario: 'hang', cfg: { backgroundAfterMs: 9999, turnDeadlineMs: 60000 } });
+  const w = h.worlds.worldFor('u1');
+  try {
+    w.apps.create({
+      id: 'city-weather',
+      title: '看天气',
+      icon: 'cloud',
+      entry: 'index.html',
+      files: { 'index.html': '<p>天气</p>' },
+    });
+    h.worlds.roomFor('u1', 'city-weather');
+    // 这一间里挂上一件（`hang` ⇒ 它一直跑着，不会自己收口）
+    assert.equal(
+      (await post(h, '/api/say', { messageId: 'u_room_q', text: '把明天天气画出来', scope: 'city-weather' })).status,
+      200,
+    );
+    await waitFor(() => w.dispatcher.workList().length > 0, '这一件要挂上账');
+    // ⚠️ **等这一轮真的开始**（`turn/start`）：工具只可能在**一轮里面**被调，
+    //    那一刻这件活已经从 `waiting` 变成 `running`、而且绑上了 `(gen,turn)`
+    //    —— 判据要打在**那个时刻**上，不能停在"刚投递、还没轮到"那一档。
+    await waitFor(() => w.dispatcher.sessionFor('city-weather')?.turnInput !== '', '这一轮开始跑');
+    assert.equal(w.dispatcher.workList().length, 1, '账上就这一件');
+
+    // ① **从别的房间问**（`scope: 'main'`）⇒ 那一件**照报**（那正是他要问的）
+    const fromMain = handleLedgerOp(w.ledger, { op: 'work', scope: 'main' }, { dispatcher: () => w.dispatcher });
+    assert.equal(fromMain.ok, true, JSON.stringify(fromMain));
+    assert.equal(fromMain.count, 1);
+    assert.match(fromMain.text, /还在做|还排着/, `逐件答案：${fromMain.text}`);
+    // ⚠️ **人话里必须是那一间的名字，不是内部 id**（`06` 禁用词那条）
+    assert.match(fromMain.text, /看天气/);
+    assert.ok(!fromMain.text.includes('city-weather'), `不许把内部 id 上屏：${fromMain.text}`);
+
+    // ② 🔴 **从那件活自己那一间问** ⇒ 它**就是"正在问的那一轮"** ⇒ 排掉，回"没有挂着的活"
+    //    （真机第一次就是这么答错的：他问"那件怎么样了"，回的是"那件还在做"——而那件是这句提问本身）
+    const fromRoom = handleLedgerOp(w.ledger, { op: 'work', scope: 'city-weather' }, { dispatcher: () => w.dispatcher });
+    assert.equal(fromRoom.count, 0, `正在问的那一轮必须排掉：${JSON.stringify(fromRoom)}`);
+    assert.match(fromRoom.text, /没有挂着的活/);
+    // 反例的正身：**不带 scope**（排不了任何一件）⇒ 又把它报出来了（说明 ① 不是恒真/恒假）
+    const noScope = handleLedgerOp(w.ledger, { op: 'work' }, { dispatcher: () => w.dispatcher });
+    assert.equal(noScope.count, 1);
+
+    // ③ 负向对照：账上没有的那一件 ⇒ 也**必须有一句实话**（真调度器给的是
+    //    "我没找到那件事。"），而**绝不能**说成"还在做"。
+    const miss = handleLedgerOp(w.ledger, { op: 'work', ref: 'u_根本没有' }, { dispatcher: () => w.dispatcher });
+    assert.equal(miss.ok, true);
+    assert.match(miss.text, /没找到/, `查无此件也要说清：${miss.text}`);
+    assert.ok(!/还在做|还排着/.test(miss.text), `查无此件不许说成还在做：${miss.text}`);
+
+    // ④ 反例的正身：**不接那本活账** ⇒ 如实说"问不到"（绝不回"没有挂着的活"）
+    const blind = handleLedgerOp(w.ledger, { op: 'work' }, null);
+    assert.equal(blind.ok, false);
+    assert.match(blind.error, /没接上/);
   } finally {
     await h.close();
   }

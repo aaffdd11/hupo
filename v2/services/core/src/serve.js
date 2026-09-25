@@ -1163,7 +1163,10 @@ console.log(
     return `  产品层   ${
       p
         ? `${p.fingerprint}（${p.gitRev ?? '未知提交'}${p.builtAt ? ` · ${p.builtAt}` : ''}）`
-        : '⚠️ 读不到（还没翻过任何一版；容器会停在镜像里那份兜底上）'
+        // ⚠️ 这句话**不许**再写"容器会停在镜像里那份兜底上" —— 那份兜底
+        //    2026-09-23 就没了（认不到产品层直接起不来）；而且盒里那一份
+        //    现在**读得到**了（`readProductLayer` 的 ② 那一路）。
+        : '⚠️ 读不到（既没有 $HUPO_CODE_ROOT/current，也没挂上 $HUPO_CODE_DIR）'
     }${channel.builds.size > 0 ? `｜在跑的：${[...channel.builds.entries()].map(([t, b2]) => `${t}=${b2}`).join(' ')}` : ''}`;
   })(),
 );

@@ -36,7 +36,7 @@ after(() => {
 });
 
 /** 起一套：真账本 + 真套接字 + 真 MCP 进程。 */
-function setup({ socketPath = null } = {}) {
+function setup({ socketPath = null, ctx = null } = {}) {
   const dataDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-chain-'));
   tmpDirs.push(dataDir);
   const store = new Store({ dataDir, fsync: false });
@@ -44,7 +44,7 @@ function setup({ socketPath = null } = {}) {
   let n = 0;
   const ledger = new Ledger({ store, timeline, now: () => AT, newId: () => `e${++n}` }).sync();
   const path = socketPath ?? ledgerSocketPath(dataDir);
-  const sock = new LedgerSocket({ ledger, socketPath: path }).listen();
+  const sock = new LedgerSocket({ ledger, socketPath: path, ctx }).listen();
   return { dataDir, store, timeline, ledger, sock, socketPath: path };
 }
 
@@ -102,7 +102,7 @@ const FIELD_ARGS = {
 
 // ── 握手 + 工具名 ────────────────────────────────────────────
 
-test('握手给的是**标准 MCP**：initialize → tools/list 四条工具', async () => {
+test('握手给的是**标准 MCP**：initialize → tools/list 五条工具', async () => {
   const s = setup();
   const c = mcpClient({ HUPO_LEDGER_SOCKET: s.socketPath });
   try {
@@ -114,7 +114,7 @@ test('握手给的是**标准 MCP**：initialize → tools/list 四条工具', a
 
     const list = await c.call('tools/list', {});
     const names = list.result.tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ['ledger_delete', 'ledger_list', 'ledger_propose', 'ledger_write']);
+    assert.deepEqual(names, ['ledger_delete', 'ledger_list', 'ledger_propose', 'ledger_write', 'work_status']);
     for (const t of list.result.tools) {
       assert.equal(t.inputSchema.type, 'object');
       assert.ok(typeof t.description === 'string' && t.description.length > 10, '每条都要说清什么时候调');
@@ -375,6 +375,74 @@ test('🔴 工具名与说明过禁用词闸（它们会进 prompt，等于上�
     for (const w of ['工作区', '客户端', '云端', '时间线', '会话', '口令', '记录', 'mcp__', 'socket', 'entryId']) {
       assert.ok(!blob.includes(w), `工具说明里出现了内部词「${w}」`);
     }
+  } finally {
+    c.child.kill('SIGKILL'); s.sock.close();
+  }
+});
+
+// ── ★ **P1 §三④**：`work_status`（"他随时能问'那件怎么样了'"）──────────────
+//
+// 契约 `docs/dev/88-P1-TIME-WAIT.md` §三·④。这一条**只读**，但它守的事很硬：
+//   · 模型拿到的那句话必须是**服务端拼的**（含"在哪一间"的名字），不是它自己猜的；
+//   · 🔴 **没接上"活账" ⇒ 明确失败** —— 不许回一句"没有挂着的活"
+//     （那正是"页面在说假话"：他明明有一件在做）。
+
+/** 这一条回答里的那一段文字。 */
+const textOf = (m) => m?.result?.content?.[0]?.text ?? '';
+
+test('T4④c `work_status`：给回的是**服务端那句话**（原样转述，模型不许自己编）', async () => {
+  const LINE = '还在做（在「看天气」里）';
+  const seen = [];
+  const s = setup({
+    ctx: {
+      dispatcher: () => ({
+        workReport: ({ ref }) => (ref === 'u_1' ? LINE : null),
+        workList: (o) => {
+          seen.push(o);
+          return [{ scopeId: 'city-weather', ref: 'u_1', turn: 3, state: 'running', text: LINE }];
+        },
+      }),
+    },
+  });
+  // ★ 让这个 MCP 子进程"以为"自己跑在某一间里（调度器就是这么给它的）
+  const c = mcpClient({ HUPO_LEDGER_SOCKET: s.socketPath, HUPO_SCOPE: 'city-weather' });
+  try {
+    // ① 全列：拿到的就是服务端那句话（一个字都不许自己编）
+    const all = await c.call('tools/call', { name: 'work_status', arguments: {} });
+    assert.equal(all.result.isError ?? false, false);
+    assert.equal(textOf(all), LINE);
+    // 🔴 **"我这一间"必须原样带到服务端**：它要拿它排掉"正在问的那一轮"自己
+    //    （真机第一次就是没排，答成"那件还在做"，而那件就是这句提问）
+    assert.deepEqual(seen.at(-1), { excludeScope: 'city-weather' });
+    // ② 按原话问某一件事 ⇒ 也原样给回
+    const one = await c.call('tools/call', { name: 'work_status', arguments: { ref: 'u_1' } });
+    assert.equal(textOf(one), LINE);
+    // ③ 账上没有那一件 ⇒ **明确失败**（不许空着、也不许编一句"快了"）
+    const none = await c.call('tools/call', { name: 'work_status', arguments: { ref: 'u_没有这件' } });
+    assert.equal(none.result.isError, true, '问不到那一件 ⇒ 必须是 isError');
+    assert.match(textOf(none), /没有这一件/);
+    // ④ 反例的正身：**这两条都不是白写的** —— 把 dispatcher 摘掉 ⇒ ①也红
+    const noCtx = setup();
+    const c2 = mcpClient({ HUPO_LEDGER_SOCKET: noCtx.socketPath });
+    try {
+      const r = await c2.call('tools/call', { name: 'work_status', arguments: {} });
+      assert.equal(r.result.isError, true, '没接上"活账" ⇒ 必须 isError（**不许**回"没有挂着的活"）');
+      assert.match(textOf(r), /问不到/);
+    } finally {
+      c2.child.kill('SIGKILL'); noCtx.sock.close();
+    }
+  } finally {
+    c.child.kill('SIGKILL'); s.sock.close();
+  }
+});
+
+test('T4④c 一件都没有 ⇒ 如实说"没有挂着的活"（**这不是失败**）', async () => {
+  const s = setup({ ctx: { dispatcher: () => ({ workReport: () => null, workList: () => [] }) } });
+  const c = mcpClient({ HUPO_LEDGER_SOCKET: s.socketPath });
+  try {
+    const r = await c.call('tools/call', { name: 'work_status', arguments: {} });
+    assert.equal(r.result.isError ?? false, false, '没有活可报不是错误');
+    assert.match(textOf(r), /没有挂着的活/);
   } finally {
     c.child.kill('SIGKILL'); s.sock.close();
   }

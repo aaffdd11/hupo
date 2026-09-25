@@ -25,33 +25,54 @@ export const FALLBACK_BUILD = 'dev';
 /**
  * 读当前那一版。**读不到返回 `null`**（不抛）。
  *
+ * ── 两处来源，**顺序不许反**（2026-09-25 修一句假话）──────────────
+ *   ① **宿主**：`$HUPO_CODE_ROOT/current` 那条软链（翻版就是翻它）；
+ *   ② **盒里**：`$HUPO_CODE_DIR`（= 挂进来的 `/app/code`）**本身**就是那一版。
+ *      🔴 在盒里 ①**永远读不到**（`/srv/hupo/tenant-code` 在容器里不存在），
+ *      而横幅原来只试 ① ⇒ 盒里的启动横幅**写着**「读不到产品层（……容器会停在
+ *      镜像里那份兜底上）」，**两半都是假话**：它跑的好好的，而且那份"兜底"
+ *      2026-09-23 就已经从镜像里拿掉了（`45-TENANT-UPDATE.md`）——
+ *      横幅**自己**在旁边还打着 `构建 <指纹>`。⇒ 加 ② 这一路。
+ *
  * @param {object} [o]
  * @param {string} [o.root]
+ * @param {string} [o.mount] 盒里那一份（默认 `$HUPO_CODE_DIR`）
  * @param {import('node:fs')} [o.fs]
  * @returns {{fingerprint:string, builtAt:string|null, gitRev:string|null, dir:string}|null}
  */
-export function readProductLayer({ root = process.env.HUPO_CODE_ROOT ?? DEFAULT_CODE_ROOT, fs = nodeFs } = {}) {
-  const link = nodePath.join(root, 'current');
-  let dir = link;
-  try {
-    dir = fs.realpathSync(link); // 软链 → 真目录（`current` 指到哪一版）
-  } catch {
-    return null; // 还没翻过任何一版
-  }
-  let man;
-  try {
-    man = JSON.parse(fs.readFileSync(nodePath.join(dir, 'manifest.json'), 'utf8'));
-  } catch {
-    return null;
-  }
-  const fp = man?.fingerprint;
-  if (typeof fp !== 'string' || !fp) return null;
-  return {
-    fingerprint: fp,
-    builtAt: typeof man?.builtAt === 'string' ? man.builtAt : null,
-    gitRev: typeof man?.gitRev === 'string' ? man.gitRev : null,
-    dir,
+export function readProductLayer({
+  root = process.env.HUPO_CODE_ROOT ?? DEFAULT_CODE_ROOT,
+  mount = process.env.HUPO_CODE_DIR ?? null,
+  fs = nodeFs,
+} = {}) {
+  const readManifest = (dir) => {
+    try {
+      const man = JSON.parse(fs.readFileSync(nodePath.join(dir, 'manifest.json'), 'utf8'));
+      const fp = man?.fingerprint;
+      if (typeof fp !== 'string' || !fp) return null;
+      return {
+        fingerprint: fp,
+        builtAt: typeof man?.builtAt === 'string' ? man.builtAt : null,
+        gitRev: typeof man?.gitRev === 'string' ? man.gitRev : null,
+        dir,
+      };
+    } catch {
+      return null;
+    }
   };
+  // ① 宿主：软链 → 真目录（`current` 指到哪一版）
+  try {
+    const real = readManifest(fs.realpathSync(nodePath.join(root, 'current')));
+    if (real) return real;
+  } catch {
+    /* 没有软链 ⇒ 看 ② */
+  }
+  // ② 盒里：挂进来的那一份自己就有 `manifest.json`
+  if (typeof mount === 'string' && mount !== '') {
+    const m = readManifest(mount);
+    if (m) return m;
+  }
+  return null;
 }
 
 /**
