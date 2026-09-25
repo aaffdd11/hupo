@@ -64,6 +64,32 @@ class SayRejected extends SayOutcome {
   final String message;
 }
 
+/// **他没把握这一句该送到哪一间 ⇒ 先反问一句**（`96-OWNER-DECISIONS.md` 第 16 条；
+/// 契约 `docs/dev/84-DISPATCHER-FOCUS.md` §三·3 的焦点路由）。
+///
+/// 服务端那条规则（那边是唯一说了算的地方 · `src/focus.js` 的 `routeTarget`）：
+/// **归处提示**（客户端给的 `scope`）和**他刚才在看的那一间**不一致 ⇒
+/// 既不按提示送、也不按焦点送，而是**反问**；而且**一个字都不落盘**
+/// （盘上不许留"没被回答的话"）。
+///
+/// ⚠️ 和另外三种"没发出去"分清楚（对用户说的话不一样）：
+///   * 不是 [SayNetworkError]（网是通的）、不是 [SayBusy]（它没满）、
+///     不是 [SayLocked]（不是试得太频繁）—— 是**这一句的归处不确定**；
+///   * 结果上它和它们一样：本地那条落 `failed` ⇒ 有「重发」这条路（N11），
+///     **一个字都不丢**（反问那次没落盘 ⇒ 同一个 `messageId` 还能再用）。
+class SayAsk extends SayOutcome {
+  const SayAsk({required this.question, required this.scope, this.focus});
+
+  /// 那句问话（**服务端给的人话** —— 客户端不许自己拼一句，免得两处口径）。
+  final String question;
+
+  /// 这一句**本来要去**的那一间（客户端给的那个 `scope`）。
+  final String scope;
+
+  /// 他刚才**在看**的那一间（服务端记着的焦点；`null` = 服务端没被告知过）。
+  final String? focus;
+}
+
 /// 网的问题。→ 该说"没发出去，可以重发"。
 class SayNetworkError extends SayOutcome {
   const SayNetworkError(this.detail);
@@ -763,6 +789,23 @@ SayOutcome sayOutcomeOf(int status, String body) {
       //    `retryAfterSec`）。猜的是"看码就断定"，而那个断定今天已经不成立了。
       if (isBusyBody(body)) return const SayBusy();
       return SayLocked(retryAfterSecOf(body));
+    case 409:
+      // ★ **C 期新加的一条**（契约 84 §三·3 · 第 16 条）：焦点与目标不一致 ⇒ 反问。
+      //   ⚠️ 按**显式字段** `ask:true` 认，**不按状态码猜**（同一个码以后可能有别的意思）。
+      //   ⚠️ 认不出来 ⇒ 退回原来那条"没细分"的路（老行为不许动）。
+      try {
+        final j = jsonDecode(body);
+        if (j is Map && j['ask'] == true && j['text'] is String) {
+          return SayAsk(
+            question: j['text'] as String,
+            scope: (j['scope'] as String?) ?? mainScope,
+            focus: j['focus'] as String?,
+          );
+        }
+      } catch (_) {
+        /* 读不出来就走下面那条 */
+      }
+      return const SayRejected('HTTP 409');
     default:
       return SayRejected('HTTP $status');
   }

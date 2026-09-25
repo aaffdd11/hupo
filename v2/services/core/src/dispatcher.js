@@ -1154,6 +1154,23 @@ export class Dispatcher {
   #onEgress;
 
   /**
+   * ★ **C 期：他最近一次看着哪一间**（契约 `84-DISPATCHER-FOCUS.md` §三·3）。
+   *
+   * 它住的这一层是刻意的：**每个用户一个调度器**（§三·1）⇒ "他的焦点"是
+   * 这个用户身上的一件事，不是宿主上一个全局（`37-MULTITENANT.md`：
+   * 调度器不许有"当前用户"全局，身份只能靠参数传）。
+   *
+   * ⚠️ 它**不参与实时路由**：那条路由是**每条连接各自**的（`server.js` 的
+   *    `onStream` 按自己那条连接的焦点挑事件）。这里这一份只为**第 16 条**服务
+   *    （`96-OWNER-DECISIONS.md`：指称与焦点不一致 ⇒ 先反问）：
+   *    `/api/say` 是**另一条路**（HTTP），它看不到那条连接，只能问这一份。
+   * ⚠️ 多台设备同时连时它是**最后被告知的那一个**（C 期如实如此，
+   *    D 期的"焦点告知"再细分）；不一致时按第 16 条**反问**，不猜。
+   * `null` = **从来没被告知过**（老客户端 / 还没连流）⇒ 不做比较，老行为不动。
+   */
+  #focusScope = null;
+
+  /**
    * @param {object} o
    *        与 `Session` 同一组参数（`timeline` 是**主线那一间**的视图）。
    *        另加 `runtime` / `store`（新挂上来的会话要共用它们）。
@@ -1190,6 +1207,28 @@ export class Dispatcher {
   /** 这个用户手上有几条会话（主线 ＋ 每个房间）。 */
   get sessionCount() {
     return this.#sessions.size;
+  }
+
+  /**
+   * ★ **C 期：这个用户最近一次被告知的焦点**（`null` = 从来没告知过）。
+   *
+   * 判据：`/api/say` 的"归处提示"和它不一致时就**先反问**（第 16 条）。
+   */
+  get focusScope() {
+    return this.#focusScope;
+  }
+
+  /**
+   * ★ **告知焦点**（`server.js` 的 `onStream` 调：连上时按 `?scope=`，之后按 `focus` 帧）。
+   *
+   * ⚠️ 缺省 / 空 ⇒ 主线（老客户端不带 scope 就是主线）。
+   * ⚠️ 这里**不校验**"这个房间存不存在"：那是 `worlds.roomFor()` 的事，
+   *    焦点帧那条路已经先过了它（不存在的房间回 `ok:false`、焦点不动）。
+   */
+  setFocus(scope) {
+    const s = scope === null || scope === undefined || scope === '' ? this.#mainScope : String(scope);
+    this.#focusScope = s;
+    return s;
   }
 
   /** 已挂上来的那些 scope（诊断 / 判据用）。 */

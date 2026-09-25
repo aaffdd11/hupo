@@ -12,6 +12,16 @@
 //
 // 另：`sinceSeq` 是续传游标（协议 R5）。重连时带上它，
 // 服务端只补后面的（决策 P-h：此时才标 `catchUp`）。
+//
+// ── C 期（契约 `84-DISPATCHER-FOCUS.md` §三·3）：**一条连接服务所有房间** ──
+//
+// 手册 `02-ARCHITECTURE.md` §四 核心原则 3 说"一个 WS 连接是物理约束"。
+// 改前这里是 `final scope`（连接级的）⇒ 切房间只能重连 —— `84 §八`
+// 把那种形状列为**明确不做**。现在：
+//   · 构造参数 `scope` = **初始焦点**（连上时仍然走 `?scope=`，老的两边照旧认得）；
+//   · 切焦点走 [focus]（客户端→服务端一帧 `{"t":"focus","scope":…,"sinceSeq":…}`），
+//     **连接不动**；服务端按焦点决定"哪些事件现时投给这条连接"。
+// ⚠️ `level` 仍然是**连接级**的（换档要重连）——两件事别混。
 
 import 'dart:async';
 import 'dart:convert';
@@ -32,13 +42,13 @@ class StreamClient {
     required this.token,
     required this.api,
     this.level = defaultProcessLevel,
-    this.scope = mainScope,
+    String scope = mainScope,
     this.pingTimeout = const Duration(seconds: 60),
     /// ★ P1-10（2026-09-24）："令牌还行不行"那一问**可注入** ——
     ///   判据要能验"401 就停下重连"那条路（B1），而真的去连一个坏地址是验不准的。
     ///   `null` = 用真那个（`api.health`）。
     this.probe,
-  });
+  }) : _focus = scope.trim().isEmpty ? mainScope : scope.trim();
 
   final String base; // 空串 = 同源
   final String token;
@@ -48,12 +58,44 @@ class StreamClient {
   /// ⇒ 换档只能靠**重连**（`chat_controller.setLevel` 就是这么做的）。
   final ProcessLevel level;
 
-  /// **这一条流连的是哪个房间**（契约 `83-APP-WORKSPACE.md` §五·甲）。
+  /// **这一条连接现在的焦点**（契约 `84-DISPATCHER-FOCUS.md` §三·3 · C 期）。
   ///
-  /// ⚠️ 和 [level] **同一类**：它是**连接级**的（服务端按这条连接决定补发哪一间、
-  ///    订阅哪一间）⇒ 换房间也只能靠**重连**（`chat_controller.setScope`）。
-  /// ⚠️ 它**在地址上**（`?scope=…`），不在帧里 —— 见 `stream_uri.dart`。
-  final String scope;
+  /// ⚠️ 改前它是 `final`（`?scope=` 是连接级的 ⇒ 切房间只能重连）——那正是
+  ///    `#121` 走偏的第三处（84 §八"明确不做"第 3/4 条）。
+  ///    现在：**一条连接服务所有房间**，切焦点是**发一帧**（[focus]），
+  ///    连接不动。构造参数给的只是**初始焦点**（连上时走 `?scope=`，
+  ///    老客户端与老服务端照旧互相认得）。
+  ///
+  /// ⚠️ 和 [level] **不是一类**：`level` 仍然是连接级的（换档要重连）；
+  ///    焦点不是。两件事混起来就会出现"换个房间顺手把档也换了"那种毛病。
+  String _focus;
+
+  /// 这一条连接现在的焦点（判据要读得到）。
+  String get scope => _focus;
+
+  /// 聚焦到某一间（**不重连**）。带上这一间自己的游标：
+  /// 服务端会把那一间缺的那一段补发过来（"历史按 `?scope=` 视图重载"）。
+  ///
+  /// ⚠️ 两件事必须一起做，少一件就会错：
+  ///   ① 记下新焦点 ⇒ 重连时 `?scope=` 与补发都以它为准；
+  ///   ② 游标换成**那一间自己的**（`sinceSeq`）—— 拿上一间的号去要下一间的历史，
+  ///      要么多收一段、要么被服务端当成"号跑到前面了"要求整条重置。
+  void focus(String scope, {int sinceSeq = 0}) {
+    final want = scope.trim().isEmpty ? mainScope : scope.trim();
+    _focus = want;
+    _sinceSeq = sinceSeq < 0 ? 0 : sinceSeq;
+    // 帧只在**连着**的时候发；没连着也不慌：下一次 `_connect` 直接按新焦点连。
+    if (_state == ConnState.connected && _ch != null) _sendFocus();
+  }
+
+  /// 把"我在看哪一间"告诉服务端（客户端→服务端那一帧）。
+  void _sendFocus() {
+    try {
+      _ch?.sink.add(jsonEncode({'t': 'focus', 'scope': _focus, 'sinceSeq': _sinceSeq}));
+    } catch (_) {
+      // 发不出去 = 这条连接已经不行了：重连那条路会按新焦点重来。
+    }
+  }
 
   final Duration pingTimeout;
 
@@ -109,15 +151,24 @@ class StreamClient {
 
     // ⚠️ 别在这里自己拼协议：同源时必须看**页面**的协议，
     //    否则会在 https 页面上拼出 ws:// 并被浏览器拦掉（`stream_uri.dart` 记着这次事故）。
-    // ⚠️ `scope` 和 `level` **同一类**（连接级）：都只走这一个算地址的函数，
-    //    谁都不许在别处再拼一遍（那条事故的第二个/第三个入口就是这么来的）。
+    // ⚠️ `scope` 和 `level` 只走这一个算地址的函数，谁都不许在别处再拼一遍
+    //    （那条事故的第二个/第三个入口就是这么来的）。
+    //    ⚠️ 这里的 `scope` 是**初始焦点**（C 期起）：连上之后切焦点走帧，
+    //       不重连 —— 见 `focus()` 顶上那段。
+    //    🔴 建地址那一行用的必须是**当下的游标与焦点**（`_sinceSeq` / `_focus`）——
+    //       判据打在字面上：`test/unit/stream_retry_test.dart` 的 R5（续传游标不许丢）。
     final uri = streamUri(
       base: base,
       page: Uri.base,
       sinceSeq: _sinceSeq,
       level: level,
-      scope: scope,
+      scope: _focus,
     );
+    // ★ 把**建地址时**那一对值记下来（上面那几行是同步求值的，中间插不进别人）：
+    //   握手要时间，这中间 `focus()` 可能已经改过焦点/游标了 ⇒ 连上之后要补一帧
+    //   （不然服务端还停在旧那一间，而客户端已经在等新那一间的话了）。
+    final uriFocus = _focus;
+    final uriSince = _sinceSeq;
 
     try {
       // 令牌走**子协议**（手册 §2.1）——不进 URL。
@@ -135,6 +186,9 @@ class StreamClient {
         onError: (_) => _onClosed(),
         cancelOnError: true,
       );
+      // ★ 握手那一下用的是**建地址时**的焦点与游标；这中间被 `focus()` 改过 ⇒
+      //   补一帧让服务端跟上来（**不重连**：连接已经建好了，就是换个焦点）。
+      if (_focus != uriFocus || _sinceSeq != uriSince) _sendFocus();
     } catch (_) {
       await _onFailed();
     }
@@ -153,6 +207,15 @@ class StreamClient {
     // 控制帧：不占号、不上时间线（决策 P-g）。
     switch (event['type']) {
       case 'client/ping':
+        return;
+      case 'client/focus':
+        // ★ **服务端对"切焦点"的确认**（C 期 · 契约 84 §四）：控制帧，
+        //   不占号、不上时间线。
+        //   ⚠️ 但它是一个**有用的界**：服务端的顺序是"先把新焦点那一间的历史
+        //      （补发）发完，再发这一帧"⇒ 在它之前收到的都算**历史**。
+        //      给上层一个内部信号（和 `__caught_up__` 同一个套路、
+        //      同样是**客户端内部**的帧，不是协议字段）。
+        _events.add({'type': '__focus_ready__'});
         return;
       case 'client/hello':
         final m = event['maxSeq'];
@@ -173,7 +236,11 @@ class StreamClient {
         return;
     }
     final seq = event['seq'];
-    if (seq is int && seq > _sinceSeq) _sinceSeq = seq;
+    // ★ **只有属于现在焦点的事件才推进游标**（C 期：一条连接服务所有房间）。
+    //   上一间的帧可能在切换的路上（补发是连着发的）—— 让它们把游标顶上去，
+    //   下一次"切回那一间"就会拿一个**过大的号**去要历史（少收一段）。
+    //   ⚠️ 上层也会把不属于这一间的帧丢掉，但那已经太晚了：游标在这里就已经动了。
+    if (eventInScope(event, _focus) && seq is int && seq > _sinceSeq) _sinceSeq = seq;
     _events.add(event);
   }
 

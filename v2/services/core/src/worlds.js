@@ -161,6 +161,31 @@ export function parseScope(params) {
   return s === '' ? MAIN_SCOPE : s;
 }
 
+/**
+ * ★ **一个 scope 的"人话名字"**（P1：完成提醒里"去哪看"那半句用它）。
+ *
+ * 🔴 **只有一个出处**：那一版制品里的 `manifest.json` 的 `title`
+ *    （`apps.list()` 也是从那儿取的）。**不许**另抄一份名字表。
+ * ⚠️ **`apps.current(id)` 给的是版本号**（见 `apps.js`）——
+ *    写成 `current(id)?.title` 会**恒 `undefined`**（这就是修前那一行）。
+ * ⚠️ **认不出 / 取不到 / 这一格坏了 ⇒ `null`**（调用方据此**不带**那半句）；
+ *    **绝不**把内部 id 当名字返回（`06` 禁用词那条）。
+ *
+ * @param {{current:(id:string)=>number|null, manifest:(id:string,v:number)=>object|null}} apps
+ * @param {string} id
+ * @returns {string|null}
+ */
+export function titleOfApp(apps, id) {
+  try {
+    const v = apps?.current?.(id);
+    if (!Number.isInteger(v) || v < 1) return null;
+    const t = apps?.manifest?.(id, v)?.title;
+    return typeof t === 'string' && t.trim() !== '' ? t : null;
+  } catch {
+    return null; // 坏一版制品不许把"开房间"这条主流程带走
+  }
+}
+
 /** 每个人的世界长什么样（给文档与测试一个准确的形状）。 */
 export const WORLD_SHAPE = Object.freeze([
   'userId', 'dir', 'cfg', 'agentKey', 'scopeId',
@@ -770,7 +795,16 @@ export class Worlds {
       agentKey: agentKeyFor(userId, id),
       // ★ P1：完成提醒里"去哪看"那半句用**它自己的名字**（认不出 ⇒ 不带那半句，
       //   绝不把内部 id 写上屏）。
-      whereTitle: world.apps.current(id)?.title ?? null,
+      //
+      // 🔴 **`current(id)` 给的是版本号，不是 app**（见 `apps.js`）——
+      //    原来写成 `current(id)?.title` ⇒ **恒 `undefined`** ⇒
+      //    "去哪看"那半句**从来没出来过**（P1 §三② 少半句）。
+      //    名字的唯一出处是那一版的 `manifest.json`（`list()` 也是从它取的）。
+      // ⚠️ **取不到就 `null`**（这个 app 不在**本机**这一格里 ⇒ 不带那半句）；
+      //    而**绝不许**把内部 id 当名字写上屏。
+      // ⚠️ 箱子里那份库（租户）这一层**够不着**（要过隧道、而且是异步）⇒
+      //    对租户这里如实是 `null` —— 那一半记在 `77-BLOCKERS.md`（B19）。
+      whereTitle: titleOfApp(world.apps, id),
       // ⚠️ 通知那本账 /「发现就报」**只挂主线**（见 `Dispatcher.addSession`）。
     });
 

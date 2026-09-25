@@ -8,20 +8,22 @@
 //   **以盒子里那份为准**。
 //
 // ── 这一层怎么修（两条路，别读成一条）──────────────────────
-//   ① **盒子那侧**：在**可信 UDS**（`trusted === true` 那条，公网口接不上）上开三个
-//      **极小的内部口** —— 列清单 / 取字节 / 收一次创建。它们**不验签**（验签在宿主），
+//   ① **盒子那侧**：在**可信 UDS**（`trusted === true` 那条，公网口接不上）上开几个
+//      **极小的内部口** —— 列清单 / 取字节 / 收一次创建 /（**B17 补的第 4 个**）
+//      给 `/api/app-ask` 的预闸下裁决。它们**不验签**（验签在宿主），
 //      也**不认识令牌**（身份就是"你从哪条 UDS 进来的"，由内核的文件权限保证）。
-//   ② **宿主那侧**：`/api/apps` 与制品口对**租户用户**不再读本机那份，而是**经现有隧道**
-//      去问他的盒子；拿回来的清单由宿主**用它自己的 `appsSignKey` / `appsBase` 现签**
-//      （公开基址与签名键在宿主这边是权威 —— 这正是**不**把整条路由塞进 `TENANT_ROUTES`
-//      的理由：塞进去就等于让盒子去签名，而盒子的公开基址不一定对）。
+//   ② **宿主那侧**：`/api/apps`、制品口与 `/api/app-ask` 的预闸对**租户用户**不再读
+//      本机那份，而是**经现有隧道**去问他的盒子；拿回来的清单由宿主**用它自己的
+//      `appsSignKey` / `appsBase` 现签**（公开基址与签名键在宿主这边是权威 ——
+//      这正是**不**把整条路由塞进 `TENANT_ROUTES` 的理由：塞进去就等于让盒子去签名，
+//      而盒子的公开基址不一定对）。
 //
 // ── 三条不许破 ────────────────────────────────────────────
 //   ① 🔴 **先验签，再碰盒子**：制品的顺序一个字都没动（`app-serve.js` 里那一步）。
 //      这一层只负责"验完签之后去哪儿取字节"。
 //   ② 🔴 **失败就说失败**：盒子不通 ⇒ 抛 `BoxError`，调用方**如实回 503/403**，
 //      **绝不许**悄悄退回宿主那份旧的（那正是这次要修的病）。
-//   ③ 🔴 **内部口只在可信口上**：公网口走到那三条路径 ⇒ 404，而且**一次都不碰**库。
+//   ③ 🔴 **内部口只在可信口上**：公网口走到那些路径 ⇒ 404，而且**一次都不碰**库。
 //
 // ⚠️ 这里是**同进程的两侧**：宿主与盒子跑的是同一份代码（`serve.js` 两边都跑）。
 //    靠 `trusted` 这个参数分开 —— 它在 `listenTrusted` 那条 UDS 上恒为 `true`。
@@ -39,6 +41,16 @@ export const BOX_APPS_PATH = '/internal/apps';
 export const BOX_ARTIFACT_PATH = '/internal/artifact';
 /** 收一次创建（**迁移用**：走盒子自己那条写入路，版本/清单/权限语义一致）。 */
 export const BOX_APP_PATH = '/internal/app';
+/**
+ * ★ **B17**：`/api/app-ask` 那道"问了先查有没有这个小程序"的预闸 ——
+ * 让**盒子那份库**自己判（盒里调的是**同一个** `checkAppAsk()`）。
+ *
+ * ⚠️ 为什么不让宿主自己拿 `list()` 再判：那四道闸里有两道（**授予了** / **配额还有**）
+ *    的状态也住在盒子里（`<id>/grant.json`、`<id>/ask.json`），而且"配额"那一步要
+ *    **先记再花**（`bumpAsk`）—— 分两次过隧道读，中间那一刀会**漏账**或**多记**。
+ *    ⇒ 一次调用，把**同一个** `checkAppAsk()` 跑在权威那份上，两边不可能分叉。
+ */
+export const BOX_APP_ASK_CHECK_PATH = '/internal/app-ask-check';
 
 /**
  * 一次内部请求最多等多久。
@@ -68,6 +80,7 @@ export function parseInternalPath(pathname) {
   if (pathname === BOX_APPS_PATH) return { kind: 'list' };
   if (pathname === BOX_APP_PATH) return { kind: 'create' };
   if (pathname === BOX_ARTIFACT_PATH) return { kind: 'artifact' };
+  if (pathname === BOX_APP_ASK_CHECK_PATH) return { kind: 'app-ask-check' };
   return null;
 }
 
@@ -192,6 +205,40 @@ export function createBoxApps({ sub = 'owner', dial, log = () => {} } = {}) {
       return {
         content: r.body,
         contentType: String(r.headers['content-type'] ?? 'application/octet-stream'),
+      };
+    },
+    /**
+     * ★ **B17：`/api/app-ask` 的预闸 —— 交给盒子那份权威来判**。
+     *
+     * 盒子那侧调的是**同一个** `checkAppAsk()`（四道闸 ＋ 先记再花），
+     * 所以这里只做一件事：**把它的裁决原样带回来**。
+     *
+     * 🔴 **失败就说失败**：盒子不通 / 答的话认不出 ⇒ **抛 `BoxError`**，
+     *    调用方**如实回 503** —— **绝不许**退回宿主那份旧的（那正是 B17 要修的那句假话）。
+     *
+     * @param {string} appId
+     * @returns {Promise<{ok:true,left:number}|{ok:false,status:number,error:string}>}
+     */
+    async gateAsk(appId) {
+      const payload = Buffer.from(JSON.stringify({ appId: String(appId ?? '') }), 'utf8');
+      const r = await requestOverSocket(dialOnce(dial), {
+        method: 'POST',
+        path: BOX_APP_ASK_CHECK_PATH,
+        headers: { 'content-type': 'application/json', 'content-length': String(payload.length) },
+        body: payload,
+      });
+      if (r.status !== 200) {
+        log(`盒子那道预闸没答（HTTP ${r.status}）`);
+        throw new BoxError(`盒子那道预闸没答（HTTP ${r.status}）`, 'bad-status');
+      }
+      const j = parseJson(r.body);
+      // ⚠️ 形状**逐字段核**：认不出就是认不出，不许当成"过了"（fail-closed）。
+      if (!j || typeof j.ok !== 'boolean') throw new BoxError('盒子里那道预闸答的话看不懂', 'bad-json');
+      if (j.ok === true) return { ok: true, left: Number.isFinite(j.left) ? j.left : null };
+      return {
+        ok: false,
+        status: Number.isFinite(j.status) ? j.status : 403,
+        error: typeof j.error === 'string' && j.error !== '' ? j.error : '这个小程序问不了',
       };
     },
     /**

@@ -71,3 +71,21 @@ String scopeOfOpenApp(String? openApp) {
 ///    别的房间（= 他后来才建的小程序）才加 `@<scope>`。
 String scopedCacheNamespace(String namespace, String scope) =>
     scope == mainScope ? namespace : '$namespace@$scope';
+
+/// **这条事件属不属于 [scope]**（C 期 · 契约 `docs/dev/84-DISPATCHER-FOCUS.md` §四）。
+///
+/// 服务端那边同一件事的出处是 `timeline.js` 的 `eventInScope`（**逐字同一条规则**，
+/// 两边各一份是刻意的：客户端不许为了"哪一间"去信一个它自己算不出来的东西）。
+///
+/// * 主线 ⇒ 事件上**没有** `scopeId`（盘上老事件就没有这个字段）或者标 `'main'`；
+/// * 房间 ⇒ `scopeId` **逐字**等于它。
+///
+/// ⚠️ 它是**视图过滤**，不是安全边界（跨人的隔离靠容器 —— 和 `worlds.js` 顶上
+///    那段同一条纪律）。
+/// 🔴 少了它，一条连接服务所有房间之后，**上一间的帧会落进这一间**
+///    （切焦点时补发是连着发的：用户手快连点两个图标就撞得上）。
+bool eventInScope(Map<String, dynamic> event, String scope) {
+  final tag = event['scopeId'];
+  if (scope == mainScope) return tag == null || tag == mainScope;
+  return tag == scope;
+}

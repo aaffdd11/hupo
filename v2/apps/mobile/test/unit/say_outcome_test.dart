@@ -94,6 +94,58 @@ void main() {
       expect(r.lockedSec, 90, reason: '登录这条路必须还能读出"还有多久"');
       expect(r.wrongPassword, false, reason: '"锁住了"不是"密码错了"');
     });
+
+    test('★ C 期：409 + `{"ask":true}` ⇒ SayAsk（焦点与目标不一致 ⇒ 先反问一句）', () {
+      // 契约 `docs/dev/84-DISPATCHER-FOCUS.md` §三·3 · `96-OWNER-DECISIONS.md` 第 16 条
+      final ask = sayOutcomeOf(
+        409,
+        jsonEncode({
+          'error': 'focus-mismatch',
+          'ask': true,
+          'focus': 'alpha',
+          'scope': 'beta',
+          'text': '你现在看的是「甲」，这句话是要送到「乙」那间去吗？',
+        }),
+      );
+      expect(ask, isA<SayAsk>());
+      final a = ask as SayAsk;
+      expect(a.scope, 'beta', reason: '★ 这一句本来要去哪一间');
+      expect(a.focus, 'alpha', reason: '★ 他刚才在看哪一间');
+      expect(a.question, contains('去吗？'), reason: '★ 反问那句话要**原样**用服务端给的');
+      // 🔴 **不按状态码猜**：409 上没有 `ask:true` 就还是原来那条"没细分"的路
+      expect(sayOutcomeOf(409, '{"error":"whatever"}'), isA<SayRejected>());
+      expect(sayOutcomeOf(409, '不是 JSON'), isA<SayRejected>());
+      // ⚠️ 409 以前是 `SayRejected('HTTP 409')` —— 那条**还在**（上面两条就是它的正身）
+    });
+  });
+
+  group('SayAsk 落到屏幕上（N11：人话 + 可重试，而且一个字都不丢）', () {
+    const askBody =
+        '{"error":"focus-mismatch","ask":true,"focus":"alpha","scope":"beta",'
+        '"text":"你现在看的是这一间，这句话是要送到别的那一间去吗？"}';
+
+    test('★ 那条发言落 failed（有「重发」），顶部显示**服务端那句反问**', () async {
+      final c = _controllerReplying(409, askBody);
+      await c.send('乙房那件事');
+
+      final mine = c.items.whereType<UserUtterance>().single;
+      expect(mine.state, MessageState.failed, reason: '★ 反问那次**一个字都没落盘** ⇒ 这句还算没被收下');
+      expect(canTransition(mine.state, MessageState.queued), true, reason: '「重发」要把这条推回 queued');
+      final line = c.lastError;
+      expect(line, isNotNull, reason: 'N11：不许静默 —— 反问就是那句人话');
+      expect(line, contains('去吗'), reason: '★ 反问那句话必须真的到得了状态条');
+      expect(scanForbidden(line!), isEmpty, reason: '禁用词：${scanForbidden(line)}');
+      // 网是通的、它也没满 ⇒ 不许说成"网断了"（那是假话；`conn_state.dart` 记过一次）
+      expect(line.contains('网'), false);
+      final (shown, _) = statusLine(ConnState.connected, error: line);
+      expect(shown, line);
+    });
+
+    test('反问**不是**令牌的事：不许把人踢回登录页（令牌留着，重发还能用）', () async {
+      final c = _controllerReplying(409, askBody);
+      await c.send('乙房那件事');
+      expect(c.token, 'tok');
+    });
   });
 
   group('SayBusy 落到屏幕上（N11：人话 + 可重试）', () {

@@ -1,4 +1,5 @@
-// **一个图标 = 一条对话**（契约 `docs/dev/83-APP-WORKSPACE.md` §五·甲，主人亲口选的"甲"）。
+// **一个图标 = 一条对话**（契约 `docs/dev/83-APP-WORKSPACE.md` §五·甲，主人亲口选的"甲"）
+// **＋ C 期：焦点路由（一条连接）**（契约 `docs/dev/84-DISPATCHER-FOCUS.md` §三·3）。
 //
 // 这一份是**硬闸**（`test/unit`）：房间里那几件事全是"错了看起来也像对的"——
 //
@@ -6,10 +7,11 @@
 //      关掉 = 回 `main`；★ **内置那四个也各回自己的 id**（主人 2026-09-25：「要分家」，
 //      见 `77-BLOCKERS.md` 的 B16 与 `models/scope.dart` 顶上那段）——
 //      服务端 `worlds.js` 的 `BUILTIN_SCOPES` 把那四个名字登记成了合法房间。
-//   ② **地址上带没带对**：那条流（`?scope=…`，还不许带令牌）、那一次 say（body）、
-//      那一问老消息（`/api/timeline?scope=…`）。
+//   ② **地址上带没带对**：那一次 say（body）、那一问老消息（`/api/timeline?scope=…`）。
 //   ③ 🔴 **切房间不许把主线弄丢**（判据 A4）：这一条最贵 ——
 //      丢了的话用户会觉得"切一趟图标，我原来那些话没了"（而没网时它再也回不来）。
+//   ④ 🔴 **C 期 F2/F3**：切房间**不重连**（只发一帧焦点，带那一间自己的游标）；
+//      不属于现在这一间的帧**不许落进来**（一条连接服务所有房间之后最容易踩的坑）。
 //
 // ⚠️ 不写界面断言（那是 `test/widget`，提示档）：这里只有纯逻辑与状态。
 
@@ -41,7 +43,7 @@ http.Response _json(String body, [int status = 200]) => http.Response(
 );
 
 /// **一条假的流**（只为判据存在）：它不开 socket，只**记账** ——
-/// "造了几条 / 每一条带的是哪个 scope / 从哪个游标开的 / 有没有被收掉"。
+/// "造了几条 / 从哪个游标开的 / 切了几次焦点（每次带的哪一间、哪个游标）/ 有没有被收掉"。
 ///
 /// ⚠️ 为什么不真连：真连一个口会把"这件事对不对"变成"这台机器网络快不快"，
 ///    而且真实的 `wss://` 在 VM 上根本连不上（`stream_uri.dart` 顶上那次事故
@@ -52,8 +54,8 @@ class _FakeStream implements StreamClient {
     required this.token,
     required this.api,
     required this.level,
-    required this.scope,
-  });
+    required scope,
+  }) : _focus = scope;
 
   @override
   final String base;
@@ -64,11 +66,13 @@ class _FakeStream implements StreamClient {
   @override
   final ProcessLevel level;
   @override
-  final String scope;
-  @override
   Duration get pingTimeout => const Duration(seconds: 60);
   @override
   Future<TokenProbe> Function(String token)? get probe => null;
+
+  String _focus;
+  @override
+  String get scope => _focus;
 
   final _events = StreamController<Map<String, dynamic>>.broadcast();
   final _states = StreamController<ConnState>.broadcast();
@@ -81,14 +85,19 @@ class _FakeStream implements StreamClient {
   ConnState get state => ConnState.idle;
   @override
   bool get isConnected => false;
+
+  /// 判据要读的账（照真那一份的形状）。
+  int _since = 0;
   @override
   int get sinceSeq => _since;
-  int _since = 0;
 
   int opens = 0;
   int openedWith = -1;
   bool closed = false;
   bool disposed = false;
+
+  /// 每次 `focus()`：`(哪一间, 带的游标)`。
+  final List<(String, int)> focuses = [];
 
   @override
   void open({int sinceSeq = 0}) {
@@ -96,6 +105,17 @@ class _FakeStream implements StreamClient {
     _since = sinceSeq;
     openedWith = sinceSeq;
   }
+
+  /// ★ **C 期**：切焦点**不重连** —— 就是在这条连接上记一笔（真那一份会发一帧）。
+  @override
+  void focus(String scope, {int sinceSeq = 0}) {
+    _focus = scope;
+    _since = sinceSeq;
+    focuses.add((scope, sinceSeq));
+  }
+
+  /// 判据用：从"服务端"推一帧进来（走和真那条一样的入口）。
+  void push(Map<String, dynamic> e) => _events.add(e);
 
   @override
   void close() => closed = true;
@@ -252,9 +272,9 @@ void main() {
     });
   });
 
-  // ── ③ 那条流跟着房间走 ──────────────────────────────────────
-  group('切房间 ⇒ 重连那条流（连接级）', () {
-    test('🔴 旧连接收掉、新连接带的是**新房间**、从**那一间自己的游标**续', () async {
+  // ── ③ 那条流服务**所有**房间：切焦点不重连（C 期 F2/F3）──────────
+  group('切房间 ⇒ **发焦点**（一条连接 · 不重连）', () {
+    test('🔴 F2：一条连接不新建、不重开；焦点帧带的是**那一间自己的**游标', () async {
       final made = <_FakeStream>[];
       final api = Api(
         client: MockClient((r) async {
@@ -283,20 +303,42 @@ void main() {
 
       await c.start(token: 'tok');
       expect(made.length, 1);
-      expect(made.single.scope, mainScope, reason: '开机连的是主对话那一间');
+      expect(made.single.scope, mainScope, reason: '开机连的初始焦点是主对话那一间');
       expect(made.single.opens, 1);
+      // 主线先有两句 ⇒ 主线那一间自己的游标 = 3
+      _feed(c, _mainFrames());
 
       await c.setScope('dice');
-      expect(made.length, 2, reason: '★ `scope` 是连接级的 ⇒ 切房间**必须重连**');
-      expect(made[0].disposed, true, reason: '★ 旧那条要收干净（不然两间的话会同时进同一个屏幕）');
-      expect(made[1].scope, 'dice', reason: '★ 新连接带的必须是新房间');
-      expect(made[1].opens, 1, reason: '新连接要真的开起来');
+      // 🔴 **判据本体**：一条连接 —— 没新建、旧那条没被收掉、也没重开
+      expect(
+        made.length,
+        1,
+        reason: '🔴 `scope` 还是连接级的旧形状 ⇒ 这里会变成 2（84 §八·3/4 明说不做）',
+      );
+      expect(made.single.disposed, false, reason: '★ 旧连接不许被收掉（连接不动）');
+      expect(made.single.opens, 1, reason: '★ 不许重开（重开就是重连）');
+      // 焦点帧发了，而且带的是 dice 那一间**自己的**游标（没来过 ⇒ 0）
+      expect(made.single.focuses.map((f) => f.$1).toList(), ['dice']);
+      expect(
+        made.single.focuses.single.$2,
+        0,
+        reason: '★ 新房间没来过 ⇒ 带 0（服务端按那一间的视图把整段历史补过来）',
+      );
 
-      // 回主线 ⇒ 再一次重连，而且仍然带 `main`
+      // 回主线：还是那条连接，带的是**主线自己**那个号（连续 —— 不是 0、也不是骰子那间的）
       await c.setScope(mainScope);
-      expect(made.length, 3);
-      expect(made[1].disposed, true);
-      expect(made[2].scope, mainScope);
+      expect(made.length, 1, reason: '🔴 切回来还是一条连接');
+      expect(made.single.disposed, false);
+      expect(made.single.opens, 1);
+      expect(made.single.focuses.map((f) => f.$1).toList(), ['dice', mainScope]);
+      expect(
+        made.single.focuses.last.$2,
+        3,
+        reason: '★ `sinceSeq` 连续：回主线带的是它自己那个号',
+      );
+
+      // **反例的正身**：真按房间重连（旧形状）会新造一条 ⇒ 上面每一条 `made.length == 1` 全红
+      expect(made.single.scope, mainScope);
     });
 
     test('★ 没在跑的流**不许顺手开一条**（还没登录完 / 判据里没开流）', () async {
@@ -320,6 +362,126 @@ void main() {
       await c.setScope('dice'); // 从没 start() 过
       expect(made, isEmpty, reason: '★ 没在跑就没有"重连"这回事（凭空开一条会去连一个不该连的地址）');
       expect(c.scope, 'dice', reason: '房间本身还是要换（本机那一屏、说出去的话都跟着换）');
+    });
+  });
+
+  // ── ③b 焦点路由**客户端这一半**：不属于这一间的帧不许落进来 ──────
+  group('焦点路由（客户端这一半 · C 期 F3）', () {
+    test('🔴 `eventInScope`：主线 = 没标签 / `main`；房间 = 逐字等于它', () {
+      expect(eventInScope({'scopeId': 'alpha'}, 'alpha'), true);
+      expect(eventInScope({'scopeId': 'alpha'}, 'beta'), false, reason: '★ 甲房的事不许算进乙房');
+      expect(eventInScope({}, mainScope), true, reason: '主线的事件**不带** `scopeId`（老字节）');
+      expect(eventInScope({'scopeId': 'main'}, mainScope), true);
+      expect(eventInScope({}, 'alpha'), false, reason: '★ 主线的事件不许落进房间（判据 A3）');
+      expect(eventInScope({'scopeId': 'alpha'}, mainScope), false);
+      // **反例的正身**：把"不看标签"那条旧形状写出来（一条连接只服务一间时的做法）
+      // ⇒ 上面第 2、5 条会当场红 —— 那正是"甲房的话出现在乙房"的样子
+      bool oldShape(Map<String, dynamic> _) => true;
+      expect(oldShape({'scopeId': 'alpha'}), true);
+      expect(oldShape({}), true);
+    });
+
+    test('🔴 切焦点之后，上一间补发过来的帧**不许**落进这一间', () async {
+      final made = <_FakeStream>[];
+      final api = Api(
+        client: MockClient((r) async {
+          if (r.url.path == '/api/renew') {
+            return _json(jsonEncode({'token': 'tok2', 'expiresAt': 9000000000000}));
+          }
+          return _json('{}');
+        }),
+      );
+      final c = ChatController(
+        api: api,
+        tokens: TokenStore(),
+        token: 'tok',
+        newStream: ({required base, required token, required level, required scope}) {
+          final s = _FakeStream(base: base, token: token, api: api, level: level, scope: scope);
+          made.add(s);
+          return s;
+        },
+      );
+      await c.start(token: 'tok');
+      final s = made.single;
+      await c.setScope('alpha');
+      await c.setScope('beta'); // 用户手快，连着切两下
+
+      // "服务端"把**甲房**的补发推过来（切焦点时它已经在路上了）
+      s.push({'type': 'user/echo', 'seq': 11, 'messageId': 'ua', 'text': '甲房的话', 'scopeId': 'alpha'});
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        _countOf(c.items, '甲房的话'),
+        0,
+        reason: '🔴 上一间的帧落进了乙这一间（屏幕上就是"别人的话"）',
+      );
+      // 负向对照：属于**现在这一间**的照收（证明上面不是"什么都不收"）
+      s.push({'type': 'user/echo', 'seq': 12, 'messageId': 'ub', 'text': '乙房的话', 'scopeId': 'beta'});
+      await Future<void>.delayed(Duration.zero);
+      expect(_countOf(c.items, '乙房的话'), 1);
+      expect(c.scope, 'beta');
+      // 而主线那间**一个字都没被污染**
+      await c.setScope(mainScope);
+      expect(_countOf(c.items, '甲房的话'), 0);
+      expect(_countOf(c.items, '乙房的话'), 0);
+    });
+
+    test('🔴 切焦点那一段历史**不许**当成"现在"：补发期间不弹浮窗、确认之后才弹', () async {
+      final made = <_FakeStream>[];
+      final api = Api(
+        client: MockClient((r) async {
+          if (r.url.path == '/api/renew') {
+            return _json(jsonEncode({'token': 'tok2', 'expiresAt': 9000000000000}));
+          }
+          return _json('{}');
+        }),
+      );
+      final c = ChatController(
+        api: api,
+        tokens: TokenStore(),
+        token: 'tok',
+        newStream: ({required base, required token, required level, required scope}) {
+          final s = _FakeStream(base: base, token: token, api: api, level: level, scope: scope);
+          made.add(s);
+          return s;
+        },
+      );
+      await c.start(token: 'tok');
+      final s = made.single;
+      c.ingest({'type': '__caught_up__'}); // 首屏那段历史读完了（真实路径上服务端一定发）
+      await c.setScope('dice'); // 切焦点 ⇒ 接下来那一段是**那一间的历史**
+
+      // "服务端"把那一间的历史发过来（头一回进那一间 ⇒ 服务端给的是全量历史）
+      s.push({
+        'type': 'notice',
+        'kind': 'expiring',
+        'text': '很久以前那件事',
+        'at': 1758400000000,
+        'seq': 30,
+        'scopeId': 'dice',
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        c.notice,
+        isNull,
+        reason: '🔴 切焦点那一段历史被当成"现在"弹出来了（就是冷启动那种骚扰 + 假话）',
+      );
+
+      // 服务端说"那一间的历史发完了"（内部信号，来自 `client/focus`）
+      s.push({'type': '__focus_ready__'});
+      await Future<void>.delayed(Duration.zero);
+      // 之后来的才算"现在发生的"
+      s.push({
+        'type': 'notice',
+        'kind': 'expiring',
+        'text': '刚刚那件事',
+        'at': 1758400000001,
+        'seq': 31,
+        'scopeId': 'dice',
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(c.notice, isNotNull, reason: '★ 确认之后的通知该弹还是得弹（别修过头）');
+      expect(c.notice!.text, '刚刚那件事');
+      c.dispose();
     });
   });
 

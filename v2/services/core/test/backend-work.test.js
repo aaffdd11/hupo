@@ -21,8 +21,9 @@ import { AgentRuntime } from '../src/agent-runtime.js';
 import { Auth } from '../src/auth.js';
 import { createServer } from '../src/server.js';
 import { Store } from '../src/store.js';
-import { Worlds } from '../src/worlds.js';
+import { Worlds, titleOfApp } from '../src/worlds.js';
 import { WorkLog } from '../src/worklog.js';
+import { workWhereWords } from '../src/work-words.js';
 
 const HERE = nodePath.dirname(fileURLToPath(import.meta.url));
 const FAKE = nodePath.join(HERE, 'fake-agent.mjs');
@@ -213,6 +214,60 @@ test('T4④b 他随时能问"那件怎么样了"：逐件答案（真跑着的�
     assert.match(line, /还在做/, `逐件答案：${line}`);
     // 查无此件也有一句（不许空着）
     assert.match(w.dispatcher.workReport({ ref: 'u_不存在' }), /没找到/);
+  } finally {
+    await h.close();
+  }
+});
+
+test('T4②b 房间那条完成提醒要说**它自己的名字**（反例：名字取成版本号 ⇒ 恒空 ⇒ 红）', async () => {
+  const h = await boot({ scenario: 'slow', cfg: { backgroundAfterMs: 150 } });
+  const w = h.worlds.worldFor('u1');
+  try {
+    // 这一格里真有一个 app：它的名字只有**一处出处**（那一版制品的 `manifest.json`）
+    w.apps.create({
+      id: 'city-weather',
+      title: '看天气',
+      icon: 'cloud',
+      entry: 'index.html',
+      files: { 'index.html': '<p>天气</p>' },
+    });
+    // ★ 纯判据的正身 / 反例：`current()` 给的是**版本号**——
+    //   照它取 `.title`（修前那一行）⇒ 恒 `null` ⇒ 那半句永远出不来。
+    assert.equal(
+      titleOfApp({ current: () => 1, manifest: (_id, v) => (v === 1 ? { title: '看天气' } : null) }, 'city-weather'),
+      '看天气',
+    );
+    assert.equal(titleOfApp({ current: () => 1, manifest: () => null }, 'city-weather'), null);
+    // 认不出 ⇒ **不写内部 id 上屏**（`06` 禁用词那条）
+    assert.equal(workWhereWords({ scopeId: 'city-weather', title: null }), '');
+
+    // 开他这一间 ⇒ 那条完成提醒里"去哪看"要带上它自己的名字
+    assert.ok(h.worlds.roomFor('u1', 'city-weather'), '这一间要开得出来');
+    const r = await post(h, '/api/say', {
+      messageId: 'u_room_1',
+      text: '把明天的天气画出来',
+      scope: 'city-weather',
+    });
+    assert.equal(r.status, 200);
+    await waitFor(
+      () => notices(w.dir).some((e) => e.kind === 'work-done'),
+      '房间里那条完成提醒',
+    );
+    const done = notices(w.dir).filter((e) => e.kind === 'work-done').pop();
+    assert.match(done.text, /在「看天气」里/, `要说清去哪看：${done.text}`);
+    assert.equal(typeof done.seq, 'number', '★ 落盘取号');
+    // ★ **提醒要走到他眼前**：那句落的是**主线那本可见的账**（`notice` 是"对用户说话"
+    //   的唯一出口）—— 所以他回了桌面也看得见"哪一间做完了"（P1 §三②）。
+    assert.ok(
+      w.timeline.readAll().some((e) => e.kind === 'work-done'),
+      '那条完成提醒要在**主线视图**里看得见（他回到桌面也收得到）',
+    );
+    // ⚠️ 反过来说清：这一间的**正文**不许进主线（A4/A5）——
+    //   只有那条提醒是例外（它是"对用户说话"，不是那一间的话）。
+    assert.ok(
+      !w.timeline.readAll().some((e) => e.type === 'message/text'),
+      '🔴 房间的正文一个字都不许漏进主线',
+    );
   } finally {
     await h.close();
   }

@@ -35,9 +35,10 @@ import 'token_store.dart';
 
 /// **那条流怎么造**（只为判据存在的注入口 —— 见 `ChatController.newStream`）。
 ///
-/// ⚠️ 四个参数**一个都不能少**：`scope` 和 `level` 都是**连接级**的
-///    （服务端按每条连接决定订阅哪一间、发多少过程）——漏传一个，
-///    "切房间 / 换档要重连"这件事就会静默地只对了一半。
+/// ⚠️ 四个参数**一个都不能少**：`level` 是**连接级**的（服务端按每条连接决定
+///    发多少过程）；`scope` 现在是**初始焦点**（C 期起，契约 84 §三·3 ——
+///    连上之后切房间走 `StreamClient.focus()` 那一帧，**不重连**）。
+///    漏传一个，"这条连接一上来听哪一间 / 发多少过程"就会静默地只对了一半。
 typedef NewStream =
     StreamClient Function({
       required String base,
@@ -69,10 +70,10 @@ class ChatController extends ChangeNotifier {
       required void Function(Map<String, dynamic>) onEvent,
     })? startHear,
     void Function()? stopHear,
-    /// **那条流怎么造**（可注入 —— 判据要能验"切房间真的重连了、新连接带的是新房间"）。
+    /// **那条流怎么造**（可注入 —— 判据要能验"切房间**只发焦点、不重连**"）。
     /// `null` = 生产那一条（`StreamClient` → `/api/stream`）。
-    /// ⚠️ 判据里注一个假的进去 ⇒ 不用真开 socket 也验得了 `setScope` 那三件事
-    ///    （旧连接被收掉 / 新连接带上新 scope / 从那一间自己的游标续）。
+    /// ⚠️ 判据里注一个假的进去 ⇒ 不用真开 socket 也验得了 `setScope` 那几件事
+    ///    （连接不新建/不重开、焦点帧带的哪一间与哪个游标）。
     NewStream? newStream,
   }) : _token = token,
        local = local ?? TimelineStore(),
@@ -466,7 +467,8 @@ class ChatController extends ChangeNotifier {
     _ensureStream();
   }
 
-  /// **换房间**（契约 `83-APP-WORKSPACE.md` §五·甲：跟着图标走）。
+  /// **换房间**（契约 `83-APP-WORKSPACE.md` §五·甲：跟着图标走；
+  /// C 期按 `84-DISPATCHER-FOCUS.md` §三·3 **收回了"按房间重连"**）。
   ///
   /// 界面那一层在"打开某个小程序 / 关掉退回桌面"时叫它，参数是纯函数
   /// `scopeOfOpenApp(...)` 算出来的那个房间名。
@@ -476,13 +478,16 @@ class ChatController extends ChangeNotifier {
   ///      打字框里那半句全都不动。切回来时它们还在（判据 A4）。
   ///   ② **本机那一屏先画出来**（新房间没来过 ⇒ 读它的缓存；S5c：先本机、再网络），
   ///      然后 `notifyListeners()` —— 屏幕立刻换成新房间的，不留一段白屏。
-  ///   ③ **那条流重连**（`scope` 和 `level` 一样是**连接级**的），而且新连接从
-  ///      **这一间的 `lastSeq`** 续 —— 没来过的那一间是 0 ⇒ 服务端把它那一间的
-  ///      历史整段补发过来（这就是"按新 scope 重新加载历史"）。
+  ///   ③ **把焦点告诉服务端**（[StreamClient.focus]）——**不重连**。
+  ///      带上**这一间自己的游标** ⇒ 服务端把这一间缺的那一段按**视图**补发过来
+  ///      （这就是"历史按 `?scope=` 视图重载"：一条日志上的那层视图，不是另一份日志）。
   ///
-  /// ⚠️ 换房间**不许**动 `level`（两件事各管各的：一个管"说多少过程"、
-  ///    一个管"哪一间"），也不许把房间存到盘上（刷新之后回到桌面那条主对话
-  ///    才是对的：房间是"我现在开着哪个图标"的影子，图标不在就回主线）。
+  /// 🔴 **为什么不再重连**：手册 §四 核心原则 3 —— *"一个 WS 连接是物理约束，
+  ///    不能每个会话一条连接"*。按房间重连会为每个图标各开一条连接，
+  ///    而且切一趟就断一次（`84 §八` 把那种形状列为**明确不做**）。
+  /// ⚠️ 换房间**不许**动 `level`（一个管"说多少过程"、一个管"哪一间"），
+  ///    也不许把房间存到盘上（刷新之后回到桌面那条主对话才是对的：
+  ///    房间是"我现在开着哪个图标"的影子，图标不在就回主线）。
   Future<void> setScope(String scope) async {
     final want = scope.trim().isEmpty ? mainScope : scope;
     if (want == _scope) return;
@@ -496,15 +501,22 @@ class ChatController extends ChangeNotifier {
     if (!room.restored) await _restoreLocal();
     // ① 屏幕先换成这一间 —— 网络那一步在下面，不许挡在它前面
     notifyListeners();
-    // ③ 流是连接级的 ⇒ 只能重连（旧的连它那两个 controller 一起收掉）。
+    // ③ ★ **焦点是一帧，不是一条连接**（C 期）：连着的流照旧连着，
+    //    只把"我在看哪一间"告诉服务端；顺带把这一间的游标给它（补发那一段）。
     //    ⚠️ **没在跑就不"顺手开一条"**（和 `setLevel` 同一条规矩）：真实路径上
-    //       `start()` 之后它一定在跑；而"没跑"的场合（还没登录完 / 判据里
-    //       `openStream:false`）凭空开一条会去连一个不该连的地址。
-    final old = _stream;
-    if (old != null) {
-      _stream = null;
-      await old.dispose();
-      _ensureStream();
+    //      `start()` 之后它一定在跑；而"没跑"的场合（还没登录完 / 判据里
+    //      `openStream:false`）凭空开一条会去连一个不该连的地址。
+    //      ⚠️ `focus()` 在没连着时也记账（新焦点 + 新游标），重连那一下会用上它。
+    final s = _stream;
+    if (s != null) {
+      // ★ 切焦点之后，那一间的历史是**补发**过来的（服务端按它那层视图给）——
+      //   在收到那条确认帧之前收到的都算**历史**：不许为它弹浮窗，更不许念出来。
+      //   （不给这一句的话，头一回进一间有历史的房间，冷启动那批通知会一条条往外弹
+      //     —— 那既是骚扰也是假话："刚才"其实不是刚才。旧形状靠"每次新连接都从
+      //     在读历史开始"挡住了它，现在连接不再新建，这个界就得显式划。）
+      //   ⚠️ 没连着时也置位：重连那一路会发 `client/hello`（⇒ `__caught_up__`）把它放下来。
+      _readingHistory = true;
+      s.focus(want, sinceSeq: room.timeline.lastSeq);
     }
     notifyListeners();
   }
@@ -755,19 +767,18 @@ class ChatController extends ChangeNotifier {
     final t = _token;
     if (t == null) return;
     if (_stream != null) return;
-    // ⚠️ 这条流钉住**开它的时候那一间**：切房间之后旧连接可能还有几帧在路上，
-    //    那些帧（和它报的连接状态）属于上一间 ⇒ 一律丢掉（见下面两个 listen）。
-    final scopeAtOpen = _scope;
+    // ★ **一条连接服务所有房间**（C 期 · 契约 84 §三·3）：开它的时候那一间只是
+    //   **初始焦点**（构造参数走 `?scope=`）；之后切房间靠 `focus()` 那一帧。
     final s =
         _newStream?.call(
           base: '',
           token: t,
           level: _level,
-          scope: scopeAtOpen,
+          scope: _scope,
         ) ??
-        StreamClient(base: '', token: t, api: api, level: _level, scope: scopeAtOpen);
+        StreamClient(base: '', token: t, api: api, level: _level, scope: _scope);
     s.states.listen((st) {
-      if (scopeAtOpen != _scope) return; // 上一间那条连接报的，不作数
+      // ⚠️ 连接状态是**连接级**的（不再属于某间房）⇒ 不再按房间丢。
       _conn = st;
       if (st == ConnState.unauthorized) {
         // ⚠️ 只有这一种情况才清令牌。**网络失败不清**（B1 的修法）
@@ -776,7 +787,17 @@ class ChatController extends ChangeNotifier {
       notifyListeners();
     });
     s.events.listen((e) {
-      if (scopeAtOpen != _scope) return; // 上一间的帧不许落进这一间的时间线
+      final type = e['type'];
+      // 内部信号（`stream.dart` 造的，不属于任何一间）
+      if (type == '__caught_up__' || type == '__reset__' || type == '__focus_ready__') {
+        ingest(e);
+        return;
+      }
+      // ★ **焦点路由在这一侧也要钉一道**（判据 F3 的客户端那一半）：
+      //   一条连接现在服务所有房间，切焦点时**上一间可能在补发**、
+      //   用户还可能手快连点两个图标 —— 不属于**现在这一间**的帧不许落进来
+      //   （落进来就是"甲房的话出现在乙房的屏幕上"）。
+      if (!eventInScope(e, _scope)) return;
       ingest(e);
     });
     // 每开一条新连接都从「在读历史」开始（读到 `client/hello` 才算读到「现在」）
@@ -801,6 +822,14 @@ class ChatController extends ChangeNotifier {
       //     但是其他手机的并没有出现这段话。"* 那条是**很久以前**的崩溃通知，
       //     却**每次登录都弹一次浮窗** —— 既是骚扰（R1.2 通知疲劳），也是假话
       //     （"刚才"其实不是刚才）。规则见 `models/notice.dart` 的 `shouldPopNotice()`。
+      _readingHistory = false;
+      return;
+    }
+    if (event['type'] == '__focus_ready__') {
+      // ★ **切焦点那一间的历史发完了**（信号来自 `stream.dart` 收到的 `client/focus`，
+      //   服务端保证"补发在前、这一帧在后"）—— 从这一刻起收到的才算"现在发生的"。
+      //   ⚠️ 和 `__caught_up__` 是**两件事**：那条管"这条连接的头一屏"，
+      //      这条管"每一次切焦点"（连接不再新建 ⇒ 那个界也得每一次重划）。
       _readingHistory = false;
       return;
     }
@@ -1141,6 +1170,14 @@ class ChatController extends ChangeNotifier {
       case SayRejected(:final message):
         room.timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '没收下：$message';
+      case SayAsk(:final question):
+        // ★ **C 期：第 16 条的反问**（契约 84 §三·3）：服务端不确定这一句该送到哪一间
+        //   ——既不按焦点送、也不按提示送，先问一句。
+        //   它**一个字都没落盘**（所以这一句还算"没被收下"）：落到 `failed`，
+        //   屏幕上就是「没发出去」+「重发」，**一个字都不丢**（N11）。
+        //   ⚠️ 那句问话**原样**用服务端给的（客户端不许自己拼一句：两处口径会漂）。
+        room.timeline.setLocalState(messageId, MessageState.failed);
+        _lastError = question;
       case SayNetworkError():
         room.timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '网没通，这条没发出去';

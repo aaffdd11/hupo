@@ -22,7 +22,20 @@ import { SayError } from './say.js';
 // ★ **scope（一个图标 = 一个工作区 = 一条对话 · 契约 `83-APP-WORKSPACE.md`）**：
 //   协议**只加可选字段** —— 缺了就是主线（老客户端一个字节都不用改）。
 //   取值与校验只有一处出处（`worlds.js`），免得"什么算合法 scope"有两份。
+// ★ **C 期（契约 `docs/dev/84-DISPATCHER-FOCUS.md` §三/§四）：焦点路由。**
+//   **一条 WS 连接服务所有房间**（手册 §四 核心原则 3）；客户端发**焦点**
+//   （新帧 `{"t":"focus","scope":…,"sinceSeq":…}`），**路由由服务端做**：
+//   焦点那条现时投给这条连接，其它条照常进那条日志、但**不实时推**。
+//   `?scope=` 作废成"**初始焦点**"（老客户端照旧）；切焦点**不重连**。
 import { MAIN_SCOPE, parseScope } from './worlds.js';
+// ★ **C 期：焦点路由**（契约 `docs/dev/84-DISPATCHER-FOCUS.md` §三/§四）。
+//   🔴 手册 §四 核心原则 3：**一个 WS 连接是物理约束** —— 不能每个房间一条连接。
+//   ⇒ 客户端发的是**焦点**（"我正在看哪个图标"），**路由由服务端做**：
+//     焦点那条的输出现时投给用户；其它条照常进日志、但不实时推。
+//   判断那几件（收帧 / 该不该反问）住在 `focus.js`（纯函数，能反着验）。
+import { focusAskText, parseFocusFrame, routeTarget } from './focus.js';
+// 事件属不属于这一间 —— **只有这一处**（`ScopeView` 与这里共用它）。
+import { eventInScope } from './timeline.js';
 // ⚠️ 只借它**校验手机号形状**（`/api/send-code` 用）；模块本身不碰用户表
 import { normalizePhone } from './users.js';
 import { ADMIT_RATIO, readAdmission } from './admission.js';
@@ -719,21 +732,22 @@ export function createServer({
       }
       if (tenant && TENANT_ROUTES.some((p) => path === p || path.startsWith(`${p}/`))) {
         // 🔴 `/api/app-ask` 在这条路上要**先过闸再转发**：
-        //    匣子里那份目录与中心这一份**不是同一个**（中心是 `data/users/<id>/`，
-        //    匣子里是它自己的 `/data`）⇒ 闸只能由**中心**（权威那份）来判；
+        //    ★ **B17**：这道闸的**取值来源必须是权威那份** —— 租户的库在他**盒子里**
+        //    （`appsFor(claim.sub)` 走 B15 已做好的那条现有隧道），**不是**宿主
+        //    `data/users/<id>/`。改前读的是宿主那份 ⇒ **只在盒里**（迁移后新造）的
+        //    app 会被判"没有这个小程序"（**页面在说假话**）。
         //    而"花"必须发生在**匣子里**（钥匙在那儿）。
         //    转发时带一个头，告诉匣子"闸已经过了，你只管花"。
         let askBody = null;
         if (path === '/api/app-ask') {
-          const w = worldFor(claim.sub);
           let body;
           try {
             body = await readJson(req, 16 * 1024);
           } catch {
             return sendJson(res, 400, { error: '这一条看不懂' });
           }
-          const gate = checkAppAsk(w?.apps, body?.appId);
-          if (!gate.ok) return sendJson(res, gate.status, { error: gate.error });
+          const gate = await gateAskFor(claim.sub, body?.appId, { tenant });
+          if (!gate.ok) return sendJson(res, gate.status, gateBody(gate));
           // 转发的是**重写过的**请求：一个"闸过了"的头（跨进程只认头，不认内存里的字段）
           // + 重新给一份身体（刚才 `readJson` 已经把它读掉了）。
           req.headers['x-hupo-app-ask-checked'] = '1';
@@ -789,22 +803,22 @@ export function createServer({
         let body;
         let left = null;
         if (req.headers['x-hupo-app-ask-checked'] === '1') {
-          // ★ **匣子这一侧**：闸在中心那边已经过了（那一份才是权威的；
-          //    匣子里这份目录跟中心不是同一个，它自己也判不了）
+          // ★ **匣子这一侧**：闸在宿主那边已经过了（对租户来说，那一份**就是盒里这份**
+          //    —— B17 之后宿主是**经隧道请盒子自己判**的，见 `gateAskFor`）
           try {
             body = await readJson(req, 16 * 1024);
           } catch {
             return sendJson(res, 400, { error: '这一条看不懂' });
           }
         } else {
-          if (!w?.apps) return sendJson(res, 404, { error: '这台部署还没开小程序' });
           try {
             body = await readJson(req, 16 * 1024);
           } catch {
             return sendJson(res, 400, { error: '这一条看不懂' });
           }
-          const gate = checkAppAsk(w.apps, body?.appId);
-          if (!gate.ok) return sendJson(res, gate.status, { error: gate.error });
+          // ★ **B17**：同一个闸、同一个取值来源（租户 ⇒ 盒里那份；主人 / 单租户 ⇒ 本机那份）。
+          const gate = await gateAskFor(claim.sub, body?.appId);
+          if (!gate.ok) return sendJson(res, gate.status, gateBody(gate));
           left = gate.left;
         }
         const prompt = typeof body?.prompt === 'string' ? body.prompt : '';
@@ -1362,13 +1376,63 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
         text: '这个房间还没建好，先在对话里把它做出来。',
       });
     }
+
+    // ── ★ **第 16 条：指称与焦点不一致 ⇒ 先反问一句**（`96-OWNER-DECISIONS.md`）──
+    //
+    // 🔴 **落在这一层是有意的**：路由本来就归服务端（手册 §四 核心原则 3，
+    //    "客户端发的是焦点，路由由服务端做"）⇒ "这一句到底该送到哪一间"
+    //    只有一个地方能判。判断本体是纯函数（`focus.js` 的 `routeTarget`）。
+    //
+    // 三档（反例都在 `test/focus.test.js` 里）：
+    //   · 没告知过焦点（老客户端 / 还没连流）⇒ **不比较**，照旧送出（老行为不动）；
+    //   · 归处提示 **==** 焦点 ⇒ 照旧送出；
+    //   · 归处提示 **!=** 焦点 ⇒ **既不按提示送、也不按焦点送**：反问一句。
+    //     （87 §④.2 那条分歧 96 第 16 条已经拍了："不确定就先反问"。
+    //     两边静默赢都是缺陷：按焦点送 = 把 B 那间的话吞掉；
+    //     按提示送 = 把活送错地方而且看不出来。）
+    //
+    // ⚠️ **重发（duplicate）不判这一条**（与下面那道准入闸同一个道理）：
+    //    那一句**早就落盘了**，拿"归处不确定"拒它 ⇒ 界面会说一句假话
+    //    （"没发出去"，而服务端其实收下了）。重发只认"是不是同一句"。
+    const duplicate = W.say.isDuplicate(body?.messageId);
+    const route = routeTarget({ hint: scope, focus: W.dispatcher?.focusScope ?? null });
+    if (!duplicate && route.ask) {
+      // ⚠️ **不落盘、不投递**（`say.say()` 根本没被调用 ⇒ 盘上不留"没被回答的话"）。
+      //    409 = 冲突，和 429（忙）/ 404（没这间）分得开；
+      //    `ask:true` 是给客户端认的**显式字段**（不去猜状态码）。
+      //
+      // 名字的唯一出处是**制品库**（`apps.list()` 里那一条的 `title`）。
+      // ⚠️ **别用 `apps.current(id)`**：它给的是**版本号**（见 `apps.js`），
+      //    `.title` 恒 `undefined`（`worlds.js` 的 `whereTitle` 今天就是这么写的 ——
+      //    那是另一处待修的账，这里不许再抄一遍那个错）。
+      // 认不出 ⇒ 不带那半句，**绝不把内部 id 写上屏**。
+      const mine = (() => {
+        try {
+          return appsFor(claim.sub)?.list?.() ?? [];
+        } catch {
+          return [];
+        }
+      })();
+      const nameOf = (s) => {
+        if (s === MAIN_SCOPE) return '主对话';
+        const one = mine.find((a) => a?.id === s);
+        return typeof one?.title === 'string' ? one.title : null;
+      };
+      return sendJson(res, 409, {
+        error: 'focus-mismatch',
+        ask: true,
+        focus: route.focus,
+        scope: route.target,
+        text: focusAskText({ target: route.target, focus: route.focus, nameOf }),
+      });
+    }
     try {
       // ★ **准入闸**（手册 §9.1）：满了就明确拒绝，而且要在**落盘之前**判。
       //   ⚠️ 重发（duplicate）**不判**：那一句早就落盘了，拿"忙"拒它会让界面说假话
       //      （显示"没发出去"，而服务端其实收下了，那一轮还在跑）。
       //   ⚠️ 拒了 ⇒ **什么都没写**（`say.say()` 根本没被调用）——这就是
       //      §9.1 那句"不建空 jsonl 文件"的落点。
-      if (!W.say.isDuplicate(body?.messageId)) {
+      if (!duplicate) {
         const adm = admit();
         if (!adm.ok) {
           log(`[准入] 拒了一句（内存 ${Math.round((adm.ratio ?? 0) * 100)}% ≥ ${Math.round(ADMIT_RATIO * 100)}%）`);
@@ -1705,8 +1769,9 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
       //      而且是**运行到那一条连接时**才炸 —— 判据当场抓住）。
       return asrWss.handleUpgrade(req, socket, head, (ws) => onAsr(ws, req, claim));
     }
-    // ★ **可选 `scope`**（契约 `83-APP-WORKSPACE.md` §三·3）：**连接级的**，
-    //   照 `level` 那个先例 —— 每条连接各自一份，缺了就是主线。
+    // ★ **可选 `scope`**（契约 84 §四）：**语义 = "初始焦点"**（"带上只当初始焦点"）。
+    //   ⚠️ 一条连接进来先按它定焦点；之后**切焦点靠帧**（`focus`），**不靠重连**
+    //      —— 那正是 C 期要收掉的形状（84 §八"明确不做"第 3/4 条）。
     //   🔴 取不到那个房间 ⇒ **握手阶段就拒**（同"没令牌"那条规矩）：
     //      不许先连上再关，更不许悄悄退回主线（那会让 A 房间的话出现在 B 房间的流里）。
     const streamScope = parseScope(url.searchParams);
@@ -1718,7 +1783,7 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
       });
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      onStream(ws, url, claim, streamRoom);
+      onStream(ws, url, claim, streamScope);
     });
   }
 
@@ -1808,12 +1873,29 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
 
   server.on('upgrade', (req, socket, head) => handleUpgrade(req, socket, head, false));
 
-  function onStream(ws, url, claim, room = null) {
+  /**
+   * **一条流服务所有房间**（契约 `docs/dev/84-DISPATCHER-FOCUS.md` §三·3 · C 期）。
+   *
+   * 改前（`#121` 的形状）：`?scope=` 是**连接级**的 ⇒ 客户端切房间只能**重连**，
+   * 一条连接只听一间。那与手册 §四 核心原则 3（"一个 WS 连接是物理约束"）
+   * 和 §四① （"焦点在哪条 ⇒ 它的输出投给用户；其它条照常进时间线、但不实时提醒"）
+   * **相反** —— 84 §八 把"每个房间一条 WS 连接 / 客户端按房间重连"列为**明确不做**。
+   *
+   * 现在：
+   *   · `?scope=` = **初始焦点**（老客户端照旧能连、能收自己那一间）；
+   *   · 客户端→服务端帧 `{"t":"focus","scope":"<id>","sinceSeq":<n>}` **切焦点** ——
+   *     **不重连**；带上 `sinceSeq` 时顺手把**那一间**缺的那段补发过来
+   *     （那是它手上**那一间**自己的游标；不带 ⇒ 只切焦点）。
+   *   · 实时推送按**焦点**筛：焦点那条现时到；别的条仍在同一条日志里，
+   *     只是**不实时推**（判据 F2/F3）。
+   */
+  function onStream(ws, url, claim, initialFocus = MAIN_SCOPE) {
     // ★ **这条流也是按人取的**（多租户）：补发与订阅都必须走**他那一份**时间线，
     //   否则甲连上来的流会补发出乙的话。身份同样只从验过签的 `claim` 来。
-    //   ★ **房间同理**（契约 `83-APP-WORKSPACE.md` §三·3）：某个 app 的流只补发
-    //     与订阅**那一条日志** —— 一条流一个房间，订阅的是那间房的时间线。
-    const W = room ?? worldFor(claim.sub);
+    const world = worldFor(claim.sub);
+    // ★ **订阅的是那条日志本身**（不是某一间的视图）：一条日志装着所有房间，
+    //   "这一条连接收不收它"由下面的**焦点**决定（判据 F3）。视图只用来读历史。
+    const base = world?.timeline?.base ?? world?.timeline ?? null;
     const rawSince = url.searchParams.get('sinceSeq');
     const sinceSeq = rawSince === null ? 0 : Number.parseInt(rawSince, 10);
     // ⚠️ **`dev=1` 与 `level` 是并存的，不是别名。** 两个理由：
@@ -1830,10 +1912,40 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     // ★ **按连接**解一次档（契约 §二·2）；不认识的当默认档，不拒连接
     const level = parseLevel(url.searchParams);
 
-    // 补发（手册 §2.2，决策 P-h）
+    /** 这一条连接**现在的焦点**（一条连接一份；`?scope=` 只是它的初始值）。 */
+    let focus =
+      initialFocus === null || initialFocus === undefined || initialFocus === ''
+        ? MAIN_SCOPE
+        : String(initialFocus);
+    /** 焦点那一间的视图（读历史用）。取不到 ⇒ `null`（调用方如实说）。 */
+    const viewFor = (scope) => {
+      if (scope === MAIN_SCOPE) return world;
+      try {
+        return roomFor(claim.sub, scope);
+      } catch {
+        return null;
+      }
+    };
+    const send = (obj) => {
+      try {
+        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
+      } catch {
+        /* 已经没了 */
+      }
+    };
+    // ★ **告诉调度器"他现在看着这一间"**（第 16 条：指称与焦点不一致 ⇒ 先反问）。
+    //   ⚠️ **实时路由不用它**（那是这条连接自己的 `focus`）；它只为 `/api/say`
+    //      那条 HTTP 路服务 —— 那条路看不到这条连接。写不进去也不许把连接带走。
+    try {
+      world?.dispatcher?.setFocus?.(focus);
+    } catch {
+      /* 焦点这件事不该把连接踹了 */
+    }
+
+    // 补发（手册 §2.2，决策 P-h）：**初始焦点**那一间。
     let plan;
     try {
-      plan = planResume({ events: W.timeline.readAll(), sinceSeq });
+      plan = planResume({ events: (viewFor(focus) ?? world).timeline.readAll(), sinceSeq });
     } catch {
       ws.close(1008, 'bad-sinceSeq');
       return;
@@ -1841,7 +1953,7 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     if (plan.reset) {
       // 客户端的号跑到我们前面去了 ⇒ 明确要它从头来，
       // **不能**什么都不发（那会把它永远停在一个不存在的世界上）
-      ws.send(JSON.stringify({ type: 'client/reset', reason: 'cursor-ahead' }));
+      send({ type: 'client/reset', reason: 'cursor-ahead' });
     } else {
       // ⚠️ 补发这一路**不过档位闸**，而且这是安全的——理由只有一个：
       //    `plan.frames` 全部来自 `store.readAll()`，即**盘上的事件**，
@@ -1850,22 +1962,67 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
       //    ⚠️ 反过来说：如果哪天有人把 `emitTransient` 换成 `emit`，
       //       这一路就会把推理原文补发给 `sinceSeq=0` 的新连接——
       //       泄露闸（`test/process-level.test.js` 那条 🔴）就是为此存在的。
-      for (const frame of plan.frames) {
-        ws.send(JSON.stringify(markCatchUp(frame, plan.catchUp)));
-      }
+      for (const frame of plan.frames) send(markCatchUp(frame, plan.catchUp));
     }
-    ws.send(JSON.stringify({
+    send({
       type: 'client/hello',
       serverNow: now(),
       maxSeq: plan.maxSeq,
       catchUpRendering: CATCHUP_RENDER,
-    }));
+      // ★ **加一个可选字段**：这条连接现在的焦点是谁（老客户端不认识它，照旧）。
+      focus,
+    });
 
-    // 实时
-    const off = W.timeline.subscribe((event) => {
-      // 这一条连接收不收它（四档 + `dev` 那条附加通道）—— 见 `levelAllows`
-      if (!levelAllows(event, { level, dev: devMode })) return;
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
+    // ── 实时：**订阅那条日志，按焦点筛**（判据 F3）──────────────────
+    //
+    // 🔴 这就是 84 §四① 落在代码上的那一行：
+    //    焦点那条的事件 ⇒ 现时推；**别的条照常进日志**（`Timeline.emit` 已经落盘了），
+    //    但**不实时推**给这条连接。⇒ 反例（"把别的条也实时推"）在这一行当场红。
+    const off = base
+      ? base.subscribe((event) => {
+          if (!eventInScope(event, focus)) return; // ★ 焦点路由
+          // 这一条连接收不收它（四档 + `dev` 那条附加通道）—— 见 `levelAllows`
+          if (!levelAllows(event, { level, dev: devMode })) return;
+          send(event);
+        })
+      : () => {};
+
+    // ── 客户端→服务端：**切焦点**（不重连）─────────────────────────
+    ws.on('message', (raw) => {
+      const frame = parseFocusFrame(raw);
+      if (!frame) return; // 不认识的帧：安静忽略（协议只加不改）
+      const view = viewFor(frame.scope);
+      if (!view) {
+        // 🔴 不许悄悄退回主线（那会让 A 房间的话出现在 B 房间的流里）——
+        //    如实说"没这个房间"，而且**焦点不动**（他没切过去）。
+        send({
+          type: 'client/focus',
+          ok: false,
+          scope: frame.scope,
+          error: 'no-such-scope',
+          text: '这个房间还没建好。',
+        });
+        return;
+      }
+      focus = frame.scope;
+      try {
+        world?.dispatcher?.setFocus?.(focus);
+      } catch {
+        /* 同上：焦点这件事不该把连接带走 */
+      }
+      // ★ **补发新焦点那一间缺的那一段**（`sinceSeq` = 客户端手上**那一间**的游标）。
+      //   这一段是**同步**做完的：Node 单线程，中间插不进实时事件 ⇒
+      //   客户端拿到的是"历史在前、现在在后"。
+      if (frame.sinceSeq !== null) {
+        try {
+          const p = planResume({ events: view.timeline.readAll(), sinceSeq: frame.sinceSeq });
+          if (p.reset) send({ type: 'client/reset', reason: 'cursor-ahead' });
+          else for (const f of p.frames) send(markCatchUp(f, p.catchUp));
+        } catch {
+          /* 补不出来也不能把这条连接踹了（下一帧还会来） */
+        }
+      }
+      send({ type: 'client/focus', ok: true, scope: focus, at: now() });
     });
 
     const beat = setInterval(() => {
@@ -1917,6 +2074,55 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     return { ok: true, left: q.left };
   }
 
+  /** 拒绝时回给客户端的那一小坨（人话在 `error` 里；`text` 有就一起带上）。 */
+  function gateBody(gate) {
+    const out = { error: gate.error };
+    if (typeof gate.text === 'string' && gate.text !== '') out.text = gate.text;
+    return out;
+  }
+
+  /**
+   * ★ **B17：`/api/app-ask` 的预闸** —— 对租户读**他盒子里**那份。
+   *
+   * 顺序（不许反）：
+   *   ① 取"这个人的小程序库"（`appsFor`）。**租户** ⇒ `createBoxApps`（B15 那条现有隧道的
+   *      客户端；造这个对象**不碰隧道**，`dial` 是懒的）；**主人 / 单租户** ⇒ 本机那份。
+   *   ② 那个来源有 `gateAsk`（= 盒子那份）⇒ **交给它判**：盒里跑的是**同一个**
+   *      `checkAppAsk()`（四道闸 ＋ 先记再花），所以两边不可能分叉。
+   *   ③ 本机那份（没有 `gateAsk`）⇒ 就地判，**逐字不变**。
+   *
+   * 🔴 **失败就说失败**：盒子不通 / 答的话认不出 ⇒ **如实 503** ——
+   *    **绝不许**拿宿主那份旧的顶替（那正是 B17 要修的那句假话）。
+   *    ⚠️ 也**绝不许**在这里退回 `worldFor(sub).apps`：那正是"两处库"的病根。
+   */
+  async function gateAskFor(sub, appIdRaw, { tenant = null } = {}) {
+    let src = null;
+    try {
+      src = appsFor(sub);
+    } catch (err) {
+      log(`小程序库取不到（${sub}）：${err?.message ?? err}`);
+    }
+    if (!src) {
+      return tenant
+        ? { ok: false, status: 503, error: 'tenant-not-ready', text: '你那台还在准备，稍等一下再试。' }
+        : { ok: false, status: 404, error: '这台部署还没开小程序' };
+    }
+    if (typeof src.gateAsk === 'function') {
+      try {
+        return await src.gateAsk(appIdRaw);
+      } catch (err) {
+        log(`小程序"问一句"的预闸读不到盒子（${sub}）：${err?.message ?? err}`);
+        return {
+          ok: false,
+          status: 503,
+          error: 'tenant-not-ready',
+          text: '你那台刚才没应，等会儿再试。',
+        };
+      }
+    }
+    return checkAppAsk(src, appIdRaw);
+  }
+
   function readJson(req, limit) {
     return new Promise((resolve, reject) => {
       let size = 0;
@@ -1942,13 +2148,15 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
   }
 
   /**
-   * **盒子那三条内部口**（B15 · 以盒子为准）。
+   * **盒子那几个内部口**（B15 · 以盒子为准；B17 补了第 4 个）。
    *
    * 只有 `handleRequest` 在 `trusted === true` 上会调到它（公网口那一条在那边就 404 了）。
-   * 三个动作都**极小**，而且**不认识令牌、不验签**（验签在宿主那侧，顺序不许反）：
+   * 几个动作都**极小**，而且**不认识令牌、不验签**（验签在宿主那侧，顺序不许反）：
    *   · `GET  /internal/apps`            ⇒ 这个盒子里的清单（宿主据此 + 自己的签名键组回执）
    *   · `GET  /internal/artifact?…`      ⇒ 一版制品里一个文件的**字节**
    *   · `POST /internal/app`             ⇒ 收一版制品（**迁移用**；落在 `Apps.create()` 上）
+   *   · `POST /internal/app-ask-check`   ⇒ ★ **B17**：`/api/app-ask` 的预闸**在这一侧判**
+   *     （宿主**请盒子自己判**：盒里调的是**同一个** `checkAppAsk()` ⇒ 两边不可能分叉）
    *
    * ⚠️ 身份**只有一个来源**：`trustedSub`（盒子里那个租户就是 `owner`）。
    *    请求里报谁都不算数 —— 和 `/api` 那条一样的规矩。
@@ -1960,6 +2168,27 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     // 清单先建对象（`appsFor` 本身**不碰隧道/盘**；真正取数在下面那两行）
     const src = appsFor(trustedSub);
     if (!src) return sendJson(res, 404, { error: '这台还没开小程序' });
+
+    // ── ★ **B17**：预闸在**权威那份**上跑（见文件头与 `gateAskFor`）──────────
+    // ⚠️ 这条口**只在可信 UDS 上**（公网口在 `handleRequest` 那边就 404 了），
+    //    与另外三个同一个前缀、同一条隧道；不是第二套通道。
+    if (hit.kind === 'app-ask-check') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method' });
+      // 盒里这份 `src` **就是**权威那份（`appsForSub` 在盒里一律走本机那格）；
+      // 真出现"盒里有别的盒子可问"就是接线错了 —— 说出来，别静默。
+      if (typeof src.gateAsk === 'function') {
+        return sendJson(res, 500, { ok: false, status: 500, error: '这道预闸的取值来源接错了' });
+      }
+      let body;
+      try {
+        body = await readJson(req, 16 * 1024);
+      } catch {
+        return sendJson(res, 400, { ok: false, status: 400, error: '这一条看不懂' });
+      }
+      // 🔴 与宿主那条路**同一个** `checkAppAsk()`（四道闸 ＋ 先记再花）。
+      //    HTTP 200 是"这条口答上来了"；裁决在正文里（`ok` / `status` / `error`）。
+      return sendJson(res, 200, checkAppAsk(src, body?.appId));
+    }
 
     if (hit.kind === 'list') {
       if (req.method !== 'GET') return sendJson(res, 405, { error: 'method' });
