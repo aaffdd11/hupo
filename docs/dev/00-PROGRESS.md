@@ -295,6 +295,7 @@
 
 | 在飞 | 谁 | 状态 | 收尾要做什么 |
 |---|---|---|---|
+| 🔴 **P2-7 的真判据：机器重启后仍 200**（主人 2026-09-25 授权的重启；**重启前已备好这份清单**）| —— | 🚀 **正在重启**（重启会杀掉我这个会话；`dsh-live.service` + `frpc-dsh-u` 都 enabled ⇒ 他还能在 `u.stalkerai.cn` 找到我）| **重启后立刻验四件**：① `curl -s -o /dev/null -w '%{http_code}' https://w.stalkerai.cn/api/version` ⇒ **200**（且 `buildId` 是真指纹不是 `dev`）② `systemctl --user list-units 'hupo*'` 三条 active + **服务日志里 `✓ hupo-a 的隧道通了`、`✓ hupo-b 的隧道通了`**（两个租户容器走各自的 `hupo-tenant.service`，`Linger=yes` 已验）③ `curl -sI https://apps.stalkerai.cn/` 有响应（制品口在）④ cgroup 是 `…/app.slice/hupo-core.service`（不是 dsh scope）。**四件全过 ⇒ P2-7 收口；缺哪件就先修哪件** |
 | ~~**一个图标 = 一个工作区 = 一条对话**（`#121`）~~ | —— | ✅ **已收尾**（两闸绿 · 真机验过 · 已推 `b9d4c9c`）| **但见下面那条：其中三处与手册相反，要按 `84-DISPATCHER-FOCUS.md` 改回来** |
 
 > ⚠️ **它不是新概念**：手册 `02-ARCHITECTURE.md` §2.1 早就写着 `workspaces/<scope-name>/ ← 子工作区（= 桌面上的一个图标）`，
