@@ -25,10 +25,37 @@ const trashTooltip = '回收站';
 ///    （还没轮到它答）· 只有回答（对面那次问已经不在对话里了）。
 ///    写成"这一问一答"的话，后两种当场变成**屏幕上说假话**（这一批最忌讳的形状）。
 ///    ⇒ 用一句三种形状都成立的话；**真正"会删掉什么"由紧跟着那份清单说清**。
-const bubbleMenuTitle = '要删掉这一处吗';
+/// ⚠️ **2026-09-25 改**（契约 `docs/dev/106-CHAT-SELECT.md` §一）：菜单里多了
+///    【复制】【多选】两件**与删掉无关**的事 ⇒ 原来那句"要删掉这一处吗"只说删掉，
+///    **就是屏幕上说假话**。⇒ 换成对三件事都成立的一句。
+///    ⚠️ **删掉那一项本身一个字没动**（`bubbleMenuDelete` / `bubbleMenuDeleteHint`）。
+const bubbleMenuTitle = '要拿这一条怎么办';
 const bubbleMenuDelete = '删掉';
 const bubbleMenuDeleteHint = '先放进回收站，过一阵子才真的删';
 const bubbleMenuCancel = '算了';
+
+// ── 长按菜单新加的两项：复制 / 多选（契约 `docs/dev/106-CHAT-SELECT.md`）──
+//
+// ⚠️ 和上面那几句**同一份表**（"气泡菜单那几句的住处"只有这一处）——
+//    摆在界面里的字**禁用词硬闸够不着**（`test/unit/forbidden_words_test.dart` 扫这份表）。
+
+/// 菜单里那两项。工具条上那个【复制】用**同一句**（同一件事同一句话）。
+const bubbleMenuCopy = '复制';
+const bubbleMenuSelect = '多选';
+
+/// 多选态那条工具条：`已选 N 条` + 退出。
+///
+/// ⚠️ 数的是**选中的条数**（不是"能复制的条数"）；复制完那句才报**真复制了几条**。
+String bubbleSelectCount(int n) => '已选 $n 条';
+const bubbleSelectCancel = '取消';
+
+/// 复制的结果（**成没成都如实说** —— N11）。
+///
+/// 🔴 空正文**不许**说这一句（把空串塞进剪贴板还告诉他"复制好了" = 屏幕说假话）。
+const bubbleCopiedLine = '已经复制了';
+String bubbleCopiedManyLine(int n) => '复制了 $n 条';
+const bubbleCopyEmptyLine = '没有能复制的字';
+const bubbleCopyFailedLine = '没复制成，再试一次';
 
 // ── 删前那份清单（契约 §8.2 的 plan；§五 要求"删不掉"那句必须上屏）──
 

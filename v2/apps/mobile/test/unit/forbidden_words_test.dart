@@ -134,6 +134,19 @@ void main() {
       bubbleMenuDelete,
       bubbleMenuDeleteHint,
       bubbleMenuCancel,
+      // ⚠️ 2026-09-25（契约 `docs/dev/106-CHAT-SELECT.md`）：菜单里新加的
+      //    【复制】【多选】、多选那条工具条、以及复制那几句实话 —— **直接引数据源**。
+      //    ⚠️ 这一批最容易混进来的是"工作区 / 数据 / 工具名"那类内部词。
+      bubbleMenuCopy,
+      bubbleMenuSelect,
+      bubbleSelectCount(0),
+      bubbleSelectCount(12),
+      bubbleSelectCancel,
+      bubbleCopiedLine,
+      bubbleCopiedManyLine(0),
+      bubbleCopiedManyLine(2),
+      bubbleCopyEmptyLine,
+      bubbleCopyFailedLine,
       planTitle,
       planCancel,
       planConfirm,

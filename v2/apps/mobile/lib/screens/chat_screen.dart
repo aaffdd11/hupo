@@ -17,10 +17,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/dev_harness.dart';
 import '../models/image_outcome.dart';
 import '../models/conn_state.dart';
+import '../models/chat_select.dart';
 import '../models/design.dart' as d;
 import '../models/desktop_words.dart';
 import '../models/export_words.dart';
@@ -46,6 +48,7 @@ import '../widgets/harness_pane.dart';
 import '../widgets/mini_app_icons.dart';
 import '../widgets/mini_runtime.dart';
 import '../widgets/plan_strip.dart';
+import '../widgets/bubble_select_bar.dart';
 import '../widgets/bubble_menu.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/chat_floater.dart';
@@ -195,6 +198,22 @@ class _ChatScreenState extends State<ChatScreen> {
   ///    而**首屏 `pixels == 0` 对上一屏历史** ⇒ 那个判据恒为 false
   ///    ⇒ **打开就停在最老那一条**。判据本身搬去了 `models/scroll_follow.dart`。
   bool _userScrolledAway = false;
+
+  // ── 多选态（契约 `docs/dev/106-CHAT-SELECT.md` §一）──────────────
+
+  /// 现在在不在**多选态**（点了菜单里那个【多选】之后）。
+  ///
+  /// ⚠️ 它的唯一入口是【多选】那一项 —— 长按本身**不进多选态**。
+  /// ⚠️ 进去之后，点气泡**只切换选中**：重发 / 打开链接 / 再弹长按菜单
+  ///    三样一个都不许触发（§一 + 判据 S6）。
+  bool _selecting = false;
+
+  /// 多选态里已选中的那几条（键 = `messageId`）。
+  ///
+  /// ⚠️ 进多选态时**从空开始**：长按的那一条**不预先选中** ——
+  ///    契约 §一 只说"点一下 = 选中"，而判据 S3 是"点两条 ⇒ 计数 2"
+  ///    （预选的话就成了 3）。
+  final Set<String> _selectedIds = {};
 
   @override
   void initState() {
@@ -1075,6 +1094,15 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
         ),
+        // ★ **多选态**那条底栏工具条（契约 `docs/dev/106-CHAT-SELECT.md` §一）。
+        //   ⚠️ 只在多选态出现 ⇒ 平时这一屏**一个像素都不变**
+        //      （通知那条 D4.8："高度变化 = 0px" 量的是平时那一屏）。
+        if (_selecting)
+          BubbleSelectBar(
+            count: _selectedIds.length,
+            onCopy: () => _copySelected(c),
+            onCancel: _exitSelect,
+          ),
         SizedBox(height: MediaQuery.viewInsetsOf(context).bottom),
       ],
     );
@@ -1270,8 +1298,12 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _render(TimelineItem item, ChatController c) => switch (item) {
     UserUtterance() => UserBubble(
       utterance: item,
-      onResend: () => c.resend(item.messageId),
-      onLongPress: () => _onBubbleLongPress(c, item),
+      // 🔴 多选态里**别的动作一个都不许触发**（契约 §一 + S6）：
+      //    重发不给、长按菜单不给，点气泡只走 `onTap`（切换选中）。
+      onResend: _selecting ? null : () => c.resend(item.messageId),
+      onLongPress: _selecting ? null : () => _onBubbleLongPress(c, item),
+      selected: _selecting && _selectedIds.contains(item.messageId),
+      onTap: _selecting ? () => _toggleSelect(item.messageId) : null,
     ),
     AssistantMessage() => _answer(item, c),
     TimelineMarker() => MarkerLine(marker: item),
@@ -1327,27 +1359,36 @@ class _ChatScreenState extends State<ChatScreen> {
       children: [
         AnswerBubble(
           message: m,
-          onLongPress: () => _onBubbleLongPress(c, m),
+          // 🔴 多选态里长按 / 打开链接 / 念出来都不给（同 `_render` 那条）——
+          //    点气泡只走 `onTap`（切换选中）。
+          onLongPress: _selecting ? null : () => _onBubbleLongPress(c, m),
           // ⚠️ 开不了外面的地址就传 `null` ⇒ 出处只当文字（**不画按不动的按钮**）
-          onOpenSource: canOpenLinks ? openExternal : null,
+          onOpenSource: _selecting ? null : (canOpenLinks ? openExternal : null),
           // ★ **读一遍**（每条都能念；念不了就传 `null` —— 同一条规矩）
-          onSpeak: canSpeak ? () => c.speakMessage(m.messageId, m.displayText) : null,
+          onSpeak: _selecting
+              ? null
+              : (canSpeak ? () => c.speakMessage(m.messageId, m.displayText) : null),
           onStopSpeak: c.stopSpeakingNow,
           speaking: c.speakingId == m.messageId,
+          selected: _selecting && _selectedIds.contains(m.messageId),
+          onTap: _selecting ? () => _toggleSelect(m.messageId) : null,
         ),
         if (reasoning.isNotEmpty) ReasoningBlock(text: reasoning),
       ],
     );
   }
 
-  // ── 长按气泡 → 删掉这一轮（契约 `28-DELETE.md`）────────────────
+  // ── 长按气泡 → 复制 / 多选 / 删掉（契约 `28-DELETE.md` + `106-CHAT-SELECT.md`）──
 
-  /// 长按气泡：先弹菜单，选中"删掉"之后**先取清单、再删**（§四：删前必须列清单）。
+  /// 长按气泡：先弹菜单，选中哪一项就走哪一条（§四：删前必须列清单）。
   ///
   /// ⚠️ 一次问答 = 一轮 = 两个 `messageId`（§三·补）——那两个 id 由
   ///    `ChatController.turnMessageIds` 从**画得出来的**那几条里算出来。
   ///    算不出来（比如这句还没发出去）⇒ **连入口都不给**：那会是一个
   ///    "看起来能删、其实服务端没有它"的动作。
+  /// ⚠️ 这一条**管着三项**：进不来的那条（不在任何一轮里）三项都不给 ——
+  ///    契约 `106` 的【复制】【多选】只说了"长按任意一条"，
+  ///    而"还没发出去的那句"在界面上本来就没有长按入口（§四 没要求改它）。
   Future<void> _onBubbleLongPress(ChatController c, TimelineItem item) async {
     final id = item.messageId;
     if (id == null) return;
@@ -1358,8 +1399,94 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       builder: (_) => const BubbleMenu(),
     );
-    if (action != BubbleAction.delete || !mounted) return;
-    await _deleteTurn(c, ids);
+    if (!mounted) return;
+    switch (action) {
+      case BubbleAction.copy:
+        await _copyOne(item);
+      case BubbleAction.select:
+        _enterSelect();
+      case BubbleAction.delete:
+        await _deleteTurn(c, ids);
+      case null:
+        return; // 划掉 / 点了"算了" ⇒ 什么都不做
+    }
+  }
+
+  // ── 复制 / 多选（契约 `docs/dev/106-CHAT-SELECT.md`）────────────
+
+  /// 复制**一条**：复制的是 `bubbleBodyOf` 给的那串正文（§二 的表）。
+  ///
+  /// ⚠️ 空正文 ⇒ **如实说一句**，而且**剪贴板一个字节都不碰**
+  ///    （把空串塞进去还说"复制好了" = 屏幕说假话，§二 的 🔴）。
+  /// ⚠️ 剪贴板写入**由他那一下手势触发**（§二 的 ⚠️：网页上读剪贴板要手势，
+  ///    顺手写是同一个道理）—— 所以这里**只在按下【复制】之后**写，
+  ///    任何"进来顺手先复制一份"的写法都是错的。
+  Future<void> _copyOne(TimelineItem item) async {
+    final body = bubbleBodyOf(item);
+    if (body.isEmpty) {
+      _say(bubbleCopyEmptyLine);
+      return;
+    }
+    if (!await _writeClipboard(body)) return;
+    _say(bubbleCopiedLine);
+  }
+
+  /// 进多选态。**选中清单从空开始**（长按那一条不预选，见 `_selectedIds`）。
+  void _enterSelect() {
+    setState(() {
+      _selecting = true;
+      _selectedIds.clear();
+    });
+  }
+
+  /// 退出多选态。**剪贴板一个字节都不碰**（判据 S5）。
+  void _exitSelect() {
+    setState(() {
+      _selecting = false;
+      _selectedIds.clear();
+    });
+  }
+
+  /// 多选态里点气泡 = **只切换选中**（判据 S3 / S6）。
+  void _toggleSelect(String messageId) {
+    setState(() {
+      if (!_selectedIds.add(messageId)) _selectedIds.remove(messageId);
+    });
+  }
+
+  /// 多选态点【复制】：**按时间顺序、一条一行**，做完**退出多选态**（判据 S4）。
+  ///
+  /// ⚠️ 顺序用 `c.items` 自己的顺序（它按 `(seq, tie)` 排过 = 时间顺序）——
+  ///    在这里另排一次（比如按点选顺序）就是"顺序反了"那条反例。
+  /// ⚠️ 一条能复制的都没有 ⇒ 如实说，**既不碰剪贴板也不退出**
+  ///    （什么都没做，就没有"做完"可言）。
+  Future<void> _copySelected(ChatController c) async {
+    final bodies = bubbleBodiesOf(
+      c.items,
+      keep: (it) => it.messageId != null && _selectedIds.contains(it.messageId),
+    );
+    if (bodies.isEmpty) {
+      _say(bubbleCopyEmptyLine);
+      return;
+    }
+    if (!await _writeClipboard(bodies.join('\n'))) return;
+    if (!mounted) return;
+    _exitSelect();
+    _say(bubbleCopiedManyLine(bodies.length));
+  }
+
+  /// 真的写剪贴板。返回有没有写成功（失败时**如实说**，见 `bubbleCopyFailedLine`）。
+  ///
+  /// ⚠️ 包一层 try：剪贴板是平台通道，写不进去（权限 / 没有那个通道）时
+  ///    抛出来会打断手势，而**沉默**更坏 —— 用户会以为复制好了，粘出去却是空的。
+  Future<bool> _writeClipboard(String text) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: text));
+      return true;
+    } catch (_) {
+      _say(bubbleCopyFailedLine);
+      return false;
+    }
   }
 
   /// 删掉这一轮：**清单 → 确认 → 删**。

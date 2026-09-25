@@ -26,8 +26,38 @@ import '../models/timeline.dart';
       MessageState.failed => (icon: Icons.error_outline, label: '没发出去'),
     };
 
+/// 多选态里"这一条选中了"那个**勾**（契约 `docs/dev/106-CHAT-SELECT.md` §一：勾 ＋ 高亮）。
+///
+/// ⚠️ 它是**第二个通道**：只给罩色的话，色盲 / 屏幕反光下就看不出来了
+///    —— 和气泡四态"不许只靠颜色"是同一条规矩（见本文件顶上那段）。
+class _SelectedMark extends StatelessWidget {
+  const _SelectedMark({required this.theme});
+
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: d.gapXs),
+      child: Icon(
+        Icons.check_circle,
+        // 跟着字算（**不写死尺寸**，手册 D3）
+        size: (theme.textTheme.bodySmall?.fontSize ?? 12) + 4,
+        color: d.accent,
+      ),
+    );
+  }
+}
+
 class UserBubble extends StatelessWidget {
-  const UserBubble({super.key, required this.utterance, this.onResend, this.onLongPress});
+  const UserBubble({
+    super.key,
+    required this.utterance,
+    this.onResend,
+    this.onLongPress,
+    this.selected = false,
+    this.onTap,
+  });
 
   final UserUtterance utterance;
   final VoidCallback? onResend;
@@ -39,11 +69,24 @@ class UserBubble extends StatelessWidget {
   ///    加进命中区扫描）。`InkWell` 里的手势由 Material 撑着，且命中区就是气泡本身。
   final VoidCallback? onLongPress;
 
+  /// **这一条在多选态里被选中了**（契约 `docs/dev/106-CHAT-SELECT.md` §一：
+  /// 选中的看得出来 = **勾 ＋ 高亮**）。
+  ///
+  /// ⚠️ 选中**不许只靠颜色**：这里同时给三路 —— 罩色（`d.selectWash`）、
+  ///    一圈 `accent` 描边、气泡里那个勾。
+  final bool selected;
+
+  /// 多选态里**点一下 = 选中 / 取消**（§一）。
+  ///
+  /// ⚠️ `null` = 不在多选态 ⇒ 点气泡什么都不做（照旧：只有长按那个入口）。
+  final VoidCallback? onTap;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final failed = utterance.state == MessageState.failed;
     final mark = _stateMark(utterance.state);
+    final base = failed ? theme.colorScheme.errorContainer : theme.colorScheme.primaryContainer;
 
     return Align(
       alignment: Alignment.centerRight,
@@ -54,22 +97,26 @@ class UserBubble extends StatelessWidget {
         //    底色 / 圆角 / 失败时那圈边**照旧**：
         //    四态必须一眼可辨，而且不许只靠颜色（下面还是图标 + 文字）。
         child: Material(
-          color: failed ? theme.colorScheme.errorContainer : theme.colorScheme.primaryContainer,
+          color: selected ? Color.alphaBlend(d.selectWash, base) : base,
           clipBehavior: Clip.antiAlias,
           shape: RoundedRectangleBorder(
             // ★ 2026-09-23（E）：14 是写死的 —— 气泡用 `radiusField` 那一档
             borderRadius: BorderRadius.circular(d.radiusField),
-            side: failed
+            side: selected
+                ? BorderSide(color: d.accent, width: 2)
+                : failed
                 ? BorderSide(color: theme.colorScheme.error, width: 1.5)
                 : BorderSide.none,
           ),
           child: InkWell(
+            onTap: onTap,
             onLongPress: onLongPress,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  if (selected) _SelectedMark(theme: theme),
                   Text(utterance.text, style: theme.textTheme.bodyLarge),
                   const SizedBox(height: 4),
                   Row(
@@ -113,12 +160,20 @@ class AnswerBubble extends StatelessWidget {
     this.onSpeak,
     this.onStopSpeak,
     this.speaking = false,
+    this.selected = false,
+    this.onTap,
   });
 
   final AssistantMessage message;
 
   /// 长按气泡（同 [UserBubble.onLongPress]）。
   final VoidCallback? onLongPress;
+
+  /// **这一条在多选态里被选中了**（同 [UserBubble.selected]）。
+  final bool selected;
+
+  /// 多选态里**点一下 = 选中 / 取消**（同 [UserBubble.onTap]）。
+  final VoidCallback? onTap;
 
   /// **出处那一行能不能点开**（契约 `docs/dev/67-SOURCES.md`）。
   ///
@@ -223,6 +278,7 @@ class AnswerBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final text = message.displayText;
+    final base = theme.colorScheme.surfaceContainerHighest;
 
     return Align(
       alignment: Alignment.centerLeft,
@@ -231,18 +287,21 @@ class AnswerBubble extends StatelessWidget {
         constraints: const BoxConstraints(maxWidth: 760),
         margin: const EdgeInsets.symmetric(vertical: 4),
         child: Material(
-          color: theme.colorScheme.surfaceContainerHighest,
+          color: selected ? Color.alphaBlend(d.selectWash, base) : base,
           clipBehavior: Clip.antiAlias,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(d.radiusField),
+            side: selected ? BorderSide(color: d.accent, width: 2) : BorderSide.none,
           ),
           child: InkWell(
+            onTap: onTap,
             onLongPress: onLongPress,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (selected) _SelectedMark(theme: theme),
                   if (text.isEmpty)
                     // 一句话都还没有：不要留一个空气泡，给一个"在处理"的轻标记
                     Text('在处理…', style: theme.textTheme.bodySmall)

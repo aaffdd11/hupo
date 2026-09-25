@@ -38,6 +38,7 @@ import 'package:hupo_app/models/timeline.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/widgets/bubbles.dart';
+import 'package:hupo_app/widgets/bubble_select_bar.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/widgets/desktop_icon_menu.dart';
 import 'package:hupo_app/widgets/harness_pane.dart';
@@ -574,6 +575,24 @@ Future<void> _openPlan(WidgetTester tester, double scale) async {
   await tester.pumpAndSettle();
 }
 
+/// ★ 2026-09-25（契约 `docs/dev/106-CHAT-SELECT.md` §一 / 判据 S7）：
+/// **像用户那样**进多选态：长按 → 菜单 →【多选】⇒ 底栏那条工具条。
+///
+/// ⚠️ 和关于页 / 空房间 / 桌面那个小面板同一条理由：**新加的界面必须也过这两道硬闸**
+///    （五档不溢出 + 命中区 ≥44），不然它们会随时间失效。
+/// ⚠️ **从真入口进**（长按真的气泡）——不直接 pump 那个工具条：
+///    那样它底下没有聊天，量的就不是用户真会看到的那棵树。
+Future<void> _openSelectBar(WidgetTester tester, double scale) async {
+  await _openBubbleMenu(tester, scale);
+  await tester.tap(find.text(bubbleMenuSelect));
+  await tester.pumpAndSettle();
+  // 负向对照：**工具条真的画出来了**才算数（没出来的话这道闸扫的是底下的聊天）
+  expect(find.byType(BubbleSelectBar), findsOneWidget,
+      reason: '★ 工具条没进这棵树 ⇒ 这道闸扫错了屏');
+  expect(find.text(bubbleSelectCount(0)), findsOneWidget,
+      reason: '★ "已选 0 条"那句没画出来');
+}
+
 /// **像用户那样**让浮窗出现在屏幕上（批 3「系统通知」新加的界面）。
 ///
 /// ⚠️ 和关于页同一条理由：新加的界面**必须也过这两道闸**。
@@ -836,6 +855,10 @@ void main() {
 
       testWidgets('气泡长按菜单（从真入口进）@ ${s}x', (tester) async {
         await _openBubbleMenu(tester, s);
+        // ★ 2026-09-25（`106-CHAT-SELECT.md`）：**新加的那两项**也必须在这一屏上
+        //   —— 它们也是 `ListTile`，下面那个循环会连它们一起量命中区。
+        expect(find.text(bubbleMenuCopy), findsOneWidget, reason: '★【复制】那一项没进这棵树');
+        expect(find.text(bubbleMenuSelect), findsOneWidget, reason: '★【多选】那一项没进这棵树');
         expect(_drain(tester), isEmpty, reason: '删除菜单在 ${s}x 溢出了');
         // 菜单里那一行是 `ListTile`（不在按钮扫描的种类里）⇒ 单独量它的命中区。
         for (final t in find.byType(ListTile).evaluate()) {
@@ -843,6 +866,13 @@ void main() {
           expect(size.height >= minTouch, isTrue,
               reason: '删除菜单 @${s}x：一行的命中区只有 ${size.height}');
         }
+      });
+
+      testWidgets('多选态那条工具条（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-25（契约 `docs/dev/106-CHAT-SELECT.md` §一 / S7）：
+        //    "已选 N 条 + 【复制】+【取消】"是**新加的界面** ⇒ 必须也过五档不溢出。
+        await _openSelectBar(tester, s);
+        expect(_drain(tester), isEmpty, reason: '多选工具条在 ${s}x 溢出了');
       });
 
       testWidgets('导出页（从真入口进）@ ${s}x', (tester) async {
@@ -1103,6 +1133,14 @@ void main() {
       testWidgets('气泡长按菜单（从真入口进）@ ${s}x', (tester) async {
         await _openBubbleMenu(tester, s);
         await sweep(tester, '删除菜单 @${s}x');
+      });
+
+      testWidgets('多选态那条工具条（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-25（契约 `docs/dev/106-CHAT-SELECT.md` §一 / S7）：
+        //    工具条那两个按钮（【复制】【取消】）必须进这份扫描 ——
+        //    不然它们的命中区没有任何东西守着（D3.6 就是"命中区 ≥44"）。
+        await _openSelectBar(tester, s);
+        await sweep(tester, '多选工具条 @${s}x');
       });
 
       testWidgets('导出页（从真入口进）@ ${s}x', (tester) async {
