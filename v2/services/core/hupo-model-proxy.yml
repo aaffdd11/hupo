@@ -18,10 +18,14 @@
 #    （盒里 agent 的 env 不许出现它）⇒ **不能**往盒里塞一把 key。
 #    ⇒ 正解与模型那条路同款：**让搜索也走这个小代理**。
 #
-# ⚠️ **base 里那个 `/anthropic/v1` 不能少**：搜索走的是**Anthropic 兼容**的 Messages API
-#    （插件发 `{baseURL}/messages`，默认就是 `https://api.deepseek.com/anthropic/v1`），
-#    而**模型**那条走的是 `/chat/completions`（同一个代理、不同路径）。
-#    少了它就会打到 `https://api.deepseek.com/messages` 上去。
+# ⚠️ **base 里那个 `/anthropic/v1` 不能少**（**实测过，不是我推的**）：搜索走的是
+#    **Anthropic 兼容**的 Messages API（插件发 `{baseURL}/messages`，默认就是
+#    `https://api.deepseek.com/anthropic/v1`），而**模型**那条走的是 `/chat/completions`
+#    —— **同一个代理、两条不同的路**。🔴 2026-09-25 真机对比过两次：
+#      · 不带 `/anthropic/v1` ⇒ 打到 `http://127.0.0.1:8787/messages`
+#        ⇒ 回来的是 **`DeepSeek API error (HTTP 404)`**；
+#      · 带上 ⇒ 真搜出结果（带标题与链接的 sources）。
+#    ⇒ 谁要改这一行，请先把上面这两条**各跑一遍**再改。
 # ⚠️ 由此的一个**产品事实**（要如实说）：DeepSeek **没有独立的搜索端点** ⇒
 #    **一次搜索 = 跑一整轮模型**（延迟与 token 都算他的）。
 - id: llm-deepseek
