@@ -6,7 +6,8 @@
 //   ③ **没配 ⇒ 如实说"没配"**（不许假装开麦；而且要说得出为什么）
 //   ④ **中继按连接取凭据**（`config` 可以是函数）⇒ 不同连接可以拿到不同的一份
 //   ⑤ **身份只从 `claim` 来**（`sub` 是选凭据的键，不是这条连接自己报的东西）
-//   ⑥ ⚠️ **今天"按人一份"还不存在** ⇒ 来源必须如实写 `default`，**不许假装是他的**
+//   ⑥ 🔴 **P2-2（2026-09-25）：兜底那份只给主人** —— 别人没填自己的 ⇒ 如实"没配"，
+//      主人（`owner`/`local`）照旧吃 `data/asr.env` 那份兜底（**他的钥匙不动**）
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -149,22 +150,33 @@ test('② 🔴 日志那一句**一个字符的钥匙都不带**（只有长度�
   }
 });
 
-test('⑥ 今天"按人一份"还**不存在** ⇒ 来源只许如实写 `default`（不许假装是他的）', () => {
+test('★ 🔴 P2-2：兜底那份**只给主人**；别人没填自己的 ⇒ 如实"没配"', () => {
   const dir = tmp();
   try {
     writeEnvFile(dir, Object.entries(KEYS).map(([k, v]) => `${k}=${v}`).join('\n'));
-    const mine = voiceCredsFor({ sub: 'u1', dataDir: dir, env: {} });
-    assert.equal(mine.configured, true);
-    assert.equal(mine.source, 'default', '★ 还没有按人取 ⇒ 只能说"部署默认这一份"');
-    assert.equal(mine.sub, 'u1', '身份留着（将来那一处实现要用）');
-    // 别人的也一样是 default（**证明它不是"按人"的**）
-    const other = voiceCredsFor({ sub: 'u2', dataDir: dir, env: {} });
-    assert.equal(other.source, 'default');
-    assert.equal(other.secretKey, mine.secretKey);
+    // ── 别人（租户）：不吃兜底 —— 认不出/不是主人 ⇒ `none`
+    for (const who of ['u1', 'u2', null, 'local-user']) {
+      const other = voiceCredsFor({ sub: who, dataDir: dir, env: {} });
+      assert.equal(other.source, 'none', `★ ${String(who)} 不许吃部署默认那份（那是主人的钥匙）`);
+      assert.equal(other.configured, false, '★ 没填自己的 ⇒ 如实说"没配"');
+      assert.equal(other.appid, '', '★ 一个字符的钥匙都不许递出去');
+      assert.equal(other.secretKey, '');
+      assert.match(other.why, /没填|没配|只给主人/, `要说得出为什么：${other.why}`);
+    }
+    // ── 🔴 反例（主人那一份**一个字都不动**）：`owner` / `local` 照旧吃兜底
+    for (const owner of ['owner', 'local']) {
+      const mine = voiceCredsFor({ sub: owner, dataDir: dir, env: {} });
+      assert.equal(mine.source, 'default', `★ ${owner} 是主人 ⇒ 兜底照旧能用`);
+      assert.equal(mine.configured, true);
+      assert.equal(mine.appid, KEYS.TENCENT_APPID);
+      assert.equal(mine.secretKey, KEYS.TENCENT_SECRET_KEY);
+      assert.equal(mine.sub, owner);
+    }
   } finally {
     nodeFs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
 
 // ── ④ 中继按连接取凭据 ──────────────────────────────────────
 test('🔴 中继：`config` 是函数 ⇒ **每条连接各取一份**（一条"没配"不影响另一条）', () => {
@@ -226,23 +238,30 @@ test('★ 🔴 配置页那三样填了 ⇒ **就用他的**（来源如实写 `
     assert.equal(cfg.configured, true);
     assert.equal(cfg.sub, 'u1', '要记住这是谁的（日志用）');
 
-    // 负向对照：**别人**那一份不许用在他身上
+    // 负向对照：**别人**那一份不许用在他身上（P2-2：别人连兜底都没有）
     const other = voiceCredsFor({ sub: 'u2', dataDir: dir, env: {} });
-    assert.equal(other.source, 'default', '★ 乙没填 ⇒ 只许用部署默认那一份');
-    assert.equal(other.appid, '999');
+    assert.equal(other.source, 'none', '★ 乙没填 ⇒ 不许用部署默认那一份（那是主人的钥匙）');
+    assert.equal(other.configured, false);
+    assert.equal(other.appid, '');
   } finally {
     nodeFs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('★ 三样**缺一** ⇒ 不算"他填了"（退回默认；与页面口径同一条规则）', () => {
+test('★ 三样**缺一** ⇒ 不算"他填了"（别人 ⇒ 没配；主人 ⇒ 退回兜底）', () => {
   const dir = tmp();
   try {
     writeEnvFile(dir, 'TENCENT_APPID=999\nTENCENT_SECRET_ID=env-id\nTENCENT_SECRET_KEY=env-key\n');
     writeUserCreds(dir, 'u1', { voiceAppId: '1300000001', voiceSecretId: 'mine-id' }); // 少 secretKey
     const cfg = voiceCredsFor({ sub: 'u1', dataDir: dir, env: {} });
-    assert.equal(cfg.source, 'default', '★ 只有两样 ⇒ 当没填过（缺一样发不出请求）');
-    assert.equal(cfg.configured, true, '默认那份还在 ⇒ 仍然能用');
+    assert.equal(cfg.source, 'none', '★ 只有两样 ⇒ 当没填过（缺一样发不出请求）');
+    assert.equal(cfg.configured, false, '★ P2-2：别人缺一样 ⇒ 如实"没配"，不许拿兜底顶上');
+    assert.equal(cfg.secretKey, '');
+    // 负向对照：主人缺一样 ⇒ 兜底照旧（**他的钥匙没被动**）
+    const owner = voiceCredsFor({ sub: 'owner', dataDir: dir, env: {} });
+    assert.equal(owner.source, 'default', '★ 主人缺一样 ⇒ 仍然吃兜底');
+    assert.equal(owner.configured, true);
+    assert.equal(owner.appid, '999');
   } finally {
     nodeFs.rmSync(dir, { recursive: true, force: true });
   }

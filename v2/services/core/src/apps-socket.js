@@ -22,7 +22,7 @@ import { NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
 import { NEEDS_ASK_IMAGE, asksToDrawImage } from './image.js';
 import { OutboundError, assertOutboundAllowed } from './outbound.js';
 import { PublishedError, authorHashOf } from './published.js';
-import { preReview } from './review.js';
+import { reviewForPublish } from './review.js';
 import { handSocketToAgent } from './socket-owner.mjs';
 import { USAGE_KINDS } from './usage.js';
 import { mirrorArtifactIntoWorkspace, snapshotBeforeInstall, snapshotWorkspace } from './workspace.js';
@@ -55,6 +55,12 @@ const MAX_LINE_BYTES = 512 * 1024;
  *   · `workspace` **子工作区那一刀**（`AppWorkspaces` · 契约 `83-APP-WORKSPACE.md`）：
  *     造/装的时候由**服务端**建 `<dir>/workspaces/<scope>/` 并把产物落进去，
  *     制品库那一份是**从工作区读回来的快照**。没接线 ⇒ 老路照旧（不建工作区）。
+ *   · `reviewPolicy` **产品层那份预审规则**（只读挂载＋指纹）；读不到 ⇒ 预审不自动放行。
+ *   · `reviewAgent` **真跑预审的那个 agent**（`review-agent.js` 造的 DSH 评审；
+ *     给了它就"真的调用一次模型"，而且那一次算力记到**这个 app** 头上，96 第 3 条）。
+ *   · `operatorAgent` **运营方那一侧的复评**（宿主的 agent，96 第 1 条）：
+ *     接了就独立再读一遍源码，与预审**对不上 ⇒ escalate**（`reviewForPublish`）。
+ *   · `usage` **用量账**（`UsageLedger`）：预审消耗记进 `<id>/usage.jsonl`。
  * @returns {object} 永远 `{ok:true,…}` 或 `{ok:false,error,…}`（**绝不抛**）
  */
 export async function handleAppsOp(apps, req, ctx = {}) {
@@ -159,14 +165,17 @@ export async function handleAppsOp(apps, req, ctx = {}) {
         assertOutboundAllowed({ route: 'publish', apps, workspaces: ctx.workspace ?? null, id: req.id });
         // ★ **预审 = 上架流程的第一步，自动跑**（96 第 4 条）。
         //   它按顺序：规则（产品层只读＋指纹）→ 申报（A16 · fail-closed）→ 代码扫描（R1／R2）
-        //   → 用量（盒里日均 vs 申报量级）→ 评审 agent（注入的；没接上 ⇒ 不自动放行）。
+        //   → 用量（盒里日均 vs 申报量级）→ 评审 agent（真的那台 DSH；没接上 ⇒ 不自动放行）。
         //   结论**绑 `rootHash`** 落 `review.jsonl`（R5）；低风险自动放行、高风险找主人。
+        //   ★ **运营方那一侧的复评**（96 第 1 条）：`ctx.operatorAgent` 接了就在预审过了之后
+        //     独立再读一遍整份源码；两份对不上 ⇒ **escalate**（`reviewForPublish`）。
         //   🔴 拒的时候**共享库一个字节都不动**（预审跑在 `published.publish` 之前）。
-        const rev = await preReview({
+        const rev = await reviewForPublish({
           apps,
           id: req.id,
           policy: ctx.reviewPolicy ?? null,
-          agent: typeof ctx.reviewAgent === 'function' ? ctx.reviewAgent : null,
+          preAgent: typeof ctx.reviewAgent === 'function' ? ctx.reviewAgent : null,
+          operatorAgent: typeof ctx.operatorAgent === 'function' ? ctx.operatorAgent : null,
           usage: ctx.usage ?? null,
           turn: Number.isInteger(req.turn) ? req.turn : null,
         });

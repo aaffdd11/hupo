@@ -11,6 +11,7 @@ import nodePath from 'node:path';
 import { RECAP_DEFAULTS } from './recap.js';
 import { appsSocketPath } from './apps-socket.js';
 import { ledgerSocketPath } from './ledger-socket.js';
+import { REVIEW_AGENT_TIMEOUT_MS } from './review-agent.js';
 
 /**
  * 读一个 uid/gid；**没设、空串、或者不是非负整数 ⇒ `null`**（= 不换手）。
@@ -282,6 +283,27 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      *    （`running` 恒真 ⇒ LRU"跑着的不许卸" ⇒ 永不淘汰）。
      */
     turnDeadlineMs: Number.parseInt(env.HUPO_TURN_DEADLINE_MS ?? '180000', 10),
+
+    /**
+     * **预审那次模型调用的上限**（96 第 3／4 条 · `review-agent.js`）。
+     *
+     * ⚠️ 它是一个**上限**：到点还没有一份认得出的结论 ⇒ `unavailable` ⇒ **escalate**
+     *    （fail-closed：审不了就不自动放行）。默认值住代码（`REVIEW_AGENT_TIMEOUT_MS`），
+     *    这里只是让判据 / 排障能把它调小。
+     */
+    reviewTimeoutMs: Number.parseInt(env.HUPO_REVIEW_TIMEOUT_MS ?? String(REVIEW_AGENT_TIMEOUT_MS), 10),
+
+    /**
+     * **运营方那一侧的复评**（96 第 1 条：运营方保存的那个 agent 读整份源码）。
+     *
+     * 🔴 **默认：宿主侧开、`HUPO_ROLE=tenant` 的盒里关**。
+     *    理由不是"盒里可以跳过审核" —— 盒里那一次是**预审**（用户自己的算力，第 3 条），
+     *    而运营方保存的那个 agent 在**宿主那一侧**（复评，第 1 条）。
+     *    ⚠️ `HUPO_OPERATOR_REVIEW=1` / `=0` 可显式覆盖（排障用）。
+     */
+    operatorReview: env.HUPO_OPERATOR_REVIEW === undefined || env.HUPO_OPERATOR_REVIEW === ''
+      ? env.HUPO_ROLE !== 'tenant'
+      : env.HUPO_OPERATOR_REVIEW !== '0',
   };
 }
 

@@ -29,6 +29,7 @@ import nodeNet from 'node:net';
 import nodePath from 'node:path';
 
 import { rootHashOf, sha256hex } from './apps.js';
+import { appendAudit, auditLine } from './audit.js';
 
 /** 那条维护口叫什么（`<dataDir>/apps-migrate.sock`）。 */
 export const MIGRATE_SOCKET_NAME = 'apps-migrate.sock';
@@ -213,6 +214,216 @@ async function verifyBack({ box, manifest, computed }) {
   }
   return null;
 }
+
+/**
+ * **能不能删宿主那份？**（P2-6 的唯一裁决 · 纯函数）。
+ *
+ * 🔴 规则只有这一处：宿主每一个小程序，都必须在迁移计划里报成 `already`
+ *    （＝盒里已有**同一个 `rootHash`**）。少一个、或那一个报的是
+ *    `conflicts` / `planned` / `skipped` / `failed` ⇒ **不许删**。
+ *
+ * @param {object} o
+ * @param {string[]} [o.hostIds]           宿主那份里的小程序 id（**不含主人那份**）
+ * @param {object|null} [o.migrateReport]  `migrateAppsToBox({apply:false})` 的报告
+ * @returns {{ok:boolean, verified:Array<object>, unverified:Array<{id:string, why:string}>}}
+ */
+export function pruneVerdict({ hostIds = [], migrateReport = null } = {}) {
+  const ids = Array.isArray(hostIds) ? hostIds : [];
+  const already = new Map((migrateReport?.already ?? []).map((a) => [a.id, a]));
+  const whyFor = (id) => {
+    for (const c of migrateReport?.conflicts ?? []) if (c.id === id) return c.why;
+    for (const p of migrateReport?.planned ?? []) if (p.id === id) return '盒子里没有这一个（还没搬过去）';
+    for (const f of migrateReport?.failed ?? []) if (f.id === id) return f.why;
+    for (const s of migrateReport?.skipped ?? []) if (s.id === id) return s.why;
+    return '盒子里对不上（迁移计划里没有它）';
+  };
+  const verified = [];
+  const unverified = [];
+  for (const id of ids) {
+    const a = already.get(id);
+    if (a) verified.push({ id, version: a.version, boxVersion: a.boxVersion ?? null, rootHash: a.rootHash });
+    else unverified.push({ id, why: whyFor(id) });
+  }
+  return { ok: ids.length > 0 && unverified.length === 0, verified, unverified };
+}
+
+/**
+ * **把宿主那份旧库删掉**（P2-6 · 主人 2026-09-25 拍板「乙：把宿主那份删掉」）。
+ *
+ * ── 主人拍的是什么 ────────────────────────────────────────
+ * 只删**租户那几格**（`data/users/<id>/hupo/apps/`）；
+ * 🔴 **主人自己那份 `data/hupo/apps/` 是权威，一个字节都不许动**。
+ * 删之前**逐条核对盒里那份**（经现有隧道读盒里清单与 `rootHash`）——
+ * **核对不上就不许删**，如实报。删完留**一行审计**。
+ *
+ * ── 六条不许破 ────────────────────────────────────────────
+ *   ① 🔴 **默认 dry-run**（`apply:false`）：一个字节都不动，也**不写审计**
+ *      （dry-run 要真的"什么都没发生"）；`apply:true` 才动手。
+ *   ② 🔴 **核对不上就不删**：宿主每一个小程序都必须能在盒子里找到**同一个 `rootHash`**；
+ *      有一个对不上（盒里没有 / hash 不同 / 宿主清单坏了）⇒ **整格都不删**。
+ *   ③ 🔴 **主人那份不碰**：`protect` 里列出来的根目录（主人那份 apps 根）
+ *      **认出来就直接停**，连读都不往下读。判据的反例就在 `test/apps-box.test.js`。
+ *   ④ **可重跑**：已经删过（宿主那份空了）⇒ 报 `alreadyClean`，**什么都不做**。
+ *   ⑤ 🔴 **核对拿不到 ⇒ 不许删**（`plan` 抛给调用方如实回）：读不到盒里那份就没有核对，
+ *      没有核对就不许删。
+ *   ⑥ **删完留一行审计**：`<data>/audit.log` 一条（同 `remove-tenant.sh` 那个形状）。
+ *
+ * ── 为什么是"先问一份迁移计划、再自己删"（不新开一条服务侧的口）──
+ * "读盒里清单与 `rootHash`"这件事**只有正在跑的服务做得到**（隧道在它手上）——
+ * 而那条路**已经有了**：`migrate-apps-to-box.mjs` 的 `plan` 作业干的正是"逐条
+ * 拿宿主字节重算 `rootHash`、与盒里那份比"（`migrateAppsToBox({apply:false})`）。
+ * ⇒ 删除这一步**不碰盒子的卷**，谁跑都行（`deploy` 自己就能删宿主那一格）。
+ *   这样这一件事只有**一条**裁决（`pruneVerdict`），而且现在这台服务就认。
+ *
+ * @param {object} o
+ * @param {string} o.userId
+ * @param {{root:string, list:Function}|null} o.hostApps
+ * @param {()=>Promise<object>} o.plan  **问一份迁移计划**（`migrateAppsToBox({apply:false})`
+ *   的报告；CLI 那份经 `apps-migrate.sock` 的 `plan` 作业拿）
+ * @param {string|null} [o.tenant]    租户名（只进审计那一行）
+ * @param {boolean} [o.apply]        **false = 只看**（默认）
+ * @param {string[]} [o.protect]     **绝不许删**的根目录（主人自己那份）
+ * @param {string|null} [o.auditFile] 审计文件（不传 ⇒ 不写）
+ * @param {object} [o.fs]
+ * @param {(m:string)=>void} [o.log]
+ * @param {()=>number} [o.now]
+ * @returns {Promise<object>} 报告（**JSON 可序列化**）
+ */
+export async function pruneHostApps({
+  userId,
+  hostApps,
+  plan,
+  tenant = null,
+  apply = false,
+  protect = [],
+  auditFile = null,
+  fs = nodeFs,
+  log = () => {},
+  now = Date.now,
+} = {}) {
+  const report = {
+    userId,
+    apply,
+    at: now(),
+    appsRoot: null,
+    host: [],
+    verified: [],
+    unverified: [],
+    blocked: null,
+    alreadyClean: false,
+    deleted: false,
+    auditLine: null,
+  };
+  if (!hostApps || typeof hostApps.root !== 'string') {
+    report.blocked = '找不到他那一份库的落点';
+    return report;
+  }
+  const root = nodePath.resolve(hostApps.root);
+  report.appsRoot = root;
+
+  // ── ③ 主人自己那份：认出来就**根本不往下走**（连列都不列）
+  const protectedRoots = (Array.isArray(protect) ? protect : [])
+    .filter((p) => typeof p === 'string' && p !== '')
+    .map((p) => nodePath.resolve(p));
+  if (protectedRoots.includes(root)) {
+    report.blocked = '这是主人自己那一份（权威）—— 一个字节都不许动';
+    return report;
+  }
+
+  let mine = [];
+  try {
+    mine = hostApps.list();
+  } catch (err) {
+    report.blocked = `宿主那份读不出来：${err?.message ?? err}`;
+    return report;
+  }
+  // ── ④ 可重跑：已经删过 ⇒ 什么都不做
+  if (mine.length === 0) {
+    report.alreadyClean = true;
+    return report;
+  }
+
+  // ── ⑤ 核对：问一份迁移计划（它逐条拿宿主字节重算 `rootHash`、与盒里那份比）。
+  //   ⚠️ 拿不到（服务不在 / 隧道不通）⇒ **抛**给调用方如实回 ——
+  //      没有核对就**绝不许**删。
+  if (typeof plan !== 'function') {
+    report.blocked = '没有接"问盒里那份"的那条路 ⇒ 核对不了，不删';
+    return report;
+  }
+  const migrateReport = await plan();
+  const verdict = pruneVerdict({ hostIds: mine.map((a) => a.id), migrateReport });
+  report.host = mine.map((a) => ({ id: a.id, version: a.version, rootHash: a.rootHash, files: null }));
+  report.verified = verdict.verified;
+  report.unverified = verdict.unverified;
+
+  // ── ② 只要有一个对不上 ⇒ **整格都不删**（如实报）
+  if (!verdict.ok) {
+    report.blocked = `盒子里对不上 ${report.unverified.length} 个 ⇒ 一个字节都不删`;
+    if (apply) writePruneAudit({ report, tenant, auditFile, fs, log, now, what: PRUNE_WHAT.refused, detail:
+      `没删：${report.unverified.map((u) => `${u.id}（${u.why}）`).slice(0, 5).join('；')}` });
+    return report;
+  }
+
+  // ── ① dry-run 到此为止：一个字节都不动（审计也不写）
+  if (!apply) return report;
+
+  // ── 真删（只删这一格；`hupo/` 下别的东西不动）
+  try {
+    fs.rmSync(root, { recursive: true, force: true });
+  } catch (err) {
+    report.blocked = `删不动（${err?.code ?? err?.message ?? err}）`;
+    writePruneAudit({ report, tenant, auditFile, fs, log, now, what: PRUNE_WHAT.refused, detail: `没删成：${report.blocked}` });
+    return report;
+  }
+  report.deleted = true;
+  writePruneAudit({
+    report,
+    tenant,
+    auditFile,
+    fs,
+    log,
+    now,
+    what: PRUNE_WHAT.done,
+    detail: `${report.verified.length} 个小程序都在盒子里对上了（逐条 rootHash）；宿主那一格 ${root} 已删`,
+  });
+  return report;
+}
+
+/** 审计那一行的事件名（**只有这一处**写）。 */
+export const PRUNE_WHAT = Object.freeze({
+  done: '删掉宿主那份旧库',
+  refused: '宿主那份旧库没删',
+});
+
+/** 写审计那一行（**写不进去不许把删除这个动作带走**）。 */
+function writePruneAudit({ report, tenant, auditFile, fs, log, now, what, detail }) {
+  if (!auditFile) return;
+  const line = auditLine({ at: now(), what, tenant, userId: report.userId, detail });
+  const ok = appendAudit({ file: auditFile, line, fs, onError: (m) => log(m) });
+  if (ok) report.auditLine = line;
+}
+
+/** 人看得懂的一段话（CLI 与测试都可以用）。 */
+export function describePruneReport(report) {
+  const lines = [];
+  lines.push(`【${report.userId}】${report.apply ? '真删' : '只看（不会动任何东西）'} · 那一格 ${report.appsRoot ?? '—'}`);
+  if (report.alreadyClean) {
+    lines.push('  宿主那份已经是空的 ⇒ 没有要删的（可重跑）。');
+    return lines.join('\n');
+  }
+  for (const a of report.host) {
+    const files = Number.isFinite(a.files) ? ` · ${a.files} 个文件` : '';
+    lines.push(`  宿主上有 ${a.id}（第 ${a.version} 版${files} · ${String(a.rootHash ?? '').slice(0, 12)}…）`);
+  }
+  for (const a of report.verified) lines.push(`  ✔ 核对上了 ${a.id}（盒里第 ${a.boxVersion} 版 · 同一个 hash）`);
+  for (const u of report.unverified) lines.push(`  ✗ 核对不上 ${u.id}：${u.why}`);
+  if (report.blocked) lines.push(`  ⛔ **没删**：${report.blocked}`);
+  if (report.deleted) lines.push('  🗑 已经删掉宿主那一格（盒子里那份是权威，桌面照旧走盒子）。');
+  if (!report.apply && report.unverified.length === 0) lines.push('加 --apply 才真删（默认只看）。');
+  if (report.auditLine) lines.push(`  审计：${report.auditLine}`);
+  return lines.join('\n');
+}
+
 
 /** 人看得懂的一段话（CLI 与测试都可以用）。 */
 export function describeMigrateReport(report) {

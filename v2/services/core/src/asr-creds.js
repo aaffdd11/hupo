@@ -28,6 +28,20 @@ import { credsFor } from './creds-store.js';
 export const VOICE_ENV_NAMES = ['TENCENT_APPID', 'TENCENT_SECRET_ID', 'TENCENT_SECRET_KEY'];
 
 /**
+ * **谁是"主人自己"**（P2-2 · 主人 2026-09-25 拍板）。
+ *
+ * 🔴 为什么需要它：`data/asr.env` 那份部署默认的语音钥匙是**主人的钥匙**
+ *    （他自己就在用它）。主人拍的是"**去掉兜底**"——但**只对别人去**：
+ *    别人没填自己那三样 ⇒ **如实说"没配"**；主人照旧能用。
+ * ⇒ 判据：`sub` 是 `owner` / `local` 才允许吃那份兜底。
+ * ⚠️ 认不出的 `sub`（`null`、空串、租户 id）一律**不算主人** ——
+ *    宁可让一个边缘身份"没配"，也不许把主人的钥匙递给别人。
+ */
+export function isOwnerSub(sub) {
+  return typeof sub === 'string' && (sub === 'owner' || sub === 'local');
+}
+
+/**
  * 语音那三样在**存档里**叫什么（短名）。
  * ⚠️ 这张表只住一处：`creds.mjs` 的 `VOICE_FIELDS`（顺序＝AppID / SecretId / SecretKey）。
  */
@@ -151,6 +165,27 @@ export function voiceCredsFor({ sub = null, dataDir, env = process.env, fs = nod
     };
   }
   const cfg = resolveVoiceCreds({ dataDir, env, fs });
+  // ── ★ P2-2（主人 2026-09-25）：**兜底只给主人** ────────────────
+  //   🔴 别人没填自己那三样 ⇒ **如实"没配"**（`source:'none'`），
+  //      **绝不**拿部署默认那份顶上 —— 那是主人的钥匙。
+  //   ⚠️ 主人（`owner` / `local`）那一份**一个字都不动**：照旧吃兜底。
+  //   ⚠️ 判据的反例就在 `test/asr-creds.test.js`：把 `isOwnerSub` 反过来
+  //      （或去掉这一支）⇒ "别人也能用兜底" ⇒ 那条必须红。
+  if (!isOwnerSub(who)) {
+    const base = asrConfigFromEnv(env);
+    return {
+      ...base,
+      appid: '',
+      secretId: '',
+      secretKey: '',
+      engine: base.engine,
+      upstream: null,
+      configured: false,
+      source: 'none',
+      sub: who,
+      why: cfg.why || '还没填自己的语音钥匙（部署默认那一份只给主人用）',
+    };
+  }
   // ⚠️ 没有他自己那份 ⇒ 退回**部署默认那一份**（`data/asr.env` 现读）。
   //    来源如实写 `default`，**绝不假装是他的**。
   return { ...cfg, sub: who, source: cfg.configured ? 'default' : 'none' };

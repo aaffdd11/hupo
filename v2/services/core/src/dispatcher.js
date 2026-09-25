@@ -101,6 +101,8 @@ class Session {
   #lastRecap = null;
   /** ★ 用量账（见构造参数 `onUsage`）。不接 ⇒ 老行为。 */
   #onUsage = null;
+  /** ★ P2-8 出网留痕（见构造参数 `onEgress`）。不接 ⇒ 老行为。 */
+  #onEgress = null;
   /** turn → 计时器。一轮一个，所以"后一轮开始把前一轮的计时器顶掉"不会丢东西。 */
   #deadlines = new Map();
   /**
@@ -288,6 +290,13 @@ class Session {
      *   不接 ⇒ 老行为（与改前逐字一致）。
      */
     onUsage = null,
+    /**
+     * ★ **P2-8 出网留痕**（主人 2026-09-25「② 先只做留痕」）：
+     *   翻译层从 `tool/result` 里取出"域名/量"，从这里交给上层（`worlds.js` 那本
+     *   `EgressLog`）。🔴 **只记量、不记正文**；**不改网络**；回调失败不挡这一轮。
+     *   不接 ⇒ 老行为（与改前逐字一致）。
+     */
+    onEgress = null,
   }) {
     if (!store) {
       // ⚠️ **不许默认没有 recap 就悄悄开工。**
@@ -311,7 +320,8 @@ class Session {
     this.#backgroundAfterMs = backgroundAfterMs;
     this.#onAuthFailure = onAuthFailure;
     this.#onUsage = onUsage;
-    this.#translator = new TurnTranslator({ timeline, scopeId, notice });
+    this.#onEgress = onEgress;
+    this.#translator = new TurnTranslator({ timeline, scopeId, notice, onEgress });
 
     // ★ P1：记下这一轮最后说出口的正文 —— 完成提醒里那句"结果一句"就是它
     //   （**转述**，不是新落一条；模型原文本身已经在时间线上了）。
@@ -1140,6 +1150,9 @@ export class Dispatcher {
   /** ★ 用量账（见 `Session` 的 `onUsage`）——每个用户一份，所有会话共用。 */
   #onUsage;
 
+  /** ★ P2-8 出网留痕（见 `Session` 的 `onEgress`）——每个用户一份，所有会话共用。 */
+  #onEgress;
+
   /**
    * @param {object} o
    *        与 `Session` 同一组参数（`timeline` 是**主线那一间**的视图）。
@@ -1168,6 +1181,8 @@ export class Dispatcher {
     this.#backgroundAfterMs = args.backgroundAfterMs ?? BACKGROUND_AFTER_MS;
     // ★ 93 §5.2·A：用量账（一个人一份）。主线与会话都从这里拿同一个回调。
     this.#onUsage = args.onUsage ?? null;
+    // ★ P2-8：出网留痕同理（一个人一份，房间里的出网也记到同一个人头上）。
+    this.#onEgress = args.onEgress ?? null;
     const main = new Session({ ...args, work: this.#work, promises: this.#promises });
     this.#sessions.set(main.scopeId, main);
   }
@@ -1228,6 +1243,8 @@ export class Dispatcher {
       backgroundAfterMs: this.#backgroundAfterMs,
       // ★ 93 §5.2·A：**每一个房间**的用量都记到它自己的 scope 头上。
       onUsage: this.#onUsage,
+      // ★ P2-8：**每一个房间**的出网痕迹都记到同一个人头上（留痕只分人，不分房间）。
+      onEgress: this.#onEgress,
     });
     this.#sessions.set(id, s);
     return s;

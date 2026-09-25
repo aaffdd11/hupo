@@ -40,6 +40,9 @@ import { createServer } from './server.js';
 import { describeAgentIdentity, loadConfig, preflight } from './config.js';
 import { integrityReport, repoRootFor, resolveServiceHome } from './integrity.js';
 import { describeAdmission, readAdmission } from './admission.js';
+// ★ **P2-12：磁盘/inode/fd 巡检接线**（周期采样 + 按手册四档分级告警）。
+//   🔴 **不改运行时**：它只报警、不拒活、不清盘（见 `disk-watch.js` 文件头）。
+import { startDiskWatch } from './disk-watch.js';
 import { applyPrune, groupSlugFor, planPrune, scanEntries, summarize } from './prune.js';
 import { createTurnStatus, statusPath } from './turn-status.js';
 // ★ P1（契约 `docs/dev/88-P1-TIME-WAIT.md` §四 T6）：服务起来时留一把锁，
@@ -948,6 +951,17 @@ const trashSweep = setInterval(() => {
 }, 60 * 60 * 1000);
 trashSweep.unref?.();
 
+// ★ **P2-12：巡检接上**（主人 2026-09-25 拍板「① 接线」）。
+//   周期采**磁盘 / inode / fd**，按手册 §11.4b 那张 80/88/92/95 四档**分级告警**。
+//   🔴 **只告警、不动手**：手册上 88 那一档写着"自动清"、92/95 写着"拒活"，
+//      而主人拍的是"**不改运行时（不拒活、不清盘）**" ⇒ 这一版**一次动作都不执行**。
+//   ⚠️ 要它真的在线上跑，得**重启一次服务**（`scripts/restart-core.sh`）——
+//      那是一次部署动作，不在这里做。
+const diskWatch = startDiskWatch({
+  dataDir: cfg.dataDir,
+  log: (m) => console.warn(m),
+});
+
 // ★ **续做**：对账说出口的那句"我重新做一遍"，在这里真的做。
 // ⚠️ 顺序不能反：**先落 `task/resumed`（记额度）再投递** ——
 //    投递失败也要算一次"发起过"，否则一个每次投递都失败的活会被无限重试。
@@ -1196,6 +1210,8 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     await close();
     turnStatus.stop();
     clearInterval(trashSweep);
+    // ★ P2-12：巡检那个定时器也要停（它 `unref` 过，但收工要干净）
+    diskWatch.stop();
     // ⚠️ 账本那些口要关掉**并把套接字文件删掉**：留着它，下次
     //    `listen()` 会撞上 `EADDRINUSE`，而那句话看起来像"端口被占"。
     worlds.closeSockets();

@@ -261,8 +261,13 @@ export function appendReview(apps, id, rec) {
   return { ...rec };
 }
 
-/** 评审 agent 回的那一份形状对不对（认不出 ⇒ 当成"没审"= fail-closed）。 */
-function readReviewerVerdict(v) {
+/**
+ * 评审 agent 回的那一份形状对不对（认不出 ⇒ 当成"没审"= fail-closed）。
+ *
+ * ⚠️ **导出**：真的那个评审 agent（`review-agent.js`）也用它验自己解析出来的 JSON
+ * —— "什么算一份结论"只许有这一处（两处必然漂）。
+ */
+export function readReviewerVerdict(v) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const rating = Number.isFinite(v.rating) ? Math.trunc(v.rating) : null;
   if (rating === null || rating < 0 || rating > 5) return null;
@@ -420,7 +425,9 @@ export async function preReview({
   if (typeof agent === 'function') {
     let raw = null;
     try {
-      raw = await agent({ id, version: v, rootHash, files, decl, points, policy: rules, usage: summary });
+      // ⚠️ 把 `turn` 也递给它：预审那次模型调用要记在**这一轮**的账上
+      //    （`review-agent.js` 用它填 `usage.jsonl` 的 `turn`；不传也能跑）。
+      raw = await agent({ id, version: v, rootHash, files, decl, points, policy: rules, usage: summary, turn });
     } catch (err) {
       raw = { unavailable: `评审没跑起来（${err?.message ?? err}）` };
     }
@@ -483,6 +490,76 @@ export async function preReview({
 }
 
 /**
+ * 🔴 **上架流程的完整那一步**：预审（盒里 · 用户的算力）＋ **运营方复评**
+ * （宿主侧 · 运营方保存的那个 agent）＋ **两份对不对得上**（96 · 我自定的第 4 条）。
+ *
+ * 顺序与 fail-closed 的落点：
+ *   ① 预审先跑（**上架第一步**，96 第 4 条）—— 它自己那几道（规则 / 申报 / 扫描 /
+ *      用量 / 评审 agent）任一读不出 ⇒ `escalate`，**共享库一个字节都不动**；
+ *   ② 给了 `operatorAgent` ⇒ 复评**独立再读一遍整份源码**、落同一条流（`scope:'operator'`）；
+ *      · 复评**跑不起来 / 结论认不出** ⇒ **escalate**（不许"审不了就放行"）；
+ *      · 两份**对不上**（评级差太多 / 一个说 pass 一个说 reject）⇒ **escalate**（96 我自定第 4 条）；
+ *   ③ 只有预审过了 **且** 两份对得上 ⇒ `allow:true`。
+ *
+ * ⚠️ **没给 `operatorAgent` 时**：复评跑不了 —— 这时**如实**把 `agreement` 记成
+ *    `null` ＋ 一句人话（**不假装对得上**）；预审自己的结论照旧算数。
+ *    宿主那一侧由 `worlds.js` 接真 agent（`HUPO_ROLE=tenant` 的盒里没有运营方的 agent
+ *    —— 盒里那一次是**预审**，主人第 3 条）。
+ *
+ * @returns {Promise<object>} `preReview()` 的那一份 ＋ `operator` ＋ `agreement`
+ */
+export async function reviewForPublish({
+  apps,
+  id,
+  version = null,
+  policy = null,
+  preAgent = null,
+  operatorAgent = null,
+  usage = null,
+  now = Date.now,
+  turn = null,
+  by = 'pre-review',
+} = {}) {
+  const pre = await preReview({ apps, id, version, policy, agent: preAgent, usage, now, turn, by });
+  // 预审自己就把这一版拦下来了 ⇒ 复评**不跑**（跑它只是白花一次算力，裁决不会变）
+  if (!pre.allow) {
+    const why = pre.verdict === 'reject' ? '预审已经拒了这一版，复评不用跑' : '预审没有自动放行，复评不用跑';
+    return { ...pre, operator: null, agreement: null, agreementWhy: why };
+  }
+  if (typeof operatorAgent !== 'function') {
+    const why = '运营方那一侧的复评没有接上（这一条如实说，不假装对得上）';
+    return { ...pre, operator: null, agreement: null, agreementWhy: why };
+  }
+  let op = null;
+  try {
+    op = await operatorReview({ apps, id, version, agent: operatorAgent, policy, now, turn });
+  } catch (err) {
+    return {
+      ...pre,
+      allow: false,
+      verdict: 'escalate',
+      refused: 'no-operator-review',
+      words: `运营方那一侧的复评没跑起来（${err?.message ?? err}）—— 这次不自动放行，请主人看一眼`,
+      operator: null,
+      agreement: null,
+    };
+  }
+  const agreement = compareReviews({ pre: pre.review, operator: op });
+  if (!agreement.agree) {
+    return {
+      ...pre,
+      allow: false,
+      verdict: 'escalate',
+      refused: 'review-disagreement',
+      words: `预审与运营方复评对不上：${agreement.why} —— 这次不自动放行，请主人看一眼`,
+      operator: op,
+      agreement,
+    };
+  }
+  return { ...pre, operator: op, agreement };
+}
+
+/**
  * **运营方那一侧的复评**（主人第 1 条：运营方保存的那个 agent 读整份源码）。
  *
  * ⚠️ 它和预审**用同一个 agent 接口**、落**同一条流**（`scope:'operator'`），
@@ -493,17 +570,36 @@ export async function operatorReview({ apps, id, version = null, agent = null, p
   const man = Number.isInteger(v) && v >= 1 ? apps.manifest(id, v) : null;
   if (!man) throw new ReviewError('要复评的那一版读不出来');
   // 复评也要绑规则指纹 —— 否则"两份评级哪一份是现在这份规则给的"就答不出来。
+  // ★ 而且**同一套规则要真的喂给它**（96 第 1 条）：只记指纹、不把规则正文给评审，
+  //   它给的评级就不是"按这份规则给的"。
   let rulesHash = null;
+  let rulesObj = null;
   if (policy) {
     try {
-      rulesHash = assertReviewPolicy(policy).rulesHash;
+      rulesObj = assertReviewPolicy(policy);
+      rulesHash = rulesObj.rulesHash;
     } catch {
       rulesHash = null; // 规则认不出 ⇒ 结论照落（事实不能静默），但**不算数**
+      rulesObj = null;
     }
   }
   const files = {};
   for (const f of man.files ?? []) files[f.path] = apps.read(id, v, f.path).content;
-  const raw = typeof agent === 'function' ? await agent({ id, version: v, rootHash: man.rootHash, files }) : null;
+  // ★ **运营方读的也是整份源码 ＋ 同一份申报**：他独立核一遍（不拿预审的结论当输入）。
+  //   ⚠️ 申报读不出**不是**这里的失败 —— 那正是评审要看见的一条风险（`decl:null`）。
+  let decl = null;
+  let points = [];
+  try {
+    const r = assertDeclarationAllowed({ files, version: v });
+    decl = r.decl;
+    points = r.points;
+  } catch {
+    decl = null;
+    points = [];
+  }
+  const raw = typeof agent === 'function'
+    ? await agent({ id, version: v, rootHash: man.rootHash, files, decl, points, policy: rulesObj, turn })
+    : null;
   const got = readReviewerVerdict(raw);
   if (!got) throw new ReviewError('运营方那一侧的评审没跑起来（或者回的东西认不出）—— 如实报，不猜');
   const review = {

@@ -39,9 +39,12 @@ import {
 import { Published, authorHashOf } from './published.js';
 import { Dispatcher } from './dispatcher.js';
 import { loadReviewPolicy } from './review.js';
+import { createDshReviewAgent } from './review-agent.js';
 import { USAGE_KINDS, UsageLedger } from './usage.js';
 import { Ledger, LEDGER_TIMELINE_ID } from './ledger.js';
 import { LedgerSocket, ledgerSocketPath } from './ledger-socket.js';
+// ★ **P2-8 出网留痕**（主人 2026-09-25「② 先只做留痕」）：一个人一本，只记域名/时间/量。
+import { EgressLog } from './egress-log.js';
 import { Notice, UNDO_RESTORE } from './notice.js';
 import { SayService } from './say.js';
 import { Tenants, OWNER_ID } from './tenants.js';
@@ -467,6 +470,43 @@ export class Worlds {
     //   落 `<dir>/hupo/apps/<id>/usage.jsonl`（**贴现有布局，不新造第二套**）。
     //   ⚠️ 它只记量（token 三格／次数／张数／秒数），**不记任何访问日志**。
     const usage = new UsageLedger({ apps, log: (m) => this.#warn(`  ${m}`) });
+    // ★ **P2-8：出网留痕**（主人 2026-09-25）—— 盒里那个 agent **能往任意地址发请求**
+    //   （93 §2.1 O3 · 账 #65），而手册读起来像"出不去"。主人拍的是**先不改网络**、
+    //   只留痕：记「它往哪发」（**域名 / 时间 / 量**）**可查**。
+    //   🔴 **不记正文**（不落 URL 的路径与查询串、不落标题/摘要/查询词）；
+    //   🔴 落 `<dir>/hupo/egress.jsonl`（与制品库同级，**不进工作区、不进制品**）。
+    const egress = new EgressLog({ dir: t.dir, sub: t.userId, log: (m) => this.#warn(m) });
+
+    // ★ **真的预审 agent**（96 第 1／3／4 条）：把源码与申报喂给盒里那台 DSH，
+    //   按产品层规则出总结／风险／评级。
+    //   🔴 以前这里是 `this.#cfg.reviewAgent ?? null` ⇒ **一律 escalate**（审核等于没跑）；
+    //      现在**默认接真实现**（要换成假的，注入 `cfg.reviewAgent` 即可）。
+    //   🔴 `guardDir` = **这个 app 的工作区**：评审只许看不许写，跑完逐文件核 sha。
+    //   🔴 `usage` = **预审吃的是用户自己的算力**（96 第 3 条）⇒ 记到这个 app 头上。
+    const reviewCfg = { ...this.#cfg, dshHome: paths.dshHome };
+    const reviewAgent = typeof this.#cfg.reviewAgent === 'function'
+      ? this.#cfg.reviewAgent
+      : createDshReviewAgent({
+        cfg: reviewCfg,
+        usage,
+        who: 'pre',
+        guardDir: (id) => scopeDirFor(t.dir, id),
+        log: (m) => this.#warn(`  ${m}`),
+      });
+    // ★ **运营方那一侧的复评**（96 第 1 条 · **宿主侧**）：独立再读一遍整份源码。
+    //   ⚠️ `HUPO_ROLE=tenant` 的盒里**没有它** —— 盒里跑的是**用户自己**的 agent
+    //      （那一次是预审，第 3 条）；运营方的 agent 在宿主那一侧。
+    //   ⚠️ 它的算力**不记到用户头上**（那是平台的账）⇒ `usage:null`。
+    const operatorAgent = typeof this.#cfg.operatorReviewAgent === 'function'
+      ? this.#cfg.operatorReviewAgent
+      : (this.#cfg.operatorReview === true
+        ? createDshReviewAgent({
+          cfg: reviewCfg,
+          usage: null,
+          who: 'operator',
+          log: (m) => this.#warn(`  ${m}`),
+        })
+        : null);
     // ⚠️ **调度器建在这下面**（它要 timeline 那几样），而"造东西那条闸"（P1-22）
     //   要看**这一轮他说了什么** —— 那句话住在调度器里。
     //   ⇒ 先空着，等它建好再指过来（`ctx.turnInput` 是个**取值函数**，调的时候才读）。
@@ -509,10 +549,12 @@ export class Worlds {
         usage,
         // ★ **上架第一步的预审**（96 第 3b／4 条）：规则是**产品层**那份（只读挂载＋指纹），
         //   读不到 / 指纹对不上 ⇒ `null` ⇒ 预审 **fail-closed**（不自动放行）。
-        //   ⚠️ `reviewAgent` 是**注入的**评审实现；本批没有 ⇒ `null` ⇒ 一律 `escalate`
-        //      （**不许**因为"审不了"就自动放行）。
+        //   ★ `reviewAgent` 现在**默认是真实现**（`createDshReviewAgent`：盒里那台 DSH
+        //     读整份源码）；没接上 / 起不来 ⇒ `unavailable` ⇒ **escalate**（不许自动放行）。
+        //   ★ `operatorAgent` = **宿主侧**的运营方复评（盒里是 `null`）。
         reviewPolicy: this.#reviewPolicy(),
-        reviewAgent: this.#cfg.reviewAgent ?? null,
+        reviewAgent,
+        operatorAgent,
         // ★ 装上了 ⇒ 往**他自己**的流里推一条（客户端收到就重拉清单，桌面自己长出来）
         onInstalled: (info) => {
           try {
@@ -592,6 +634,11 @@ export class Worlds {
       onUsage: ({ scopeId, turn, usage: u }) => {
         usage.note(scopeId, { kind: USAGE_KINDS.agentTurn, usage: u, scopeId, turn });
       },
+      // ★ **P2-8：出网留痕从这里接上** —— 翻译层取出"域名/量"，落进这个人那本账。
+      //   🔴 只记域名与量（不记正文）；回调失败不挡轮（`EgressLog.note` 自己吞）。
+      onEgress: ({ entries }) => {
+        egress.noteAll(entries);
+      },
     });
 
     // ★ 账本那条本地通道：**套接字路径由这个人的目录派生** ⇒ 天然跟人走
@@ -636,6 +683,8 @@ export class Worlds {
       workspaces,
       // ★ **用量账**（93 §五）：`worlds.noteUsage()` 用它接语音那一路的账。
       usage,
+      // ★ **P2-8 出网留痕**（一个人一本；`read()` 就是"可查"那一半）。
+      egress,
       appsSocket,
       published: this.#published,
       dispatcher,

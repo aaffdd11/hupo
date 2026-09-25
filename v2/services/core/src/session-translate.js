@@ -60,6 +60,9 @@
 import { EventEmitter } from 'node:events';
 
 import { MessageWriter } from './message-writer.js';
+// ★ **P2-8：出网留痕**（主人 2026-09-25）—— 从 `tool/result` 里只取"域名/量"，
+//   交给上层（`worlds.js` 那本 `EgressLog`）。**不记正文**，见 `egress-log.js`。
+import { egressFromToolResult } from './egress-log.js';
 import { MAX_SOURCES, sourcesFromToolResult } from './sources.js';
 import { isReadOnlyTool } from './tools.js';
 // ★ **失败五类那几句人话只有一处出处**（`notice.js` 的 `FAILED_LINES`）——
@@ -253,12 +256,18 @@ export class TurnTranslator extends EventEmitter {
   #notice;
   /** 登记失败（同一个 `(turn, kind)` 两条通道都说了）——只记不抛，见 ⑥。 */
   #claimErrors = [];
+  /**
+   * ★ **P2-8：出网留痕的出入口**（可选）。`null` = 没接（离线测试、老调用方）。
+   * 🔴 回调失败**不许挡这一轮**（留痕是旁路，F10 同款）。
+   */
+  #onEgress;
 
-  constructor({ timeline, scopeId = null, notice = null }) {
+  constructor({ timeline, scopeId = null, notice = null, onEgress = null }) {
     super();
     this.#timeline = timeline;
     this.#scopeId = scopeId;
     this.#notice = notice;
+    this.#onEgress = typeof onEgress === 'function' ? onEgress : null;
   }
 
   /** 当前有没有一轮还没收口。给淘汰回调判断用。 */
@@ -406,15 +415,36 @@ export class TurnTranslator extends EventEmitter {
   #onToolResult(data) {
     const turn = data?.turn;
     if (typeof turn !== 'number') return;
+    const name = typeof data?.step === 'number' ? this.#stepTools.get(`${turn}:${data.step}`) : undefined;
+    // ★ **P2-8：出网留痕**（主人 2026-09-25）。⚠️ 放在"这一轮还在账上"那道判断
+    //   **之前**：留痕记的是**已经发生过的**那次出网，与"出处要不要贴到气泡上"无关。
+    //   ⚠️ 配不上工具名（`#stepTools` 在收口时清了）⇒ **不记**（认不出就不猜）——
+    //      实际序列里 `web_*` 的结果都在轮内回来，不会漏。
+    //   🔴 只记域名/量；正文一个字节都不进来（判据在 `test/egress-log.test.js`）。
+    this.#noteEgress(turn, egressFromToolResult(name, data?.meta));
     const rec = this.#turns.get(turn);
     if (!rec) return;
-    const name = typeof data?.step === 'number' ? this.#stepTools.get(`${turn}:${data.step}`) : undefined;
     const found = sourcesFromToolResult(name, data?.meta);
     if (found.length === 0) return;
     for (const one of found) {
       if (rec.sources.length >= MAX_SOURCES) break;
       if (rec.sources.some((x) => x.url === one.url)) continue;
       rec.sources.push(one);
+    }
+  }
+
+  /**
+   * ★ **P2-8：把这一条出网痕迹交出去**（`worlds.js` 那本 `EgressLog` 落盘）。
+   *
+   * ⚠️ **留痕是旁路**：回调出事**不许挡这一轮**（F10 同款，同 `#noteUsage` 的取舍）。
+   * ⚠️ 认不出（空数组）⇒ 什么都不做（**不拿 0 充一条**）。
+   */
+  #noteEgress(turn, entries) {
+    if (!this.#onEgress || !Array.isArray(entries) || entries.length === 0) return;
+    try {
+      this.#onEgress({ scopeId: this.#scopeId ?? 'main', turn, entries });
+    } catch {
+      /* 旁路：出网留痕出事不许把用户那一轮弄失败 */
     }
   }
 

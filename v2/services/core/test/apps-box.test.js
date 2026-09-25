@@ -30,11 +30,16 @@ import { createServer } from '../src/server.js';
 import { createAppServer, verifyEntry } from '../src/app-serve.js';
 import { createBoxApps } from '../src/apps-box.js';
 import {
+  PRUNE_WHAT,
   createAppsMigrateServer,
+  describePruneReport,
   migrateAppsToBox,
   migrateCall,
   migrateSocketPath,
+  pruneHostApps,
+  pruneVerdict,
 } from '../src/apps-migrate.js';
+import { auditPath } from '../src/audit.js';
 
 const NOW = 1_800_000_000_000;
 const KEY = Buffer.from('b'.repeat(64), 'hex');
@@ -521,3 +526,158 @@ test('B15-2/B15-5 制品字节也不会串：甲拿到的签名换到乙的盒�
   q.set('u', 'u2');
   assert.equal((await fetch(`${host.artifactOrigin}${u.pathname}?${q}`)).status, 403);
 });
+
+// ════════════════════════════════════════════════════════════
+// P2-6 —— 删宿主那份旧库（主人 2026-09-25「乙：把宿主那份删掉」）
+// ════════════════════════════════════════════════════════════
+test('🔴 P2-6：核对全过才删 · dry-run 不动盘也不写审计 · 可重跑 · 删完留一行审计', async (t) => {
+  const hostDir = tmp();
+  const boxDir = tmp();
+  const host = new Apps({ dir: hostDir, sub: 'u2' });
+  host.create(OK('tianqi-probe', '看天气', '<p>宿主的天气</p>'));
+  host.create(OK('wenda', '问答小抄', '<p>宿主的问答</p>'));
+  const box = await bootBox(t, { dir: boxDir });
+  const boxClient = () => createBoxApps({ sub: 'u2', dial: () => nodeNet.connect(box.uds) });
+  // 先把旧的搬进盒子（这一步用现成的迁移 —— 核对的前提就是"盒里已经有一份一样的"）
+  await migrateAppsToBox({ userId: 'u2', hostApps: host, box: boxClient(), apply: true });
+  // "问盒里那份"这条路 = 现成的 `plan` 作业（逐条拿宿主字节重算 hash、与盒里比）
+  const planFn = () => migrateAppsToBox({ userId: 'u2', hostApps: host, box: boxClient(), apply: false });
+
+  const hostRoot = nodePath.join(hostDir, 'hupo', 'apps');
+  const boxRoot = nodePath.join(boxDir, 'hupo', 'apps');
+  const before = fingerprint(hostRoot);
+  const boxBefore = fingerprint(boxRoot);
+  const auditFile = auditPath(hostDir);
+
+  // ── ① dry-run：一个字节都不动，**而且不写审计**（"只看"就要真的什么都没发生）
+  const plan = await pruneHostApps({ userId: 'u2', hostApps: host, plan: planFn, apply: false, auditFile });
+  assert.deepEqual(plan.verified.map((a) => a.id).sort(), ['tianqi-probe', 'wenda']);
+  assert.equal(plan.deleted, false);
+  assert.equal(nodeFs.existsSync(auditFile), false, '★ dry-run 不许写审计');
+  assert.deepEqual([...fingerprint(hostRoot).entries()].sort(), [...before.entries()].sort(), 'dry-run 一个字节都不许动');
+
+  // ── ② --apply：核对全过 ⇒ 删掉租户那一格
+  const done = await pruneHostApps({
+    userId: 'u2', hostApps: host, plan: planFn, apply: true, tenant: 'hupo-b', auditFile, now: () => NOW,
+  });
+  assert.equal(done.deleted, true);
+  assert.equal(done.blocked, null);
+  assert.equal(nodeFs.existsSync(hostRoot), false, '★ 租户那一格删掉了');
+  // 🔴 盒子里那份**仍在**（它是权威；桌面照旧走盒子）
+  assert.deepEqual([...fingerprint(boxRoot).entries()].sort(), [...boxBefore.entries()].sort(), '盒子那份一个字节都不许动');
+  assert.equal(new Apps({ dir: boxDir, sub: 'owner' }).list().length, 2);
+  // 审计一行（事件名 + 谁 + 哪台）
+  const audit = nodeFs.readFileSync(auditFile, 'utf8');
+  assert.ok(audit.includes(PRUNE_WHAT.done), `审计里要有那一行：${audit}`);
+  assert.ok(audit.includes('u2'));
+  assert.ok(audit.includes('hupo-b'));
+  assert.equal(done.auditLine.includes(PRUNE_WHAT.done), true);
+
+  // ── ③ 可重跑：已经空了 ⇒ 报"没有要删的"，什么都不做（**连问都不问**）
+  const again = await pruneHostApps({
+    userId: 'u2', hostApps: host, plan: () => { throw new Error('已经空了就不该再问盒子'); }, apply: true, auditFile,
+  });
+  assert.equal(again.alreadyClean, true);
+  assert.equal(again.deleted, false);
+  assert.equal(describePruneReport(again).includes('没有要删的'), true);
+});
+
+test('🔴 P2-6 反例：盒子里对不上 ⇒ **一个字节都不删**（盒里没有 / hash 不同）', async (t) => {
+  // ① 盒里那个同名但**不一样**（hash 不同）
+  const hostDir = tmp();
+  const boxDir = tmp();
+  new Apps({ dir: hostDir, sub: 'u2' }).create(OK('wenda', '问答小抄', '<p>宿主版</p>'));
+  new Apps({ dir: boxDir, sub: 'owner' }).create(OK('wenda', '问答小抄（盒子自己的）', '<p>盒子版</p>'));
+  const host = new Apps({ dir: hostDir, sub: 'u2' });
+  const box = await bootBox(t, { dir: boxDir });
+  const boxClient = () => createBoxApps({ sub: 'u2', dial: () => nodeNet.connect(box.uds) });
+  const hostRoot = nodePath.join(hostDir, 'hupo', 'apps');
+  const before = fingerprint(hostRoot);
+  const auditFile = auditPath(hostDir);
+  const rep = await pruneHostApps({
+    userId: 'u2', hostApps: host, plan: () => migrateAppsToBox({ userId: 'u2', hostApps: host, box: boxClient(), apply: false }),
+    apply: true, auditFile,
+  });
+  assert.equal(rep.deleted, false, '★ 对不上就不许删');
+  assert.equal(rep.unverified.length, 1);
+  assert.ok(rep.blocked);
+  assert.deepEqual([...fingerprint(hostRoot).entries()].sort(), [...before.entries()].sort(), '★ 整格都不许动');
+  assert.ok(nodeFs.readFileSync(auditFile, 'utf8').includes(PRUNE_WHAT.refused), '拒了也要记一行（"想删、没删、为什么"）');
+
+  // ② 盒子里**根本没有**那一个 ⇒ 也不许删
+  const hostDir2 = tmp();
+  const boxDir2 = tmp();
+  const host2 = new Apps({ dir: hostDir2, sub: 'u2' });
+  host2.create(OK('only-host', '只有宿主有', '<p>x</p>'));
+  const box2 = await bootBox(t, { dir: boxDir2 });
+  const rep2 = await pruneHostApps({
+    userId: 'u2',
+    hostApps: host2,
+    plan: () => migrateAppsToBox({
+      userId: 'u2', hostApps: host2, box: createBoxApps({ sub: 'u2', dial: () => nodeNet.connect(box2.uds) }), apply: false,
+    }),
+    apply: true,
+  });
+  assert.equal(rep2.deleted, false);
+  assert.match(rep2.unverified[0].why, /盒子里没有/);
+  assert.equal(nodeFs.existsSync(nodePath.join(hostDir2, 'hupo', 'apps')), true);
+});
+
+test('🔴 P2-6 反例：核对拿不到（服务不在 / 隧道不通）⇒ **不许删**（而且不碰盘）', async () => {
+  const hostDir = tmp();
+  new Apps({ dir: hostDir, sub: 'u2' }).create(OK('wenda', '问答小抄', '<p>宿主版</p>'));
+  const hostRoot = nodePath.join(hostDir, 'hupo', 'apps');
+  const before = fingerprint(hostRoot);
+  await assert.rejects(
+    () => pruneHostApps({
+      userId: 'u2',
+      hostApps: new Apps({ dir: hostDir, sub: 'u2' }),
+      plan: async () => { throw new Error('隧道没通'); },
+      apply: true,
+    }),
+    /隧道没通/,
+  );
+  assert.deepEqual([...fingerprint(hostRoot).entries()].sort(), [...before.entries()].sort());
+  // 没接 plan ⇒ 也不许删（宁可不删）
+  const rep = await pruneHostApps({ userId: 'u2', hostApps: new Apps({ dir: hostDir, sub: 'u2' }), apply: true });
+  assert.equal(rep.deleted, false);
+  assert.ok(rep.blocked);
+});
+
+test('🔴 P2-6 反例：主人自己那份（`data/hupo/apps`）**一个字节都不许动**', async () => {
+  const dataDir = tmp();
+  const owner = new Apps({ dir: dataDir, sub: 'owner' });
+  owner.create(OK('coin', '我的硬币', '<p>主人的东西</p>'));
+  const ownerRoot = nodePath.join(dataDir, 'hupo', 'apps');
+  const before = fingerprint(ownerRoot);
+  // 认出来就停：**连"问盒里那份"都不问**（plan 一被叫就抛）
+  const rep = await pruneHostApps({
+    userId: 'owner',
+    hostApps: owner,
+    plan: async () => { throw new Error('主人那份根本不该被问'); },
+    apply: true,
+    protect: [ownerRoot],
+  });
+  assert.equal(rep.deleted, false);
+  assert.match(rep.blocked, /主人/);
+  assert.deepEqual([...fingerprint(ownerRoot).entries()].sort(), [...before.entries()].sort(), '★ 主人那份一个字节都不许动');
+});
+
+test('🔴 P2-6 裁决（纯函数）：少一个 / 报冲突 / 报要搬 ⇒ 都不放行', () => {
+  const all = pruneVerdict({
+    hostIds: ['a', 'b'],
+    migrateReport: { already: [{ id: 'a', version: 1, boxVersion: 1, rootHash: 'h' }, { id: 'b', version: 1, boxVersion: 1, rootHash: 'h' }] },
+  });
+  assert.equal(all.ok, true);
+  const missing = pruneVerdict({ hostIds: ['a', 'b'], migrateReport: { already: [{ id: 'a' }], planned: [{ id: 'b' }] } });
+  assert.equal(missing.ok, false);
+  assert.match(missing.unverified[0].why, /盒子里没有/);
+  const conflict = pruneVerdict({ hostIds: ['a'], migrateReport: { already: [], conflicts: [{ id: 'a', why: 'hash 不一样' }] } });
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.unverified[0].why, 'hash 不一样');
+  // 宿主那份是空的 ⇒ 不放行（那由 `alreadyClean` 那一支处置，不该走到这儿）
+  assert.equal(pruneVerdict({ hostIds: [], migrateReport: { already: [] } }).ok, false);
+  assert.equal(pruneVerdict({}).ok, false);
+});
+
+

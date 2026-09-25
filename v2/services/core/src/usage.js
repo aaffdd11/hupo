@@ -94,6 +94,10 @@ function num(v) {
  *   · OpenAI / DeepSeek 系：`prompt_tokens` · `completion_tokens` ·
  *     `prompt_cache_hit_tokens`（= cache read）／`prompt_cache_miss_tokens`（= uncached）
  *   · Anthropic 系：`input_tokens` · `output_tokens` · `cache_read_input_tokens`
+ *   · ★ **这台 DSH 自己那份**（`session.event` 的 `assistant/message.data.usage`，
+ *     实测形状）：`inputTokens` · `outputTokens` · `cacheReadTokens` · `totalTokens`
+ *     · `reasoningTokens`。⚠️ 实测 `totalTokens = inputTokens + outputTokens + cacheReadTokens`
+ *     ⇒ `inputTokens` **不含** cache read（uncached 就是它），**不许**再减一次。
  *
  * ⚠️ 认不出 ⇒ **如实全 0**，并把 `known:false` 交给调用方 —— 不许拿"总数"当"没缓存"填进去
  *    （那会把一个几乎免费的量算成要花钱的量，正好是 F6 禁止的那种口径混用）。
@@ -112,16 +116,20 @@ export function normalizeUsage(raw) {
   // ⚠️ **两种形状的"输入"含义不同**，不许混着减：
   //   · OpenAI／DeepSeek：`prompt_tokens` **含**缓存命中 ⇒ uncached = prompt − hit
   //   · Anthropic：`input_tokens` **不含**缓存（缓存另算）⇒ uncached = input_tokens
+  //   · DSH（camelCase）：同 Anthropic ⇒ uncached = inputTokens
   const promptTokens = pick('prompt_tokens');
   const inputTokens = pick('input_tokens');
-  const output = pick('completion_tokens', 'output_tokens');
-  const cacheRead = pick('prompt_cache_hit_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens');
+  const dshInputTokens = pick('inputTokens');
+  const output = pick('completion_tokens', 'output_tokens', 'outputTokens');
+  const cacheRead = pick('prompt_cache_hit_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'cacheReadTokens');
   const cacheMiss = pick('prompt_cache_miss_tokens');
-  const known = promptTokens !== null || inputTokens !== null || output !== null || cacheRead !== null;
+  const known = promptTokens !== null || inputTokens !== null || dshInputTokens !== null
+    || output !== null || cacheRead !== null;
   let uncachedInput = 0;
   if (cacheMiss !== null) uncachedInput = cacheMiss;
   else if (promptTokens !== null) uncachedInput = Math.max(0, promptTokens - (cacheRead ?? 0));
   else if (inputTokens !== null) uncachedInput = inputTokens;
+  else if (dshInputTokens !== null) uncachedInput = dshInputTokens;
   return {
     uncachedInput: num(uncachedInput),
     output: num(output ?? 0),

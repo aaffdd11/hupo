@@ -106,7 +106,12 @@ UNIT
 '
         printf '  --security-opt=no-new-privileges \\\n'
         printf '  --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \\\n'
-        printf '  --pids-limit=512 --memory=768m --memory-swap=768m \\\n'
+        # ⚠️ **`--cpus=4` 只影响"以后新建"的容器**（P2-11 · `docs/dev/96-OWNER-DECISIONS.md`）：
+        #    它写进**新渲染出来的单元**；已经在跑的那两台**不动**（不重建、不重启）——
+        #    要它们也带上，得等下一次自然重开（`--replace` 会重建）。
+        #    ⚠️ 这里原来只有 `--pids-limit` 与 `--memory`：内存那条挡住了，
+        #    CPU 那条没有 ⇒ 一个租户里跑飞的 agent 能把整机（32 线程）吃满。
+        printf '  --pids-limit=512 --memory=768m --memory-swap=768m --cpus=4 \\\n'
         printf '  --env HUPO_CHANNEL=/run/hupo-host/channel.sock \\\n'
         printf '  --env HUPO_CHANNEL_WAIT_MS=60000 \\\n'
         printf '  %s\n' "$IMG"
