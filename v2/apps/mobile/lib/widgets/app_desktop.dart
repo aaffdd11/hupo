@@ -403,16 +403,32 @@ class _DesktopIconState extends State<_DesktopIcon> {
     );
   }
 
-  /// **按住 / 右键 ⇒ 出那个底栏小面板**（契约 `104` §一）。
+  /// **按住 / 右键 ⇒ 出那个小面板**（契约 `104` §一）。
+  ///
+  /// ★ 2026-09-25 主人：*"我建议弹窗从页面上方跳出。"* ⇒ **从上面下来**
+  ///   （原来是底栏那个 `showModalBottomSheet`）。
   ///
   /// ⚠️ 这一层**只问"选了哪一项"**：发请求、重拉清单、失败时怎么说，全在 `screens/`
   ///    那一层（`widgets` 是傻组件，**不许**碰 `services` —— 楼层闸）。
-  /// ⚠️ 用户点了面板外面 / 系统返回键 ⇒ `showModalBottomSheet` 回 `null`
-  ///    ⇒ 什么都不做（"取消"和"点外面"是同一件事，这是底栏面板的既有语义）。
+  /// ⚠️ 用户点了面板外面 / 系统返回键 ⇒ 回 `null` ⇒ 什么都不做
+  ///    （"取消"和"点外面"是同一件事，这是这一层的既有语义）。
   Future<void> _askMenu(BuildContext context) async {
-    final action = await showModalBottomSheet<DesktopIconAction>(
+    final action = await showGeneralDialog<DesktopIconAction>(
       context: context,
-      builder: (_) => const DesktopIconMenu(),
+      barrierDismissible: true,
+      // 无障碍：读屏要知道"这层遮罩点一下就关"
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Theme.of(context).colorScheme.scrim.withValues(alpha: 0.4),
+      transitionDuration: d.motionPage,
+      pageBuilder: (_, _, _) => const _TopPanel(child: DesktopIconMenu()),
+      transitionBuilder: (_, anim, _, child) => SlideTransition(
+        // ⚠️ `-1` = 从屏幕上方外面滑进来（主人要的就是这个"跳出来"的方向）
+        position: Tween<Offset>(
+          begin: const Offset(0, -1),
+          end: Offset.zero,
+        ).animate(anim),
+        child: child,
+      ),
     );
     switch (action) {
       case DesktopIconAction.rename:
@@ -424,5 +440,29 @@ class _DesktopIconState extends State<_DesktopIcon> {
       case null:
         break; // 点外面 / 返回键 = 取消
     }
+  }
+}
+
+/// **贴着页面上边那一层**（主人 2026-09-25：*"我建议弹窗从页面上方跳出。"*）。
+///
+/// ⚠️ 只圆下面两个角（上面是屏幕边）；`SafeArea` 让出刘海/状态栏那一条。
+class _TopPanel extends StatelessWidget {
+  const _TopPanel({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Material(
+        color: cs.surface,
+        borderRadius: const BorderRadius.vertical(
+          bottom: Radius.circular(d.radiusCard),
+        ),
+        child: SafeArea(bottom: false, child: child),
+      ),
+    );
   }
 }

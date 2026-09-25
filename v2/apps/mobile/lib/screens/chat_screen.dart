@@ -600,17 +600,6 @@ class _ChatScreenState extends State<ChatScreen> {
     return null;
   }
 
-  /// 容器顶上那行字：谁开着就写谁。
-  String _mineTitle(ChatController c) {
-    final mine = _openMine();
-    if (mine != null) return mine.title;
-    if (_openApp == builtInDiscoverId) return discoverTitle;
-    // ⚠️ 「我自己那台」也要在这儿认一下：不认的话聊天条那个图标会写着
-    //    「在『设置』里问」—— 一句假话（`chat_scope_icon_test` 就是钉这件事的形状）。
-    if (_openApp == builtInHarnessId) return harnessAppLabel;
-    return _openApp == builtInMathId ? mathTitle : configTitle;
-  }
-
   /// **现在这一间是哪一个小程序**（空房间那一句要用它的名字）；`null` = 不是
   /// 某一个"我的小程序"（主对话 / 名字一时查不到）。
   ///
@@ -639,29 +628,53 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// **现在这句话是在哪儿说的** ⇒ 聊天条最前面那个图标（主人 2026-09-23）。
   ///
-  /// * 没进任何小程序 = **在桌面上**（也就是全局）⇒ 一个**家**；
-  /// * 进了某个小程序 ⇒ **那个小程序自己的图标**（桌面点开的那个）。
+  /// * 主对话 = **在桌面上**（也就是全局）⇒ 一个**家**；
+  /// * 某一间 ⇒ **那一间自己的图标**。
+  ///
+  /// ★ 2026-09-25（主人拍的 **B35**）：它**看的是"现在在哪一间"（`c.scope`）**，
+  ///   不再看"点开了哪个图标"（`_openApp`）—— 窗口**自己跟到新那一间**之后，
+  ///   原来那句「在桌面上问（全局）」就成了**假话**（话其实进了另一间）。
   ///
   /// ⚠️ **它只是指示、不是按钮**：点了什么都不做 —— 主人要的是"看得出来现在在哪儿"。
   ///    真让它可点就等于多一个出口，那要另配一条行为与 ≥44 的命中区（D3.6），不在这一刀里。
-  IconData _scopeIcon() {
-    final id = _openApp;
-    if (id == null) return Icons.home_outlined;
-    if (id.startsWith(_minePrefix)) {
-      final mine = _openMine();
-      // ⚠️ 清单刷新之后那条可能没了（`_openMine()` 为 null）⇒ 给默认的小程序图标，
-      //    **不许**掉进下面那个 switch（那会把"我的某个小程序"画成设置）。
-      return mine == null ? defaultAppIcon : miniAppIconFor(mine.icon);
+  IconData _scopeIcon(ChatController c) {
+    final s = c.scope;
+    if (s == mainScope) return Icons.home_outlined;
+    for (final a in _myApps) {
+      if (a.id == s) return miniAppIconFor(a.icon);
     }
-    return _builtInIcon(id);
+    if (s == builtInSettingsId ||
+        s == builtInMathId ||
+        s == builtInDiscoverId ||
+        s == builtInHarnessId) {
+      return _builtInIcon(s);
+    }
+    // ⚠️ 认不出那一间 ⇒ 给一个"在说话"的图标：**不许**画成"设置"，
+    //    更不许画成主线的家（那两样都是在说假话）。
+    return Icons.forum_outlined;
   }
 
-  /// 那个图标本身（带说明：长按/读屏听到"这句话是在哪儿说的"）。
+  /// 那条说明（长按 / 读屏听到"这句话是在哪儿说的"）。
+  ///
+  /// ★ 同 [_scopeIcon]：**按"现在在哪一间"算**（B35）。
+  String _scopeWords(ChatController c) {
+    final s = c.scope;
+    if (s == mainScope) return chatScopeDesktop;
+    for (final a in _myApps) {
+      if (a.id == s) return chatScopeInApp(a.title);
+    }
+    if (s == builtInSettingsId) return chatScopeInApp(configTitle);
+    if (s == builtInMathId) return chatScopeInApp(mathTitle);
+    if (s == builtInDiscoverId) return chatScopeInApp(discoverTitle);
+    if (s == builtInHarnessId) return chatScopeInApp(harnessAppLabel);
+    // 名字查不到（刚派出去那一间 —— 名字在他盒子里 · B20）⇒ 不撒谎的模糊话
+    return chatScopeElsewhere;
+  }
+
+  /// 那个图标本身（带说明）。
   Widget _scopeBadge(ChatController c) => Tooltip(
-    message: _openApp == null
-        ? chatScopeDesktop
-        : chatScopeInApp(_mineTitle(c)),
-    child: Icon(_scopeIcon(), size: 18, color: d.ink),
+    message: _scopeWords(c),
+    child: Icon(_scopeIcon(c), size: 18, color: d.ink),
   );
 
   /// 替**现在开着的那一个小程序**问一句（乙-4b）。

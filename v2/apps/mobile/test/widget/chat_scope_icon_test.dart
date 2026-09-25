@@ -90,6 +90,8 @@ void main() {
     );
   });
 
+  _b35();
+
   testWidgets('🔴 收起态也画它（收起那条照样能发话 ⇒ 也该看得出在哪儿说）', (tester) async {
     await _pump(tester); // 默认就是收起档
     expect(find.byType(ChatFloater), findsOneWidget);
@@ -99,6 +101,49 @@ void main() {
         matching: find.byTooltip(chatScopeDesktop),
       ),
       findsOneWidget,
+    );
+  });
+}
+
+// ── 🔴 B35（主人 2026-09-25 拍）：那个指示**看的是"现在在哪一间"** ──────────────
+
+/// ★ 它原来取 `_openApp`（"点开了哪个图标"）⇒ **窗口自己跟到新那一间**之后，
+///   屏幕上还写着「在桌面上问（全局）」—— 而那句话其实进了**另一间**（假话）。
+extension on WidgetTester {
+  /// 从外面喂一条事实进去（和真那条流同一个入口 —— `ChatController.ingest`）。
+  void feed(ChatController c, Map<String, dynamic> e) => c.ingest(e);
+}
+
+void _b35() {
+  testWidgets('🔴 B35：跟到"名字查不到"的那一间 ⇒ 说明**不许**再写"在桌面上"', (tester) async {
+    final c = _controller();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          initialTier: FloaterTier.collapsed,
+          controller: c,
+          onLoggedOut: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 起点：主对话 ⇒ 「在桌面上问（全局）」
+    expect(find.byTooltip(chatScopeDesktop), findsOneWidget, reason: '起点该是"在桌面上"');
+
+    // ★ 服务端说"这件事搬到新的一处去了"（`102` §五那条瞬态帧）⇒ 窗口自己跟过去
+    tester.feed(c, {'type': 'scope/open', 'scope': 'count-x-y', 'at': 1});
+    await tester.pumpAndSettle();
+
+    expect(c.scope, 'count-x-y', reason: '窗口该跟过去了（这一条是 B35 的前提）');
+    expect(
+      find.byTooltip(chatScopeDesktop),
+      findsNothing,
+      reason: '★ 跟过去之后还写着"在桌面上问" —— 那就是假话（话进了另一间）',
+    );
+    expect(
+      find.byTooltip(chatScopeElsewhere),
+      findsOneWidget,
+      reason: '★ 名字查不到时要说那句不撒谎的模糊话',
     );
   });
 }

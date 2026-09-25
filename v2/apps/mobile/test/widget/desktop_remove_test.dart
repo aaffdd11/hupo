@@ -507,6 +507,27 @@ void main() {
     expect(find.text('新名字'), findsNothing, reason: '★ 界面不许先把新名字画上去（那就是假话）');
   });
 
+  testWidgets('C17：面板**从页面上方**出来（主人 2026-09-25："我建议弹窗从页面上方跳出。"）', (tester) async {
+    final fake = _Fake();
+    await _pump(tester, _controller(fake));
+
+    await tester.longPress(find.text(_appTitle));
+    await tester.pumpAndSettle();
+
+    final panel = tester.getRect(find.byType(DesktopIconMenu));
+    final screen = tester.getSize(find.byType(Scaffold).first);
+    expect(
+      panel.top,
+      lessThan(60),
+      reason: '★ 面板没贴住页面上边（主人要的是从上方"跳出来"）—— 实际 top=${panel.top}',
+    );
+    expect(
+      panel.top,
+      lessThan(screen.height / 2),
+      reason: '★ 面板跑到下半屏去了（那就退回成底栏那个形状了）',
+    );
+  });
+
   testWidgets('C15·补：复制**没成**（500）⇒ 如实说一句，桌上不多不少', (tester) async {
     final fake = _Fake(copyStatus: 500);
     await _pump(tester, _controller(fake));
