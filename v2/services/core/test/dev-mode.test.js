@@ -1547,3 +1547,237 @@ test('★ 看板那句话：JS 与 Dart 两份文案**逐字一样**（改一份
   assert.equal(pick('devBoardNotHupo'), DEV_BOARD_NOT_HUPO, '那句话两份必须逐字一样');
   assert.equal(pick('devBoardWhyNot'), DEV_BOARD_WHY_NOT, '那句解释两份必须逐字一样');
 });
+
+// ════════════════════════════════════════════════════════════
+// ★ 换房间的**内存峰值**（2026-09-25 真机踩出来的 · `DEV_EXIT_WAIT_MS`）
+//
+// 真机读数：容器上限 768MB；一台 `dsh web` 348MB ＋ 它那三个 MCP 子进程 ~144MB ＋
+// 盒里自己的服务 ~76MB。换房间原来是"`SIGTERM` 旧的 ⇒ **立刻**起新的"（旧那台要
+// `killGraceMs` 之后才 `SIGKILL`）⇒ 两台峰值叠在一起 ⇒ 内核把**新起来的那台**杀掉
+// （`oom_kill` 3 → 5，正好对应两次换房间）⇒ 那一间**打不开**。
+// ⇒ 判据：**起新台之前，旧那台必须已经真的没了**。
+// ════════════════════════════════════════════════════════════
+
+/** 一个"死得慢"的假子进程：`kill()` 之后**过一会儿**才吐 `exit`（真 DSH 就是这样）。 */
+function slowFakeChild(line, { exitAfterMs = 60 } = {}) {
+  const c = new EventEmitter();
+  c.stdout = new EventEmitter();
+  c.stdout.setEncoding = () => {};
+  c.stderr = new EventEmitter();
+  c.stderr.setEncoding = () => {};
+  c.stdin = new Writable({ write(_c, _e, cb) { cb(); } });
+  c.killed = false;
+  c.exited = false;
+  c.signals = [];
+  c.kill = (sig = 'SIGTERM') => {
+    c.killed = true;
+    c.signals.push(sig);
+    if (c.exited) return;
+    // ★ **`SIGKILL` 是当场就没了**（真进程也一样）；`SIGTERM` 才是"过一会儿才退"
+    const ms = sig === 'SIGKILL' ? 0 : exitAfterMs;
+    const t = setTimeout(() => {
+      c.exited = true;
+      c.emit('exit', null, sig);
+    }, ms);
+    t.unref?.();
+  };
+  setImmediate(() => c.stdout.emit('data', `${line}\n`));
+  return c;
+}
+
+test('★ 换房间：**起新台之前旧那台要真的没了**（不然两台峰值叠加 ⇒ 新的被 OOM 杀掉）', async () => {
+  const cfg = {
+    dshBin: '/bin/dsh',
+    agentCwd: '/data/main',
+    dshHome: '/data/dsh',
+    agentUid: 1000,
+    agentBootTimeoutMs: 5000,
+  };
+  const rooms = [
+    { id: 'main', name: '主对话', cwd: '/data/main' },
+    { id: 'other', name: 'other', cwd: '/data/workspaces/other' },
+  ];
+  const kids = [];
+  /** 起第二台的那一刻，第一台还在不在（**这就是那条判据**）。 */
+  const firstStillAliveWhenSecondSpawned = [];
+  const spawnFn = () => {
+    if (kids.length > 0) firstStillAliveWhenSecondSpawned.push(kids.some((k) => k && !k.exited));
+    const c = slowFakeChild(`dsh web: http://127.0.0.1:${42000 + kids.length}/?token=T${kids.length}`);
+    kids.push(c);
+    return c;
+  };
+  const { httpRequest } = fakeUpstream();
+  const relay = createDevWebRelay({
+    cfg,
+    rooms: () => rooms,
+    spawnFn,
+    httpRequest,
+    killGraceMs: 50,
+    bootTimeoutMs: 2000,
+  });
+  try {
+    assert.equal((await selectRoom(relay, 'main')).status, 302);
+    const a = fakeReqRes({ url: '/' });
+    await relay.handle(a.req, a.res, '/');
+    for (let i = 0; i < 100 && a.res.status === null; i += 1) await sleep(5);
+    assert.equal(a.res.status, 200);
+
+    // 换一间：旧的收掉 ⇒ **它真的没了**之后才准起新的
+    assert.equal((await selectRoom(relay, 'other')).status, 302);
+    const b = fakeReqRes({ url: '/' });
+    await relay.handle(b.req, b.res, '/');
+    for (let i = 0; i < 200 && b.res.status === null; i += 1) await sleep(5);
+    assert.equal(b.res.status, 200, '换过去那一间也要起得来');
+    assert.equal(kids.length, 2, '换房间要新起一台');
+    assert.equal(kids[0].exited, true, '旧那台必须已经退出');
+    assert.deepEqual(
+      firstStillAliveWhenSecondSpawned,
+      [false],
+      '🔴 **起第二台的时候，第一台必须已经不在了**（叠在一起就是真机那次 OOM 的形状）',
+    );
+    // 正对照：旧那台是被**收掉**的（不是"它自己碰巧没了"）
+    assert.equal(kids[0].killed, true, '换房间要收掉旧的');
+  } finally {
+    relay.shutdown();
+  }
+});
+
+test('★ 那台起不来 ⇒ **失败的那一台要被真的收掉**（不留孤儿赖着内存）＋ 如实说原因', async () => {
+  const cfg = {
+    dshBin: '/bin/dsh',
+    agentCwd: '/data/main',
+    dshHome: '/data/dsh',
+    agentUid: 1000,
+  };
+  const kids = [];
+  /** cgroup 那个"被 OOM 杀了几个"的读数（起台**期间**它涨了 ⇒ 就是被系统杀的）。 */
+  let oomKills = 3;
+  // 一个**永远不报端口、也不自己退**的假子进程（正是"起不来"那一档）
+  const spawnFn = () => {
+    oomKills = 5; // ← 起这一台的过程中，系统杀了两个（真机那次就是这个形状）
+    const c = slowFakeChild('', { exitAfterMs: 100000 });
+    c.stdout.emit = () => {}; // 永远不吐那一行
+    kids.push(c);
+    return c;
+  };
+  const { httpRequest } = fakeUpstream();
+  /** relay 说过的话（判据要读"它有没有如实说原因"）。 */
+  const saidLines = [];
+  const relay = createDevWebRelay({
+    cfg,
+    rooms: () => [{ id: 'main', name: '主对话', cwd: '/data/main' }],
+    spawnFn,
+    httpRequest,
+    log: (m) => saidLines.push(String(m)),
+    killGraceMs: 30,
+    bootTimeoutMs: 120,
+    // 起之前 3、起之后 5 ⇒ "被系统杀了（内存不够）"这句要**读得出来**
+    oomKillsFn: () => oomKills,
+  });
+  try {
+    assert.equal((await selectRoom(relay, 'main')).status, 302);
+    const r = fakeReqRes({ url: '/' });
+    await relay.handle(r.req, r.res, '/');
+    for (let i = 0; i < 200 && r.res.status === null; i += 1) await sleep(5);
+    assert.equal(r.res.status, 502, '起不来 ⇒ 如实 502（不是 200，也不是空连接）');
+    // 收掉它（SIGTERM 之后按上限 SIGKILL）
+    assert.equal(kids[0].killed, true, '🔴 失败的那一台必须被收掉（不许留着赖内存）');
+    await sleep(80);
+    assert.equal(kids[0].exited, true, '🔴 收完要真的退出');
+
+    // ★ **第二半：OOM 读数要能把它说具体**（读不到就一个字都不编）
+    const r2 = fakeReqRes({ url: '/' });
+    await relay.handle(r2.req, r2.res, '/');
+    for (let i = 0; i < 200 && r2.res.status === null; i += 1) await sleep(5);
+    assert.equal(r2.res.status, 502);
+    // 日志里那句要带上 oom 读数（判据读的是 relay 的日志）
+    const said = saidLines.join('\n');
+    assert.match(said, /oom_kill 3 → 5/u, `要如实说"被系统杀过（内存不够）"：${said.slice(-300)}`);
+    assert.equal(kids.length, 2, '第二次请求要再起一台（不复用失败那台）');
+  } finally {
+    relay.shutdown();
+  }
+});
+
+// ════════════════════════════════════════════════════════════
+// ★ **不许把 DSH 的注册表改成它自己读不了的东西**（2026-09-25 真机踩的）
+//
+// 真机读数：注册表是**那台 DSH（uid=1000）**建/读的，而写它的是**盒里那个服务（root）**。
+// 原来按 `mode: 0o600` 一写 ⇒ 文件变成 `root:root 0600` ⇒ DSH 一起来就
+// `EACCES: open '/data/dsh/storages/workspace.json'` ⇒ **每一间都起不来**（界面一片 502）。
+// ⇒ 判据：**写完必须还是原来那个属主、原来那个权限**；换不过手 ⇒ **一个字都不许改**。
+// ════════════════════════════════════════════════════════════
+
+/** 一份冻在别处的注册表 ＋ 一个能用的假 fs。 */
+function registryFixture({ mode = 0o640, uid = 12345, gid = 12345 } = {}) {
+  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-dev-reg-own-'));
+  nodeFs.mkdirSync(nodePath.join(dir, 'storages'), { recursive: true });
+  const file = workspaceRegistryPath(dir);
+  const raw = JSON.stringify({
+    unit: { name: 'workspace', version: 2 },
+    global: { initialized: true, workspaceIds: ['w0'], archivedSessionIds: [] },
+    tables: { workspaces: { w0: { path: '/somewhere/else', title: 'else', sessionIds: [] } } },
+  });
+  nodeFs.writeFileSync(file, raw, { mode });
+  const calls = { chown: [], chmod: [] };
+  const fs = {
+    readFileSync: (...a) => nodeFs.readFileSync(...a),
+    writeFileSync: (...a) => nodeFs.writeFileSync(...a),
+    renameSync: (...a) => nodeFs.renameSync(...a),
+    unlinkSync: (...a) => nodeFs.unlinkSync(...a),
+    existsSync: (...a) => nodeFs.existsSync(...a),
+    realpathSync: (p) => {
+      try {
+        return nodeFs.realpathSync(p);
+      } catch {
+        return String(p);
+      }
+    },
+    statSync: () => ({ mode, uid, gid }),
+    chownSync: (p, u, g) => {
+      calls.chown.push([nodePath.basename(p), u, g]);
+    },
+    chmodSync: (p, m) => {
+      calls.chmod.push([nodePath.basename(p), m]);
+    },
+  };
+  return { dir, file, raw, fs, calls };
+}
+
+test('★ 写注册表：**属主与权限照原样**（换到临时文件上再改名 —— 先换手、后改名）', () => {
+  const { dir, file, fs, calls } = registryFixture({ mode: 0o640, uid: 12345, gid: 12345 });
+  const r = ensureRoomRegistered({ dshHome: dir, cwd: '/data/workspaces/other', fs, apply: true });
+  assert.equal(r.changed, true, r.why);
+  // ① 换手换在**临时文件**上（不是先把坏的盖上去再补救）
+  assert.equal(calls.chown.length, 1, '要 chown 一次');
+  assert.match(calls.chown[0][0], /^workspace\.json\.tmp-/u, '🔴 必须换在**临时文件**上（先换手、后改名）');
+  assert.deepEqual(calls.chown[0].slice(1), [12345, 12345], '换回**原来那个属主**');
+  assert.equal(calls.chmod.length, 1, '权限也要照原样');
+  assert.equal(calls.chmod[0][1], 0o640, '🔴 权限不许写死成 0600');
+  // ② 盘上真的改了（`initialized:false`）＋ 没有一个 `.tmp-` 留在那儿
+  const after = JSON.parse(nodeFs.readFileSync(file, 'utf8'));
+  assert.equal(after.global.initialized, false);
+  assert.equal(
+    nodeFs.readdirSync(nodePath.join(dir, 'storages')).filter((n) => n.includes('.tmp-')).length,
+    0,
+    '临时文件不许留着',
+  );
+  nodeFs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('★ 换不过手（chown 失败）⇒ **原文一个字节都不许改**，而且如实说', () => {
+  const { dir, file, raw, fs } = registryFixture();
+  fs.chownSync = () => {
+    throw new Error('EPERM: operation not permitted');
+  };
+  const r = ensureRoomRegistered({ dshHome: dir, cwd: '/data/workspaces/other', fs, apply: true });
+  assert.equal(r.changed, false, '换不过手 ⇒ 不许说"改好了"');
+  assert.match(r.why, /一个字节都没动/u, '要如实说一句');
+  assert.equal(nodeFs.readFileSync(file, 'utf8'), raw, '🔴 原文必须原样');
+  assert.equal(
+    nodeFs.readdirSync(nodePath.join(dir, 'storages')).filter((n) => n.includes('.tmp-')).length,
+    0,
+    '临时文件要清掉',
+  );
+  nodeFs.rmSync(dir, { recursive: true, force: true });
+});

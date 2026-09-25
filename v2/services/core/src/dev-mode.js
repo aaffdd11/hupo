@@ -125,6 +125,46 @@ export const DEV_LINK_TTL_MS = 10 * 60 * 1000;
 export const DEV_COOKIE_TTL_MS = 24 * 60 * 60 * 1000;
 /** 收 `dsh web` 的宽限：先 `SIGTERM`，到点还活着就 `SIGKILL`。 */
 export const DEV_KILL_GRACE_MS = 2000;
+
+/**
+ * 🔴 **换房间时，等旧那台"真的没了"的上限**（真机踩出来的）。
+ *
+ * **踩到的是什么**（2026-09-25 真机 · u2 的盒子 · 硬读数）：容器内存上限 **768MB**，
+ * 盒里自己的服务 ~76MB，而**一台 `dsh web` 是 348MB ＋ 它自己那三个 MCP 子进程 ~144MB**。
+ * 换房间那条路原来是"`SIGTERM` 旧的 ⇒ **立刻**起新的"（旧那台要 `killGraceMs` 之后才被
+ * `SIGKILL`）⇒ **两台的峰值叠在一起** ⇒ 内核把**新起来的那台**杀掉
+ * （`/sys/fs/cgroup/memory.events` 的 `oom_kill` 3 → 5，正好对应两次换房间）⇒
+ * 界面上那一间**打不开**（502），而且旧那台还可能变成孤儿赖着内存。
+ * ⇒ 起新台之前**先等旧的退出**（有上限，超时如实说一句，不无限等）。
+ */
+export const DEV_EXIT_WAIT_MS = 8000;
+
+/**
+ * **容器这一层的内存被 OOM 杀了几个进程**（读不到 ⇒ `null`，**不猜**）。
+ *
+ * ⚠️ 只用来把"被系统杀掉了"这句话**说具体**（`oom_kill` 涨了 ⇒ 内存不够），
+ *    读不到就什么都不说 —— 不许编原因。
+ */
+export function readOomKills(fs = nodeFs) {
+  for (const f of ['/sys/fs/cgroup/memory.events', '/sys/fs/cgroup/memory/memory.failcnt']) {
+    try {
+      const raw = fs.readFileSync(f, 'utf8');
+      const m = /oom_kill\s+(\d+)/u.exec(raw);
+      if (m) return Number.parseInt(m[1], 10);
+    } catch {
+      /* 没有 / 读不到 ⇒ 试下一个 */
+    }
+  }
+  return null;
+}
+
+/** 等一会儿（`killChild` 那条路上用）。 */
+function delay(ms) {
+  return new Promise((r) => {
+    const t = setTimeout(r, ms);
+    t.unref?.();
+  });
+}
 /**
  * 插"不是琥珀"那一条时，**最多**缓多少字节的顶层文档。
  * ⚠️ 超了就**边写边转发**（一个字节都不丢，只是那一条不插）——
@@ -807,10 +847,32 @@ export function ensureRoomRegistered({ dshHome, cwd, fs = nodeFs, apply = false 
     };
   }
   // ★ 让 DSH 下次开机按会话头重新发现（幂等；表里的记录一条都不删）
+  //
+  // 🔴 **不许把它改成 DSH 自己读不了的东西**（2026-09-25 真机踩出来的）：
+  //    这份注册表是**那台 DSH（uid=1000）**建/读的，而写它的是**盒里那个服务（root）**。
+  //    原来按 `mode: 0o600` 一写 ⇒ 文件变成 **root:root 0600** ⇒ DSH 一起来就
+  //    `EACCES: open '/data/dsh/storages/workspace.json'`（**每一间都起不来**，
+  //    界面上一片 502）。⇒ 写之前**记下原来的属主与权限**，写到**临时文件**上、
+  //    `chown` 回原主、再 `rename` 盖上去（原子；同时**先 chown 再改名** ⇒
+  //    换不过去就什么都没换，原文一个字节不动）。
+  let st = null;
+  try {
+    st = fs.statSync(file);
+  } catch {
+    st = null; // 读不到 stat ⇒ 什么都不改（宁可"没让它重新发现"，也不许写坏它）
+  }
+  if (!st) return { changed: false, registered: false, why: '读不到它的属主 —— 不改它' };
+  const mode = Number.isInteger(st.mode) ? st.mode & 0o777 : 0o600;
+  const me = typeof process.getuid === 'function' ? process.getuid() : null;
+  const needChown = Number.isInteger(st.uid) && me !== null && st.uid !== me;
   const next = { ...j, global: { ...j.global, initialized: false } };
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
   try {
-    fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode });
+    // ⚠️ 顺序是死的：**先在临时文件上换手，再改名**。反过来的话，chown 失败时
+    //    那个"改坏了属主"的文件**已经在原位**了 —— 退不回去。
+    if (needChown) fs.chownSync(tmp, st.uid, st.gid);
+    if (typeof fs.chmodSync === 'function') fs.chmodSync(tmp, mode);
     fs.renameSync(tmp, file);
   } catch (err) {
     try {
@@ -818,7 +880,11 @@ export function ensureRoomRegistered({ dshHome, cwd, fs = nodeFs, apply = false 
     } catch {
       /* 没建起来 */
     }
-    return { changed: false, registered: false, why: `写不进去（${err?.message ?? err}）—— 不改它` };
+    return {
+      changed: false,
+      registered: false,
+      why: `写不进去（${err?.message ?? err}）—— 原文一个字节都没动`,
+    };
   }
   return {
     changed: true,
@@ -865,6 +931,8 @@ export function createDevWebRelay({
   log = () => {},
   killGraceMs = DEV_KILL_GRACE_MS,
   bootTimeoutMs = null,
+  /** 注入用：读"这一层被 OOM 杀了几个"（判据里给一个假的；默认读 cgroup）。 */
+  oomKillsFn = readOomKills,
 } = {}) {
   if (!cfg) throw new Error('开发者中继需要 cfg');
   /** ⚠️ 日志一律先过 `redactSecrets`（进程令牌 / cookie 值不许进日志）。 */
@@ -893,6 +961,13 @@ export function createDevWebRelay({
   let currentId = null;
   /** 起进程那一刻那一间的 cwd（给 `state()` 排障用）。 */
   let currentCwd = null;
+  /** 现在这一台**真的没了**的凭据（`exit` 一发生就 resolve；`null` = 没在跑）。 */
+  let childGone = null;
+  /**
+   * **上一次收台还没做完**（`killChild()` 给的那个 promise）。
+   * 🔴 起新台之前要 `await` 它 —— 见 `DEV_EXIT_WAIT_MS` 那段（换房间撞 OOM 的根因）。
+   */
+  let tearing = Promise.resolve();
   /**
    * 代号：换一台就 +1。
    * ⚠️ 少了它，"换房间"期间那条**在飞的启动**落地时会把**新**这一台的状态覆盖掉
@@ -922,13 +997,23 @@ export function createDevWebRelay({
     return listRooms().find((r) => r.id === id) ?? null;
   }
 
+  /**
+   * 收掉现在这一台。**返回一个 promise：它真的没了（或者等到了上限）**。
+   *
+   * 🔴 **为什么要能等**：换房间是"先收旧的、再起新的"，而旧那台（一整台 DSH，
+   *    ~348MB ＋ 三个 MCP 子进程）**不是一下就没了**的 —— 原来不等 ⇒ 两台的峰值叠在
+   *    一起 ⇒ 盒子的内存上限顶不住 ⇒ 内核把**新起来的那台**杀掉（真机：`oom_kill` 3→5）。
+   *    ⇒ 调用方（`ensure()`）**起新台之前先 `await` 它**。
+   */
   function killChild() {
     gen += 1;
     const c = child;
+    const gone = childGone;
     child = null;
+    childGone = null;
     upstream = null;
     starting = null;
-    if (!c) return;
+    if (!c) return tearing;
     try {
       c.kill('SIGTERM');
     } catch {
@@ -942,6 +1027,11 @@ export function createDevWebRelay({
       }
     }, killGraceMs);
     t.unref?.();
+    tearing = (async () => {
+      await Promise.race([gone ?? Promise.resolve(), delay(DEV_EXIT_WAIT_MS)]);
+      clearTimeout(t);
+    })();
+    return tearing;
   }
 
   /**
@@ -956,6 +1046,14 @@ export function createDevWebRelay({
 
   /** 起进程，等 stdout 上那一行。`room` = **那一间**（cwd 就是它）。 */
   function spawnWeb(room) {
+    // ★ **起这台之前的内存读数**（只用来说清"是不是被 OOM 杀的"；读不到就是 `null`）
+    const oomAtStart = (() => {
+      try {
+        return oomKillsFn();
+      } catch {
+        return null;
+      }
+    })();
     // 🔴 **先看看 DSH 认不认得这一间**（D3 的必要条件）：注册表一旦初始化过，DSH 就
     //    **不再**发现新房间，界面会把这一间的会话整个藏掉 —— 光把 cwd 指对不够。
     //    ⚠️ **默认只读**：写 DSH 的 `workspace.json` 属于"改运行中的东西"，要主人拍
@@ -985,6 +1083,11 @@ export function createDevWebRelay({
       env: agentEnv(cfg),
     });
     child = c;
+    // ★ **"真的没了"的凭据**：`exit` 一发生就 resolve（`killChild()` 等它）
+    let goneResolve = null;
+    childGone = new Promise((r) => {
+      goneResolve = r;
+    });
     if (c?.stdout?.setEncoding) c.stdout.setEncoding('utf8');
     if (c?.stderr?.setEncoding) c.stderr.setEncoding('utf8');
     c?.stderr?.on?.('data', (d) => {
@@ -992,8 +1095,10 @@ export function createDevWebRelay({
     });
     // 进程自己没了 ⇒ 清掉状态（下一条请求会**重新懒起**，不是永远坏着）
     c?.on?.('exit', () => {
+      goneResolve?.();
       if (child === c) {
         child = null;
+        childGone = null;
         upstream = null;
       }
     });
@@ -1008,7 +1113,28 @@ export function createDevWebRelay({
         if (err) reject(err);
         else resolve(val);
       };
-      const timer = setTimeout(() => finish(new Error(`等 dsh web 报端口超时（${bootMs}ms）`)), bootMs);
+      // ★ 失败时**把这一台的句柄挂在错误上** —— 调用方据此收掉它（**不许留孤儿**：
+      //   换房间时全局那个 `child` 可能已经指向新的一间了）。
+      const oomBefore = oomAtStart;
+      const failWith = (msg) => {
+        const oomNow = (() => {
+          try {
+            return oomKillsFn();
+          } catch {
+            return null;
+          }
+        })();
+        // 🔴 **只说读得到的事**：OOM 计数涨了 ⇒ 说明"被系统杀掉了（内存不够）"；
+        //    读不到 / 没涨 ⇒ 一个字都不编。
+        const hint =
+          Number.isInteger(oomNow) && Number.isInteger(oomBefore) && oomNow > oomBefore
+            ? `；⚠️ 这一层的内存被系统杀过（oom_kill ${oomBefore} → ${oomNow}）—— 多半是同时开着两台`
+            : '';
+        const e = new Error(`${msg}${hint}`);
+        e.child = c;
+        finish(e);
+      };
+      const timer = setTimeout(() => failWith(`等 dsh web 报端口超时（${bootMs}ms）`), bootMs);
       timer.unref?.();
       c?.stdout?.on?.('data', (chunk) => {
         buf += String(chunk);
@@ -1025,13 +1151,14 @@ export function createDevWebRelay({
           }
         }
       });
-      c?.on?.('error', (err) => finish(err));
+      c?.on?.('error', (err) => {
+        err.child = c;
+        finish(err);
+      });
       c?.on?.('exit', (code, signal) => {
-        finish(
-          new Error(
-            `dsh web 起不来（code=${code ?? '—'}${signal ? `，signal=${signal}` : ''}）` +
-              `${stderrTail.trim() ? `；它最后说的话：${redactSecrets(stderrTail).trim().slice(-300)}` : ''}`,
-          ),
+        failWith(
+          `dsh web 起不来（code=${code ?? '—'}${signal ? `，signal=${signal}` : ''}）` +
+            `${stderrTail.trim() ? `；它最后说的话：${redactSecrets(stderrTail).trim().slice(-300)}` : ''}`,
         );
       });
     });
@@ -1103,8 +1230,16 @@ export function createDevWebRelay({
     if (!starting) {
       const myGen = gen;
       const p = (async () => {
-        const hit = await spawnWeb(room);
+        // 🔴 **先等上一台真的退干净**（换房间那条路的内存峰值就在这儿 ——
+        //    见 `DEV_EXIT_WAIT_MS`：两台的峰值叠在一起会被内核 OOM 杀掉新的那台）。
+        await tearing;
+        // 🔴 **`spawnWeb` 这一步也在 `try` 里面**（2026-09-25 真机 + 判据一起抓到的）：
+        //    它原来在 `try` **外面** ⇒ "起不来"那一条路（超时 / 一启动就被杀）
+        //    **走不到**下面那个 `catch` ⇒ 那台失败的 `dsh web` **没人收** ⇒
+        //    它赖在容器里占着 ~348MB，而中继自己以为"什么都没有在跑"。
+        let hit = null;
         try {
+          hit = await spawnWeb(room);
           const cookie = await exchangeToken(hit.port, hit.token);
           if (myGen !== gen) {
             // 这期间被换掉了 ⇒ 刚起来的这一台**不留**（不然盒里就有两台了）。
@@ -1122,6 +1257,13 @@ export function createDevWebRelay({
           upstream = { port: hit.port, cookie };
           return upstream;
         } catch (err) {
+          // 🔴 **失败的那一台要被真的收掉**（不留孤儿赖着内存）：按**句柄**收
+          //    （全局那个 `child` 可能已经指向新的一间），再走一遍 `killChild()`。
+          try {
+            (err?.child ?? hit?.child)?.kill?.('SIGKILL');
+          } catch {
+            /* 已经没了 */
+          }
           killChild();
           throw err;
         }
