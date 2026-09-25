@@ -145,11 +145,36 @@ if [ "$MODE" = "build" ]; then
   FP="$("$NODE" -e 'process.stdout.write(JSON.parse(process.argv[1]).fingerprint)' "$MAN")"
   NFILES="$("$NODE" -e 'process.stdout.write(String(JSON.parse(process.argv[1]).files.length))' "$MAN")"
   DEST="$CODE_ROOT/$FP"
+  # ★ **提交号要如实**（2026-09-25 补）：原来只写 `HEAD`，而**改成这一版的那些改动
+  #   往往还没提交**（工作树是脏的）⇒ manifest 里那个号**不包含**跑着的代码 ——
+  #   以后有人问"盒里跑的是哪个提交"，会得到一个**差一两个提交的答案**。
+  #   脏树就**明说脏**（`<短号>+dirty`），干净才是那个号本身。
+  #   ⚠️ 它**不在指纹里**（manifest 是算完指纹才生成的，自指）⇒ 见下面"刷新标签"那一段。
+  REV="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  if [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    REV="${REV}+dirty"
+  fi
   echo "── 产品层 ──────────────────────────────────────"
   say "输入：${INPUTS[*]}（$NFILES 个文件）"
   say "指纹：$FP"
   if [ -d "$DEST" ] && [ -f "$DEST/manifest.json" ]; then
     say "这一版已经在了：$DEST（内容相同 ⇒ 同一个指纹，**不用重造**）"
+    # ★ **但"版本标签"要顺手刷新**（2026-09-25 补）：`gitRev` 不在指纹里
+    #   （manifest 是算完指纹才生成的，自指）⇒ 上一次是**脏树**造的话，
+    #   那个号**不包含**跑着的代码。这里发现对不上就只**重写 manifest** ——
+    #   不动一个字节的 `src/`、不动指纹、**不叫任何容器重开**。
+    CUR_REV="$("$NODE" -e 'try{process.stdout.write(String(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).gitRev||""))}catch{}' "$DEST/manifest.json" 2>/dev/null || true)"
+    if [ "$CUR_REV" != "$REV" ]; then
+      say "⚠️ 版本标签要刷新：manifest 里是「${CUR_REV:-空}」，现在是「$REV」（只改这一个字段，不动代码）"
+      "$NODE" -e '
+        const fs = require("node:fs");
+        const [p, rev] = process.argv.slice(1);
+        const m = JSON.parse(fs.readFileSync(p, "utf8"));
+        m.gitRev = rev;
+        fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+      ' "$DEST/manifest.json" "$REV"
+      chmod a+r "$DEST/manifest.json"
+    fi
   else
     plan "拷进 $DEST"
     rm -rf "$DEST"
@@ -184,7 +209,7 @@ if [ "$MODE" = "build" ]; then
         fingerprint: fp, builtAt: new Date().toISOString(), gitRev,
         inputs: inputs.split(","), files: Number(n),
       }, null, 2) + "\n");
-    ' "$DEST" "$FP" "$NFILES" "$(IFS=,; echo "${INPUTS[*]}")" "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    ' "$DEST" "$FP" "$NFILES" "$(IFS=,; echo "${INPUTS[*]}")" "$REV"
     chmod a+r "$DEST/manifest.json"
     rm -f "$DEST/src/mcp-ledger-server.mjs.orig" 2>/dev/null || true
     say "造好了"
