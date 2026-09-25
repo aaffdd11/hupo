@@ -68,7 +68,8 @@ void main() {
   //   这条棘轮管的是**别再涨**：同一屏上"三种卡片外观"那种毛病，
   //   正是从"顺手写个 12"一处一处攒出来的（本项目第一条纪律：数值只住 design.dart）。
   //
-  // 基线 = 2026-09-24 实测：**161 处 / 25 个文件**。只许少、不许多。
+  // 基线 = 2026-09-24 实测：**161 处 / 25 个文件**；2026-09-25 把奥数题那一屏整个删掉
+  // （它原来 2 处）⇒ **159 处 / 24 个文件**。只许少、不许多。
   const Map<String, int> dimBaseline = {
     'lib/screens/about_screen.dart': 4,
     'lib/screens/app_theme.dart': 2,
@@ -77,7 +78,6 @@ void main() {
     'lib/screens/export_screen.dart': 7,
     'lib/screens/landing_screen.dart': 36,
     'lib/screens/login_screen.dart': 7,
-    'lib/screens/math_quiz_screen.dart': 2,
     'lib/screens/model_key_screen.dart': 4,
     'lib/screens/settings_screen.dart': 1,
     'lib/screens/trash_screen.dart': 6,
@@ -114,7 +114,7 @@ void main() {
     return n;
   }
 
-  test('★ P1-8 棘轮：写死的间距/尺寸只许少、不许多（基线 161 处）', () {
+  test('★ P1-8 棘轮：写死的间距/尺寸只许少、不许多（基线 159 处）', () {
     final over = <String>[];
     var total = 0;
     for (final e in Directory('lib').listSync(recursive: true)) {
@@ -128,8 +128,8 @@ void main() {
     expect(over, isEmpty,
         reason: '写死的间距/尺寸涨了：\n${over.join('\n')}\n'
             '（要用 d.gapS/gapM/gapL 或 design.dart 里那几档；确实该新增一档就先改 token）');
-    expect(total, lessThanOrEqualTo(161),
-        reason: '总处数从 161 涨到 $total —— 棘轮只许往下走');
+    expect(total, lessThanOrEqualTo(159),
+        reason: '总处数从 159 涨到 $total —— 棘轮只许往下走');
   });
 
   test('P1-8 负向对照：这个计数**真的数得出来**（不是空转）', () {

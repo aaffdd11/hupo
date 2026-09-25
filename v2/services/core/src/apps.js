@@ -131,24 +131,24 @@ export function checkAppId(id) {
 }
 
 /**
- * **app 不许占用的 id**（🔴 **唯一出处**）：主线那个房间 ＋ 桌面内置那四格。
+ * **app 不许占用的 id**（🔴 **唯一出处**）：主线那个房间 ＋ 桌面内置那三格。
  *
  * 🔴 为什么名单住这里（不另抄一份在 `worlds.js`）：**闸要落在写入路的汇合点**——
  *    制品库那个 `apps.create()`。所有写路（新路 `snapshotWorkspace`、老路
  *    `apps-socket.js` 的那一支、装上 `published.installInto`）最后都汇到这里。
  *    `apps.js` 是叶子模块，`worlds.js` 反过来可以引用它，**不会成环**。
  *
- * ⚠️ 与客户端 `v2/apps/mobile/lib/models/app_spec.dart` 的四个内置 id **逐字一致**
+ * ⚠️ 与客户端 `v2/apps/mobile/lib/models/app_spec.dart` 的三个内置 id **逐字一致**
  *    （对不上 ⇒ 客户端拿一个服务端不认的 scope 去连 ⇒ 404）。
  */
-export const REFUSED_APP_IDS = Object.freeze(['main', 'settings', 'math', 'discover', 'harness']);
+export const REFUSED_APP_IDS = Object.freeze(['main', 'settings', 'discover', 'harness']);
 
 /**
  * 保留 id ⇒ **人话拒**（N11）；不是保留 id ⇒ 原样返回。
  *
- * ⚠️ `main` 与内置那四个是同一道闸的两半：前者"谁都不许占"，后者"它已经是别人的房间"。
+ * ⚠️ `main` 与内置那三个是同一道闸的两半：前者"谁都不许占"，后者"它已经是别人的房间"。
  * ⚠️ 它**只拦"当 app"**，不拦"当房间"：`main` 由 `workspace.checkScope` 另有一条，
- *    内置那四个走 `worlds.roomFor`（那里对内置是**放行**的）。
+ *    内置那三个走 `worlds.roomFor`（那里对内置是**放行**的）。
  */
 export function refuseReservedAppId(raw) {
   const s = typeof raw === 'string' ? raw : '';
@@ -386,7 +386,7 @@ export class Apps {
    */
   create({ id, title, icon, entry, files, permissions = [], createdBy = 'user', createdTurn = null, expectRootHash = null }) {
     checkAppId(id);
-    // 🔴 **保留 id 的唯一一道闸**（`REFUSED_APP_IDS`）：主线 ＋ 桌面内置四格。
+    // 🔴 **保留 id 的唯一一道闸**（`REFUSED_APP_IDS`）：主线 ＋ 桌面内置三格。
     //    写在这里 ⇒ **每一条写路都过它**（含 `apps-socket.js` 那条老路、装上、迁移）。
     refuseReservedAppId(id);
     // 🔴 权限**只许白名单里的**；乙-1 白名单是空的 ⇒ 现在任何非空权限都拒。

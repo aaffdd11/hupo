@@ -1,7 +1,7 @@
 // 「我自己那台」那一层的**全部文案**（契约 `docs/dev/81-HARNESS-ENTRY.md` §5.2 / §5.4）。
 //
 // ⚠️ 单独一个文件、纯数据：这一层每一句都要过**禁用词硬闸**
-//    （同 `math_words.dart` / `landing_words.dart` 那几份；清单在
+//    （同 `space_words.dart` / `landing_words.dart` 那几份；清单在
 //     `test/unit/forbidden_words_test.dart`）。
 // ⚠️ 一个内部词都不许有：没有「工作区 / 口令 / 客户端 / 云端 / 服务器 / 会话 / 模型 /
 //    工具 / 搜索 / 连接」，也不许出现工具名与英文 `web_search`。

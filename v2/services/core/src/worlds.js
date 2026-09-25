@@ -79,20 +79,20 @@ import { JobBook } from './job.js';
 export const MAIN_SCOPE = 'main';
 
 /**
- * **桌面上的内置磁贴**（设置 / 奥数题 / 发现 /「我自己那台」）。
+ * **桌面上的内置磁贴**（设置 / 发现 /「我自己那台」）。
  *
  * 🔴 这几个字符串与客户端 `v2/apps/mobile/lib/models/app_spec.dart` 的
- *    `builtInSettingsId` / `builtInMathId` / `builtInDiscoverId` / `builtInHarnessId`
+ *    `builtInSettingsId` / `builtInDiscoverId` / `builtInHarnessId`
  *    **逐字一致**（一个字对不上 = 客户端拿着一个服务端不认识的 scope 去连 ⇒ 404）。
  *
  * ★ 主人 2026-09-25 定的（`docs/dev/77-BLOCKERS.md` 的 **B16**）：
  *   原来按"内置磁贴是界面、不是他做的 app ⇒ 不单独分房间"办，主人回的是
  *   **「要分家」** ⇒ **桌面上的每个图标都要有自己的房间**。
- *   ⇒ 这四家和 `/api/apps` 里那些小程序**同一套不变量**：
+ *   ⇒ 这三家和 `/api/apps` 里那些小程序**同一套不变量**：
  *     自己一条 timeline、自己的 `agentKey`、自己的 cwd `<dir>/workspaces/<id>/`；
  *   ⇒ **但不许被 app 占用**（与 `main` 同一条规矩：它们已经是别人的房间了）。
  */
-export const BUILTIN_SCOPES = Object.freeze(['settings', 'math', 'discover', 'harness']);
+export const BUILTIN_SCOPES = Object.freeze(['settings', 'discover', 'harness']);
 
 /** 这是不是桌面上的内置那一格（**认不出 ⇒ `false`**，不许猜）。 */
 export function isBuiltinScope(raw) {
@@ -101,7 +101,7 @@ export function isBuiltinScope(raw) {
 }
 
 /**
- * **app 不许占用的那些 id**：`main`（主线那个房间）＋ 内置那四个。
+ * **app 不许占用的那些 id**：`main`（主线那个房间）＋ 内置那三个。
  *
  * ⚠️ 与 `main` 的唯一区别：内置那几个**本身是合法房间**（桌面上就有那个图标），
  *    而 `main` 不是"另一个房间"，它就是主线本身。
@@ -117,7 +117,7 @@ export const RESERVED_APP_SCOPES = REFUSED_APP_IDS;
 //       不在那儿叫一次，一个保留 id 会先在盘上留一个空工作区）。
 //    ⇒ 原来这里那个只为"当 app"而生的 `UserWorkspaces` 子类**删掉了**：
 //      闸搬进 `AppWorkspaces` 本身 ⇒ 谁 new 都是同一份逻辑，不会再漏一条路。
-// ⚠️ 内置那四个**本身是合法房间**：它们的目录走下面 `roomFor` 的 `mkdir ＋ hand`，
+// ⚠️ 内置那三个**本身是合法房间**：它们的目录走下面 `roomFor` 的 `mkdir ＋ hand`，
 //    **不走 `ensure`** —— 所以"ensure 拒内置 id"拒的是"当 app"，不是"当房间"。
 
 /**
@@ -774,7 +774,7 @@ export class Worlds {
       //      而且**不许顺手建一个**）——所以这里只问 `workspaces.has` / 制品库，
       //      一个 `mkdir` 都没有。
       handoffs,
-      //   ⚠️ **内置那四个**（`BUILTIN_SCOPES`）也算存在（它们桌面上就有图标 ·
+      //   ⚠️ **内置那三个**（`BUILTIN_SCOPES`）也算存在（它们桌面上就有图标 ·
       //      见 `roomFor` 那段），别的必须真的在工作区或制品库里。
       //   ★ **存在但还没挂上来**（他还没点开过那个图标）⇒ 由这里把它挂上来
       //     （`roomFor` 自己会校验"真的存在"；不存在的那些已经被 `scopeExists` 拒了）。
@@ -896,7 +896,7 @@ export class Worlds {
    *
    * ⚠️ **scope 必须已经存在**（工作区目录在，或者制品库里有这个 app）：
    *    不然一个随手的字符串就能在盘上拉出一条日志来。
-   *    ★ **唯一的例外是内置那四个**（`BUILTIN_SCOPES`，B16）：它们**本来就存在**
+   *    ★ **唯一的例外是内置那三个**（`BUILTIN_SCOPES`，B16）：它们**本来就存在**
    *      —— 桌面上就有那个图标；工作区目录由这里第一次用到时建（B16-2）。
    * @returns {object} 世界（`main`）或房间
    */
@@ -909,7 +909,7 @@ export class Worlds {
     if (had) return had;
 
     const world = this.worldFor(userId);
-    // ★ **内置那四个也是合法房间**（B16「要分家」）：它们**不在** `/api/apps` 里、
+    // ★ **内置那三个也是合法房间**（B16「要分家」）：它们**不在** `/api/apps` 里、
     //   盘上也可能还没有工作区，但**桌面上就有那个图标** ⇒ 不许拿
     //   "没有这个工作区"把人挡回去 —— 那样客户端一打开设置就会 404。
     //   ⚠️ 别的 scope 仍然必须**已经存在**（工作区目录在，或者制品库里有这个 app）：

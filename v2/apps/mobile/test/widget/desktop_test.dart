@@ -111,8 +111,8 @@ void main() {
                 onOpen: (_) {},
               ),
               DesktopApp(
-                label: '奥数题',
-                id: 'math',
+                label: '发现',
+                id: 'discover',
                 icon: Icons.star_outline,
                 onOpen: (_) {},
               ),
@@ -136,13 +136,13 @@ void main() {
     expect(ops, contains(0.0), reason: '正在动的那一格图标要藏起来');
     expect(ops, contains(1.0), reason: '别的格子照常画');
     expect(find.text('设置'), findsOneWidget, reason: '标签留着（只藏图标）');
-    expect(find.text('奥数题'), findsOneWidget);
+    expect(find.text('发现'), findsOneWidget);
   });
 
   testWidgets('放大到 2.0 倍也不溢出（D3.5 那一族的形状）', (tester) async {
     await pump(
       tester,
-      [app('设置'), app('奥数题'), app('发现'), app('掷硬币'), app('掷骰子'), app('问答小抄')],
+      [app('设置'), app('发现'), app('我自己那台'), app('掷硬币'), app('掷骰子'), app('问答小抄')],
       scale: 2.0,
     );
     expect(tester.takeException(), isNull);

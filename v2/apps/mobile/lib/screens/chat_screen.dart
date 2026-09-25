@@ -30,7 +30,6 @@ import '../models/app_spec.dart';
 import '../models/app_words.dart';
 import '../models/harness.dart';
 import '../models/harness_words.dart';
-import '../models/math_words.dart';
 import '../models/scope.dart';
 import '../models/space_words.dart';
 import '../models/timeline.dart';
@@ -58,7 +57,6 @@ import '../widgets/process_view.dart';
 import '../widgets/trash_plan_sheet.dart';
 import 'discover_screen.dart';
 import 'export_screen.dart';
-import 'math_quiz_screen.dart';
 import 'settings_screen.dart';
 import 'trash_screen.dart';
 
@@ -139,7 +137,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 浮窗那一层的把手（外面要叫它"拉满"/"收起"）。
   final _floaterKey = GlobalKey<ChatFloaterState>();
 
-  /// **"我的小程序"在 `_openApp` 里的前缀**（跟内置那两个区分开：`'settings'` / `'math'`）。
+  /// **"我的小程序"在 `_openApp` 里的前缀**（跟内置那三个区分开：`'settings'` / `'discover'` / …）。
   ///
   /// ⚠️ 前缀本身搬去了 `models/scope.dart`（`mineAppPrefix`）——因为"现在在哪个房间"
   ///    那条判定是**纯函数**，它得看得见这个前缀（判据在 `test/unit/scope_test.dart`）。
@@ -158,7 +156,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// **现在开着哪个小程序**（`null` = 没开）。
   ///
-  /// ⚠️ 原来是个布尔（只装得下「设置」一个）。主人 2026-09-22 要加「奥数题」⇒ 改成名字。
+  /// ⚠️ 原来是个布尔（只装得下「设置」一个）。后来桌面上不止一格（发现 /「我自己那台」）
+  ///    ⇒ 改成名字。
   /// ⚠️ **同时只开一个**：关掉再开另一个。真要做"多个同时开着"（`IndexedStack` + 各自状态），
   ///    等真的需要时再说 —— 现在没有那个需求，先不做（`04-ROADMAP.md` §十一：做一半比不做更坏）。
   String? _openApp;
@@ -340,13 +339,6 @@ class _ChatScreenState extends State<ChatScreen> {
                     // 打开小程序 ⇒ **聊天自动收起**（§6.4 规则 5：把屏幕让给小程序）
                     onOpen: (from) => _openMiniApp(from, builtInSettingsId),
                   ),
-                // ★ 第二个小程序（主人 2026-09-22 点名的"奥数题库" ⇒ 见 `57-MATH.md`）
-                DesktopApp(
-                  label: mathAppLabel,
-                  id: builtInMathId,
-                  icon: _builtInIcon(builtInMathId),
-                  onOpen: (from) => _openMiniApp(from, builtInMathId),
-                ),
                 // ★ **发现**（乙-3）：别人发出来的（**只读那一屏**；装/发都在对话里）
                 DesktopApp(
                   label: discoverAppLabel,
@@ -376,7 +368,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     // ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §一 ·
                     //   `docs/dev/104-APP-MENU.md` §一）：
                     //   **只有"他自己做的那几个"才给这个面板** —— 内置那几格
-                    //   （设置 / 奥数题 / 发现 /「我自己那台」）不在 `/api/apps` 里，
+                    //   （设置 / 发现 /「我自己那台」）不在 `/api/apps` 里，
                     //   服务端那三条路都认不出它们（传 `null` = 连面板都不出）。
                     //   ⚠️ 传下去的是**服务端那一份的 id**（`a.id`），不是屏幕上带前缀那串。
                     onRename: () => _renameMyApp(a.id, a.title),
@@ -562,9 +554,6 @@ class _ChatScreenState extends State<ChatScreen> {
         title: discoverTitle,
       );
     }
-    if (_openApp == builtInMathId) {
-      return (view: const MathQuizScreen(), title: mathTitle);
-    }
     // ★ **「我自己那台」**（契约 `81-HARNESS-ENTRY.md` §5.4）：桌面上的一层**终端**，
     //   里面是那台 DSH 自己的原始流（`HarnessPane` 只认 `models` 里那条通道的形状）。
     //   ⚠️ **不 push 新页面** —— 它就是 `MiniAppHost` 里的一个孩子（和别的小程序一样）。
@@ -620,7 +609,6 @@ class _ChatScreenState extends State<ChatScreen> {
   /// ⚠️ 桌面那个图标与**聊天条前面那个**必须是**同一个**（不然"进去了"这件事
   ///    在两处长得不一样）⇒ 图标只写在这儿，两处都从这儿取。
   static IconData _builtInIcon(String which) => switch (which) {
-    builtInMathId => Icons.calculate_outlined,
     builtInDiscoverId => Icons.travel_explore_outlined,
     builtInHarnessId => Icons.computer_outlined,
     _ => Icons.settings_outlined,
@@ -644,7 +632,6 @@ class _ChatScreenState extends State<ChatScreen> {
       if (a.id == s) return miniAppIconFor(a.icon);
     }
     if (s == builtInSettingsId ||
-        s == builtInMathId ||
         s == builtInDiscoverId ||
         s == builtInHarnessId) {
       return _builtInIcon(s);
@@ -664,7 +651,6 @@ class _ChatScreenState extends State<ChatScreen> {
       if (a.id == s) return chatScopeInApp(a.title);
     }
     if (s == builtInSettingsId) return chatScopeInApp(configTitle);
-    if (s == builtInMathId) return chatScopeInApp(mathTitle);
     if (s == builtInDiscoverId) return chatScopeInApp(discoverTitle);
     if (s == builtInHarnessId) return chatScopeInApp(harnessAppLabel);
     // 名字查不到（刚派出去那一间 —— 名字在他盒子里 · B20）⇒ 不撒谎的模糊话
@@ -966,9 +952,9 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     // 🔴 **跟着图标走**（契约 `83-APP-WORKSPACE.md` §五·甲）：
     //    打开哪个小程序，**下面那条聊天就是它的对话**。
-    //    ⚠️ 判定是**纯函数**（`models/scope.dart`）：只有"我的小程序"有自己的房间，
-    //      内置那几个（设置 / 奥数题 / 发现 / 「我自己那台」）**不在** `/api/apps` 里，
-    //      服务端没有它们的 id ⇒ 那期间房间**仍然是主线**（理由写在那个文件顶上）。
+    //    ⚠️ 判定是**纯函数**（`models/scope.dart`）：内置那几格（设置 / 发现 /
+    //      「我自己那台」）和"我的小程序"一样**各回自己的 id**（B16「要分家」）——
+    //      服务端 `BUILTIN_SCOPES` 把那几个名字登记成了合法房间。
     //    ⚠️ 它**不挡打开**：先把那一屏画出来（上面那个 `setState`），再换房间。
     unawaited(widget.controller.setScope(scopeOfOpenApp(which)));
   }

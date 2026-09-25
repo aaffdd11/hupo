@@ -595,7 +595,7 @@ test('🔴 F6 回归：工作区 / 保留 id / 主线不变 / 一条日志一套
     assert.equal(p.dshHome, w.cfg.dshHome, '★ DSH_HOME 还是每人一份（不是每间一份）');
   }
 
-  // ⑤ **保留 id**（A 里那一条）：内置那四个是**房间**、但**不许当 app**
+  // ⑤ **保留 id**（A 里那一条）：内置那三个是**房间**、但**不许当 app**
   for (const id of BUILTIN_SCOPES) {
     assert.equal(checkScope(id), id, `★ ${id} 是**房间**（roomFor 认它）`);
     assert.throws(() => refuseReservedAppId(id), /桌面上/, `🔴 ${id} 不许当小程序`);

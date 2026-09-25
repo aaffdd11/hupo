@@ -272,7 +272,7 @@ export class AppWorkspaces {
     // 🔴 **保留 id 不许在这里建出 app 的工作区**（闸只有一份：`apps.refuseReservedAppId`）。
     //    ⚠️ 建工作区**发生在写制品之前**（`apps-socket.js` 先 `ensure` 再 `snapshotWorkspace`）
     //    ⇒ 只靠 `apps.create` 拒的话，一个保留 id 会先在盘上留一个空工作区。
-    //    ⚠️ 内置那四个**是合法房间**：它们的目录走 `worlds.roomFor` 的 `mkdir ＋ hand`，
+    //    ⚠️ 内置那三个**是合法房间**：它们的目录走 `worlds.roomFor` 的 `mkdir ＋ hand`，
     //       不走 `ensure`（B16-2）—— 所以这里拒它们，拒的是"当 app"，不是"当房间"。
     refuseReservedAppId(scope);
     const id = checkScope(scope);

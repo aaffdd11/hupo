@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/widgets/mini_app_icons.dart';
 import 'package:hupo_app/models/app_words.dart';
+import 'package:hupo_app/models/harness_words.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
@@ -22,6 +23,7 @@ import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
+import 'package:hupo_app/widgets/app_desktop.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -108,6 +110,29 @@ void main() {
     expect(find.text('好的那个'), findsOneWidget);
     expect(find.text('过期那个'), findsNothing, reason: '★ 摆了就是"点了没反应"');
     expect(find.text('没有入口那个'), findsNothing);
+  });
+
+  // 🔴 M2（契约 `docs/dev/105-DROP-MATH.md` §三·M2）：**桌面上只剩三格内置**
+  //
+  // ⚠️ 判据打在**真入口**上（泵出那一屏，数它自己画出来的格子），**不是**去数
+  //    `app_spec.dart` 里的常量 —— 那样"代码里删了、屏上还画着"照样绿。
+  //    反例也就是这一条的读法：还画着「奥数题」/ 格数对不上 ⇒ 当场红。
+  testWidgets('🔴 M2（105）：桌面上**只剩三格**内置（设置 / 发现 /「我自己那台」）', (tester) async {
+    await _pump(tester, _apiWith(const []));
+    // 真入口：`ChatScreen` 自己喂给桌面那一层的那份清单（**不是** `app_spec.dart` 里的常量）
+    final desktop = tester.widget<AppDesktop>(find.byType(AppDesktop));
+    final labels = desktop.apps.map((a) => a.label).toList();
+    expect(
+      labels,
+      [settingsAppLabel, discoverAppLabel, harnessAppLabel],
+      reason: '★ 桌面上的内置格就是这三个（奥数题那一格已从产品里去掉）；'
+          '多一格 / 少一格 / 还画着它 ⇒ 红',
+    );
+    // 而且**真的画到屏幕上**了（配置里有、屏上没有 ⇒ 红）
+    expect(labels.length, 3, reason: '★ 内置格数 = 3');
+    for (final l in labels) {
+      expect(find.text(l), findsOneWidget, reason: '★ 「$l」那一格没画到屏幕上');
+    }
   });
 
   testWidgets('清单拉不到（500 / 空）⇒ 只剩内置那几个，聊天照常', (tester) async {

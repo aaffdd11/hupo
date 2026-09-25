@@ -6,7 +6,7 @@
 //    （屏幕上**没有**"装"按钮，而且**明说**这件事；不说的话用户会在这儿找按钮，
 //     找不到就是"点了没反应"那种失望）。
 //
-// ⚠️ 形状与 `SettingsScreen` / `MathQuizScreen` 同规矩：**不画 `Scaffold` / `AppBar`**
+// ⚠️ 形状与 `SettingsScreen` 同规矩：**不画 `Scaffold` / `AppBar`**
 //    （顶栏由小程序容器给），整屏 `ListView`（五档字号下能滚，不溢出）。
 
 import 'package:flutter/material.dart';

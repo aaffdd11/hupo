@@ -13,9 +13,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/design.dart' as d;
 import 'package:hupo_app/models/space_words.dart';
+import 'package:hupo_app/models/app_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
-import 'package:hupo_app/models/math_words.dart';
-import 'package:hupo_app/screens/math_quiz_screen.dart';
+import 'package:hupo_app/screens/discover_screen.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -188,7 +188,7 @@ void main() {
   testWidgets('🔴 打开那一瞬间：那一层**带阴影**（主人 2026-09-23 报的）', (tester) async {
     await _pump(tester);
     // 点开一个不是设置的小程序（缩小动画那一下才看得出"从图标长出来"）
-    await tester.tap(find.text(mathAppLabel));
+    await tester.tap(find.text(discoverAppLabel));
     await tester.pump(); // 起第一帧
     await tester.pump(const Duration(milliseconds: 60)); // 落在扩开动画里
 
@@ -207,7 +207,7 @@ void main() {
 
   testWidgets('🔴 收回的时候阴影**回来了**（缩回图标那一下也要有）', (tester) async {
     await _pump(tester);
-    await tester.tap(find.text(mathAppLabel));
+    await tester.tap(find.text(discoverAppLabel));
     await tester.pumpAndSettle();
     expect(surfaceShadow(tester), isNull, reason: '全屏时没有阴影');
 
@@ -229,10 +229,10 @@ void main() {
     // 根因：`_openApp` 一置空，"现在开着哪一屏"那一串判断**最后兜底到 `SettingsScreen`**
     // ⇒ 收回动画那一帧里画的是**设置**。⇒ 这一条就钉在**收回动画中间那一帧**上。
     await _pump(tester);
-    // 拿「奥数题」当例子（它**不是**设置 —— 缺陷只在"关掉的不是设置"时才看得出来）
-    await tester.tap(find.text(mathAppLabel));
+    // 拿「发现」当例子（它**不是**设置 —— 缺陷只在"关掉的不是设置"时才看得出来）
+    await tester.tap(find.text(discoverAppLabel));
     await tester.pumpAndSettle();
-    expect(find.byType(MathQuizScreen), findsOneWidget);
+    expect(find.byType(DiscoverScreen), findsOneWidget);
 
     await tester.tap(find.byTooltip(miniAppBack));
     // ⚠️ **只推进一小段**（正好落在收回动画里）——`pumpAndSettle` 会一口气跑完，看不出这一帧
@@ -243,13 +243,13 @@ void main() {
       reason: '★ 收回动画期间**不许**出现"设置"那一屏（那是兜底分支跑出来了）',
     );
     expect(
-      find.byType(MathQuizScreen),
+      find.byType(DiscoverScreen),
       findsOneWidget,
       reason: '★ 正在缩回去的应该是**它自己**（不是别的屏）',
     );
 
     await tester.pumpAndSettle();
-    expect(find.byType(MathQuizScreen), findsNothing, reason: '收完了就该真的没了');
+    expect(find.byType(DiscoverScreen), findsNothing, reason: '收完了就该真的没了');
     expect(find.byType(SettingsScreen), findsNothing);
   });
 

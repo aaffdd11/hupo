@@ -4,9 +4,9 @@
 // 这一份是**硬闸**（`test/unit`）：房间里那几件事全是"错了看起来也像对的"——
 //
 //   ① **房间怎么算**（纯函数）：桌面上 = `main`、打开"我的小程序" = 那个 app 的 id、
-//      关掉 = 回 `main`；★ **内置那四个也各回自己的 id**（主人 2026-09-25：「要分家」，
+//      关掉 = 回 `main`；★ **内置那三个也各回自己的 id**（主人 2026-09-25：「要分家」，
 //      见 `77-BLOCKERS.md` 的 B16 与 `models/scope.dart` 顶上那段）——
-//      服务端 `worlds.js` 的 `BUILTIN_SCOPES` 把那四个名字登记成了合法房间。
+//      服务端 `worlds.js` 的 `BUILTIN_SCOPES` 把那三个名字登记成了合法房间。
 //   ② **地址上带没带对**：那一次 say（body）、那一问老消息（`/api/timeline?scope=…`）。
 //   ③ 🔴 **切房间不许把主线弄丢**（判据 A4）：这一条最贵 ——
 //      丢了的话用户会觉得"切一趟图标，我原来那些话没了"（而没网时它再也回不来）。
@@ -163,19 +163,18 @@ void main() {
       expect('mine:dice'.startsWith(mineAppPrefix), true);
     });
 
-    test('★ B16-4：内置那四个 ⇒ **各回自己的 id**（每个图标一间房，不再落回主线）', () {
+    test('★ B16-4：内置那三个 ⇒ **各回自己的 id**（每个图标一间房，不再落回主线）', () {
       // 🔴 与客户端 `app_spec.dart` 的 `builtIn*Id` 逐字对齐，也与服务端
       //    `worlds.js` 的 `BUILTIN_SCOPES` 逐字对齐。
       final expected = <String, String>{
         builtInSettingsId: 'settings',
-        builtInMathId: 'math',
         builtInDiscoverId: 'discover',
         builtInHarnessId: 'harness',
       };
-      expect(expected.length, 4, reason: '四个内置 id 不许有重的（重了 = 两个图标一间房）');
+      expect(expected.length, 3, reason: '三个内置 id 不许有重的（重了 = 两个图标一间房）');
       expected.forEach((open, scope) {
         expect(scopeOfOpenApp(open), scope, reason: '★ 内置的「$open」就是它自己的房间');
-        expect(scope, isNot(mainScope), reason: '★ 内置那四个**不再**落回主线');
+        expect(scope, isNot(mainScope), reason: '★ 内置那三个**不再**落回主线');
         // 它必须是**服务端认得的形状**（小写字母数字与短横，`safeScope` 那条）
         expect(
           RegExp(r'^[a-z0-9][a-z0-9-]*$').hasMatch(scope),
@@ -183,12 +182,21 @@ void main() {
           reason: '★ "$scope" 得是个合法 scope 的形状（不然服务端 404）',
         );
       });
-      // **反例的正身**：把两间串起来就会红（比如设置映射成了奥数题）
+      // **反例的正身**：把两间串起来就会红（比如设置映射成了发现）
       expect(
         scopeOfOpenApp(builtInSettingsId),
-        isNot(scopeOfOpenApp(builtInMathId)),
-        reason: '🔴 两间内置房间必须不同（串了 = 在设置里说的话跑到奥数题去）',
+        isNot(scopeOfOpenApp(builtInDiscoverId)),
+        reason: '🔴 两间内置房间必须不同（串了 = 在设置里说的话跑到发现去）',
       );
+      // 🔴 2026-09-25（契约 `docs/dev/105-DROP-MATH.md`）：`math` 那个内置格从产品里去掉了
+      //    ⇒ 它**不再是**内置（客户端与服务端两边都放手）。⚠️ 它还**是个合法名字**：
+      //    认不出的写法一律回主线（**宁回主线，也不许现编一个房间名**）。
+      expect(
+        scopeOfOpenApp('math'),
+        mainScope,
+        reason: '★ `math` 已经不是一个内置房间了 ⇒ 认不出 ⇒ 回主线',
+      );
+      expect(MiniApp.isBuiltIn('math'), false, reason: '★ 服务端 `BUILTIN_SCOPES` 也不再认它');
       // **负向对照**："我的小程序"照旧回那个 app 的 id；认不出的写法回主线（不许现编）
       expect(scopeOfOpenApp('mine:dice'), 'dice');
       expect(scopeOfOpenApp(null), mainScope);

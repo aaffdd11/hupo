@@ -11,7 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hupo_app/models/space.dart';
-import 'package:hupo_app/models/math_words.dart';
+import 'package:hupo_app/models/app_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
@@ -63,18 +63,18 @@ void main() {
     );
   });
 
-  testWidgets('🔴 进了「奥数题」⇒ 那个图标变成**奥数题自己的图标**，而且退出后回到**家**', (tester) async {
+  testWidgets('🔴 进了「发现」⇒ 那个图标变成**发现自己的图标**，而且退出后回到**家**', (tester) async {
     await _pump(tester);
-    await tester.tap(find.text(mathAppLabel)); // 真入口：点桌面上那个图标
+    await tester.tap(find.text(discoverAppLabel)); // 真入口：点桌面上那个图标
     await tester.pumpAndSettle();
 
-    final inApp = _badgeIcon(tester, chatScopeInApp(mathTitle));
+    final inApp = _badgeIcon(tester, chatScopeInApp(discoverTitle));
     // ⚠️ **跟桌面上那一个是同一个**（"进去了"在两处必须是同一件事 —— 所以图标只有一份来源）
     final onDesktop = tester.widget<Icon>(
       find
           .descendant(
             of: find.byType(AppDesktop),
-            matching: find.byIcon(Icons.calculate_outlined),
+            matching: find.byIcon(Icons.travel_explore_outlined),
           )
           .first,
     );

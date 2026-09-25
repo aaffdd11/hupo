@@ -1117,13 +1117,13 @@ test('🔴 A1·补（反例三·失败）：一轮**中途失败**（进程没�
 // B16 · **桌面上的每个图标都有自己的房间**（`docs/dev/77-BLOCKERS.md` 的 B16 ·
 //       主人 2026-09-25 原话：*"要分家"*）
 //
-// 原来只给 `/api/apps` 里那些"我的小程序"分房间；桌面上的内置那四个
-// （设置 / 奥数题 / 发现 /「我自己那台」）**不在**那份清单里、服务端没有它们的 id
+// 原来只给 `/api/apps` 里那些"我的小程序"分房间；桌面上的内置那三个
+// （设置 / 发现 /「我自己那台」）**不在**那份清单里、服务端没有它们的 id
 // ⇒ 在它们那几屏里说的话落进**主线**。主人把这件事定成**要分家**：
 // 桌面上的**每个**图标都是自己的房间，而且与小程序的房间**同一套不变量**。
 //
 // 四条判据（每条都带反例）：
-//   B16-1 四个内置 id 各自一个 scope：**在 A 房里说的话，B 房里看不到**（主线也不受影响）
+//   B16-1 三个内置 id 各自一个 scope：**在 A 房里说的话，B 房里看不到**（主线也不受影响）
 //         ⚠️ 判的是"看不看得见"，**不是**"每个 scope 一份日志文件 / 各有一套编号"——
 //            手册 `05-DECISIONS.md` P-l：**一条可见时间线 = 一条日志，scope 只是事件上的标签**。
 //   B16-2 内置房间的 cwd = `<dir>/workspaces/<id>/`，第一次用到时建、**交给 agent 的 uid**
@@ -1131,27 +1131,66 @@ test('🔴 A1·补（反例三·失败）：一轮**中途失败**（进程没�
 //   B16-4 客户端纯逻辑那一条在 `v2/apps/mobile/test/unit/scope_test.dart`
 // ════════════════════════════════════════════════════════════════
 
-test('★ B16：内置那四个**是合法房间**，但**不许被 app 占用**（纯规则，含反例）', () => {
+test('★ B16：内置那三个**是合法房间**，但**不许被 app 占用**（纯规则，含反例）', () => {
   // 🔴 与客户端 `lib/models/app_spec.dart` 的 `builtIn*Id` **逐字一致**
   //    （对不上 ⇒ 客户端拿着一个服务端不认识的 scope 去连 = 404）
-  assert.deepEqual([...BUILTIN_SCOPES], ['settings', 'math', 'discover', 'harness']);
+  assert.deepEqual([...BUILTIN_SCOPES], ['settings', 'discover', 'harness']);
   for (const id of BUILTIN_SCOPES) {
     assert.equal(isBuiltinScope(id), true);
     assert.equal(safeScope(id), id, `内置 id 本身就得是合法 scope：${id}`);
     assert.equal(checkScope(id), id, `★ ${id} 过得了 checkScope —— 它是**房间**，不是保留名`);
   }
-  // 保留名单 = 主线 ＋ 四个内置（app 一个都不许占）
-  assert.deepEqual([...RESERVED_APP_SCOPES], ['main', 'settings', 'math', 'discover', 'harness']);
+  // 保留名单 = 主线 ＋ 三个内置（app 一个都不许占）
+  assert.deepEqual([...RESERVED_APP_SCOPES], ['main', 'settings', 'discover', 'harness']);
 
   // **反例**：不是内置的照旧不是；认不出的一律 `false`（不许猜）
-  for (const bad of ['Setting', 'dice', 'main', '', null, 'settings-x']) {
+  //   ⚠️ **2026-09-25（契约 `105-DROP-MATH.md` §一⑤）：`'math'` 就住在这一串里** ——
+  //      奥数题那个内置格从产品里去掉了 ⇒ 它**不再是**内置、也不再是保留 id。
+  for (const bad of ['Setting', 'dice', 'main', '', null, 'settings-x', 'math']) {
     assert.equal(isBuiltinScope(bad), false, `这不该被当成内置：${String(bad)}`);
   }
   // 而 `main` 仍然由 `checkScope` 拦（老规矩一个字没动）
   assert.throws(() => checkScope('main'), /主线/);
 });
 
-test('🔴 B16-1：四个内置房间各自一个 scope（A 房的话 B 房看不到；主线不受影响）', async () => {
+// ════════════════════════════════════════════════════════════════
+// M3 · **`math` 不再是合法房间**（契约 `docs/dev/105-DROP-MATH.md` §一⑤ / §三·M3）
+//
+// 奥数题那个内置格从产品里去掉了（主人 2026-09-25 拍的「乙」）⇒ 它原来在
+// `BUILTIN_SCOPES` 里那一个名字也要收走 —— **不收拾干净就是"半截"**：
+// 白名单里留着 `math`，`?scope=math` 就还是"服务端认得的房间"。
+//
+// ⚠️ **不动盒里那一间的历史数据**（契约 §二）：这一条只判"名字还认不认"，
+//    一个字节都不碰 `main.jsonl` 里那些 `scopeId: 'math'` 的老事件。
+//    ⇒ 副作用如实说：他盒子里若已经建过 `workspaces/math/`，那一间**还进得去**
+//      （`workspaces.has` 看盘上事实），只是桌面上**没有那一格**了。
+// ════════════════════════════════════════════════════════════════
+
+test('🔴 M3（105）：`math` 不再是合法房间（白名单 ＋ 真入口两条路都对）', async () => {
+  // ① 纯规则那一半：白名单与"是不是内置"都不认它了
+  assert.equal(BUILTIN_SCOPES.includes('math'), false, '★ 奥数题去掉了 ⇒ `math` 不许还在房间白名单里');
+  assert.equal(isBuiltinScope('math'), false, '★ `math` 不再是内置房间');
+  // 保留名单（不许当 app）也跟着收掉 —— 一份留、一份走就是"两处数字不一致"
+  assert.equal(RESERVED_APP_SCOPES.includes('math'), false, '★ 那个名字已经还给用户了（不再保留）');
+  // ⚠️ 形状那一层照旧过：`math` 只是**不再特殊**，不是"名字不合法"
+  assert.equal(safeScope('math'), 'math', '★ 它只是不再特殊，不是一个非法名字');
+
+  // ② 真入口那一半：没建过这一间的世界里，`?scope=math` 必须被当成"没有这个房间"
+  const h = await boot();
+  const bad = await get(h, '/api/timeline?before=9999&limit=10&scope=math', 'u1');
+  assert.equal(bad.status, 404, `★ \`?scope=math\` 该被当成"没有这个工作区"：${await bad.text()}`);
+  assert.equal((await post(h, '/api/say', { messageId: 'm-math', text: '这一间不该还能说话', scope: 'math' }, 'u1')).status, 404,
+    '★ `/api/say` 的 `scope=math` 也要拒（两条真入口都收干净）');
+  // **负向对照的正身**：剩下那三个内置照旧进得去
+  //   （不然这一条量的只是"所有房间都 404"）
+  for (const id of BUILTIN_SCOPES) {
+    const ok = await get(h, `/api/timeline?before=9999&limit=10&scope=${id}`, 'u1');
+    assert.equal(ok.status, 200, `★ ${id} 还是合法房间（对照）：${await ok.text()}`);
+  }
+  await h.close();
+});
+
+test('🔴 B16-1：三个内置房间各自一个 scope（A 房的话 B 房看不到；主线不受影响）', async () => {
   const h = await boot();
   const w = h.worlds.worldFor('u1');
 
@@ -1188,7 +1227,7 @@ test('🔴 B16-1：四个内置房间各自一个 scope（A 房的话 B 房看�
     assert.equal(echo.scopeId, id, '★ 事件里的 scopeId 必须是那个内置 id');
   }
 
-  // **主线**：自己那句在、四间的话一句都没漏进来
+  // **主线**：自己那句在、三间的话一句都没漏进来
   const main = textOf(await page(null));
   assert.match(main, /暗号-main/);
   for (const id of BUILTIN_SCOPES) {
@@ -1199,8 +1238,8 @@ test('🔴 B16-1：四个内置房间各自一个 scope（A 房的话 B 房看�
   assert.equal(w.agentKey, 'u1/main');
   assert.equal(w.timeline.id, 'main');
 
-  // **反例的正身**：四间共用一个 scope（今天之前那种）= 上面那几条"看不到"会一起红
-  assert.equal(new Set(BUILTIN_SCOPES).size, BUILTIN_SCOPES.length, '四个内置 id 不许有重的');
+  // **反例的正身**：几间共用一个 scope（今天之前那种）= 上面那几条"看不到"会一起红
+  assert.equal(new Set(BUILTIN_SCOPES).size, BUILTIN_SCOPES.length, '三个内置 id 不许有重的');
   await h.close();
 });
 
@@ -1336,7 +1375,7 @@ test('🔴 B16-3：内置 id 不许当小程序（人话拒）；主线与既有
     '★ 既有小程序房间照旧能说、能翻',
   );
 
-  // 内置那四个**从头到尾没被当成房间用过** ⇒ 不该凭空多出目录
+  // 内置那三个**从头到尾没被当成房间用过** ⇒ 不该凭空多出目录
   for (const id of BUILTIN_SCOPES) {
     assert.equal(nodeFs.existsSync(nodePath.join(root, id)), false, `（${id} 没被用到，就不该有目录）`);
   }

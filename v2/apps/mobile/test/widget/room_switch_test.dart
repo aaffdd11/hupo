@@ -20,11 +20,11 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hupo_app/models/app_spec.dart';
-import 'package:hupo_app/models/math_words.dart';
+import 'package:hupo_app/models/app_words.dart';
 import 'package:hupo_app/models/scope.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
-import 'package:hupo_app/screens/math_quiz_screen.dart';
+import 'package:hupo_app/screens/discover_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
@@ -138,7 +138,7 @@ void main() {
     // 收起聊天（把屏幕还给小程序），然后从容器顶上那个返回关掉它
     await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
-    expect(find.byType(MathQuizScreen), findsNothing, reason: '（负向对照：这一屏不是奥数题）');
+    expect(find.byType(DiscoverScreen), findsNothing, reason: '（负向对照：这一屏不是发现那一屏）');
     await tester.tap(find.byTooltip(miniAppBack));
     await tester.pumpAndSettle();
     expect(c.scope, mainScope, reason: '★ 关掉它 ⇒ 回到桌面那一间');
@@ -151,26 +151,29 @@ void main() {
     expect(find.text('骰子那一间那句话'), findsNothing, reason: '★ 小程序那一间的话不许露到主线');
   });
 
-  testWidgets('★ 内置那几个（设置 / 奥数题 / …）**也是**房间：桌面上每个图标一间', (tester) async {
-    // ⚠️ 这一条**改过一次**（2026-09-25 · B16）：原来它断言的是"内置那几个不是房间、
-    //    仍是主线"。主人后来拍了**「要分家」** ⇒ 桌面上每个图标都要有自己的房间，
-    //    服务端 `worlds.js` 的 `BUILTIN_SCOPES` 把四个 id 登记成**合法房间**，
-    //    客户端 `models/scope.dart` 的 `scopeOfOpenApp` 也按它算。
-    //    ⇒ 旧断言当场变红（`Actual: 'math'`）—— 这一期（84-C）正好把它改对。
-    //    ⚠️ 判据的另一半在 `test/unit/scope_test.dart`（B16-4：四个 id 逐字对齐）。
+  testWidgets('★ 内置那几格（设置 / 发现 /「我自己那台」）**也是**房间：桌面上每个图标一间', (tester) async {
+    // ⚠️ 这一条**改过两次**：
+    //    · 2026-09-25（B16）：原来它断言的是"内置那几个不是房间、仍是主线"。
+    //      主人后来拍了**「要分家」** ⇒ 桌面上每个图标都要有自己的房间，
+    //      服务端 `worlds.js` 的 `BUILTIN_SCOPES` 把 id 登记成**合法房间**，
+    //      客户端 `models/scope.dart` 的 `scopeOfOpenApp` 也按它算。
+    //    · 2026-09-25（契约 `docs/dev/105-DROP-MATH.md`）：原来拿「奥数题」当那个例子，
+    //      而它**从产品里去掉了** ⇒ 换成「发现」（判据守的还是同一件事：
+    //      内置格也是房间、也是屏）。
+    //    ⚠️ 判据的另一半在 `test/unit/scope_test.dart`（B16-4：那三个 id 逐字对齐）。
     final c = _controller();
     await _pump(tester, c);
-    await tester.tap(find.text(mathAppLabel));
+    await tester.tap(find.text(discoverAppLabel));
     await tester.pumpAndSettle();
-    expect(find.byType(MathQuizScreen), findsOneWidget, reason: '★ 没进奥数题那一屏 ⇒ 判据扫错了屏幕');
+    expect(find.byType(DiscoverScreen), findsOneWidget, reason: '★ 没进发现那一屏 ⇒ 判据扫错了屏幕');
     expect(
       c.scope,
-      builtInMathId,
+      builtInDiscoverId,
       reason: '★ 内置的图标**有自己的房间**（服务端认这个名字；落回主线才是缺陷）',
     );
-    expect(c.scope, isNot(mainScope), reason: '🔴 内置那四个**不再**落回主线（B16「要分家」）');
+    expect(c.scope, isNot(mainScope), reason: '🔴 内置那三个**不再**落回主线（B16「要分家」）');
     // 而"看得出来现在在哪儿"照旧（容器顶上那行字说得出这一间是谁）
-    expect(find.byTooltip(chatScopeInApp(mathTitle)), findsOneWidget);
+    expect(find.byTooltip(chatScopeInApp(discoverTitle)), findsOneWidget);
     // 退回桌面 ⇒ 回主线那一间（房间是"现在开着哪个图标"的影子）
     await tester.tap(find.byTooltip(miniAppBack));
     await tester.pumpAndSettle();

@@ -84,10 +84,14 @@ void main() {
     }
   });
 
-  test('内置那两个不算"我的"', () {
-    expect(MiniApp.isBuiltIn('math'), true);
+  test('内置那三个不算"我的"（而 `math` 已经**不是**内置了）', () {
     expect(MiniApp.isBuiltIn('settings'), true);
+    expect(MiniApp.isBuiltIn('discover'), true);
+    expect(MiniApp.isBuiltIn('harness'), true);
     expect(MiniApp.isBuiltIn('dice'), false);
+    // 🔴 2026-09-25（契约 `docs/dev/105-DROP-MATH.md`）：奥数题那一格从产品里去掉 ⇒
+    //    服务端 `BUILTIN_SCOPES` 不再认这个名字，客户端这里也必须跟着放手。
+    expect(MiniApp.isBuiltIn('math'), false, reason: '★ 那个内置格没了 ⇒ `math` 不再是内置 id');
   });
   _discoverModelTests();
 }

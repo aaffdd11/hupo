@@ -9,7 +9,7 @@
 //       `files` 直接交给 `apps.create`（老路 / 装上 / 迁移），数据就进制品了。
 //       ⇒ 写入侧也要拒（人话），并且**盘上零残留**。
 //
-//   S5  保留 id（`main`／桌面内置四格）**从任何一条写入路**都进不去 ——
+//   S5  保留 id（`main`／桌面内置三格）**从任何一条写入路**都进不去 ——
 //       原来闸在 `worlds.js` 的 `UserWorkspaces`（工作区那一层），
 //       而 `apps-socket.js` 那条**没接 `ctx.workspace` 的老路**能绕过它，
 //       保留 id 照样进制品库 ⇒ 客户端按内置处理 ⇒ "造了但看不见"。
@@ -117,8 +117,11 @@ test('★ S4 负向对照：工作区**写得进** `.data/`／`.exp/`，但发�
 // S5 · 保留 id：从任何一条写入路都进不去
 // ════════════════════════════════════════════════════════════════
 
-test('★ S5 起点：保留名单只有一个出处，而且就是契约点的那五个', () => {
-  assert.deepEqual([...REFUSED_APP_IDS], ['main', 'settings', 'math', 'discover', 'harness']);
+test('★ S5 起点：保留名单只有一个出处，而且就是契约点的那几个（`main` ＋ 三个内置）', () => {
+  assert.deepEqual([...REFUSED_APP_IDS], ['main', 'settings', 'discover', 'harness']);
+  // ⚠️ **2026-09-25（契约 `105-DROP-MATH.md` §一⑤）：`'math'` 从这一串里收走了** ——
+  //    奥数题那个内置格没了 ⇒ 那个名字不再是保留 id（这里也顺手钉住）。
+  assert.equal(REFUSED_APP_IDS.includes('math'), false, '★ `math` 不再是保留 id');
   // `worlds.js` 那两个导出与它是同一份（**不是各抄一遍**）
   assert.deepEqual([...RESERVED_APP_SCOPES], [...REFUSED_APP_IDS]);
   assert.deepEqual([...REFUSED_APP_IDS], [MAIN_SCOPE, ...BUILTIN_SCOPES]);

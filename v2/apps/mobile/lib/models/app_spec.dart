@@ -10,11 +10,10 @@
 //      （**不是**把整个小程序藏掉：名字不认识不该让他的东西消失）。
 //   ③ 权限现在是空的（乙-1）；非空也算得出来，到乙-4 才有意义。
 
-/// 内置那两个小程序的 **id**（它们在壳里写死，**不在** `/api/apps` 的清单里）。
+/// 内置那三个小程序的 **id**（它们在壳里写死，**不在** `/api/apps` 的清单里）。
 const String builtInSettingsId = 'settings';
-const String builtInMathId = 'math';
 
-/// 「发现」那一屏（乙-3）：它和设置/奥数题一样是**内置的**（不在 `/api/apps` 的清单里）。
+/// 「发现」那一屏（乙-3）：它和设置一样是**内置的**（不在 `/api/apps` 的清单里）。
 const String builtInDiscoverId = 'discover';
 
 /// ★ **「我自己那台」**（2026-09-24 · 契约 `docs/dev/81-HARNESS-ENTRY.md` §5.4）：
@@ -91,13 +90,13 @@ class MiniApp {
     );
   }
 
-  /// 内置那两个**不算"我的小程序"**：设置与奥数题是由开发者写死在壳里的。
+  /// 内置那三个**不算"我的小程序"**：设置 / 发现 /「我自己那台」是由开发者写死在壳里的。
   ///
-  /// ⚠️ 这里是 **id**（`'settings'` / `'math'`），**不是界面上那两个字**（那是 `space_words.dart`）。
+  /// ⚠️ 这里是 **id**（`'settings'` / `'discover'` / `'harness'`），**不是界面上那几个字**
+  ///    （那是 `space_words.dart` / `app_words.dart` / `harness_words.dart`）。
   ///    两处混用的话，`_openApp` 那个开关迟早对不上（这次就是这么被自己的判据抓到的）。
   static bool isBuiltIn(String id) =>
       id == builtInSettingsId ||
-      id == builtInMathId ||
       id == builtInDiscoverId ||
       id == builtInHarnessId;
 }

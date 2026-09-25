@@ -205,7 +205,7 @@
 | # | 规则 | 判据 | 反着验（必须红） | 出处 · 状态 |
 |---|---|---|---|---|
 | **3.3.1** | `main` 不许当 scope | 用 `main` 建工作区 ⇒ 人话拒 | 建得出来 ⇒ 红 | `workspace.js:57,88-90`【已有】 |
-| **3.3.2** | 桌面内置那四个 id（设置／奥数题／发现／"我自己那台"）**不许当 app 占用** | 用它们造 app ⇒ 拒 | 造得出来 ⇒ 客户端会把他的东西当内置的 ⇒ 红 | `worlds.js:77-125`（`BUILTIN_SCOPES`／`refuseBuiltinAsApp`／`UserWorkspaces.ensure/write`）【已有】 |
+| **3.3.2** | 桌面内置那三个 id（设置／发现／"我自己那台"）**不许当 app 占用** | 用它们造 app ⇒ 拒 | 造得出来 ⇒ 客户端会把他的东西当内置的 ⇒ 红 | `worlds.js:77-125`（`BUILTIN_SCOPES`／`refuseBuiltinAsApp`／`UserWorkspaces.ensure/write`）【已有】 |
 | **3.3.3** | ⚠️ **这道闸住"工作区那一层"，不在"制品库那一层"** | `apps.create` 只查形状（`apps.js:101-107`），保留 id 由 `UserWorkspaces` 挡（`worlds.js:116-125`） | 走**没接 `ctx.workspace` 的旧路**（`apps-socket.js:91-103`）⇒ 保留 id **能进制品库** ⇒ 客户端按内置处理 ⇒ "造了但看不见" ⇒ 红 | 本文核出；**要建**（把闸挪到/补到 `apps.create`） |
 | **3.3.4** | `.hupo*` 是工作区自己的名字，模型／制品**不许占** | 写 `.hupo.json` ⇒ 拒 | 覆盖掉 ⇒ 工作区的账没了 ⇒ 红 | `workspace.js:332-333`【已有】 |
 | **3.3.5** | 数据／经验包的 `pack` 名走**与 app id 同一条形状**（`apps.checkAppId`） | pack 名不合形状 ⇒ 拒 | 造一个 `../` 形状的 pack 名 ⇒ 红 | 【要建】（复用同一处规则，**不新造形状**） |
@@ -251,7 +251,7 @@
 | 7 | **名称**：`title` 非空、长度在 `MAX_TITLE_CHARS` 内；`entry` 必须在制品里 | `apps.js:310-311,317-318,337` | 空名／入口不在制品里 ⇒ 拒 | 入口不在也能建 ⇒ 打开必白屏 ⇒ 红 |
 | 8 | **图标**：白名单里挑；认不出 ⇒ **自动配一个**（不抛错） | `apps.js:52-54,312-316` | 桌面上**不出现空白图标** | 认不出就建不出来 ⇒ 红 |
 | 9 | **工作区那一刀**：服务端建 `<dir>/workspaces/<scope>/` 并把产物落进去（不靠模型记得） | `apps-socket.js:70-90` · `workspace.js:268-303` · `83` §三·4 | 造完 ⇒ 那间房里有东西 | 文件躺回 `main/` ⇒ 红（`83` A1） |
-| 10 | **保留 id**（`main` ＋ 内置四个） | `workspace.js:57` · `worlds.js:92-125` | 保留 id ⇒ 拒 | 见 §3.3.3（旧路绕得过 ⇒ 红） |
+| 10 | **保留 id**（`main` ＋ 内置**三个**：`settings`/`discover`/`harness`） | `workspace.js:57` · `worlds.js:92-125` | 保留 id ⇒ 拒 | 见 §3.3.3（旧路绕得过 ⇒ 红） |
 | 11 | **N1／N2 的结构面**：制品口另一起源、CSP `connect-src 'none'`、制品拿不到令牌 | `app-serve.js:1-6,42-53`（`:48`） · `08-SPEC.md:24-25` · D4.15 | 制品自己**发不出任何请求** | 制品口并回壳的 origin ⇒ 整套白做 ⇒ 红 |
 | 12 | **创建是私密动作**：创建的落点是"他自己那一格" | `apps.js:5,24` · `published.js:1-8` | 创建后**共享库里没有它** | 创建即上架 ⇒ 红 |
 
@@ -298,7 +298,7 @@
 |---|---|---|---|---|
 | **S1** | 🔴 **沙箱与不同源**：执行第三方代码的东西**绝不与持令牌的原点同源**（N1）；CSP `default-src 'none'` / `connect-src 'none'`；iframe 不给 `allow-same-origin` | `08-SPEC.md:24` · D4.15（`05-DECISIONS.md:295`）· `app-serve.js:1-6,42-53` · `08-SPEC.md` §14.1 | 制品口与壳**不同 origin**；制品读不到壳的存储与令牌 | 制品口并回壳 origin／给 `allow-same-origin` ⇒ 红 |
 | **S2** | **不许碰令牌**：制品**永远拿不到钥匙**；`ask` 花的是**看的人**的钥匙，且走直连模型（无工具） | `08-SPEC.md:25`（N2）· D4.17（`05-DECISIONS.md:297`）· `apps.js:61` · `app-serve.js:13-14`（制品口**不读** `auth.json`） | 制品字节里搜哨兵／令牌形态串 ⇒ **零命中**；制品口不认令牌 | 制品能带上登录态取东西 ⇒ 红 |
-| **S3** | **工作区布局与保留 id**：主目录与 `workspaces/` **平行**；一个图标一间房；`main` 与内置四个不许当 app | `02-ARCHITECTURE.md` §2.1／§2.2 · `workspace.js:40,57,59-67` · `worlds.js:92-125` | `<dir>/workspaces/<scope>` **不在** `<dir>/main` 里 | 把 `workspaces` 挪进 `main` ⇒ 主目录 agent 写得进子工作区 ⇒ 红 |
+| **S3** | **工作区布局与保留 id**：主目录与 `workspaces/` **平行**；一个图标一间房；`main` 与内置**三个**不许当 app | `02-ARCHITECTURE.md` §2.1／§2.2 · `workspace.js:40,57,59-67` · `worlds.js:92-125` | `<dir>/workspaces/<scope>` **不在** `<dir>/main` 里 | 把 `workspaces` 挪进 `main` ⇒ 主目录 agent 写得进子工作区 ⇒ 红 |
 | **S4** | **命名**：界面上不许出现内部词（"工作区"等永久禁用）；id 形状；图标白名单 | `05-DECISIONS.md:96`（D1.1）· `v2/apps/mobile/lib/models/forbidden_words.dart` · `apps.js:101-107,52-54` | 面向用户的字符串**零命中**禁用词 | 加一句带"工作区／调度器／工具名"的文案 ⇒ 闸红 |
 | **S5** | **配额**：制品容量与问话配额各有常量 | `apps.js:31-43`（`MAX_*`）· `apps.js:72-73`（`ASK_PER_DAY`／`ASK_MIN_INTERVAL_MS`）· `apps.js:458-489` | 超限／太快 ⇒ **说清是哪一道**（`askQuota` 的分支），且**先记再花** | 两道混成一句 ⇒ 用户一直重试 ⇒ 红 |
 | **S6** | 🔴 **一条日志／一套编号**（P-l）：三层的每件动作落**同一条可见时间线**、同一套编号；`scopeId` **只是标签** | `05-DECISIONS.md:256` · `02-ARCHITECTURE.md:294-304` · `84` §五 F1 | 两个 scope 的事件落**同一个**日志、编号连续 | 每 scope 一份日志／各自从 1 起 ⇒ 红 |
@@ -584,7 +584,7 @@
 | 节 | 离线（不碰真机就能跑） | 真机（这台机器上真装真跑） |
 |---|---|---|
 | §二 | 只看路径即可判层；三层载体两两不相交｜从制品口取 `.exp/`／`.data/` ⇒ 404 | 造一份"既像数据又像经验"的东西 ⇒ 它按载体只落一层 |
-| §三 | `.data/x` 写得进、且发布后共享库搜不到｜`main`／内置四个当 app ⇒ 拒｜`.hupo*` 被拒 | 造一个 app ⇒ 文件只在那间房与制品库；卸载 ⇒ 找得回来 |
+| §三 | `.data/x` 写得进、且发布后共享库搜不到｜`main`／内置三个当 app ⇒ 拒｜`.hupo*` 被拒 | 造一个 app ⇒ 文件只在那间房与制品库；卸载 ⇒ 找得回来 |
 | §四 | 创建闸 12 条逐条反着验（明说闸／形状／路径／配额／权限／版本／入口／图标／保留 id）｜上架闸 A1–A14 逐条 | 造完 ⇒ 共享库里没有它；上架 ⇒ 发现页能看到，且字段不破旧客户端 |
 | §五 | 禁词闸｜哨兵搜令牌 ⇒ 零命中｜两个 scope 的事件落同一日志、同一套编号（F1）｜超限 ⇒ 人话 + 可重试 | 制品口与壳不同源；制品读不到壳存储；`ask` 花的是看他的人的钥匙 |
 | §六 | 无同意 ⇒ 交付失败｜撤回后新请求 ⇒ 拒｜回执里**没有"已删除"**｜形状声明里零值 | 一对一交一份 ⇒ 两边各一条回执；装上一份 ⇒ 上游数据哨兵零命中 |
@@ -683,7 +683,7 @@
 | `v2/services/core/src/apps-consent.js` | `:28,36` `ASK`／`MAKE` · `:53-58` `asksToMakeApp`（**只读服务端记的当轮输入**；fail-closed） |
 | `v2/services/core/src/image.js` | `:214` `asksToDrawImage` · `:230` `NEEDS_ASK_IMAGE` |
 | `v2/services/core/src/notice.js` | `:40` 瞬态只准写盘失败 · `:47-56` 五枚 `kind` · `:75` 后台四枚 · `:329-345` `notice()` · `:428-431` `#suppressed` |
-| `v2/apps/mobile/lib/models/app_spec.dart` | `:14-25` 内置四个 id · `:28-92` `MiniApp`（**无 `rootHash`**）· `:61-92` `parse`（`:71-72` 读 `expiresAt`）· `:98-102` `isBuiltIn` · `:106-151` `DiscoverApp`（**无 `authorHash`**） |
+| `v2/apps/mobile/lib/models/app_spec.dart` | `:14-25` 内置三个 id · `:28-92` `MiniApp`（**无 `rootHash`**）· `:61-92` `parse`（`:71-72` 读 `expiresAt`）· `:98-102` `isBuiltIn` · `:106-151` `DiscoverApp`（**无 `authorHash`**） |
 
 **另核过的事实**：全仓 `grep 经验包\|数据包\|能力体`（**除本文外**）= **0**（三层是本契约新立的词）·
 `.data`／`.exp` 作为路径前缀全仓**未使用** ·
