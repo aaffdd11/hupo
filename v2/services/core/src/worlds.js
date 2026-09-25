@@ -45,6 +45,9 @@ import { Ledger, LEDGER_TIMELINE_ID } from './ledger.js';
 import { LedgerSocket, ledgerSocketPath } from './ledger-socket.js';
 // ★ **P2-8 出网留痕**（主人 2026-09-25「② 先只做留痕」）：一个人一本，只记域名/时间/量。
 import { EgressLog } from './egress-log.js';
+// ★ **阶段 4：一对一交付的登记面**（99）：四条记录落在那条可见日志上（P-l），
+//   一人一个对象（和他的世界同一条日志、同一套号）。
+import { Delivery } from './delivery.js';
 import { Notice, UNDO_RESTORE } from './notice.js';
 import { SayService } from './say.js';
 import { Tenants, OWNER_ID } from './tenants.js';
@@ -189,7 +192,7 @@ export function titleOfApp(apps, id) {
 /** 每个人的世界长什么样（给文档与测试一个准确的形状）。 */
 export const WORLD_SHAPE = Object.freeze([
   'userId', 'dir', 'cfg', 'agentKey', 'scopeId',
-  'store', 'timeline', 'notice', 'say', 'trash', 'ledger', 'ledgerSocket', 'apps', 'workspaces', 'appsSocket', 'published', 'dispatcher', 'boot',
+  'store', 'timeline', 'notice', 'say', 'trash', 'ledger', 'ledgerSocket', 'apps', 'workspaces', 'appsSocket', 'published', 'delivery', 'dispatcher', 'boot',
 ]);
 
 export class Worlds {
@@ -480,6 +483,16 @@ export class Worlds {
     const ledgerTimeline = new Timeline({ id: LEDGER_TIMELINE_ID, store: t.store });
     const ledger = new Ledger({ store: t.store, timeline: ledgerTimeline }).sync();
 
+    // ★ **阶段 4：一对一交付的登记面**（`docs/dev/99-STAGE4-DELIVERY.md`）。
+    //   🔴 它**不另起日志**：四条记录落在**上面那条可见日志**上（P-l：同一条日志、
+    //      同一套号，多作用域只是事件上的 `scopeId` 标签）——
+    //      所以注入的是 `mainView`，房间那一间由 `viewFor` 现取。
+    //   🔴 它**只登记、不搬运**：这一版没有任何一条路把数据包的字节带出去。
+    const delivery = new Delivery({
+      timeline: mainView,
+      viewFor: (scope) => this.#viewFor(t.userId, scope),
+    });
+
     // ★ **小程序制品库**（乙-1 · 契约 `docs/dev/59-USER-APPS.md`）：**按人一份**，
     //   落在**他自己那一格**下面（`<dir>/hupo/apps/`）—— 这就是"只有他自己可见"的落点。
     //   ⚠️ 它**不认识令牌**；它是"谁的世界"由这里定，路由那边按 `claim.sub` 取。
@@ -709,6 +722,8 @@ export class Worlds {
       trash,
       ledger,
       ledgerSocket,
+      // ★ **阶段 4：一对一交付的登记面**（99）：一个人一个对象，落在**这条日志**上。
+      delivery,
       apps,
       workspaces,
       // ★ **用量账**（93 §五）：`worlds.noteUsage()` 用它接语音那一路的账。
@@ -831,6 +846,9 @@ export class Worlds {
       session,
       apps: world.apps,
       workspaces: world.workspaces,
+      // ⚠️ **与 `world.delivery` 是同一个对象**（同 `dispatcher` 那条理由）：
+      //    四条记录是**一个人一本账**，多作用域只是标签，不是每间一本。
+      delivery: world.delivery,
       world,
     };
     this.#rooms.set(key, room);
