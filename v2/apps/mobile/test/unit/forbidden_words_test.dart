@@ -12,6 +12,7 @@ import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/desktop_words.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
 import 'package:hupo_app/models/harness_words.dart';
+import 'package:hupo_app/models/job_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
 import 'package:hupo_app/models/login_words.dart';
 import 'package:hupo_app/models/notice_words.dart';
@@ -162,6 +163,16 @@ void main() {
       trashPurgeConfirmBody,
       trashPurgeConfirmYes,
       trashPurgeConfirmNo,
+      // ★ 2026-09-25（契约 `docs/dev/108-JOB-ASK-FLOW.md`）：派活那一层确认上的字
+      //    —— **直接引数据源**（手抄会漂）。⚠️ 那句问话本身**不在**这一份里：
+      //    它是**服务端给的**（客户端照抄），这边一个字的模板都不许有。
+      jobAskTitle,
+      jobAskNewPlace,
+      jobAskHere,
+      jobAskExpiredFallback,
+      jobAskExpiredTitle,
+      jobAskFailedLine,
+      jobAskWhyLine('帮我做一个练算数的小程序'),
       trashDeletedLine,
       trashRestoredLine,
       trashPurgedLine,
@@ -252,6 +263,11 @@ void main() {
       devOpenUnreachable,
       devOpenCannotHere,
       devOpenFailed,
+      // ★ 2026-09-25（主人 2026-09-25 拍的「甲」·
+      //    契约 `docs/dev/109-DEV-ENTRY-IS-YOURS.md` §八）：**看板那句话** ——
+      //    这一层里回话的**不是琥珀**，所以页面上必须明写（诚实纪律，不许省）。
+      devBoardNotHupo,
+      devBoardWhyNot,
       // ⚠️ 每一档实际画出来的那一句也扫（`devEntryWords` 就是屏幕上的那句）
       for (final v in DevEntryView.values) devEntryWords(v),
       // ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §三）：桌面图标长按 / 右键

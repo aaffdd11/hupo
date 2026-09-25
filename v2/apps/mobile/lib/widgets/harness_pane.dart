@@ -252,6 +252,29 @@ class _HarnessPaneState extends State<HarnessPane> {
     );
   }
 
+  /// **看板那句话**（主人 2026-09-25 拍的「甲」· 契约 `109-DEV-ENTRY-IS-YOURS.md` §八）。
+  ///
+  /// 🔴 **必须一直在**：这一层里回话的**不是琥珀**（那台进程没带人格那层），
+  ///    名字却叫"我自己那台" —— 不写这一句，界面就在说假话。
+  /// ⚠️ 用 `Wrap`：3.1 倍字号时它**换行**，而不是把上面那块挤爆（D3.5）。
+  Widget _notHupoBar(ThemeData t) {
+    final style = (t.textTheme.bodySmall ?? const TextStyle()).copyWith(color: d.muted);
+    return Container(
+      width: double.infinity,
+      color: d.accentTint,
+      padding: const EdgeInsets.fromLTRB(d.gapS, d.gapXs, d.gapS, d.gapXs),
+      child: Wrap(
+        spacing: d.gapXs,
+        runSpacing: d.gapXs,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(devBoardNotHupo, style: style.copyWith(color: d.accent)),
+          Text(devBoardWhyNot, style: style),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
@@ -260,6 +283,8 @@ class _HarnessPaneState extends State<HarnessPane> {
     final gone = _status.state == HarnessState.gone;
     return Column(
       children: [
+        // ★ **看板那句话**：一进来就看得见，滚不走（契约 109 §八）
+        _notHupoBar(t),
         Expanded(
           child: NotificationListener<ScrollNotification>(
             // ⚠️ **只有手指拖出来的滚动**才算"用户自己翻走了"（自己 `animateTo` 的不算）

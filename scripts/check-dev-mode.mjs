@@ -8,7 +8,17 @@
 // ── 它验三步（D8 那一条）────────────────────────────────────
 //   ① **无 cookie** 取 `/` ⇒ **拒**（不许"先给界面"）；
 //   ② 走一次 `/__enter` 签名 ⇒ **302/303 + `hupo-dev` cookie**；
-//   ③ 带 cookie 取 `/` ⇒ **200 且 HTML 里有 `__DSH_BOOT__`**（界面本体真的从那台 DSH 来）。
+//   ③ 带 cookie 取 `/` ⇒ **200 且是"房间清单"那一页**（★ 2026-09-25 起那条入口**先给清单**）
+//      —— 顺便验 **D6**（列得出全部房间：`main` ＋ 每一间工作区）与**看板那句话**
+//      （"在这儿说话的不是琥珀"）；
+//   ③b 从那一页里挑一间（`/?room=<id>`）⇒ **302**（选上了）；
+//   ③c 再取 `/` ⇒ **200 且 HTML 里有 `__DSH_BOOT__`**（界面本体真的从那台 DSH 来）
+//      ＋ **那条提示真的插进去了**（`injectDevBanner`：看板那句话在那一页本体上也看得见）；
+//   ④ 带 cookie **真升一次级** `/api/remote.mux` ⇒ **101**（数据通道）。
+//
+// ⚠️ **这一条改过一次（2026-09-25）**：③ 原来直接要 `__DSH_BOOT__`，那是**旧形状**
+//    （那条入口直连那一台）。改成"先给房间清单"之后，照旧版跑会在 ③/④ 报红，
+//    而系统其实是好的 ⇒ **判据要跟着形状改**（不是把红的哄绿）。
 //
 // ── 用法 ────────────────────────────────────────────────────
 //   HUPO_TOKEN=<令牌> node scripts/check-dev-mode.mjs --url https://dsh19145526557.stalkerai.cn
@@ -190,9 +200,13 @@ if (!enter.ok) {
   }
 }
 
-// ③ 带 cookie ⇒ 200 且 HTML 里有 `__DSH_BOOT__`
+// ③ 带 cookie ⇒ 200 且**是"房间清单"那一页**（★ 2026-09-25：那条入口先给清单）
+//    ★ 顺手验两件**主人点名要的**：**D6**（列得出全部房间）与**看板那句话**（不是琥珀）。
 say('');
-say('── ③ 带 cookie 取 `/` ⇒ 200 且 HTML 含 `__DSH_BOOT__` ─────');
+say('── ③ 带 cookie 取 `/` ⇒ 200 且是"房间清单"那一页（D6 ＋ 看板那句话）─────');
+/** ★ 看板那句话（**主人 2026-09-25 拍的「甲」**）：跟 `src/dev-mode.js` 里那份逐字一样。 */
+const NOT_HUPO = '在这儿说话的不是琥珀。';
+let roomHref = null;
 if (!cookie) {
   record(null, '③ 带 cookie 取 `/`', '没验到：上一步没拿到 cookie');
 } else {
@@ -205,10 +219,64 @@ if (!cookie) {
       '③ 带 cookie 取 `/`',
       `HTTP ${home.status}（要 200）—— 外层过了但里层没通：看盒子里那台 dsh web 起没起来`,
     );
-  } else if (!/__DSH_BOOT__/u.test(home.body)) {
-    record(false, '③ 带 cookie 取 `/`', '200 了，但 HTML 里没有 `__DSH_BOOT__` —— 来的不是那台 DSH 的界面');
+  } else if (!home.body.includes(NOT_HUPO)) {
+    record(
+      false,
+      '③ 带 cookie 取 `/`',
+      '200 了，但页面上**没写**"在这儿说话的不是琥珀" —— 那一页要么还是旧形状，要么那句话丢了',
+    );
   } else {
-    record(true, '③ 带 cookie 取 `/`', `200 · HTML ${home.body.length} 字节 · 含 \`__DSH_BOOT__\``);
+    // D6：列得出全部房间（`main` ＋ 每一间工作区）——**至少两间**才算过
+    const names = [...home.body.matchAll(/<li><a href="\/\?room=[^"]*">([^<]*)<\/a>/gu)].map((m) => m[1]);
+    const hrefs = [...home.body.matchAll(/href="(\/\?room=[^"]*)"/gu)].map((m) => m[1]);
+    roomHref = hrefs[0] ?? null;
+    if (names.length >= 2 && roomHref) {
+      record(
+        true,
+        '③ 房间清单那一页（＋ D6 ＋ 看板那句话）',
+        `200 · 房间 ${names.length} 间：${names.join(' / ')} · 那句话在`,
+      );
+    } else {
+      record(
+        false,
+        '③ D6：清单里要列得出全部房间（至少两间）',
+        `只列了 ${names.length} 间：${names.join(' / ') || '（一间都没有）'} —— 要么这一间真没有工作区，要么那一台没重新认房间（workspaceNudge）`,
+      );
+    }
+  }
+}
+
+// ③b/③c：挑一间（302）⇒ 再取 `/` ⇒ 200 且含 `__DSH_BOOT__` ＋ 那条提示（真的插进去了）
+say('');
+say('── ③b/c 点一间 ⇒ 302；再取 `/` ⇒ 200 且含 `__DSH_BOOT__` ＋ 看板那句话 ─────');
+if (!roomHref) {
+  record(null, '③b/c 点一间再取 `/`', '没验到：上一步没拿到房间清单里那一条链接');
+} else {
+  const pick = await get(`${URL_}${roomHref}`, { cookie: `hupo-dev=${cookie}` });
+  if (!pick.ok || pick.status < 300 || pick.status >= 400) {
+    record(false, '③b 点一间（`/?room=…`）', pick.ok ? `HTTP ${pick.status}（要 302）` : `连不上：${pick.error}`);
+  } else {
+    record(true, '③b 点一间（`/?room=…`）', `HTTP ${pick.status} —— 记下了这一间`);
+    const ui = await get(`${URL_}/`, { cookie: `hupo-dev=${cookie}` });
+    if (!ui.ok) {
+      record(false, '③c 再取 `/`', `连不上：${ui.error}`);
+    } else if (ui.status !== 200) {
+      record(false, '③c 再取 `/`', `HTTP ${ui.status}（要 200）`);
+    } else if (!/__DSH_BOOT__/u.test(ui.body)) {
+      record(false, '③c 再取 `/`', '200 了，但 HTML 里没有 `__DSH_BOOT__` —— 来的不是那台 DSH 的界面');
+    } else if (!ui.body.includes(NOT_HUPO)) {
+      record(
+        false,
+        '③c 那一页本体上要看板那句话',
+        '`__DSH_BOOT__` 在，但那条提示**没插进去**（`injectDevBanner`：多半认不出 `<body>` 或者被压缩过）',
+      );
+    } else {
+      record(
+        true,
+        '③c 那一页本体（＋ 看板那句话）',
+        `200 · HTML ${ui.body.length} 字节 · 含 \`__DSH_BOOT__\` 与"不是琥珀"那一条`,
+      );
+    }
   }
 }
 

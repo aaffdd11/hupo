@@ -1,4 +1,5 @@
-// **开发者模式** —— 判据 D1–D7、D9（契约 `docs/dev/82-DEV-MODE.md` §六）。
+// **开发者模式** —— 判据 D1–D9（契约 `docs/dev/82-DEV-MODE.md` §六）；
+// **"开的是你自己那台 · 全部房间"那一组见契约 `docs/dev/109-DEV-ENTRY-IS-YOURS.md`**。
 //
 // ── 这份怎么打 ──────────────────────────────────────────────
 //   · **宿主那半边**（D1–D6、D9）：起一台**真 HTTP**服务，用一个**假盒子**（真的 TCP 口）
@@ -6,7 +7,18 @@
 //   · **盒子那半边**（D7、D9）：注入**假 spawn + 假上游**（不用真 DSH、不用真容器），
 //     验参数、验换 cookie、验改写的头、验只连回环。
 //
-// ⚠️ 判据 D8（真图）在 `scripts/check-dev-mode.mjs` 里（要**部署好的**系统才跑得起来）。
+// ⚠️ 判据 D8（真图 · 旧那套）在 `scripts/check-dev-mode.mjs` 里（要**部署好的**系统才跑得起来）。
+//
+// ── 109 那几条（2026-09-25）────────────────────────────────
+//   **D1** 参数与真那台**同源**：`--profile sdk` ＋ 人格 ＋ 能力层 ＋ 模型那条（= `agentArgs()`）
+//          · 变异：改回 `--profile web` ⇒ 红
+//   **D2** cwd ＝ **那一间的 cwd**（`main` ⇒ 主对话那一间；工作区 ⇒ `workspaces/<它>`）
+//          · 变异：指回 `/data`（或别的房间）⇒ 红
+//   **D6** 清单里**列得出全部房间**（`main` ＋ 每一间工作区）
+//          · 变异：只列 `main` ⇒ 红
+//   **D7** 🔴 **只有一套配置、一个家**：源码里不许再出现 `--profile web`；`DSH_HOME` 只有一个
+//   **D3/D4** 🔴 **真机**判据（真机上那两个进程共用一份会话）—— 读数写在 `109` 那份的账里，
+//          这一份打不了（它不碰真 DSH）。
 //
 // ── 每条判据都要能**反着验** ────────────────────────────────
 //   D1 没标 dev ⇒ 拒          · 反例：同样的请求给标了的人 ⇒ 200
@@ -41,20 +53,30 @@ import { Store } from '../src/store.js';
 import { Timeline } from '../src/timeline.js';
 import { createServer } from '../src/server.js';
 import { signEntry } from '../src/app-serve.js';
+import { agentPatchArgs } from '../src/agent-runtime.js';
 import {
   DEV_COOKIE,
   DEV_ENTER_PATH,
+  DEV_BOARD_NOT_HUPO,
+  DEV_BOARD_WHY_NOT,
+  DEV_ROOMS_PATH,
+  DEV_WEB_PROFILE,
   createDevWebRelay,
   devCookieValue,
   devEntryLink,
   devHostFor,
+  devRoomsHtml,
   devSig,
   devWebArgs,
+  ensureRoomRegistered,
+  injectDevBanner,
+  normalizeRooms,
   parseDevHost,
   parseDshWebLine,
   redactSecrets,
   readCookie,
   verifyDevCookie,
+  workspaceRegistryPath,
 } from '../src/dev-mode.js';
 
 const BASE = 'stalkerai.cn';
@@ -765,11 +787,21 @@ test('🔴 D9：`/h…` 的升级**只在 `trusted`（那条 0600 UDS）上接**
 // ════════════════════════════════════════════════════════════
 
 
-test('🔴 D7：起 `dsh web` 的参数 —— **只听回环、端口交给内核**，`--patch` 在 `--profile web` 后面', () => {
-  const cfg = { modelPatchPath: '/app/code/hupo-model-proxy.yml', agentProfile: 'sdk' };
-  assert.deepEqual(devWebArgs(cfg), [
+test('🔴 D1/D7′：起那台的参数 —— **patch 集合与真那台同一处出处**，只听回环', () => {
+  const cfg = {
+    agentProfile: 'sdk',
+    personaPath: '/app/code/hupo-persona.yml',
+    capabilitiesPath: '/app/code/hupo-capabilities.yml',
+    modelPatchPath: '/app/code/hupo-model-proxy.yml',
+    agentCwd: '/data/main',
+  };
+  const want = [
     '--profile',
-    'web',
+    'web', // ← D7″：界面这个 app（DSH 只在它里面提供浏览器界面）
+    '--patch',
+    '/app/code/hupo-persona.yml',
+    '--patch',
+    '/app/code/hupo-capabilities.yml',
     '--patch',
     '/app/code/hupo-model-proxy.yml',
     '--host',
@@ -777,12 +809,315 @@ test('🔴 D7：起 `dsh web` 的参数 —— **只听回环、端口交给内�
     '--port',
     '0',
     '--no-open',
-  ]);
+  ];
+  assert.deepEqual(devWebArgs(cfg), want);
+
+  // ★ **D7′：patch 集合与调度器那台同一处产出**（`agentPatchArgs()`）——
+  //    这一条把"各写一份"结构上钉死。
+  assert.deepEqual(
+    devWebArgs(cfg).filter((_a, i, all) => all[i - 1] === '--patch'),
+    agentPatchArgs(cfg).filter((_a, i, all) => all[i - 1] === '--patch'),
+    '入口那台与调度器那台的 patch 集合必须是**同一个函数**产出的',
+  );
+  // 顺序也一样：人格 → 能力层 → 模型（`--patch` 可重复，顺序就是叠加顺序）
+  assert.deepEqual(devWebArgs(cfg), ['--profile', 'web', ...agentPatchArgs(cfg), '--host', '127.0.0.1', '--port', '0', '--no-open']);
+  // ★ **D1 的变异**：少挂一条（或回到"只有模型那条"那种 `harnessArgs` 形状）⇒ 当场红
+  assert.notDeepEqual(
+    devWebArgs(cfg),
+    ['--profile', 'web', '--patch', cfg.modelPatchPath, '--host', '127.0.0.1', '--port', '0', '--no-open'],
+    '只有模型那条 patch（改前那种"没有人格、没有工具"）必须红',
+  );
+  assert.ok(devWebArgs(cfg).includes(cfg.personaPath), '人格那一层必须在');
+  assert.ok(devWebArgs(cfg).includes(cfg.capabilitiesPath), '能力层必须在');
+  assert.ok(devWebArgs(cfg).includes(cfg.modelPatchPath), '模型那条必须在');
+
   const args = devWebArgs(cfg);
   assert.ok(!args.includes('0.0.0.0'), '绝对不许听 0.0.0.0（那等于把盒子递给整张网）');
   assert.ok(!args.includes('-p') && !args.some((a) => a.includes('--publish')), '不开宿主端口');
-  // 模型那条 patch 是**可选**的，但 profile 永远在
+  // ⚠️ `--patch` 是**全局选项**，必须写在 `--profile` **后面**（H5 那条同一条纪律）
+  const pi = args.indexOf('--profile');
+  for (const i of [args.indexOf('--patch'), args.lastIndexOf('--patch')]) assert.ok(i > pi, '`--patch` 要在 `--profile` 后面');
+  // 那几层 patch 是**可选**的，但 profile 永远在
   assert.deepEqual(devWebArgs({}), ['--profile', 'web', '--host', '127.0.0.1', '--port', '0', '--no-open']);
+});
+
+test('🔴 D7′/D7″（源码级）：patch 集合与 `agent-runtime` **同一处产出**；`DSH_HOME` 只有一个；`web` 那一行有读数撑着', async () => {
+  const src = nodeFs.readFileSync(
+    nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname), '../src/dev-mode.js'),
+    'utf8',
+  );
+  // ⚠️ 注释里当然会提到那些字（那是在讲事实）⇒ 把注释剥掉只看**代码**。
+  const code = src
+    .replace(/\/\*[\s\S]*?\*\//gu, '') // 块注释（JSDoc 也在内）
+    .split('\n')
+    .filter((l) => !/^\s*\/\//u.test(l)) // 行注释
+    .join('\n');
+  // ① **D7′**：patch 层**不许自己拼一份** —— 只能走 `agentPatchArgs()`。
+  assert.match(code, /agentPatchArgs\(/u, 'patch 层必须由 `agentPatchArgs()` 造（与 agent-runtime 一处出处）');
+  assert.ok(!/harnessArgs/u.test(code), '不许再用 `harnessArgs()`（那套只有模型那条 patch）');
+  assert.ok(!/cfg\.personaPath/u.test(code), '不许自己拼 `--patch cfg.personaPath`（那是第二处出处）');
+  assert.ok(!/cfg\.capabilitiesPath/u.test(code), '不许自己拼 `--patch cfg.capabilitiesPath`');
+  assert.ok(!/cfg\.modelPatchPath/u.test(code), '不许自己拼 `--patch cfg.modelPatchPath`');
+  // ② **D7′**：env（`DSH_HOME` ＋ 能力层那几样）也只能有一处出处：`agentEnv(cfg)`。
+  //    ⚠️ 少给能力层那几样，`hupo-capabilities.yml` 会让 dsh **整个 plugin tree 加载失败**
+  //       （真机读数：`expected {…} but got {"args":[null]}`）—— 见 `agentEnv` 的注释。
+  assert.match(code, /agentEnv\(cfg\)/u, 'env 必须由 `agentEnv(cfg)` 造（与 agent-runtime 一处出处）');
+  assert.ok(!/childEnv\(/u.test(code), '不许在这里自己拼 env（那是第二处出处）');
+  assert.ok(!/\bhome:\s+(?!cfg\.dshHome)/u.test(code), '不许另设第二个 home');
+  // ③ **D7″**：`--profile web` **可以有**，但必须有那两条读数撑着（下一个人不许以为换 sdk 就同源）。
+  const comments = src;
+  assert.match(comments, /dsh --profile sdk --host/u, '注释里要留 `--profile sdk --host` 那条读数（原话）');
+  assert.match(comments, /unknown option/u, "注释里要留 `unknown option '--host'` 那句原话");
+  assert.match(comments, /stdio JSON-RPC/u, '注释里要说清 sdk 是 stdio JSON-RPC（没有浏览器界面）');
+  assert.match(code, /DEV_WEB_PROFILE/u, '`web` 那一行要走具名常量（它的来历写在常量上面）');
+  assert.equal(DEV_WEB_PROFILE, 'web');
+});
+
+/** 走一次"选某一间"（`/?room=<id>` ⇒ 302），返回那次响应。 */
+async function selectRoom(relay, id) {
+  const url = `/?room=${encodeURIComponent(id)}`;
+  const { req, res } = fakeReqRes({ url });
+  await relay.handle(req, res, url);
+  return res;
+}
+
+test('🔴 D3 的必要条件：注册表冻结了 ⇒ 默认**只读提示**（一个字节都不写）；要动它得显式开', () => {
+  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-dev-reg-'));
+  const storages = nodePath.join(dir, 'storages');
+  nodeFs.mkdirSync(storages, { recursive: true });
+  const mainDir = nodePath.join(dir, 'main');
+  const otherDir = nodePath.join(dir, 'other');
+  nodeFs.mkdirSync(mainDir);
+  nodeFs.mkdirSync(otherDir);
+  const file = workspaceRegistryPath(dir);
+  /** 冻结在 `other`（真机上那一份就是这种形状：`initialized:true` 且只认一间）。 */
+  const frozen = {
+    unit: { name: 'workspace', version: 2 },
+    global: { initialized: true, workspaceIds: ['w1'], archivedSessionIds: ['s-archived'] },
+    tables: { workspaces: { w1: { path: otherDir, title: 'other', sessionIds: ['x.1'] } } },
+  };
+  const write = (o) => nodeFs.writeFileSync(file, `${JSON.stringify(o, null, 2)}\n`);
+  try {
+    // ★ **默认（`apply` 不给）= 只读**：看出来了，但**一个字节都不许动**。
+    write(frozen);
+    const before = nodeFs.readFileSync(file, 'utf8');
+    const ro = ensureRoomRegistered({ dshHome: dir, cwd: mainDir });
+    assert.equal(ro.registered, false, '要看出来"这一间不在注册表里"');
+    assert.equal(ro.changed, false, '默认**不许**写盘');
+    assert.equal(nodeFs.readFileSync(file, 'utf8'), before, '🔴 默认一个字节都不许动（写它要主人拍）');
+    assert.match(ro.why, /得主人拍/u, '要有一句"这事得主人拍"的话');
+
+    // ① 显式 `apply:true` ⇒ 置回 `initialized:false`（DSH 下次按会话头重新发现）
+    const r1 = ensureRoomRegistered({ dshHome: dir, cwd: mainDir, apply: true });
+    assert.equal(r1.changed, true);
+    const after = JSON.parse(nodeFs.readFileSync(file, 'utf8'));
+    assert.equal(after.global.initialized, false, '要让 DSH 重新发现房间');
+    assert.deepEqual(after.global.archivedSessionIds, ['s-archived'], '既有账一条都不许动');
+    assert.deepEqual(after.tables.workspaces.w1.sessionIds, ['x.1'], '既有记录一条都不许动');
+
+    // ② 已经在里面 ⇒ **一个字节都不动**（幂等）
+    after.global.initialized = true;
+    write(after);
+    const before2 = nodeFs.readFileSync(file, 'utf8');
+    assert.equal(ensureRoomRegistered({ dshHome: dir, cwd: otherDir, apply: true }).changed, false);
+    assert.equal(nodeFs.readFileSync(file, 'utf8'), before2, '已经在里面 ⇒ 不动它');
+
+    // ③ 注册表不在 / 坏了 ⇒ 什么都不做（DSH 自己会 bootstrap；坏的更不许碰）
+    nodeFs.rmSync(file);
+    assert.equal(ensureRoomRegistered({ dshHome: dir, cwd: mainDir, apply: true }).changed, false);
+    nodeFs.writeFileSync(file, '{ 不是 json');
+    assert.equal(ensureRoomRegistered({ dshHome: dir, cwd: mainDir, apply: true }).changed, false);
+    assert.equal(nodeFs.readFileSync(file, 'utf8'), '{ 不是 json', '坏的也不许动');
+
+    // ④ 反向对照：冻结着而**不** nudge ⇒ 它一直是 `true`（界面就看不到那一间 —— 真机读数）
+    write(frozen);
+    assert.equal(JSON.parse(nodeFs.readFileSync(file, 'utf8')).global.initialized, true);
+  } finally {
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('🔴 D2/D6：房间清单 = `main` ＋ 每一间工作区；点哪间就用**那间的 cwd** 起（一次只开一间）', async () => {
+  // 一个**冻结在别处**的 DSH 注册表：这一间不在里面 ⇒ 起那台之前要 nudge 它。
+  const regDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-dev-reg2-'));
+  nodeFs.mkdirSync(nodePath.join(regDir, 'storages'), { recursive: true });
+  nodeFs.writeFileSync(
+    workspaceRegistryPath(regDir),
+    JSON.stringify({
+      unit: { name: 'workspace', version: 2 },
+      global: { initialized: true, workspaceIds: ['w0'], archivedSessionIds: [] },
+      tables: { workspaces: { w0: { path: '/somewhere/else', title: 'else', sessionIds: [] } } },
+    }),
+  );
+  const cfg = {
+    dshBin: '/bin/dsh',
+    agentCwd: '/data/main',
+    dshHome: regDir,
+    personaPath: '/app/code/hupo-persona.yml',
+    capabilitiesPath: '/app/code/hupo-capabilities.yml',
+    modelPatchPath: '/app/code/hupo-model-proxy.yml',
+    agentUid: 1000,
+    agentGid: 1000,
+    agentBootTimeoutMs: 5000,
+  };
+  // ★ 房间清单的来源（生产里由 `serve.js` 从 `worlds` 取 —— 与真那台**同一处**）
+  const rooms = [
+    { id: 'main', name: '主对话', cwd: '/data/main' },
+    { id: 'count-abc', name: 'count-abc', cwd: '/data/workspaces/count-abc' },
+  ];
+  const spawned = [];
+  const kids = [];
+  const spawnFn = (bin, args, opts) => {
+    const c = fakeChild(`dsh web: http://127.0.0.1:${41001 + spawned.length}/?token=T${spawned.length}`);
+    spawned.push({ bin, args, opts });
+    kids.push(c);
+    return c;
+  };
+  const { httpRequest } = fakeUpstream();
+  const relay = createDevWebRelay({
+    cfg,
+    rooms: () => rooms,
+    // ⚠️ **显式开**才动 DSH 的注册表（默认关 —— 写它要主人拍）。
+    workspaceNudge: true,
+    spawnFn,
+    httpRequest,
+    bootTimeoutMs: 2000,
+  });
+  try {
+    // ① ★ D6：清单页列出**全部**房间（`main` ＋ 每一间工作区），而且**一间 DSH 都不用起**
+    const page = fakeReqRes({ url: DEV_ROOMS_PATH });
+    await relay.handle(page.req, page.res, DEV_ROOMS_PATH);
+    assert.equal(page.res.status, 200);
+    assert.equal(spawned.length, 0, '列房间**不该**花掉一台 DSH');
+    assert.match(page.res.body(), /主对话/u);
+    assert.match(page.res.body(), /count-abc/u);
+    assert.match(page.res.body(), /\?room=main/u, '`main` 要能点（href 里带 id）');
+    assert.match(page.res.body(), /\?room=count-abc/u);
+    // ★ **变异：只列 `main` ⇒ 当场红**（两条清单的形状必须不一样）
+    assert.notEqual(
+      devRoomsHtml({ rooms: normalizeRooms([rooms[0]]) }),
+      devRoomsHtml({ rooms: normalizeRooms(rooms) }),
+      '只列 `main` 的清单与"全部房间"的清单必须不一样 —— D6 的变异就是"只列 main"',
+    );
+
+    // ② 还没选过 ⇒ `/` 先给清单（契约 109 §"先给一个房间清单"）
+    const home = fakeReqRes({ url: '/' });
+    await relay.handle(home.req, home.res, '/');
+    assert.equal(home.res.status, 200);
+    assert.match(home.res.body(), /count-abc/u);
+    assert.equal(spawned.length, 0, '还没选哪间 ⇒ 一台都不许起');
+
+    // ③ 选 `main` ⇒ 302；再来 `/` ⇒ 用 **main 的 cwd** 起
+    const sel = await selectRoom(relay, 'main');
+    assert.equal(sel.status, 302, '选房间就是 302 到 `/`');
+    const mainReq = fakeReqRes({ url: '/' });
+    await relay.handle(mainReq.req, mainReq.res, '/');
+    for (let i = 0; i < 50 && mainReq.res.status === null; i += 1) await sleep(5);
+    assert.equal(spawned.length, 1);
+    // ★ **D2**：cwd = 那一间的 cwd（盒里就是 `/data/main`）—— **不是 `/data`**
+    assert.equal(spawned[0].opts.cwd, '/data/main', 'main 那一间 ⇒ cwd 就是主对话那一间（不是 /data）');
+    assert.equal(spawned[0].opts.env.DSH_HOME, regDir, 'DSH_HOME 就是那一个（不另设第二个家）');
+    assert.deepEqual(spawned[0].args, [
+      '--profile',
+      DEV_WEB_PROFILE,
+      ...agentPatchArgs(cfg),
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '0',
+      '--no-open',
+    ]);
+    // ★ **D3 的必要条件**：这一间不在冻结的注册表里 ⇒ 起那台之前要 nudge 它
+    //   （不然 DSH 界面会把这一间的会话整个藏掉 —— 真机读见 `ensureRoomRegistered`）。
+    assert.equal(
+      JSON.parse(nodeFs.readFileSync(workspaceRegistryPath(regDir), 'utf8')).global.initialized,
+      false,
+      '冻结的注册表里没有这一间 ⇒ 起那台之前必须让它重新发现房间',
+    );
+
+    // ④ 换一间 ⇒ **旧的收掉** ＋ 新的用**那间的 cwd**（"一次只开一间"）
+    const sel2 = await selectRoom(relay, 'count-abc');
+    assert.equal(sel2.status, 302);
+    const roomReq = fakeReqRes({ url: '/' });
+    await relay.handle(roomReq.req, roomReq.res, '/');
+    for (let i = 0; i < 50 && roomReq.res.status === null; i += 1) await sleep(5);
+    assert.equal(spawned.length, 2, '换房间要**新起一台**');
+    assert.equal(spawned[1].opts.cwd, '/data/workspaces/count-abc', '点哪间就用**那间的 cwd**');
+    assert.equal(kids[0].killed, true, '换房间 ⇒ 旧的必须收掉（内存/句柄别失控）');
+    assert.equal(relay.state().room, 'count-abc');
+    assert.equal(relay.state().cwd, '/data/workspaces/count-abc');
+    assert.equal(relay.state().running, true);
+
+    // ⑤ 不认识的一间 ⇒ 404，而且**一台都不许起**（不拿随手的字符串当 cwd）
+    const bad = await selectRoom(relay, '../../etc');
+    assert.equal(bad.status, 404);
+    assert.equal(spawned.length, 2, '不认识的一间 ⇒ **一台都不许起**');
+
+    // ⑥ 那一间没了（工作区被删）⇒ 回清单页，不拿一个已经不存在的 cwd 去 spawn
+    rooms.pop();
+    const gone = fakeReqRes({ url: '/' });
+    await relay.handle(gone.req, gone.res, '/');
+    assert.equal(gone.res.status, 200);
+    assert.match(gone.res.body(), /主对话/u);
+    assert.equal(relay.state().running, false, '那一间没了 ⇒ 那一台也要收掉');
+  } finally {
+    relay.shutdown();
+    nodeFs.rmSync(regDir, { recursive: true, force: true });
+  }
+});
+
+test('🔴 默认**不动** DSH 的注册表（写它要主人拍）—— 只留一句只读提示', async () => {
+  const regDir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-dev-reg3-'));
+  nodeFs.mkdirSync(nodePath.join(regDir, 'storages'), { recursive: true });
+  const frozen = {
+    unit: { name: 'workspace', version: 2 },
+    global: { initialized: true, workspaceIds: ['w0'], archivedSessionIds: [] },
+    tables: { workspaces: { w0: { path: '/somewhere/else', title: 'else', sessionIds: [] } } },
+  };
+  nodeFs.writeFileSync(workspaceRegistryPath(regDir), `${JSON.stringify(frozen, null, 2)}\n`);
+  const before = nodeFs.readFileSync(workspaceRegistryPath(regDir), 'utf8');
+  const cfg = {
+    dshBin: '/bin/dsh',
+    agentCwd: '/data/main',
+    dshHome: regDir,
+    agentUid: 1000,
+    agentGid: 1000,
+    agentBootTimeoutMs: 5000,
+  };
+  const logs = [];
+  const spawned = [];
+  const { httpRequest } = fakeUpstream();
+  const relay = createDevWebRelay({
+    cfg,
+    rooms: () => [{ id: 'main', name: '主对话', cwd: '/data/main' }],
+    // ⚠️ **故意不传 `workspaceNudge`**（默认 `false`）
+    spawnFn: (_b, _a, opts) => {
+      spawned.push(opts);
+      return fakeChild('dsh web: http://127.0.0.1:41001/?token=T');
+    },
+    httpRequest,
+    bootTimeoutMs: 2000,
+    log: (m) => logs.push(String(m)),
+  });
+  try {
+    await selectRoom(relay, 'main');
+    const { req, res } = fakeReqRes({ url: '/' });
+    await relay.handle(req, res, '/');
+    for (let i = 0; i < 50 && res.status === null; i += 1) await sleep(5);
+    assert.equal(spawned.length, 1, '那台照常起（只读提示不挡路）');
+    assert.equal(
+      nodeFs.readFileSync(workspaceRegistryPath(regDir), 'utf8'),
+      before,
+      '🔴 默认**一个字节都不写**（写 DSH 的存储要主人拍）',
+    );
+    assert.ok(
+      logs.some((m) => /不在 DSH 的注册表里/u.test(m) && /主人拍/u.test(m)),
+      '要留一句只读提示（说清"看不到那一间"＋"这事得主人拍"）',
+    );
+  } finally {
+    relay.shutdown();
+    nodeFs.rmSync(regDir, { recursive: true, force: true });
+  }
 });
 
 test('`parseDshWebLine`：认得出那一行，认不出就 null（不猜）', () => {
@@ -817,8 +1152,13 @@ function fakeChild(line) {
   return c;
 }
 
-/** 假上游：第一跳是换 cookie，第二跳才是真请求。 */
-function fakeUpstream() {
+/** 假上游：第一跳是换 cookie，第二跳才是真请求。
+ *
+ * @param {object} [o]
+ * @param {string} [o.doc] 第二跳那个响应体（默认没有 `<body>` —— 那是"认不出来"那一档）
+ * @param {string} [o.docType] 第二跳的 `content-type`
+ */
+function fakeUpstream({ doc = '<!doctype html>__DSH_BOOT__', docType = 'text/html; charset=utf-8' } = {}) {
   const calls = [];
   const httpRequest = (opts, cb) => {
     const rec = { opts, body: '' };
@@ -836,11 +1176,11 @@ function fakeUpstream() {
         : {
             status: 200,
             headers: {
-              'content-type': 'text/html; charset=utf-8',
+              'content-type': docType,
               'set-cookie': ['dsh-auth-abc=1; Path=/'],
               location: 'http://127.0.0.1:41001/next',
             },
-            body: '<!doctype html>__DSH_BOOT__',
+            body: doc,
           };
       const upRes = Readable.from([Buffer.from(r.body)]);
       upRes.statusCode = r.status;
@@ -903,6 +1243,9 @@ test('🔴 D7：盒子侧 relay —— 只连回环、替浏览器带 DSH 的 co
   process.env.DEEPSEEK_API_KEY = 'should-not-leak';
   const relay = createDevWebRelay({ cfg, spawnFn, httpRequest, bootTimeoutMs: 2000 });
   try {
+    // ★ 新形状：入口**先给房间清单** ⇒ 先选一间（默认清单里那一间是 `main`）。
+    const sel = await selectRoom(relay, 'main');
+    assert.equal(sel.status, 302);
     const { req, res } = fakeReqRes({
       method: 'POST',
       url: '/api/x?y=1',
@@ -963,6 +1306,7 @@ test('D7：盒里那台起不来 ⇒ 502 说人话（不是空连接，也不是
     return c;
   };
   const relay = createDevWebRelay({ cfg, spawnFn, bootTimeoutMs: 200 });
+  await selectRoom(relay, 'main'); // 新形状：先选一间
   const { req, res } = fakeReqRes({ url: '/', headers: { host: '127.0.0.1:1' } });
   await relay.handle(req, res, '/');
   assert.equal(res.status, 502);
@@ -1022,6 +1366,8 @@ test('★ D9（盒子侧）：升级到回环 —— Host/Origin 改写、DSH co
     bootTimeoutMs: 2000,
   });
   t.after(() => relay.shutdown());
+  // ★ 新形状：升级那条也要先知道开的是哪一间 ⇒ 先选一间（默认清单里是 `main`）。
+  assert.equal((await selectRoom(relay, 'main')).status, 302);
 
   const front = await devFront(relay);
   const r = await wsConnect(`ws://127.0.0.1:${front.port}/h/api/remote.mux`, {
@@ -1061,10 +1407,143 @@ test('D9（盒子侧）：盒里那台起不来 ⇒ **握手阶段** 502 说人�
   t.after(() => relay.shutdown());
 
   const front = await devFront(relay);
+  // ★ **还没选哪一间** ⇒ 握手阶段 503（不是先给一条 101）
+  const noRoom = await wsConnect(`ws://127.0.0.1:${front.port}/h/api/remote.mux`, {
+    headers: { host: 'dsh19145526557.stalkerai.cn' },
+  });
+  assert.equal(noRoom.ok, false, '还没选房间 ⇒ 不许先给一条 101');
+  assert.equal(noRoom.status, 503);
+  assert.match(noRoom.body ?? '', /房间/u, '要有一句人话（回房间清单选一间）');
+
+  // 选一间之后：那台起不来 ⇒ 502
+  assert.equal((await selectRoom(relay, 'main')).status, 302);
   const r = await wsConnect(`ws://127.0.0.1:${front.port}/h/api/remote.mux`, {
     headers: { host: 'dsh19145526557.stalkerai.cn' },
   });
   assert.equal(r.ok, false, '起不来 ⇒ 不许先给一条 101');
   assert.equal(r.status, 502);
   assert.match(r.body ?? '', /没起来/u, '要有一句人话');
+});
+
+// ── ★ 「看板那句话」（主人 2026-09-25 拍的「甲」· 契约 109 §八）──────────────
+//
+// 判据：**页面上明写"在这儿说话的不是琥珀"**。三处落点：
+//   ① 进之前那一页（`devRoomsHtml`）；② **那一页本体**（`injectDevBanner`）；
+//   ③ 客户端「我自己那台」那一层（`dev_harness_words.dart` → 判据在 Dart 那一侧）。
+// ⚠️ 为什么非要有：那一页里回话的**真的不是琥珀**（`standard` preset 自己那份 persona
+//    盖住了我们那层 —— 真机读数在 `dev-mode.js` 顶上）。不写 = 界面说假话。
+
+test('★ 看板那句话：进之前那一页上**明写**（而且一个内部词都没有）', () => {
+  const html = devRoomsHtml({ rooms: [{ id: 'main', name: '主对话', cwd: '/data/main' }] });
+  assert.ok(html.includes(DEV_BOARD_NOT_HUPO), '那一页必须写着"在这儿说话的不是琥珀"');
+  assert.ok(html.includes(DEV_BOARD_WHY_NOT), '还得说清哪一份是它的、哪一份不是');
+  // 反例：那句话必须在**这一页上**（不是某个变量里躺着）
+  assert.ok(/<body>[\s\S]*不是琥珀/u.test(html), '那句必须在 `<body>` 里面（真的画得出来）');
+});
+
+test('★ `injectDevBanner`：插在 `<body>` 之后（第一个孩子），其余字节一个不动', () => {
+  const before = '<!doctype html><html><head><title>t</title></head><body><div id="root"></div><script src="./a.js"></script></body></html>';
+  const after = injectDevBanner(before);
+  assert.ok(after !== null, '认得出 `<body>` ⇒ 必须插进去');
+  assert.ok(after.includes(DEV_BOARD_NOT_HUPO) && after.includes(DEV_BOARD_WHY_NOT));
+  // 插在 `<body>` 之后、`#root` 之前（后面那条靠 `flex` 占满剩下的地方 —— 见那一段 CSS）
+  assert.ok(
+    after.indexOf('<body>') < after.indexOf('hupo-dev-notice'),
+    '那一条要在 `<body>` 里面',
+  );
+  assert.ok(
+    after.indexOf('hupo-dev-notice') < after.indexOf('id="root"'),
+    '那一条要在 `#root` **之前**（不然它会掉到页面底下）',
+  );
+  // 原文一个字都没丢（只多插了一段）
+  for (const keep of ['<!doctype html>', '<title>t</title>', '<div id="root"></div>', '<script src="./a.js"></script>', '</html>']) {
+    assert.ok(after.includes(keep), `原来那一段不许被动：${keep}`);
+  }
+  // 🔴 **认不出来 ⇒ `null`**（宁可没有那一条，也不许猜着改那一页）
+  assert.equal(injectDevBanner('<div>没有 body 的一小段</div>'), null);
+  assert.equal(injectDevBanner(''), null);
+});
+
+test('★ 看板那句话：**顶层那一页**才插（别的路径 / 非 HTML 一字节都不改）', async (t) => {
+  const cfg = {
+    dshBin: '/bin/dsh',
+    agentCwd: '/data/main',
+    dshHome: '/data/dsh',
+    agentUid: 1000,
+    agentGid: 1000,
+    agentBootTimeoutMs: 5000,
+  };
+  const doc = '<!doctype html><html><body><div id="root"></div></body></html>';
+  const { httpRequest, calls } = fakeUpstream({ doc });
+  const relay = createDevWebRelay({
+    cfg,
+    spawnFn: () => fakeChild('dsh web: http://127.0.0.1:41002/?token=PROC-TOKEN'),
+    httpRequest,
+    bootTimeoutMs: 2000,
+  });
+  t.after(() => relay.shutdown());
+  assert.equal((await selectRoom(relay, 'main')).status, 302);
+
+  // ① 顶层那一页 ⇒ 那一条**必须在**（而且 content-length 跟着新长度走）
+  const a = fakeReqRes({ url: '/', headers: { host: 'dsh19145526557.stalkerai.cn' } });
+  await relay.handle(a.req, a.res, '/');
+  for (let i = 0; i < 100 && a.res.status === null; i += 1) await sleep(5);
+  assert.equal(a.res.status, 200);
+  assert.ok(a.res.body().includes(DEV_BOARD_NOT_HUPO), '顶层那一页必须有那一条');
+  assert.ok(a.res.body().includes('id="root"'), '原来那一页还得在');
+  assert.equal(
+    Number(a.res.outHeaders['content-length']),
+    Buffer.byteLength(a.res.body(), 'utf8'),
+    '改了本体就必须改 content-length（不然浏览器会截断）',
+  );
+  // 而且**要了不压缩**（压缩过的字节没法安全地插一行）
+  const docCall = calls.find((c) => c.opts.path === '/');
+  assert.equal(docCall?.opts.headers['accept-encoding'], 'identity');
+  // 反例：**不是顶层那一份**（别的路径，哪怕也是 HTML）⇒ 一个字节都不碰
+  const b = fakeReqRes({ url: '/other.html', headers: { host: 'dsh19145526557.stalkerai.cn' } });
+  await relay.handle(b.req, b.res, '/other.html');
+  for (let i = 0; i < 100 && b.res.status === null; i += 1) await sleep(5);
+  assert.equal(b.res.body(), doc, '只有顶层那一份才插；别的路径原样');
+});
+
+test('★ 看板那句话：非 HTML / 子路径**一个字节都不碰**（认不出就不插）', async (t) => {
+  const cfg = {
+    dshBin: '/bin/dsh',
+    agentCwd: '/data/main',
+    dshHome: '/data/dsh',
+    agentUid: 1000,
+    agentBootTimeoutMs: 5000,
+  };
+  const doc = '<!doctype html><html><body><div id="root"></div></body></html>';
+  const { httpRequest } = fakeUpstream({ doc, docType: 'application/javascript' });
+  const relay = createDevWebRelay({
+    cfg,
+    spawnFn: () => fakeChild('dsh web: http://127.0.0.1:41003/?token=PROC-TOKEN'),
+    httpRequest,
+    bootTimeoutMs: 2000,
+  });
+  t.after(() => relay.shutdown());
+  assert.equal((await selectRoom(relay, 'main')).status, 302);
+
+  const r = fakeReqRes({ url: '/', headers: { host: 'dsh19145526557.stalkerai.cn' } });
+  await relay.handle(r.req, r.res, '/');
+  for (let i = 0; i < 100 && r.res.status === null; i += 1) await sleep(5);
+  assert.equal(r.res.status, 200);
+  assert.equal(r.res.body(), doc, '不是 HTML ⇒ **原样**（一个字节都不许动）');
+});
+
+test('★ 看板那句话：JS 与 Dart 两份文案**逐字一样**（改一份不改另一份 ⇒ 当场红）', () => {
+  // ⚠️ 同一句话不许有两处来源 —— 但它们**必须**跨语言各存一份
+  //    （一份给盒子里的页面，一份给 App 那一层）⇒ 用这条闸把它们钉在一起。
+  const dart = nodeFs.readFileSync(
+    nodePath.resolve(import.meta.dirname, '../../../apps/mobile/lib/models/dev_harness_words.dart'),
+    'utf8',
+  );
+  const pick = (name) => {
+    const m = new RegExp(`const String ${name} = '([^']*)';`, 'u').exec(dart);
+    assert.ok(m, `Dart 那份里找不到 ${name}`);
+    return m[1];
+  };
+  assert.equal(pick('devBoardNotHupo'), DEV_BOARD_NOT_HUPO, '那句话两份必须逐字一样');
+  assert.equal(pick('devBoardWhyNot'), DEV_BOARD_WHY_NOT, '那句解释两份必须逐字一样');
 });

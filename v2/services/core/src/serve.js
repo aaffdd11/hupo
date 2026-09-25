@@ -790,19 +790,54 @@ const { listen, listenTrusted, close } = createServer({
     log: (m) => console.log(`▶ ${m}`),
   }),
   /**
-   * ★ **开发者模式**（契约 `docs/dev/82-DEV-MODE.md` · 2026-09-24）—— 两侧分开给：
+   * ★ **开发者模式**（契约 `docs/dev/82-DEV-MODE.md` · 2026-09-24；
+   * **"开的是你自己那台 · 全部房间"改于 2026-09-25 · 契约 `docs/dev/109-DEV-ENTRY-IS-YOURS.md`**）
+   * —— 两侧分开给：
    *
    *   · **宿主这一侧**（`dev`）：按 `Host` 认出 `dsh<手机号>.<HUPO_DEV_BASE>` ⇒ 走开发者中继。
    *     签名用**制品那条同一个密钥**，但**分域**（payload `d|…`）。
-   *   · **盒子这一侧**（`devContainer`）：只在**容器里**建 —— 它懒起回环上那台 `dsh web`
-   *     并反代 `/h…`。宿主上不建（宿主那条公开口永远不接 `/h`）。
-   *     ⚠️ 判据 D7：盒子**不开任何宿主端口**，`dsh web` 只听回环。
+   *   · **盒子这一侧**（`devContainer`）：只在**容器里**建 —— 它**先给房间清单**
+   *     （`main` ＋ `workspaces/` 下每一间，来源见下面 `rooms`），点哪间就用**那间的 cwd**
+   *     起一台 `dsh --profile web`（**界面只有这个 app 提供**）＋ 与真那台**同一套** patch
+   *     （人格 ＋ 能力层 ＋ 模型那条，`agentPatchArgs()` 一处出处）并反代 `/h…`。
+   *     宿主上不建（宿主那条公开口永远不接 `/h`）。
+   *     ⚠️ 判据 D7′/D7″（**改过一次，别照旧版读**）：同源落在**同一套 patch ＋ 一个
+   *        `DSH_HOME` ＋ 那一间的 cwd** 上；`--profile web` 是**界面那个 app**，
+   *        `--profile sdk` 是 stdio JSON-RPC（连 `--host` 都不认）⇒ 换掉它这条入口**当场起不来**。
+   *        ⚠️ 而且它那副**嗓子不是琥珀的**（`standard` preset 自己那份 persona 盖住我们那层）
+   *        ⇒ 页面上**明写**"在这儿说话的不是琥珀"（主人 2026-09-25 拍的「甲」）。
    */
   dev: isHostSide
     ? { key: appsSignKey, base: cfg.devBase, scheme: cfg.devScheme }
     : null,
   devContainer: cfg.trustedSocketPath
-    ? createDevWebRelay({ cfg, log: (m) => console.log(`  ${m}`) })
+    ? createDevWebRelay({
+        cfg,
+        /**
+         * ★ **房间清单的来源与真那台同源**（契约 `docs/dev/109-DEV-ENTRY-IS-YOURS.md`）：
+         *   `main` 的 cwd 就是 `paths.agentCwd`（盒里 `/data/main`）—— **不是 `/data`**；
+         *   别的房间走 `roomFor()` 用的同一处（`workspaces.dirFor(scope)`）。
+         *   ⇒ 点哪间就用**那间的 cwd** 起，看到的必须是**同一份会话**（判据 D2/D3）。
+         * ⚠️ **每次现取**（新工作区不用重启就能看见）；`worldFor` 只是取（世界早就热过了）。
+         */
+        rooms: () => {
+          const w = worlds.worldFor(OWNER_ID);
+          return [
+            { id: MAIN_SCOPE, name: '主对话', cwd: w.cfg.agentCwd },
+            ...w.workspaces.list().map((s) => ({ id: s, name: s, cwd: w.workspaces.dirFor(s) })),
+          ];
+        },
+        /**
+         * 🔴 **让 DSH 认得这些房间**（主人 2026-09-25 **批**了这一条；契约 109 §八）。
+         *
+         * 真机读数：DSH 的工作区注册表一旦 `initialized === true`，**再也不发现新房间**，
+         * 界面会把那一间的对话整个藏掉（**光把 cwd 指对不够**）⇒ D3/D6 都会红。
+         * 打开它 = 起那台之前把 `initialized` 置回 `false`（让 DSH 按对话头重新发现所有房间）。
+         * ⚠️ 那属于"写运行中的东西" ⇒ 默认**关**；这一行是主人点头之后才加上去的。
+         */
+        workspaceNudge: true,
+        log: (m) => console.log(`  ${m}`),
+      })
     : null,
   // ★ **字体镜像的缓存目录**（`/fonts/…` 那条口）：镜像下来的字体落在这儿
   fontCacheDir: nodePath.join(cfg.dataDir, 'font-cache'),

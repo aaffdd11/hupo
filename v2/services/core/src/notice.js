@@ -72,7 +72,7 @@ export const URGENT_KIND = 'disk-full';
  *   有 `unknown` 兜底：**那句话照旧显示**，`notice.dart` 顶上写着这条）。
  *   ⇒ 旧客户端不炸、协议字段一个都不动。
  */
-export const WORK_NOTICE_KINDS = Object.freeze(['work-started', 'work-done', 'work-failed', 'work-late']);
+export const WORK_NOTICE_KINDS = Object.freeze(['work-started', 'work-done', 'work-failed', 'work-late', 'work-nudge']);
 
 /** 撤销：现在**只有回收站那一条**有（契约 §5.1）。动作名与客户端对齐。 */
 export const UNDO_RESTORE = Object.freeze({ action: 'trash/restore', label: '拿回来' });

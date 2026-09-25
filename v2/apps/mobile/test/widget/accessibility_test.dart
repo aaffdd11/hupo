@@ -51,6 +51,7 @@ import 'package:hupo_app/screens/model_key_screen.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/screens/waiting_screen.dart';
 import 'package:hupo_app/models/image_outcome.dart';
+import 'package:hupo_app/models/job_words.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
@@ -207,6 +208,33 @@ Future<void> _openRenameDialog(WidgetTester tester, double scale) async {
   await tester.pumpAndSettle();
   expect(find.text(desktopRenameTitle), findsOneWidget, reason: '★ 改名那一层没进这棵树');
   expect(find.text(desktopRenameOk), findsOneWidget, reason: '★ 那个"改好了"没画出来');
+}
+
+/// ★ 2026-09-25（契约 `docs/dev/108-JOB-ASK-FLOW.md` §一 第①步 · 判据 C1）：
+/// **像用户那样**收到那句问话 ⇒ 出**确认层 ＋ 两个按钮**。
+///
+/// ⚠️ 和关于页 / 空房间 / 删除确认同一条理由：**新加的界面必须也过这两道硬闸**
+///    （五档不溢出 + 命中区 ≥44），不然它们会随时间失效。
+/// ⚠️ **走真入口**：那层确认是 `ChatScreen` 收到**服务端那一帧**之后弹的
+///    （`_maybeAskJob`），所以这里也喂一帧进去 —— 不直接 pump 那个面板
+///    （那样它底下没有聊天屏，量的就不是用户真会看到的那棵树）。
+/// ⚠️ 那一帧是**瞬态**（服务端 `emitTransient`）：不占号、不落盘、不重放。
+Future<void> _openJobAsk(WidgetTester tester, double scale) async {
+  final c = ChatController(api: Api(base: 'http://127.0.0.1:1'), tokens: TokenStore());
+  await _pump(tester, ChatScreen(controller: c, onLoggedOut: () {}), scale);
+  c.ingest({
+    'type': 'job/ask',
+    'id': 'j_ask_1',
+    'where': 'math-drill',
+    'why': '帮我做一个练算数的小程序',
+    'text': '这件事要另开一处专门做吗？',
+    'at': 7,
+  });
+  await tester.pumpAndSettle();
+  // 负向对照：**那一层真的出来了**才算数（没出来的话这道闸量的是别的屏）
+  expect(find.text(jobAskTitle), findsOneWidget, reason: '★ 那层确认没进这棵树 ⇒ 这道闸扫错了屏');
+  expect(find.text(jobAskNewPlace), findsOneWidget, reason: '★ 【另开一处做】没画出来');
+  expect(find.text(jobAskHere), findsOneWidget, reason: '★ 【就在这儿做】没画出来');
 }
 
 /// **像用户那样**打开「我自己那台」（2026-09-24 新加的磁贴 · 契约 `81-HARNESS-ENTRY.md`）。
@@ -935,6 +963,12 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '删除确认层在 ${s}x 溢出了');
       });
 
+      testWidgets('派活那一层确认（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-25（契约 `108` §一 第①步）：那一层里有一句**他说的原话**
+        //    （长度不可控）＋ 两个按钮 —— 字号放到最大那一档最容易顶出屏幕。
+        await _openJobAsk(tester, s);
+      });
+
       testWidgets('桌面图标的**改名那一层**（从真入口进）@ ${s}x', (tester) async {
         // ⚠️ 2026-09-25（契约 `104` §一）：输入框 ＋ 标题 ＋ 两个按钮 —— 字放大那一档最险。
         await _openRenameDialog(tester, s);
@@ -1208,6 +1242,13 @@ void main() {
         // ⚠️ 2026-09-25（契约 `104` §一）：【算了】/【改好了】两个按钮也要进这份扫描。
         await _openRenameDialog(tester, s);
         await sweep(tester, '改名那一层 @${s}x');
+      });
+
+      testWidgets('派活那一层确认（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-25（契约 `108` §一 第①步）：【另开一处做】/【就在这儿做】
+        //    两个按钮的命中区都要 ≥44（这是他真要按下去的那一下）。
+        await _openJobAsk(tester, s);
+        await sweep(tester, '派活确认层 @${s}x');
       });
     }
 

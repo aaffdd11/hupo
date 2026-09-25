@@ -12,6 +12,8 @@ import 'package:flutter/foundation.dart';
 import '../models/conn_state.dart';
 import '../models/export.dart';
 import '../models/hearing_session.dart';
+import '../models/job_ask.dart';
+import '../models/job_words.dart';
 import '../models/message_state.dart';
 import '../models/notice.dart';
 import '../models/plan.dart';
@@ -213,6 +215,35 @@ class ChatController extends ChangeNotifier {
   ///    `_openApp` 喂它。这一层**不猜**"现在开着哪个图标"——它只记住被告诉的那个值。
   String _scope = mainScope;
 
+  // ── ★ **派活那一步**（契约 `docs/dev/108-JOB-ASK-FLOW.md`）────────────
+  //
+  // 那一帧 `job/ask`（瞬态）到了 ⇒ 屏上出一层确认 ＋ 两个按钮；
+  // 他答了（走同一条流发一帧）⇒ 服务端建那一处 ＋ 推 `scope/open` ⇒ 窗口自己切过去。
+  // 答【就在这儿做】⇒ 什么都不建，它就在主对话里做完。
+
+  /// 现在等着他答的那一笔（`null` = 没有）。
+  JobAsk? _jobAsk;
+
+  /// ★「接着往下」用的那一份**视图**：切过去之后那一屏要先看得见**他那句原话**。
+  ///
+  /// 🔴 **不许复制事实**（契约 §二 C4 / §一 不许破的第 5 条）：这里装的是
+  ///    **主对话那一间内存里那条**（同一份 `UserUtterance`），
+  ///    `items` 只是把它**排到那一间前面**——不落盘、不进那一间的缓存、
+  ///    也不进 `_facts` ⇒ 盘上永远只有一份（它的家还是主对话那条日志）。
+  final Map<String, List<TimelineItem>> _carried = {};
+
+  /// 他刚说的那句（发问话那一刻从**主对话**里取的）——`scope/open` 到的时候带过去。
+  UserUtterance? _carryCandidate;
+
+  /// ★ **做完自动给他看**：界面那一层要打开的那一格（取走就清）。
+  String? _openAppRequest;
+
+  /// 刚才**发出去等回执**的那一笔（回执只认号相同的那一帧；答完就清）。
+  ///
+  /// ⚠️ 为什么不能拿 `_jobAsk` 当依据：那层确认一按下去就收了（`_jobAsk = null`），
+  ///    于是"任何一帧回执"都会被当成自己的 —— 判据当场抓到过这一次。
+  String? _answeredId;
+
   /// **每一个房间在内存里的那一份**（键 = scope）。
   ///
   /// 🔴 为什么必须**一间留一份**，而不是切过去就把上一间丢掉：
@@ -288,7 +319,61 @@ class ChatController extends ChangeNotifier {
   ///
   /// ⚠️ 更早那几页**不在** `timeline` 里（它们不进本机缓存，见 `_olderItems`），
   ///    所以这里要把两段拼起来；界面那一层照旧只用这一个口。
-  List<TimelineItem> get items => [..._olderItems, ...timeline.items];
+  ///
+  /// ★ **「接着往下」**（契约 108 §二 C4）：他答【另开一处做】之后切过去，
+  ///    那一屏**先看得见他那句原话** —— 它排在**这一间自己那些条目之前**
+  ///    （他先说的话，然后才是这一间的活）。⚠️ 它是**视图**（内存里那份），
+  ///    盘上不多一个字（见 `_carried` 那段）。
+  List<TimelineItem> get items => [...?_carried[_scope], ..._olderItems, ...timeline.items];
+
+  /// ★ 现在等着他答的那一笔（`null` = 没有）—— 界面那一层按它出确认层。
+  JobAsk? get pendingJobAsk => _jobAsk;
+
+  /// ★ **做完自动给他看**：界面那一层取一次（取走就清 ⇒ 只自动打开一次）。
+  String? takeOpenAppRequest() {
+    final id = _openAppRequest;
+    _openAppRequest = null;
+    return id;
+  }
+
+  /// 主对话里**最后那句已经确认的**用户发言；没有 ⇒ `null`（**不编**）。
+  ///
+  /// ⚠️ 用 `timeline.items`（**那一间自己的**事实），不是 `items`
+  ///    （那个已经把"带过去的"也算进去了 —— 拿它当来源会自己吃自己）。
+  UserUtterance? _lastConfirmedUtterance() {
+    for (final it in timeline.items.reversed) {
+      if (it is UserUtterance && it.state == MessageState.confirmed && it.text.trim().isNotEmpty) {
+        return it;
+      }
+    }
+    return null;
+  }
+
+  /// ★ **他答了那一句问话**（契约 `docs/dev/108-JOB-ASK-FLOW.md` §一 第②/③步）。
+  ///
+  /// 只发一帧（**同一条流**），然后**等回执**：
+  ///   · 收下了 ⇒ 那层确认收掉；要是答的"是"，紧接着那一帧 `scope/open` 会让窗口自己切过去
+  ///     （🔴 **这一层不自己切房间**：两个裁判就会切两次）；
+  ///   · 没送出去（流没连着 / 号码对不上）⇒ **如实说一句**，绝不假装收下了。
+  ///
+  /// ⚠️ **不许猜**：`yes` 就是他按下的那一个按钮，这里不做任何"默认选哪个"。
+  void answerJobAsk({required bool yes}) {
+    final ask = _jobAsk;
+    if (ask == null) return;
+    final s = _stream;
+    final sent = s != null && s.answerJob(ask.id, yes: yes);
+    if (!sent) {
+      // 那层确认**留着**：他再按一次就有机会送出去（不是"按了没反应"）。
+      _lastError = jobAskFailedLine;
+      notifyListeners();
+      return;
+    }
+    _jobAsk = null;
+    _answeredId = ask.id; // 只等**这一笔**的回执
+    // 答【否】⇒ 不会再有 `scope/open` ⇒ 那份"带过去"的也就不该留着。
+    if (!yes) _carryCandidate = null;
+    notifyListeners();
+  }
 
   /// 界面上那行「它正在做…」；`null` = 什么都不显示。
   ///
@@ -906,9 +991,73 @@ class ChatController extends ChangeNotifier {
     //        白跑一趟磁盘）。
     if (event['type'] == 'scope/open') {
       final to = event['scope'];
-      if (to is String && to.isNotEmpty && to != _scope) {
-        unawaited(setScope(to));
+      if (to is String && to.isNotEmpty) {
+        // ★ **「接着往下」**（契约 108 §二 C4）：切过去之前，把**发起那一间**
+        //   刚说的那句"按视图带过去"（只放内存，见 `_carried` 那段）。
+        //   ⚠️ **他答了【另开一处做】才会有这一帧**（答【否】没有这一帧，
+        //      那一句就留在主对话里不动 —— 那本来就是对的）。
+        final carried = _carryCandidate;
+        if (carried != null) {
+          _carryCandidate = null;
+          _carried.putIfAbsent(to, () => <TimelineItem>[]).add(carried);
+        }
+        if (to != _scope) unawaited(setScope(to));
       }
+      return;
+    }
+
+    // ★ **契约 `docs/dev/108-JOB-ASK-FLOW.md` §一 第①步**：他接下一件新东西时，
+    //   服务端**先问一句** ⇒ 屏上出一层确认 ＋ 两个按钮。
+    //   ⚠️ 它是**瞬态**（不占号、不落盘）⇒ 这里 `return`，**不许喂给 `timeline`**
+    //      （喂了就是"屏幕上多出一条谁也看不见的东西"，重放时还会再问一遍）。
+    final ask = jobAskOf(event);
+    if (ask != null) {
+      // ★ 「接着往下」那一份要**在发问话的这一刻**从主对话里取（他刚说完那句）。
+      _carryCandidate = _lastConfirmedUtterance();
+      _jobAsk = ask;
+      notifyListeners();
+      return;
+    }
+
+    // ★ **那一笔作废了**（超时 / 不答 ⇒ 不许猜）：把那层确认收掉 ＋ 如实说一句。
+    //   🔴 只认**号相同**的那一帧（作废的是那一笔，不是"所有的问话"）。
+    final mine = _jobAsk;
+    if (mine != null && jobAskExpiredOf(event, mine.id) != null) {
+      final text = event['text'];
+      _jobAsk = null;
+      _carryCandidate = null;
+      _lastError = text is String && text.trim().isNotEmpty ? text.trim() : jobAskExpiredFallback;
+      notifyListeners();
+      return;
+    }
+
+    // ★ **答话的回执**（收下了没有）—— `ok:false` 时那句人话**照抄服务端给的**
+    //   （与反问那条路同一条规矩：那句人话到得了状态条，绝不静默）。
+    final ack = jobAnswerAckOf(event);
+    if (ack != null) {
+      if (ack.id != _answeredId) return; // 别的号的回执：不是这一笔的事
+      _answeredId = null;
+      if (!ack.ok) {
+        _jobAsk = null;
+        _carryCandidate = null;
+        _lastError = ack.text ?? jobAskFailedLine;
+      }
+      notifyListeners();
+      return;
+    }
+
+    // ★ **做完自动给他看**（契约 §一 第④步 · 判据 C5/C6）：
+    //   🔴 **只有他正开着那一间**才认这一帧（服务端也只推给那一间的那条连接，
+    //      这里再挡一道：帧不是属于**现在这一间**的就丢掉 ⇒ 结构上抢不了屏）。
+    //   ⚠️ **不落盘、不进时间线**：那句总结的家只有主进程那条 `job/report`
+    //      （一条事实一个家）⇒ 这里只在浮窗里"旁边留一句"。
+    final open = jobOpenOf(event);
+    if (open != null && eventInScope(event, _scope)) {
+      _openAppRequest = open.app;
+      if (open.text.isNotEmpty) {
+        _showNotice(Notice(kind: NoticeKind.unknown, text: open.text));
+      }
+      notifyListeners();
       return;
     }
 
@@ -1115,6 +1264,12 @@ class ChatController extends ChangeNotifier {
   void _invalidateLocal() {
     _textSinceSave = 0;
     _facts.clear();
+    // ★ **派活那一步那一份也一起清**（契约 108）：待答的那一笔、以及
+    //   "带过去的那句原话"都是**上一位的**（共用设备那条规矩，`38` §8.2）。
+    _jobAsk = null;
+    _carryCandidate = null;
+    _openAppRequest = null;
+    _carried.clear();
     // ★ **更早那几页也一起清**（批 C）：它们是"上一个世界"的老消息，
     //   留着的话下一个用这台机器的人会看到别人的历史（`38` §8.2 同一类病）。
     _clearOlder();

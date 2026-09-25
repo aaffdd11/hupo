@@ -1,6 +1,7 @@
-// **开发者模式**（契约 `docs/dev/82-DEV-MODE.md` · 主人 2026-09-24 定稿）。
+// **开发者模式**（契约 `docs/dev/82-DEV-MODE.md` · 主人 2026-09-24 定稿；
+// **"开的是你自己那台"改于 2026-09-25 · 契约 `docs/dev/109-DEV-ENTRY-IS-YOURS.md`**）。
 //
-// 一句话：把某个（被标成 `dev` 的）用户盒子里那台 `dsh web` 露到
+// 一句话：把某个（被标成 `dev` 的）用户盒子里那台 DSH 露到
 // `dsh<手机号>.<HUPO_DEV_BASE>` 上，**盒子不开端口**（容器内只听回环），
 // **外层用琥珀的登录锁**（App 里点一下 ⇒ 短时效签名链接 ⇒ 种第一方 cookie）。
 //
@@ -9,10 +10,47 @@
 //     `/__enter` 验签种 cookie；其余路径要第一方 cookie（**验签 + 现查 dev**）⇒
 //     经 `proxyFor(tenant)` 把请求送进容器，**路径加 `/h` 前缀**、**剥掉浏览器 cookie**。
 //   · **盒子这一侧**（`createDevWebRelay` · 只在 `trusted === true` 的请求上）：
-//     路径以 `/h` 开头 ⇒ 懒起 `dsh --profile web --patch <模型那条> --host 127.0.0.1 --port 0 --no-open`，
+//     先给一个**房间清单**（`main` ＋ `workspaces/` 下每一间）；点某一间 ⇒
+//     用**那一间的 cwd** 起一台 `dsh --profile sdk` ＋ 人格 ＋ 能力层 ＋ 模型那条 patch
+//     （**与调度器按轮起的那台同源** —— 参数只有 `agentArgs()` 一处出处），
 //     从 stdout 解析端口与进程令牌 ⇒ `GET /?token=` 换 DSH 自己的 cookie 存住 ⇒
 //     之后每条上游请求都**替浏览器**带上它，并把 `Host`/`Origin` 改写成回环
 //     （那道 `/api` 栅栏按回环放行，正反例都实测过 —— `81-HARNESS-ENTRY.md` §四）。
+//
+// 🔴 **只有一套配置、一个家**（主人 2026-09-25 铁律）：patch 层（人格 ＋ 能力层 ＋ 模型那条）
+//    与调度器按轮起的那台**逐字同源**（`agentPatchArgs()`，一处出处），`$DSH_HOME` 就是
+//    盒里那一个（`/data/dsh`，**不另设**），cwd 就是**选中的那一间**。
+//    ⚠️ 这一份原来只挂**模型那条** patch（没人格、没能力层）——那才是"第二套配置"，
+//    主人明说"绝对不允许"（"它只允许有一个 deepseek harness"）。现在那两样都挂上了。
+//    ⚠️ 至于 `--profile web` 那一行：**它是界面这个 app**，DSH 只在它里面提供浏览器界面
+//    （`dsh --profile sdk` 是 stdio JSON-RPC，`--host` 都不认）—— 见 `DEV_WEB_PROFILE` 那段读数。
+//    会话按 cwd 分项目、而 `$DSH_HOME/sessions` 只有一份 ⇒ **看到的是同一份会话**。
+//
+// ⚠️ **一次只开一间**（内存与句柄都不许失控）：`dsh web` 是**一整台 DSH**（不是小工具），
+//    盒子的上限是 768MB，而"一间留一台"会随房间数线性涨（每间还带自己的 agent 窗口）。
+//    ⇒ **换房间 = 收掉旧的、起新的**（`killChild()` 之后才 spawn）。
+//    **如实说清**：房间清单页上写着这件事；会话本身落盘（`$DSH_HOME/sessions`），
+//    换房间**不丢**已经记下的对话，但**旧页面那条流会断开**（要重新进那一间）。
+//
+// 🔴 **一件事必须如实说**（2026-09-25 真机读数 · 真 dsh ＋ 本仓那三层 patch，
+//    读的是会话日志里的 `system/message` / `request/header`，不是猜的）：
+//      · **工具：是我们的** —— 46 个里含 `mcp__ledger__job_start`、`mcp__apps__*`、
+//        `mcp__image__image_generate` ⇒ 能力层那三层 patch **真挂上了**；
+//      · **人格：不是我们的** —— `--profile web` 的**会话 agent 是它自己的 agent preset
+//        （`standard`）**，而那个 preset 自己声明了一份 `persona`
+//        （"You are a coding agent powered by the {{model}} model."）——
+//        它**盖住**了我们那层 `system-prompt` patch（system prompt 里**没有**
+//        「你是「助手」」，也没有「守正出奇」）。
+//    ⇒ **这一页是"看得见同一份会话"的窗口，不是"跟他助手同一副嗓子"的窗口。**
+//      要那副嗓子得换一条形状（只读看板 / 我们自己接 SDK）—— 那要主人拍。
+//
+// ⚠️ **还有一件真机事实**（D3 的必要条件）：DSH 的工作区注册表一旦初始化过，
+//    **再也不发现新房间**，界面会把那一间的会话整个藏掉（**光把 cwd 指对不够**）。
+//    ⇒ `spawnWeb()` 起那台之前会先 `ensureRoomRegistered()` 看一眼：
+//      · **默认只读**（`workspaceNudge:false`）：不在注册表里就**只留一句提示**，
+//        一个字节都不写 —— 这时界面**看不到**那一间（D3 红），**如实**；
+//      · `workspaceNudge:true` 才真把 `initialized` 置回 `false`（让 DSH 重新发现房间）。
+//    🔴 **写盘要主人拍** ⇒ 默认关。`serve.js` 现在**不**传这个开关。
 //
 // ── ⚠️ 主数据通道是一条 **WebSocket**（2026-09-24 修的真 bug）──────
 //   那个界面的主数据通道是 `@deepseek-ai/dsh-api-gateway/lib/client.js` 里的
@@ -25,26 +63,32 @@
 //     · 盒子：`handleUpgrade` 把这条升级**原样搬字节**到回环上的 `dsh web`，
 //       并改写 `Host`/`Origin`、注入 DSH 那把 cookie、剥掉浏览器 cookie。
 //
-// ── 三条不许破 ─────────────────────────────────────────────
+// ── 四条不许破 ─────────────────────────────────────────────
 //   ① 🔴 **签名分域**：`/__enter` 的 payload 是 `d|<sub>|<exp>`，cookie 是 `dh|<sub>|<exp>`；
 //      拿**制品**那条签名（`<sub>|<id>|<version>|<exp>`）或别处的签名来用 ⇒ **一律不过**（判据 D5）。
 //   ② 🔴 **每个请求现查 `dev`**（`users.isDev`）：关掉就**当场**拒，不是等重启（判据 D4）。
 //      升级那条走的是**同一个** `authorize`（判据 D9 的反例：没 cookie / 假 cookie /
 //      没标 dev / 没租户 ⇒ **握手阶段**拒，不是先连上再关）。
 //   ③ 🔴 **不缓冲**：请求体与响应体两头都 `pipe`；升级那条是**双向管道**。
+//   ④ 🔴 **一套配置、一个家**（契约 109 D7′/D7″）：patch 层只由 `agentPatchArgs()` 造
+//      （人格 ＋ 能力层 ＋ 模型那条 —— 与调度器那台**一处出处**），`DSH_HOME` 只有
+//      `cfg.dshHome` 一个。`--profile web` 那一行**是 DSH 逼出来的**（界面只有它有，
+//      读数见 `DEV_WEB_PROFILE`）—— **不是**"可以随手换成 sdk"。换 `sdk` = 这条入口起不来。
 //
 // ⚠️ **绝不用 root 跑 DSH、绝不用容器真实的 `DSH_HOME` 做探针**（`81-HARNESS-ENTRY.md` §9.3
-//    那次事故）。这一份里的 spawn 走 `childEnv()` + `cfg.agentUid/Gid`（"换手"那条安全设计）。
+//    那次事故）。这一份里的 spawn 走 `agentEnv()` + `cfg.agentUid/Gid`（"换手"那条安全设计）。
 
 import nodeCrypto from 'node:crypto';
+import nodeFs from 'node:fs';
 import nodeHttp from 'node:http';
 import nodeNet from 'node:net';
+import nodePath from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
 
-// ⚠️ 只借**纯函数**（与 `harness-session.mjs` 同一个做法）：
-//    `childEnv()` 摘掉密钥；`harnessArgs()` 保证 `--patch` **写在 `--profile` 后面**。
-import { childEnv } from './agent-runtime.js';
-import { harnessArgs } from './harness-session.mjs';
+// ⚠️ 只借**三个纯函数**：
+//    `agentEnv()` 摘掉密钥 ＋ 给那**一个** `DSH_HOME` ＋ 能力层要的那几样环境变量；
+//    `agentPatchArgs()` 给出**与调度器那台逐字同一套** patch（判据 D1/D7′）。
+import { agentEnv, agentPatchArgs } from './agent-runtime.js';
 // ⚠️ 只借**掩码**那一个纯函数：手机号是个人信息，**日志里只许出现掩码形态**
 //    （与 `users.js` / `audit.js` 同一条纪律）。
 import { maskPhone } from './audit.js';
@@ -64,12 +108,29 @@ export const DEV_HARNESS_PATH = '/api/dev-harness';
 export const DEV_MODE_PATH = '/api/dev-mode';
 /** 进容器这条路的前缀：`/api/x` → `/h/api/x`、`/` → `/h/`。 */
 export const DEV_PATH_PREFIX = '/h';
+/**
+ * **房间清单**那一页的路径（契约 109 §"房间清单"）。
+ *
+ * ⚠️ 它必须在 `/` 之外另有一个地址：`/` 选过房间之后就是**那台界面**了
+ *    （DSH 的界面把 API 算在 `location.origin` 的根上 ⇒ 不能给它加路径前缀），
+ *    所以"回房间清单"只能靠一个**界面不会用到的**路径 —— 这个。
+ * ⚠️ 用 `__` 开头是刻意的：DSH 自己用的是 `/`、`/api/*`、`/plugins/*`、`/assets/*`。
+ */
+export const DEV_ROOMS_PATH = '/__rooms';
+/** 选房间那个查询参数：`/?room=<id>`。 */
+export const DEV_ROOM_QUERY = 'room';
 /** 签名链接的有效期（**短**是刻意的：它是一条"凭 URL 就能进"的能力）。 */
 export const DEV_LINK_TTL_MS = 10 * 60 * 1000;
 /** cookie 会话的有效期（一天）。 */
 export const DEV_COOKIE_TTL_MS = 24 * 60 * 60 * 1000;
 /** 收 `dsh web` 的宽限：先 `SIGTERM`，到点还活着就 `SIGKILL`。 */
 export const DEV_KILL_GRACE_MS = 2000;
+/**
+ * 插"不是琥珀"那一条时，**最多**缓多少字节的顶层文档。
+ * ⚠️ 超了就**边写边转发**（一个字节都不丢，只是那一条不插）——
+ *    宁可没有那一条，也不许把那一页卡住 / 吃掉内存。
+ */
+export const DEV_BANNER_MAX_BYTES = 512 * 1024;
 
 /** 签名分域：换 cookie 的短链接。 */
 export const DEV_ENTER_DOMAIN = 'd';
@@ -454,24 +515,194 @@ export function createDevHostRelay({
   };
 }
 
-// ── 盒子这一侧：懒起 `dsh web` 并反代 ────────────────────────
+// ── 盒子这一侧：房间清单 ＋ 懒起一台 `dsh web`（与真那台同源）并反代 ──
 
 /**
- * **给那个进程的参数**（契约 §四/§五）。
+ * 🔴 **浏览器界面只有 `web` 这个 app 提供** —— 这一行是被 DSH 的形状逼出来的，不是选的。
  *
- * 🔴 `--patch` 是**全局选项**，必须写在 `--profile web` **后面** —— 所以这里复用
- *    `harnessArgs()`（那个函数已经被 H5 那一组判据钉住"patch 挨着 profile"）。
+ * 真机读数（本机 `dsh` 0.1.5-rc.1）：
+ * ```
+ * $ dsh --profile sdk --help
+ * Serve DeepSeek Harness SDK clients over stdio JSON-RPC.   ← 它没有 --host/--port
+ * $ dsh --profile sdk --host 127.0.0.1 --port 0 --no-open
+ * error: unknown option '--host'                            ← exit=1
+ * $ dsh web --help
+ * Serve the DeepSeek Harness browser UI.
+ * Options: --host / --no-open / --port / --trusted-host     ← 界面只在这儿
+ * ```
+ * ⇒ 把这一行换成 `sdk` 不会"更同源"，只会让这条入口**当场起不来**。
+ *
+ * ★ **"同源"落在另外三样上**（它们才是会话/配置的实质，判据 D1/D7）：
+ *   ① **同一套 patch**（`agentPatchArgs(cfg)` —— 与调度器那台**一处出处**）；
+ *   ② **同一个 `$DSH_HOME`**（`cfg.dshHome`，盒里 `/data/dsh` —— 会话只有一份，按 cwd 分项目）；
+ *   ③ **同一间的 cwd**（`room.cwd`）。
+ * ⇒ 界面里看到的、和它平时干活时说的是**同一份会话**（D3）。
+ */
+export const DEV_WEB_PROFILE = 'web';
+
+/**
+ * **给那个进程的参数**（契约 109 §二/§三 D1/D2/D7）。
+ *
+ * 🔴 **配置层与调度器那台逐字同源**：人格 ＋ 能力层 ＋ 模型那条，全部由
+ *    `agentPatchArgs()` 造（**只有那一处出处**）。这里**只多三样**：
+ *    · `--profile web`：**界面**这个 app（见上面 `DEV_WEB_PROFILE` 那段读数 ——
+ *      DSH 只在它里面提供浏览器界面）；
+ *    · `--host 127.0.0.1` / `--port 0`：只听回环、端口交给内核挑
+ *      （盒子**不开**任何宿主端口 —— 原判据 D7）；
+ *    · `--no-open`：别去拉浏览器（盒里没有）。
+ *
+ * ⚠️ 判据 D1 的**变异**：把那几层 patch 少挂一条（或者换成 `harnessArgs()` 那套
+ *    "只有模型那条"）⇒ 当场红 —— 那正是改前"没有人格、没有工具"的形状。
  */
 export function devWebArgs(cfg = {}) {
   return [
-    ...harnessArgs({ ...cfg, agentProfile: 'web' }),
-    // ⚠️ **只听回环、端口交给内核挑**（盒子**不开**任何宿主端口 —— 判据 D7）。
+    '--profile',
+    DEV_WEB_PROFILE,
+    ...agentPatchArgs(cfg),
     '--host',
     '127.0.0.1',
     '--port',
     '0',
     '--no-open',
   ];
+}
+
+/**
+ * 房间清单**归一化**：只要 `{id, name, cwd}` 三样都认得出、`id` 不重复的。
+ *
+ * ⚠️ 认不出的**一律丢掉**（不猜）：`cwd` 认不出 ⇒ 那间点开就会 spawn ENOENT
+ *    （而那个 ENOENT 分不清"目录不在"和"程序找不到"）。
+ */
+export function normalizeRooms(list) {
+  const out = [];
+  const seen = new Set();
+  for (const r of Array.isArray(list) ? list : []) {
+    const id = typeof r?.id === 'string' ? r.id.trim() : '';
+    const cwd = typeof r?.cwd === 'string' ? r.cwd.trim() : '';
+    if (id === '' || cwd === '' || seen.has(id)) continue;
+    seen.add(id);
+    const name = typeof r?.name === 'string' && r.name.trim() !== '' ? r.name.trim() : id;
+    out.push({ id, name, cwd });
+  }
+  return out;
+}
+
+/** HTML 转义（房间名来自盘上/制品库，**不许**直接拼进页面）。 */
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/gu, (c) => {
+    switch (c) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      default:
+        return '&#39;';
+    }
+  });
+}
+
+// ── ★ **看板那句话**（主人 2026-09-25 拍的「甲」；契约 `109-DEV-ENTRY-IS-YOURS.md` §八）──
+//
+// 🔴 **这一页里回话的不是琥珀**。真机读数（读的是会话日志，不是猜的）：
+//    我们那三层 patch **真挂上了**（46 个工具里含 `mcp__ledger__*` / `mcp__apps__*`），
+//    但 `--profile web` 那条路的**会话 agent 是 DSH 自己的 preset（`standard`）**，
+//    而那个 preset 自己声明了一份 `persona`，**盖住**了我们那层 `system-prompt`
+//    ⇒ 工具是我们的、**嗓子不是**。
+//    ⇒ 名字叫"我自己那台"，说话的却**不是琥珀** —— 页面上必须**明写**这一句，
+//      不然就是"名字一样、东西不一样"（那是界面在说假话，手册 §六·4）。
+//
+// ⚠️ **一处文案、两处落点**：这一页（进之前）与**那一页本体**（进去之后，`injectDevBanner`）。
+//    客户端那边（`v2/apps/mobile/lib/models/dev_harness_words.dart`）也有同样两句 ——
+//    **防漂的判据**在 `test/dev-mode.test.js`（逐字比对两份，改一份不改另一份 ⇒ 当场红）。
+export const DEV_BOARD_NOT_HUPO = '在这儿说话的不是琥珀。';
+export const DEV_BOARD_WHY_NOT = '干的活、记的事都是琥珀那一份；说话的规矩和口气是这台机器自带的。';
+
+/**
+ * 注进**那一页本体**顶部的那一条（`<body>` 之后第一个孩子）。
+ *
+ * 🔴 **一处尺寸都不写死**（手册 D3）：那条的高度由字自己撑，`#root` 用 `flex:1`
+ *    把剩下的地方占满 —— 所以字放大/手机上折成两行都不会把它挤出去。
+ * ⚠️ 深色主题也跟着（DSH 把 `data-ds-dark-theme` 挂在 `body` 上）。
+ * ⚠️ 只用**内联 style + 一个 div**：不依赖任何脚本，也不碰 DSH 自己的任何文件。
+ */
+export const DEV_BOARD_BANNER = `<style>
+body{display:flex;flex-direction:column}
+#root{flex:1 1 auto;min-height:0;height:auto!important}
+#hupo-dev-notice{flex:0 0 auto;padding:.35em .7em;font:inherit;font-size:.85rem;line-height:1.5;
+  background:#F7E4DF;color:#C8452F;border-bottom:1px solid #E8E0D4}
+#hupo-dev-notice span{color:#7A6E66;margin-left:.5em}
+body[data-ds-dark-theme] #hupo-dev-notice{background:#2B2320;color:#E8A08E;border-bottom-color:#3A3230}
+body[data-ds-dark-theme] #hupo-dev-notice span{color:#B9AEA6}
+</style>
+<div id="hupo-dev-notice">${DEV_BOARD_NOT_HUPO}<span>${DEV_BOARD_WHY_NOT}</span></div>`;
+
+/**
+ * 把上面那一条插进 DSH 自己那一页（**唯一一处**动它的地方，而且是**注入**、不改它的文件）。
+ *
+ * ⚠️ **认不出来就原样返回 `null`**（没有 `<body>` ⇒ 调用方一个字节都不改地发出去）：
+ *    这一条是"如实"，不是"功能"，**宁可没有也不能把那一页弄坏**。
+ */
+export function injectDevBanner(html) {
+  const s = String(html ?? '');
+  const m = /<body[^>]*>/iu.exec(s);
+  if (!m) return null;
+  const at = m.index + m[0].length;
+  return `${s.slice(0, at)}\n${DEV_BOARD_BANNER}\n${s.slice(at)}`;
+}
+
+/**
+ * **房间清单那一页**（"先给一个房间清单"）。
+ *
+ * ⚠️ 它是**我们自己的**一小页（不是 DSH 的界面）：所以它**不需要**先起 `dsh web`
+ *    （列房间不该花掉一台 DSH 的内存）。
+ * ⚠️ 名字用人话：`main` 显示成"主对话"，工作区显示它自己的短名（**不露内部 id**）。
+ * ⚠️ 页面上**如实写清**"一次只开一间"那件事（换房间会重开界面、旧页面断开）。
+ * ⚠️ 页面上**明写**"在这儿说话的不是琥珀"（见上面那一段 —— 主人拍的「甲」）。
+ */
+export function devRoomsHtml({ rooms = [], current = null } = {}) {
+  const items = rooms
+    .map((r) => {
+      const now = r.id === current ? '<span class="now">（现在打开的）</span>' : '';
+      return `<li><a href="/?${DEV_ROOM_QUERY}=${encodeURIComponent(r.id)}">${escapeHtml(r.name)}</a>${now}</li>`;
+    })
+    .join('\n');
+  const body =
+    rooms.length === 0
+      ? '<p>这一台现在没有可打开的房间。</p>'
+      : `<ul>\n${items}\n</ul>`;
+  return `<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>房间</title>
+<style>
+body{font:16px/1.6 system-ui,-apple-system,"Noto Sans CJK SC",sans-serif;margin:0;padding:24px;color:#222}
+h1{font-size:20px;margin:0 0 4px}
+p{margin:8px 0}
+ul{list-style:none;padding:0;margin:16px 0}
+li{margin:8px 0}
+a{font-size:18px;text-decoration:none;border-bottom:1px solid #bbb}
+.now{color:#888;font-size:14px;margin-left:8px}
+.note{color:#666;font-size:14px}
+.here{background:#F7E4DF;color:#C8452F;border:1px solid #E8E0D4;border-radius:8px;padding:8px 12px;font-size:15px}
+.here span{color:#7A6E66}
+</style>
+</head>
+<body>
+<h1>房间</h1>
+<p class="here">${DEV_BOARD_NOT_HUPO}<span>${DEV_BOARD_WHY_NOT}</span></p>
+<p class="note">点一间进去。这里开的就是这台机器上那一台 DSH —— 与它平时干活的那台<b>同一个家</b>（会话只有一份、按房间分），所以看到的是同一份对话。</p>
+${body}
+<p class="note">一次只开一间：换一间会把上一间那台收掉（省内存）。已经记下的对话不会丢；但上一个页面的连接会断开，要重新进那一间。</p>
+<p class="note"><a href="${DEV_ROOMS_PATH}">回到这一页</a></p>
+</body>
+</html>
+`;
 }
 
 /**
@@ -494,18 +725,140 @@ export function pickDshAuth(setCookie) {
   return null;
 }
 
+/** DSH 那份工作区注册表在哪（`$DSH_HOME/storages/workspace.json`）。**只有这一处**。 */
+export function workspaceRegistryPath(dshHome) {
+  return nodePath.join(String(dshHome ?? ''), 'storages', 'workspace.json');
+}
+
 /**
- * 建盒子这一侧的 `dsh web` 反代（**懒起**：第一条 `/h` 请求才起进程）。
+ * **让 DSH 认得这一间** —— 这是 D3（真机看得见那一间里的会话）的**必要条件**。
+ *
+ * 🔴 真机读数（2026-09-25，`/tmp/dshreg`）：
+ *   DSH 的工作区注册表（`$DSH_HOME/storages/workspace.json`）一旦
+ *   `global.initialized === true`，它**再也不从会话头里发现新的房间** ——
+ *   `dsh-workspace` 的 `bootstrap()` 只跑那一次（`if (!state.initialized) { … bootstrap }`）。
+ *   实测：注册表冻结在 `other` 时，另起的那台界面**只列 `other`**；
+ *   `main` 里那份会话**一个字都不显示**（连 `Ungrouped` 都没有）——
+ *   哪怕那台进程的 cwd 就是 `main`。⇒ **光把 cwd 指对，不够**。
+ *
+ * ★ 修法（**最小、幂等、不动既有记录**）：起那台之前，如果这一间的 cwd
+ *   **不在**注册表里，就把 `initialized` 置回 `false` —— 下一次 boot 会按会话头
+ *   **重新发现所有房间**（`bootstrap` 保留既有表、只补新路径）。
+ *   实测：置回 `false` 再起 ⇒ 注册表里 `other` 与 `main` 都在了，界面两间都列出来。
+ *
+ * 🔴 **写盘默认是关的**（`apply` 默认 `false`）：写 DSH 的存储属于"改运行中的东西"，
+ *    **要主人拍**。不开的时候只做**只读检查**（调用方据此说一句提示），一个字节都不动。
+ *
+ * ⚠️ 真要写时，调用方必须保证**我们那台 `dsh web` 没在跑**（`spawnWeb()` 前面先 `killChild()`）
+ *    —— 免得跟 DSH 自己的写撞上。
+ * ⚠️ 认不出来（文件不在 / 读不动 / 不是 JSON）⇒ **什么都不做**：
+ *    那种情况 DSH 自己会 bootstrap（本来就是"还没初始化"）。
+ *
+ * @param {object} o
+ * @param {string} o.dshHome
+ * @param {string} o.cwd
+ * @param {object} [o.fs]
+ * @param {boolean} [o.apply] **默认 `false`（只读）**；`true` 才真的把 `initialized` 置回 `false`
+ * @returns {{changed:boolean, registered:boolean|null, why:string}}
+ *          `registered:false` = 确知这一间不在注册表里（`changed` 才表示真写了盘）
+ */
+export function ensureRoomRegistered({ dshHome, cwd, fs = nodeFs, apply = false }) {
+  const file = workspaceRegistryPath(dshHome);
+  const want = (() => {
+    try {
+      return fs.realpathSync(cwd);
+    } catch {
+      return String(cwd ?? '');
+    }
+  })();
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch {
+    return { changed: false, registered: null, why: '注册表还没有（DSH 自己会 bootstrap）' };
+  }
+  let j;
+  try {
+    j = JSON.parse(raw);
+  } catch {
+    return { changed: false, registered: null, why: '注册表读不出来（不猜、也不动它）' };
+  }
+  if (j?.global?.initialized !== true) {
+    return { changed: false, registered: null, why: '注册表还没初始化（DSH 自己会 bootstrap）' };
+  }
+  const table = j?.tables?.workspaces;
+  const rows = table && typeof table === 'object' ? Object.values(table) : [];
+  for (const r of rows) {
+    let p = typeof r?.path === 'string' ? r.path : '';
+    if (p === '') continue;
+    try {
+      p = fs.realpathSync(p);
+    } catch {
+      /* 原来的路径没了 ⇒ 照原样比 */
+    }
+    if (p === want) return { changed: false, registered: true, why: '这一间已经在注册表里' };
+  }
+  // ★ 这一间不在
+  if (!apply) {
+    return {
+      changed: false,
+      registered: false,
+      why: `这一间（${cwd}）不在 DSH 的注册表里 —— 界面可能看不到它的会话（要让它重新发现房间，得主人拍）`,
+    };
+  }
+  // ★ 让 DSH 下次开机按会话头重新发现（幂等；表里的记录一条都不删）
+  const next = { ...j, global: { ...j.global, initialized: false } };
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* 没建起来 */
+    }
+    return { changed: false, registered: false, why: `写不进去（${err?.message ?? err}）—— 不改它` };
+  }
+  return {
+    changed: true,
+    registered: false,
+    why: `这一间（${cwd}）还不在注册表里 ⇒ 让 DSH 下次开机重新发现所有房间`,
+  };
+}
+
+/**
+ * 建盒子这一侧的 `dsh web` 反代（**懒起**：选了房间、第一条真请求才起进程）。
+ *
+ * ★ **房间清单**（契约 109）：先给 `main` ＋ 每一间工作区；点哪间就用**那间的 cwd**。
+ *   ⇒ 那个 `cwd` 必须与真那台**同源**（`worlds` 那一套）—— 由调用方给 `rooms`
+ *   （`serve.js` 从 `worlds` 取）；不给就退回只有 `main` 一间（`cfg.agentCwd`）。
+ *
+ * ⚠️ **一次只开一间**：换房间 ⇒ 先 `killChild()` 再 spawn；句柄/内存不随房间数涨。
  *
  * @param {object} o
  * @param {object} o.cfg   `config.js` 那份（`dshBin` / `agentCwd` / `dshHome` /
- *   `modelPatchPath` / `agentUid` / `agentGid` / `agentBootTimeoutMs`…）
+ *   `personaPath` / `capabilitiesPath` / `modelPatchPath` / `agentUid` / `agentGid` /
+ *   `agentBootTimeoutMs`…）
+ * @param {() => Array<{id:string,name:string,cwd:string}>|null} [o.rooms]
+ *        房间清单的来源（**每次现取** ⇒ 新建的工作区不用重启就能看见）
  * @param {Function} [o.spawnFn]   注入用（判据里换成一个假子进程；默认真 spawn）
  * @param {Function} [o.httpRequest] 注入用（判据里换成一个假上游；默认真 `http.request`）
  * @param {Function} [o.connectFn] 注入用（**升级那条**接上游用的 `net.connect`；判据里换成假上游）
  */
 export function createDevWebRelay({
   cfg,
+  rooms = null,
+  /**
+   * 🔴 **要不要动 DSH 的工作区注册表**（`$DSH_HOME/storages/workspace.json`）。
+   *
+   * `false`（**默认**）= 只读：注册表里没有这一间时**只留一句提示**，一个字节都不写
+   *   —— 那种情况下 DSH 界面**看不到**这一间的会话（D3 会红），这是**如实**的。
+   * `true` = 起那台之前把 `initialized` 置回 `false`，让 DSH 按会话头重新发现所有房间
+   *   （真机读数见 `ensureRoomRegistered`）。
+   * ⚠️ 写它属于"改运行中的东西" ⇒ **默认关**，要主人拍。
+   */
+  workspaceNudge = false,
   spawnFn = nodeSpawn,
   httpRequest = nodeHttp.request,
   connectFn = nodeNet.connect,
@@ -524,18 +877,57 @@ export function createDevWebRelay({
         ? cfg.agentBootTimeoutMs
         : 90_000;
 
-  /** 现在那个进程（`null` = 没起 / 已经没了）。 */
+  /**
+   * 现在那个进程（`null` = 没起 / 已经没了）。
+   *
+   * 🔴 **一次只开一间**（契约 109）：`currentId` 是**现在这一台**开的哪一间，
+   *    `currentCwd` 是起它的那一刻用的 cwd（诊断用）。换房间 ⇒ `killChild()` 再 spawn。
+   */
   let child = null;
   /** 起好之后的两个事实：回环端口、DSH 自己那把 cookie（**替浏览器**拿着）。 */
   let upstream = null;
   let starting = null;
   let closed = false;
   let stderrTail = '';
+  /** 现在那一台开的哪一间（`null` = 还没选）。 */
+  let currentId = null;
+  /** 起进程那一刻那一间的 cwd（给 `state()` 排障用）。 */
+  let currentCwd = null;
+  /**
+   * 代号：换一台就 +1。
+   * ⚠️ 少了它，"换房间"期间那条**在飞的启动**落地时会把**新**这一台的状态覆盖掉
+   *    （它会把自己那个端口写进 `upstream`）—— 那是"两个 dev 进程"的形状。
+   */
+  let gen = 0;
+
+  /** **房间清单的来源**（不给 ⇒ 只有 `main` 一间，cwd 就是 `cfg.agentCwd`）。 */
+  const roomsOf = () => {
+    if (typeof rooms === 'function') return rooms();
+    return [{ id: 'main', name: '主对话', cwd: cfg.agentCwd }];
+  };
+
+  /** 现在有哪些房间（**每次现取** —— 新工作区不用重启就能看见）。 */
+  function listRooms() {
+    try {
+      return normalizeRooms(roomsOf());
+    } catch (err) {
+      say(`房间清单没读出来：${err?.message ?? err}`);
+      return [];
+    }
+  }
+
+  /** 找一间；**认不出 ⇒ `null`**（不许拿一个随手的字符串当 cwd）。 */
+  function findRoom(id) {
+    if (typeof id !== 'string' || id === '') return null;
+    return listRooms().find((r) => r.id === id) ?? null;
+  }
 
   function killChild() {
+    gen += 1;
     const c = child;
     child = null;
     upstream = null;
+    starting = null;
     if (!c) return;
     try {
       c.kill('SIGTERM');
@@ -552,18 +944,45 @@ export function createDevWebRelay({
     t.unref?.();
   }
 
-  /** 起进程，等 stdout 上那一行。 */
-  function spawnWeb() {
+  /**
+   * 收掉现在这一台并**忘掉选过哪间**（房间没了 / 关掉中继时用）。
+   * ⚠️ 与 `killChild()` 分开：那一个只收进程（"换一间"还要把新那间记上）。
+   */
+  function dropCurrent() {
+    killChild();
+    currentId = null;
+    currentCwd = null;
+  }
+
+  /** 起进程，等 stdout 上那一行。`room` = **那一间**（cwd 就是它）。 */
+  function spawnWeb(room) {
+    // 🔴 **先看看 DSH 认不认得这一间**（D3 的必要条件）：注册表一旦初始化过，DSH 就
+    //    **不再**发现新房间，界面会把这一间的会话整个藏掉 —— 光把 cwd 指对不够。
+    //    ⚠️ **默认只读**：写 DSH 的 `workspace.json` 属于"改运行中的东西"，要主人拍
+    //       （`workspaceNudge` 是那个开关，默认 **关**）。关着的时候只留一句提示。
+    //    ⚠️ 无论写不写，都必须在 spawn **之前**（此刻我们那台一定没在跑 —— `ensure()` 先收了）。
+    const reg = ensureRoomRegistered({ dshHome: cfg.dshHome, cwd: room.cwd, apply: workspaceNudge });
+    if (reg.changed) say(`房间 ${room.name}：${reg.why}`);
+    else if (reg.registered === false) say(`房间 ${room.name}：⚠️ ${reg.why}`);
+    // 🔴 **一套参数**（`--profile web` ＋ 那几层 patch）—— 见 `devWebArgs()`。
     const args = devWebArgs(cfg);
+    // 🔴 **cwd = 那一间**（盒里 `main` 就是 `/data/main`）：DSH 按 cwd 给会话分组
+    //    ⇒ 与调度器按轮起的那台看到的是**同一份会话**（契约 109 D2/D3）。
+    const cwd = room.cwd;
     const c = spawnFn(cfg.dshBin, args, {
-      cwd: cfg.agentCwd,
+      cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       // 🔴 **换手**：盒里的服务是 root，而 root 带 CAP_DAC_OVERRIDE
       //    ⇒ 不换手的话那台 DSH 能读钥匙（决策 ①）。换不过去会异步 EPERM ⇒ 大声失败。
       ...(cfg.agentUid !== null && cfg.agentUid !== undefined ? { uid: cfg.agentUid } : {}),
       ...(cfg.agentGid !== null && cfg.agentGid !== undefined ? { gid: cfg.agentGid } : {}),
-      // ★ env 走 `childEnv()`（**摘掉密钥**）—— `HUPO_MODEL_TICKET` 是镜像烘死的占位符。
-      env: childEnv({ home: cfg.dshHome }),
+      // ★ env 只有**一处出处**：`agentEnv(cfg)`（摘密钥 ＋ `DSH_HOME` **就是那一个**
+      //   ＋ 能力层那几样 `HUPO_*`）。
+      //   🔴 少了能力层那几样，`hupo-capabilities.yml` 那几条 `- insert:` 的 `args`
+      //      会变成 `[null]` ⇒ **整个 plugin tree 加载失败、dsh 当场退**（真机读数：
+      //      `failed to apply loader entry mcp-ledger … expected {…} but got {"args":[null]}`）。
+      //   ⚠️ **绝不给第二个 home**：那等于第二个 harness（判据 D7′）。
+      env: agentEnv(cfg),
     });
     child = c;
     if (c?.stdout?.setEncoding) c.stdout.setEncoding('utf8');
@@ -599,7 +1018,9 @@ export function createDevWebRelay({
           buf = buf.slice(nl + 1);
           const hit = parseDshWebLine(line);
           if (hit) {
-            finish(null, hit);
+            // ⚠️ 把**这一台**的句柄一起交出去：调用方要能只收掉自己那一台
+            //    （换房间时 `child` 可能已经指向新的那一间了）。
+            finish(null, { ...hit, child: c });
             return;
           }
         }
@@ -664,40 +1085,134 @@ export function createDevWebRelay({
     throw new Error('没换到 dsh 自己那把 cookie（那个进程令牌可能不认）');
   }
 
-  /** 起（或复用）那台 `dsh web`。 */
-  async function ensure() {
+  /**
+   * 起（或复用）**某一间**的那台 `dsh web`。
+   *
+   * 🔴 **一次只开一间**：`currentId` 已经是这一间 ⇒ 复用；不是 ⇒ **先把旧的收掉**
+   *    （`killChild()`）再起。⇒ 句柄/内存不随房间数涨。
+   * ⚠️ `gen` 那一道：换房间时在飞的那次启动落地后会**自己收掉**，不会把新那台盖掉。
+   */
+  async function ensure(room) {
     if (closed) throw new Error('开发者中继已经关了');
+    if (currentId !== room.id) {
+      killChild(); // 换房间：旧的收掉（"一次只开一间"）
+      currentId = room.id;
+      currentCwd = room.cwd;
+    }
     if (upstream) return upstream;
     if (!starting) {
-      starting = (async () => {
-        const hit = await spawnWeb();
+      const myGen = gen;
+      const p = (async () => {
+        const hit = await spawnWeb(room);
         try {
           const cookie = await exchangeToken(hit.port, hit.token);
-          // ⚠️ **令牌与 cookie 都不进日志**（只说端口与"通了"）
-          say(`盒里那台 dsh web 起来了（127.0.0.1:${hit.port}，只听回环；cookie 已存住）`);
+          if (myGen !== gen) {
+            // 这期间被换掉了 ⇒ 刚起来的这一台**不留**（不然盒里就有两台了）。
+            // ⚠️ 收的是**我这一台**（`hit.child`），不是 `child` —— 后者现在
+            //    可能已经指向**新那一间**的进程了。
+            try {
+              hit.child?.kill('SIGTERM');
+            } catch {
+              /* 已经没了 */
+            }
+            throw new Error('这一台刚起来就被换掉了');
+          }
+          // ⚠️ **令牌与 cookie 都不进日志**（只说端口、房间与"通了"）
+          say(`盒里那台 dsh web 起来了（127.0.0.1:${hit.port}，房间 ${room.name}，只听回环；cookie 已存住）`);
           upstream = { port: hit.port, cookie };
           return upstream;
         } catch (err) {
           killChild();
           throw err;
         }
-      })().finally(() => {
-        starting = null;
-      });
+      })();
+      starting = p;
+      // ⚠️ **只清"还是它自己"的那一个**：换房间时 `killChild()` 已经把 `starting` 清掉、
+      //    新那一台的启动可能已经放进来了 —— 无条件清会把**新那台**的状态抹掉
+      //    ⇒ 下一条请求会**又起一台**（那就是"两个进程"）。
+      const settle = () => {
+        if (starting === p) starting = null;
+      };
+      void p.then(settle, settle);
     }
     return starting;
   }
 
+  /** 把房间清单那一页发出去（**它自己不起任何 DSH**）。 */
+  function sendRoomsPage(res) {
+    const body = devRoomsHtml({ rooms: listRooms(), current: currentId });
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'content-length': Buffer.byteLength(body),
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    });
+    res.end(body);
+    return undefined;
+  }
+
   /**
    * 把一条 `/h…` 请求反代到那台 `dsh web`。**不缓冲**（两头 `pipe`）。
+   *
+   * ★ **房间那一步在反代之前**（契约 109）：
+   *    · `/__rooms` ⇒ 清单页（**不碰任何 DSH 进程**）；
+   *    · `/?room=<id>` ⇒ 记下这一间 ＋ `302` 到 `/`（那一间的那台在下一条请求里懒起）；
+   *    · 还没选过（`currentId === null`）⇒ `/` 给清单、别的路径如实说一句。
+   *
    * @param {string} relPath 已经剥掉 `/h` 前缀的路径（`/`、`/api/x?y=1`…）
    */
   async function handle(req, res, relPath) {
+    const path0 = typeof relPath === 'string' && relPath.startsWith('/') ? relPath : `/${relPath ?? ''}`;
+    // ⚠️ 只借它取 pathname/searchParams（`relPath` 是**相对**的，给个假 origin）
+    const url = new URL(path0, 'http://127.0.0.1');
+
+    // ── ★ 房间清单（`/__rooms` 永远给；`/` 还没选过也给）──
+    if (url.pathname === DEV_ROOMS_PATH) return sendRoomsPage(res);
+
+    // ── ★ 选一间：`/?room=<id>` ⇒ 记下来 ＋ 302 到 `/` ──
+    //   ⚠️ **只在 `/` 与清单页上认这个参数**（别的地方带 `room=` 是别人自己的事）。
+    const want = url.searchParams.get(DEV_ROOM_QUERY);
+    if (want !== null && want !== '' && (url.pathname === '/' || url.pathname === '/index.html')) {
+      const room = findRoom(want);
+      if (!room) {
+        say(`开发者入口：点了不认识的一间（${String(want).slice(0, 40)}）⇒ 拒`);
+        return devUnavailable(res, 404, '没有这一间。回房间清单看一眼。');
+      }
+      if (currentId !== room.id) {
+        killChild(); // 换房间 ⇒ 旧的收掉（"一次只开一间"）
+        currentId = room.id;
+        currentCwd = room.cwd;
+      }
+      // 302 到**干净**的 `/`（把这个参数抹掉，免得它留在界面地址里）
+      res.writeHead(302, {
+        location: '/',
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+      });
+      res.end();
+      return undefined;
+    }
+
+    // ── ★ 还没选过哪一间 ──
+    if (currentId === null) {
+      // 首页 ⇒ **先给房间清单**（契约 109 §"先给一个房间清单"）
+      if (url.pathname === '/' || url.pathname === '/index.html') return sendRoomsPage(res);
+      return devUnavailable(res, 409, '先回房间清单选一间。');
+    }
+
+    // ── ★ 那一间还在吗（工作区可能被删了）──
+    const room = findRoom(currentId);
+    if (!room) {
+      say(`开发者入口：现在这一间（${currentId}）不在清单里了 ⇒ 回清单页`);
+      dropCurrent();
+      return sendRoomsPage(res);
+    }
+
     let up;
     try {
-      up = await ensure();
+      up = await ensure(room);
     } catch (err) {
-      say(`盒里那台 dsh web 没起来：${err?.message ?? err}`);
+      say(`盒里那台 dsh web 没起来（房间 ${room.name}）：${err?.message ?? err}`);
       return devUnavailable(res, 502, '那台界面现在没起来，等会儿再试。');
     }
 
@@ -714,7 +1229,15 @@ export function createDevWebRelay({
     }
     headers['sec-fetch-site'] = 'same-origin';
 
-    const path = typeof relPath === 'string' && relPath.startsWith('/') ? relPath : `/${relPath ?? ''}`;
+    const path = path0;
+    // ★ **那一页本体**（只有它）要在顶上明写"在这儿说话的不是琥珀"（契约 109 §八）。
+    //   ⚠️ 只认顶层那两份文档；别的 HTML（界面自己的子页 / 资源）一个字节都不碰。
+    const isDoc =
+      (req.method === 'GET' || req.method === 'HEAD') &&
+      (url.pathname === '/' || url.pathname === '/index.html');
+    //   ⚠️ 要 `identity`：压缩过的字节没法安全地插一行（认不出就不插 —— 见 `injectDevBanner`）。
+    if (isDoc) headers['accept-encoding'] = 'identity';
+
     let answered = false;
     const fail = (err) => {
       if (answered) return;
@@ -738,8 +1261,55 @@ export function createDevWebRelay({
             '',
           );
         }
-        res.writeHead(upRes.statusCode ?? 502, out);
-        upRes.pipe(res); // 流式（别缓冲）
+        // ★ 顶层文档 ⇒ **插那一条**（其余一律原样流式转出去）
+        const enc = String(out['content-encoding'] ?? '');
+        const canInject =
+          isDoc &&
+          (upRes.statusCode ?? 0) === 200 &&
+          String(out['content-type'] ?? '').includes('text/html') &&
+          (enc === '' || enc === 'identity');
+        if (!canInject) {
+          res.writeHead(upRes.statusCode ?? 502, out);
+          upRes.pipe(res); // 流式（别缓冲）
+          return;
+        }
+        // ⚠️ 只缓**那一页文档**（很小），而且**封顶**：超了就"边写边转发"，一个字节都不丢。
+        const chunks = [];
+        let n = 0;
+        let bail = false;
+        const head0 = () => {
+          const o = { ...out };
+          delete o['content-length'];
+          res.writeHead(upRes.statusCode ?? 502, o);
+        };
+        upRes.on('data', (c) => {
+          if (bail) return void res.write(c);
+          chunks.push(c);
+          n += c.length;
+          if (n > DEV_BANNER_MAX_BYTES) {
+            bail = true;
+            head0();
+            for (const x of chunks) res.write(x);
+            chunks.length = 0;
+          }
+        });
+        upRes.on('error', fail);
+        upRes.on('end', () => {
+          if (bail) return void res.end();
+          const raw = Buffer.concat(chunks);
+          const withBanner = injectDevBanner(raw.toString('utf8'));
+          if (withBanner === null) {
+            // 认不出那一页 ⇒ **原样**（这一条是"如实"，不是"功能"：宁可没有，也不能弄坏它）
+            say('开发者入口：那一页认不出 <body> ⇒ 那条提示这次没插进去（页面照常）');
+            head0();
+            return void res.end(raw);
+          }
+          const buf = Buffer.from(withBanner, 'utf8');
+          const o = { ...out };
+          o['content-length'] = String(buf.length);
+          res.writeHead(upRes.statusCode ?? 502, o);
+          res.end(buf);
+        });
       },
     );
     up_req.on('error', fail);
@@ -772,7 +1342,13 @@ export function createDevWebRelay({
    */
   function handleUpgrade(req, socket, head, relPath) {
     const path = typeof relPath === 'string' && relPath.startsWith('/') ? relPath : `/${relPath ?? ''}`;
-    ensure()
+    // ★ **先要知道开的是哪一间**（契约 109）：没选过 ⇒ 握手阶段如实拒。
+    const room = currentId === null ? null : findRoom(currentId);
+    if (!room) {
+      rejectUpgradeSocket(socket, 503, 'Service Unavailable', '先回房间清单选一间。');
+      return undefined;
+    }
+    ensure(room)
       .then((up) => {
         const headers = { ...req.headers };
         for (const h of UPGRADE_HOP_BY_HOP) delete headers[h];
@@ -834,15 +1410,34 @@ export function createDevWebRelay({
   return {
     handle,
     handleUpgrade,
-    ensure,
+    /**
+     * 起（或复用）**某一间**那台（给判据/排障用）。
+     * ⚠️ 不给 `id` 就用**现在选的那一间**；没选过 ⇒ 抛。
+     */
+    openRoom(id = null) {
+      const r = id === null ? (currentId === null ? null : findRoom(currentId)) : findRoom(id);
+      if (!r) throw new Error('没有这一间（或者还没选）');
+      return ensure(r);
+    },
+    /** 现在有哪些房间（**每次现取**）。 */
+    rooms() {
+      return listRooms();
+    },
     /** 现在什么状态（**不含任何秘密**；给横幅/排障用）。 */
     state() {
-      return { running: Boolean(child), port: upstream?.port ?? null, ready: Boolean(upstream) };
+      return {
+        running: Boolean(child),
+        port: upstream?.port ?? null,
+        ready: Boolean(upstream),
+        // ★ 现在这一台开的是哪一间（排障第一眼要看的就是它）
+        room: currentId,
+        cwd: currentCwd,
+      };
     },
     /** 收干净（`server.close()` 之后兜底 —— 不许留孤儿）。 */
     shutdown() {
       closed = true;
-      killChild();
+      dropCurrent();
     },
   };
 }

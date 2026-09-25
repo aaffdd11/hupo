@@ -181,6 +181,34 @@ void main() {
     expect(find.text(harnessOpening), findsOneWidget, reason: '★ 还没开好也要说一句普通话');
   });
 
+  testWidgets('★ **看板那句话**：那一层里回话的不是琥珀 ⇒ 页面上明写（契约 109 §八）', (tester) async {
+    // 主人 2026-09-25 拍的「甲」：**能看能聊，但页面上明写"在这儿说话的不是琥珀"**。
+    // ⚠️ 这一条是那句话的**自动化证据**：少了它，界面就在说假话
+    //    （名字叫"我自己那台"，答话的却是那台自带的嗓子）。
+    final feed = _FakeFeed(initial: _ready);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          controller: _controller(),
+          onLoggedOut: () {},
+          harnessFeed: () => feed,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text(harnessAppLabel));
+    await tester.pumpAndSettle();
+    expect(find.byType(HarnessPane), findsOneWidget, reason: '★ 没进那一层 ⇒ 判据扫错了屏幕');
+    // 🔴 两句都要**在那一层里**（不许是别处某个长得像的句子）
+    for (final line in [devBoardNotHupo, devBoardWhyNot]) {
+      expect(
+        find.descendant(of: find.byType(HarnessPane), matching: find.text(line)),
+        findsOneWidget,
+        reason: '★ 「$line」没画到那一层上 ⇒ 名字一样、东西不一样（假话）',
+      );
+    }
+  });
+
   testWidgets('★ 真入口（**不注入**）：生产那条接不上时也**不许白屏**', (tester) async {
     // ⚠️ 这一条走的是真实现（`services/harness_client.dart`）。VM 上它连不上
     //    （`Uri.base` 是个 file:// ⇒ 算不出主机），但那正是"接不上"这一半要验的样子：

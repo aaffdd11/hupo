@@ -97,6 +97,29 @@ class StreamClient {
     }
   }
 
+  /// ★ **他答了那一句问话**（契约 `docs/dev/108-JOB-ASK-FLOW.md` §一 第②/③步）。
+  ///
+  /// 🔴 **走同一条流**（不新开 HTTP 路）：问话那一帧本来就是这条流上的，
+  ///    答话从同一条回去 ⇒ 一个动作一个家；而且路由表（手册 §2.1）不用动。
+  /// 🔴 **客户端不许自己切房间**：切过去只认服务端那一帧 `scope/open`
+  ///    （两处各切一次 = 两个裁判）。
+  ///
+  /// @returns 发出去了没有。`false` = 没连着 / 号是空的 ⇒ 调用方**如实说一句**，
+  ///          绝不假装收下了。
+  bool answerJob(String id, {required bool yes}) {
+    final want = id.trim();
+    if (want.isEmpty) return false;
+    if (_state != ConnState.connected || _ch == null) return false;
+    try {
+      _ch?.sink.add(jsonEncode({'t': 'job-answer', 'id': want, 'yes': yes}));
+      return true;
+    } catch (_) {
+      // 发不出去 = 这条连接已经不行了（重连那条路会把它接上，
+      // 而那一笔要是超时了，服务端会推"作废了"那一帧）。
+      return false;
+    }
+  }
+
   final Duration pingTimeout;
 
   /// 见构造函数里的说明：只为判据而存在的注入口。

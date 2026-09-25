@@ -44,6 +44,99 @@ export const JOB_START = 'job/start';
 export const JOB_REPORT = 'job/report';
 
 /**
+ * ★ **"这件事要另开一处做吗"那一帧**（契约 `docs/dev/108-JOB-ASK-FLOW.md` §一 第①步）。
+ *
+ * 🔴 **它是瞬态**（`Timeline.emitTransient`）：**不落盘、不占号、不重放**。
+ *    理由与 `SCOPE_OPEN` 同一条，另外还多一条：**没答之前什么都不许建**
+ *    ——那一笔待确认**只住在内存里**（谁在哪一间发起的 · `where` · `why`），
+ *    盘上连一份待确认记录都没有（S1/S5 的反例正身就落在这儿）。
+ *
+ * 🔴 **字段叫 `where` 不叫 `scope`**：它不是"去这一间"（那是 `scope/open` 的语义），
+ *    只是"打算开的那一处的短名"（内部词，**不上屏**：名字由 agent 起，他不需要知道）。
+ *    ⚠️ 也**不带 `scopeId`**：带了就被"焦点在主线"的那条连接丢掉，而那条正是
+ *    刚在主对话里派完活的那个人（与 `SCOPE_OPEN` 同一条路由纪律）。
+ */
+export const JOB_ASK = 'job/ask';
+
+/** ★ **超时 / 不答 ⇒ 那一笔作废**那一帧（**瞬态**：让屏上那层收掉 + 如实说一句）。 */
+export const JOB_ASK_EXPIRED = 'job/ask-expired';
+
+/**
+ * ★ **做完自动把它打开**那一帧（契约 §一 第④步 / 判据 C5/C6）。
+ *
+ * 🔴 **它是瞬态**：那句总结**不许在那一间里落第二份**（一条事实一个家 ——
+ *    总结的家是主进程那条 `job/report`），所以这句只走实时、只当"旁边那句话"。
+ * 🔴 **由那一间那条会话推**（`Session.noteTransient`）⇒ 帧上带 `scopeId = 那一间`
+ *    ⇒ **只有正开着那一间的那条连接收得到**（他看别处时结构上抢不了屏，C6）。
+ */
+export const APP_OPEN = 'app/open';
+
+/**
+ * ★ **客户端→服务端那一帧：他答了**（契约 §一 第②/③步）。
+ *
+ * 🔴 **走那条流，不新开 HTTP 路**：问话那一帧（`job/ask`）本来就是**这条流**上的，
+ *    答话从同一条流回去 ⇒ 一个动作一个家；而且不新增 `/api/…` 路由
+ *    （路由表是手册 §2.1 的权威那一份，加一条就要两边一起改）。
+ * 🔴 **一条连接就是一个人**（`claim.sub` 是握手时验过签的）⇒ 这里的 `id`
+ *    只在**他自己**那一笔待确认上找得到，"答别人那一笔"结构上不可能。
+ *
+ * 形状（**只加不改**：认不出的帧一律安静忽略 —— 和焦点那一帧同一条纪律）：
+ *
+ *   {"t":"job-answer","id":"j_ask_…","yes":true}   // true = 另开一处做
+ */
+export const JOB_ANSWER_T = 'job-answer';
+
+/** 那一帧的形状（**只有一处**：推送与判据都用它）。 */
+export function jobAnswerFrame({ id, yes }) {
+  return { t: JOB_ANSWER_T, id: String(id), yes: yes === true };
+}
+
+/**
+ * 解析**客户端→服务端**那一帧 `{"t":"job-answer","id":…,"yes":…}`。
+ *
+ * @param {string|Buffer} raw 这一帧的原文
+ * @returns {{id:string, yes:boolean}|null} `null` = **不是这一帧**（安静忽略）
+ */
+export function parseJobAnswerFrame(raw) {
+  let obj = null;
+  try {
+    const text =
+      typeof raw === 'string' ? raw : Buffer.isBuffer(raw) ? raw.toString('utf8') : null;
+    if (text === null) return null;
+    obj = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!obj || typeof obj !== 'object' || obj.t !== JOB_ANSWER_T) return null;
+  const id = typeof obj.id === 'string' ? obj.id.trim() : '';
+  if (id === '') return null;
+  return { id, yes: obj.yes === true };
+}
+
+/**
+ * ★ **答话的回执那一帧**（服务端→客户端 · **瞬态**）。
+ *
+ * 为什么要有它：那层确认上按下去之后，他得知道**收下了没有** ——
+ * `ok:false` 时 `text` 是服务端给的人话（"那件事我还没动手" / "没成…"），
+ * 客户端**照抄**（与反问那条路同一条规矩：那句人话到得了状态条）。
+ */
+export const JOB_ANSWER_ACK = 'job/answer-ack';
+
+/** 那一帧的形状。 */
+export function jobAnswerAckEvent({ id, ok, yes = null, error = null, text = null, at = Date.now() } = {}) {
+  return {
+    type: JOB_ANSWER_ACK,
+    id: String(id),
+    ok: ok === true,
+    yes: yes === null ? null : yes === true,
+    error: typeof error === 'string' && error !== '' ? error : null,
+    text: typeof text === 'string' && text.trim() !== '' ? text.trim() : null,
+    at,
+  };
+}
+
+
+/**
  * ★ **"现在该看哪一间"那一帧**（契约 `102` 追加的 ⑤：派活之后界面自己切过去）。
  *
  * 🔴 **它是瞬态**（`Timeline.emitTransient`）：**不落盘、不占号**，
@@ -62,9 +155,73 @@ export function scopeOpenEvent({ scope, at = Date.now() } = {}) {
   return { type: SCOPE_OPEN, scope: String(scope), at };
 }
 
+/**
+ * ★ **那帧问话的形状**（**只有一处**：推送、客户端解析、判据都照它）。
+ *
+ * @param {object} o
+ * @param {string} o.id    这一笔待确认的号（他答话时原样带回来 —— 一次一件，够用）
+ * @param {string} [o.where] 打算开的那一处的短名（**内部词，不上屏**）
+ * @param {string} [o.why]  他说的那句原话（上屏：那层确认里要看得见"你让我做的是这个"）
+ * @param {number} [o.at]
+ */
+export function jobAskEvent({ id, where, why = null, at = Date.now() } = {}) {
+  return {
+    type: JOB_ASK,
+    id: String(id),
+    where: String(where ?? ''),
+    why: typeof why === 'string' && why.trim() !== '' ? why.trim() : null,
+    text: jobAskText(),
+    at,
+  };
+}
+
+/** ★ 那一笔作废（超时 / 不答）那一帧的形状。 */
+export function jobAskExpiredEvent({ id, at = Date.now() } = {}) {
+  return { type: JOB_ASK_EXPIRED, id: String(id), text: JOB_LINES.notYet, at };
+}
+
+/**
+ * ★ **做完自动打开**那一帧的形状。
+ *
+ * @param {object} o
+ * @param {string} o.app   要打开的那一个的名字（那个 app 的 id，与这一间同名）
+ * @param {string} [o.text] 旁边留的那一句总结（**服务端给的原话**，客户端照抄）
+ */
+export function appOpenEvent({ app, text = null, at = Date.now() } = {}) {
+  return { type: APP_OPEN, app: String(app), text: typeof text === 'string' && text.trim() !== '' ? text.trim() : null, at };
+}
+
+/**
+ * 那层确认上那句问话（**服务端拼**：客户端照抄 —— 与反问那条路同一条规矩，
+ * 两处各拼一句就会漂）。🔴 不带任何内部短名。
+ */
+export function jobAskText() {
+  return '这件事要另开一处专门做吗？';
+}
+
 
 /** 登记那个文件叫什么（`<dir>/jobs.jsonl`）。**只有这一处**。 */
 export const JOB_FILE = 'jobs.jsonl';
+
+/**
+ * ★ **那帧问话等他多久**（契约 §一 第④步：超时 / 不答 ⇒ **不许猜**）。
+ *
+ * ⚠️ **阈值住代码，不写文档**（手册纪律 1）；`Worlds` 可以把它调小（判据要用）。
+ * 到点：那一笔记 `expired`、**什么都不建**、如实说一句 —— **绝不替他选**。
+ */
+export const JOB_ASK_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * ★ **他停在那儿等回话时，最多替它接几次**（B39 的兜底 · `77-BLOCKERS.md`）。
+ *
+ * 🔴 **有上限**（契约 §四.1 那条的反面："不答就是不答"；无限接 = 一件活永远不认输）。
+ * 接满上限还是没交回 ⇒ **如实报"没做完"**，登记照旧挂在"还在做"那一档（B28 那半不动）。
+ */
+export const JOB_NUDGE_MAX = 2;
+
+/** 替他接一句时**投给子进程**的那句话（不带内部词、不给它第二条路）。 */
+export const JOB_NUDGE_LINE =
+  '接着上面往下，把那件事做完；做完用一句话交回来。别问任何人、也别等谁回话。';
 
 /**
  * 总结里"做了什么"那半句最多留多少字（**住代码，不写文档** · 手册纪律 1）。
@@ -95,6 +252,22 @@ export const JOB_LINES = Object.freeze({
   noWords: '交回来得说清两样：它叫什么、做成了什么。',
   /** 派成了 ⇒ 给模型的那句（它会转述）。 */
   started: '好，这件事我另开一处专门做，做完把结果告诉你。',
+  /** ★ **还没建成**：回给模型的那句（契约 §一 第①步 ⇒ 这一轮就此收口）。 */
+  asked: '已经问他了，等他答；这一轮你先说到这儿。',
+  /** ★ 他点了【另开一处做】⇒ 回给主进程那位的这句（它知道事已经交出去了）。 */
+  yesToAgent:
+    '他说「另开一处做」。这件事已经交到专门做它的那一处了，你在这儿不用动手，也不用再开一处；'
+    + '做完它会把结果交回来。',
+  /** ★ 他点了【就在这儿做】⇒ 回给主进程那位的这句（它就在主对话里把这件事做完）。 */
+  noToAgent: '他说「就在这儿做」。那你就在这儿把这件事做完，做完把结果告诉他。',
+  /** ★ **超时 / 不答**：如实说一句 —— 不替他选、不建（契约 §一 第④步）。 */
+  notYet: '那件事我还没动手。',
+  /** ★ 他停在那儿等回话、我替它接了一句（B39 的留痕：人话，不带内部词）。 */
+  nudged: '它那边停了一下，我替它接了一句，让它接着往下做。',
+  /** ★ 同上，第 n 次（每次都要留痕 ⇒ 换一句，不然会被"同一句话只说一次"压掉）。 */
+  nudgedAgain: (n) => `它那边又停了一下，我又替它接了一句（第 ${n} 次）。`,
+  /** ★ 接满上限仍没交回 ⇒ 如实报"没做完"（不许说成"还在做"那种含糊）。 */
+  nudgeGaveUp: '它那边停下来等回话了，我替它接了几次也没交回来 —— 那件还没做完。',
   /** 收下了那份总结 ⇒ 给子进程的那句。 */
   done: '好，我把结果告诉他了。',
   /** `job_list` 一条都没有时的兜底。 */
@@ -139,6 +312,12 @@ export function jobPacketText({ where, why } = {}) {
     y ? `他要的是：${y}` : '',
     y ? `他原话是这么说的：「${y}」` : '',
     w ? `你这一处的短名是 ${w}（做东西的时候拿它当短名）。` : '',
+    // 🔴 **B39-a：这一间里没有真人能回话**（"用户"是主进程那位，不站在这儿）。
+    //    真机实测：它收尾时留了一句"这条我说太长了，没说完。你回一句「接着说」…"
+    //    ⇒ 活就停在那儿等一个永远不会来的回答（`job_done` 从没被调过）。
+    //    ⇒ 这段任务书里必须明说：**自己一次做完、别问、别等**。
+    '这件事你自己一次做完：**不要问任何人，也不要等谁回话**。'
+      + '要是写不下了、或者一时说不完，就接着往下把它写完 —— 没人会回你。',
     '做完之后，把它叫什么、做成了什么，用一句人话说清楚交回去。'
       + '别把过程抄一遍，只说你做成了什么、它在哪儿能打开。',
   ]

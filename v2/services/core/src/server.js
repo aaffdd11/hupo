@@ -34,6 +34,7 @@ import { MAIN_SCOPE, parseScope } from './worlds.js';
 //     焦点那条的输出现时投给用户；其它条照常进日志、但不实时推。
 //   判断那几件（收帧 / 该不该反问）住在 `focus.js`（纯函数，能反着验）。
 import { focusAskText, parseFocusFrame, routeTarget, FOCUS_UNKNOWN } from './focus.js';
+import { jobAnswerAckEvent, parseJobAnswerFrame } from './job.js';
 // 事件属不属于这一间 —— **只有这一处**（`ScopeView` 与这里共用它）。
 import { eventInScope } from './timeline.js';
 // ⚠️ 只借它**校验手机号形状**（`/api/send-code` 用）；模块本身不碰用户表
@@ -2164,8 +2165,32 @@ const TENANT_ROUTES = [
         })
       : () => {};
 
-    // ── 客户端→服务端：**切焦点**（不重连）─────────────────────────
+    // ── 客户端→服务端：**切焦点**（不重连）＋ **答那句问话**（契约 108）──────
     ws.on('message', (raw) => {
+      // ★ **契约 `docs/dev/108-JOB-ASK-FLOW.md`**：他点了【另开一处做】/【就在这儿做】。
+      //   🔴 **走这条流**（不新开 HTTP 路）：问话那一帧本来就是这条流上的，
+      //      答话从同一条回去 ⇒ 一个动作一个家；而且路由表（手册 §2.1 那一份）
+      //      不用动。裁决与"建那一刀"全在调度器那边，这里只转发 ＋ 回一句回执。
+      //   ⚠️ 他要是**已经答过 / 那一笔超时作废了** ⇒ `ok:false` ＋ 服务端那句人话
+      //      （"那件事我还没动手"）——客户端照抄，**不许猜**。
+      const answer = parseJobAnswerFrame(raw);
+      if (answer) {
+        const d = world?.dispatcher;
+        const r =
+          typeof d?.answerJobAsk === 'function'
+            ? d.answerJobAsk(answer)
+            : { ok: false, error: 'no-job-book', text: '这一台还没接上派活那条路。' };
+        send(
+          jobAnswerAckEvent({
+            id: answer.id,
+            ok: r?.ok === true,
+            yes: r?.ok === true ? r?.yes === true : null,
+            error: r?.ok === true ? null : (r?.error ?? null),
+            text: r?.ok === true ? null : (r?.text ?? null),
+          }),
+        );
+        return;
+      }
       const frame = parseFocusFrame(raw);
       if (!frame) return; // 不认识的帧：安静忽略（协议只加不改）
       const view = viewFor(frame.scope);

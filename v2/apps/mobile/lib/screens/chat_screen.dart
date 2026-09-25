@@ -45,6 +45,7 @@ import '../services/hearing.dart';
 import '../services/speech.dart';
 import '../widgets/app_desktop.dart';
 import '../widgets/harness_pane.dart';
+import '../widgets/job_ask_sheet.dart';
 import '../widgets/mini_app_icons.dart';
 import '../widgets/mini_runtime.dart';
 import '../widgets/plan_strip.dart';
@@ -246,6 +247,13 @@ class _ChatScreenState extends State<ChatScreen> {
       _appsRevision = rev;
       unawaited(_loadMyApps());
     }
+    // ★ **派活那一步**（契约 `docs/dev/108-JOB-ASK-FLOW.md`）：
+    //   ① 他接下一件新东西 ⇒ 服务端先问一句 ⇒ 出那层确认（两个按钮）；
+    //   ② 做完且他正开着那一间 ⇒ **自动把那个东西打开**（"点开图标"那条老路）。
+    //   ⚠️ 两件都**不抢屏**：① 只在服务端问了才弹；② 服务端只推给"正开着那一间"
+    //      的那条连接，而且这一层还要认得出那个名字才开（见 `_maybeAutoOpen`）。
+    _maybeAskJob();
+    _maybeAutoOpen();
     // ★ **换了房间 ⇒ 换句话说，现在该看的是另一条对话**（契约 `83` §五·甲）。
     //   ⚠️ 两件跟着走的事：
     //     ① "用户自己往上翻过"那个标志**不作数了** —— 那是**上一间**里的动作，
@@ -262,6 +270,55 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// **上一次画出来的那个房间**（用来认出"房间换了" —— 见 [_onChanged]）。
   late String _shownScope = widget.controller.scope;
+
+  /// ★ **那层确认现在开着吗**（同一笔只弹一次 —— 见 [_maybeAskJob]）。
+  bool _askSheetOpen = false;
+
+  /// ★ **他接下一件新东西 ⇒ 服务端先问一句 ⇒ 出那层确认**（契约 108 §一 第①步 · C1）。
+  ///
+  /// 🔴 **同一笔只弹一次**：`_onChanged` 会被叫很多次（每一帧都叫），
+  ///    没有这个开关就会叠出一摞一样的层（而且每一层都答一次）。
+  /// 🔴 **文案与问话都照服务端给的**（`JobAsk`）：这一层一个字都不自己拼。
+  Future<void> _maybeAskJob() async {
+    final c = widget.controller;
+    final ask = c.pendingJobAsk;
+    if (ask == null || _askSheetOpen || !mounted) return;
+    _askSheetOpen = true;
+    try {
+      final yes = await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => JobAskSheet(ask: ask),
+      );
+      if (!mounted) return;
+      // ⚠️ **他滑掉了那一层**（`null`）⇒ **什么都不答**（不替他选）。
+      //    那一笔还在服务端等着；到点它会推"作废了"那一帧，那时如实说一句。
+      if (yes == null) return;
+      // 🔴 **答案发回服务端**（走同一条流）；至于"建不建、切不切"，
+      //    那是服务端的事 —— 这一层**不自己切房间**（两个裁判会切两次）。
+      c.answerJobAsk(yes: yes);
+    } finally {
+      _askSheetOpen = false;
+    }
+  }
+
+  /// ★ **做完自动给他看**（契约 108 §一 第④步 · C5/C6）。
+  ///
+  /// 条件**两个都要**（缺一个都不许开）：
+  ///   ① 服务端推来了那一帧，而且它属于**现在这一间**（服务端那一侧也只推给
+  ///      "正开着那一间"的那条连接 ⇒ 这里再挡一道，结构上抢不了屏）；
+  ///   ② 那个名字**真的在他清单里**（认不出就不开 —— 开了就是一屏"找不到"，
+  ///      那比不开更坏）。
+  void _maybeAutoOpen() {
+    final c = widget.controller;
+    final want = c.takeOpenAppRequest();
+    if (want == null || !mounted) return;
+    final mine = _myApps.any((a) => a.id == want);
+    if (!mine) return; // 还没拉到清单 / 不是他的 ⇒ **不开**（不猜）
+    setState(() {
+      _openApp = '$_minePrefix$want';
+    });
+  }
 
   /// **钉到最新**（`jumpTo`，不带条件）。
   ///

@@ -23,7 +23,7 @@ import { resolveFocus } from './focus-book.js';
 //   与**转交**（交给**已有**的一间 · N16）分开的**另一条路** —— 派活是**新建**一间，
 //   把它做完的**总结**扔回主进程，主进程侧只留一份**简登记**（索引，不是日志副本）。
 //   ⚠️ `handoff.js` 那套一个字都没动。
-import { JOB_LINES, JOB_REPORT, JOB_START, decideJobStart, jobPacketText, jobSummaryText, scopeOpenEvent } from './job.js';
+import { JOB_ASK_TIMEOUT_MS, JOB_LINES, JOB_NUDGE_LINE, JOB_NUDGE_MAX, JOB_REPORT, JOB_START, appOpenEvent, decideJobStart, jobAskEvent, jobAskExpiredEvent, jobPacketText, jobSummaryText, scopeOpenEvent } from './job.js';
 // ★ P1 时间分级（契约 `docs/dev/88-P1-TIME-WAIT.md`）：
 //   **逐件落盘**的活账（T2）、后台四句（T4）、承诺行与再报（T5）。
 import { WORK_STATES, isOpen, pairKey } from './worklog.js';
@@ -161,14 +161,23 @@ class Session {
     return this.#lastJobPacket;
   }
 
+  /** ★ **派活**：这一份任务书是哪一处的（B39 收口时要用它找登记里那一行）。 */
+  #lastJobWhere = null;
+
   /**
    * ★ **派活**：哪几轮是**派来的活**（收口时那条总结由 `job/report` 那条路发，
    * 别在两条通道上各说一遍 —— R1.2 的通知疲劳）。
+   *
+   * ⚠️ **`turn` → 那一处的短名**（契约 108 起从 `Set` 改成 `Map`）：
+   *    B39 的兜底要在收口时知道"是哪一件活停了"（登记里那一行 ＋ 这一件接了几次）。
    */
-  #jobTurns = new Set();
+  #jobTurns = new Map();
 
   /** ★ **派活**：这一间刚把总结交回去了（`Dispatcher.finishJob` 记的）。 */
   #jobReported = false;
+
+  /** ★ **B39：这件活我替它接过几次**（`where` → 次数）。**有上限**（`JOB_NUDGE_MAX`）。 */
+  #jobNudges = new Map();
 
   /** ★ **D 期：怎么算"这一间存在"**（构造参数 `scopeExists`；缺省一律 false）。 */
   #scopeExists = () => false;
@@ -419,8 +428,9 @@ class Session {
       this.#turnGeneration.set(turn, generation);
       const owner = this.#claimDelivery();
       this.#turnOwner.set(pairKey(generation, turn), owner?.messageId ?? null);
-      // ★ **派活**：这一轮是派来的活 ⇒ 记下来（收口时那条总结走回报那条路）
-      if (owner?.job === true) this.#jobTurns.add(turn);
+      // ★ **派活**：这一轮是派来的活 ⇒ 记下来（收口时那条总结走回报那条路；
+      //   B39 兜底还要知道"是哪一处"）
+      if (owner?.job === true) this.#jobTurns.set(turn, this.#lastJobWhere ?? '');
       // ★ P1-22：**这一轮他说了什么** = 引起来的那句话（没有票 ⇒ 空 ⇒ 不许造东西）
       this.#turnInput = owner?.text ?? '';
       // ★ P1：**逐件落盘**（契约 T2）。有票 ⇒ 绑到 `(generation, turn)`；
@@ -474,13 +484,24 @@ class Session {
       //   ★ **派活**（契约 102）：这一轮如果是派来的活、而且它**真把总结交回去了**，
       //     那条"做完了"由 `job/report` 那条路发（带它自己起的名字、"在哪看"）——
       //     这里**不再重复说一遍**（同一件事两条通道 = R1.2 的通知疲劳）。
-      const isJob = this.#jobTurns.delete(turn);
+      // ⚠️ `Map.delete()` 返回的是**布尔**（拿不到值）⇒ 先 `get` 再 `delete`
+      //   （这条当初写错过一次：布尔被当成"哪一处"，兜底那一层整个错位）。
+      const isJobWhere = this.#jobTurns.get(turn);
+      const isJob = this.#jobTurns.has(turn);
+      if (isJob) this.#jobTurns.delete(turn);
       if (this.#backgroundTurns.delete(turn)) {
         if (!(isJob && done && this.#jobReported)) {
           this.#announceWorkFinished({ turn, kind, done });
         }
       }
-      if (isJob) this.#jobReported = false;
+      if (isJob) {
+        // ★ **B39 兜底**（`77-BLOCKERS.md`）：它是派来的活、这一轮收了口、
+        //   而总结**没交回来** ⇒ 它多半停在那儿等一个永远不会来的回答
+        //   （真机实测那句话是"你回一句「接着说」"）⇒ **替它接一句**（有上限）。
+        //   ⚠️ 顺序：先按老规矩把"这一轮完了"那几件事做完，再兜这一层。
+        if (!this.#jobReported) this.#nudgeStalledJob({ where: isJobWhere, kind });
+        this.#jobReported = false;
+      }
       // ★ A1·「发现就报」：**正常结束**这条路也要比（三条路缺一不可）
       this.#mainLeak?.finish({ turn, reason: kind });
     });
@@ -1264,17 +1285,63 @@ class Session {
    * ⚠️ 走的**就是** `deliver` 那条投递/认领路（真 spawn、真 prompt）——
    *    不是"只在盘上写一句话"。
    * 比 `deliver` 只多两件：
-   *   · 记下任务书原文（`lastJobPacket`，诊断/判据用）；
+   *   · 记下任务书原文（`lastJobPacket`，诊断/判据用）＋ **是哪一处的**（B39 要用）；
    *   · 这一票标记成**派来的活** ⇒ 认领它的那一轮收口时，那条总结走回报那条路。
    */
-  deliverJob(packet) {
+  deliverJob(packet, { where = null } = {}) {
     this.#lastJobPacket = typeof packet === 'string' ? packet : String(packet ?? '');
+    if (typeof where === 'string' && where !== '') this.#lastJobWhere = where;
     return this.deliver(this.#lastJobPacket, { job: true });
+  }
+
+  /**
+   * ★ **B39 兜底：它停在那儿等回话 ⇒ 替它接一句**（`77-BLOCKERS.md` 的 B39）。
+   *
+   * 🔴 **有上限**（`JOB_NUDGE_MAX`）：接满还是没交回 ⇒ **如实报"没做完"**（上面那条）。
+   * 🔴 这一票**仍然标记成派来的活**（`job:true`）⇒ 接下来那一轮照旧算"派来的活"，
+   *    于是"再接一次"和"再接满了"这两条路都还走得通（不然接一次就断了）。
+   */
+  deliverJobNudge(text) {
+    return this.deliver(typeof text === 'string' ? text : JOB_NUDGE_LINE, { job: true });
+  }
+
+  /** ★ **B39 兜底：它停在那儿等回话 ⇒ 替它接一句**（`77-BLOCKERS.md` 的 B39）。 */
+  #nudgeStalledJob({ where = '', kind = null } = {}) {
+    // ⚠️ 只兜"它自己收的口"（说完了 / 说不下了）。
+    //    `timeout` / 进程没了那两条路**不接** —— 那边没有"接着说"可言，
+    //    硬接会变成"它死了我还催它"（而且 `deliver` 会再起一个进程，代价白花）。
+    if (kind !== 'completed' && kind !== 'max-tokens') return;
+    const key = String(where ?? '');
+    if (key === '') return; // 不知道是哪一处 ⇒ 接不了（**不猜**）
+    const given = this.#jobNudges.get(key) ?? 0;
+    if (given >= JOB_NUDGE_MAX) {
+      if (this.#jobNudges.get(`${key}:told`) === true) return; // 只如实说一次
+      this.#jobNudges.set(`${key}:told`, true);
+      this.#sayProactive(JOB_LINES.nudgeGaveUp, { kind: 'work-nudge' });
+      return;
+    }
+    const n = given + 1;
+    this.#jobNudges.set(key, n);
+    // **留痕**（B39-c）：主进程那一侧看得见"它停过、我替它接了一句"
+    //   ⚠️ 每次换一句（同一句话在窗口内只会说一次 ⇒ 不换就看不到第 2 次）。
+    this.#sayProactive(n <= 1 ? JOB_LINES.nudged : JOB_LINES.nudgedAgain(n), { kind: 'work-nudge' });
+    // ★ **真接一句**：这一票照旧标记成派来的活 ⇒ 接下来那一轮还算"派来的活"
+    //   （于是"再接一次"和"再接满了"这两条路都还走得通）。
+    this.deliverJobNudge(JOB_NUDGE_LINE).catch((err) => {
+      this.#lastError = `替它接的那一句没送出去：${err?.message ?? err}`;
+    });
   }
 
   /** ★ **派活**：这一间刚把总结交回去了（`Dispatcher.finishJob` 记的）。 */
   noteJobReported() {
     this.#jobReported = true;
+  }
+
+  /** ★ **B39**：这一件交回来了 ⇒ 那本"接了几次"的账跟着销掉。 */
+  clearJobNudges(where) {
+    if (typeof where !== 'string' || where === '') return;
+    this.#jobNudges.delete(where);
+    this.#jobNudges.delete(`${where}:told`);
   }
 
   /**
@@ -1578,6 +1645,26 @@ export class Dispatcher {
    */
   #startScope = null;
 
+  /**
+   * ★ **待确认的那一笔派活**（契约 `docs/dev/108-JOB-ASK-FLOW.md` §一 第①步）。
+   *
+   * 🔴 **只在内存里**：谁在哪一间发起的 · `where` · `why` · 号 · 计时器。
+   *    **盘上一个字都没有**（S1/S5）：没答之前什么都不建，连一份待确认记录都不落。
+   * 🔴 **一次一件**（契约 §四.2）：再来一笔就**顶掉**前一笔（前一笔按 `expired` 记）。
+   */
+  #ask = null;
+  /** 待确认那个号的自增段（`j_…`；与登记那个号同一族，诊断用）。 */
+  #askSeq = 0;
+  /**
+   * ★ **那一笔最近的下场**（诊断/判据用）：`{id, where, why, status}`，
+   * `status` ∈ `pending` / `yes` / `no` / `expired`。**不落盘**。
+   */
+  #lastAsk = null;
+  /**
+   * ★ **那一帧问话等他多久**（阈值住 `job.js`；`Worlds` 能调小 —— 判据要它小）。
+   */
+  #jobAskTimeoutMs = JOB_ASK_TIMEOUT_MS;
+
   /** ★ **派活的投递排着**（与转交同一条理由：两笔交错会把轮的账弄乱）。 */
   #jobChain = Promise.resolve();
   /**
@@ -1638,6 +1725,11 @@ export class Dispatcher {
     // ★ **派活**（契约 102）：那本简登记 ＋ "建一间"那一刀（都由 `Worlds` 给）。
     this.#jobs = args.jobs ?? null;
     this.#startScope = typeof args.startScope === 'function' ? args.startScope : null;
+    // ★ **契约 108**：那帧问话等他多久（判据要能把它调小）。
+    this.#jobAskTimeoutMs =
+      Number.isFinite(args.jobAskTimeoutMs) && args.jobAskTimeoutMs > 0
+        ? args.jobAskTimeoutMs
+        : JOB_ASK_TIMEOUT_MS;
     this.#scopeExists = typeof args.scopeExists === 'function' ? args.scopeExists : () => false;
     // ★ **D 期**：目标那一间"存在但还没挂上来"时，由宿主把它挂上来（见字段说明）。
     this.#loadSession = typeof args.loadSession === 'function' ? args.loadSession : null;
@@ -2172,24 +2264,42 @@ export class Dispatcher {
   // 与**转交**的分界（契约 §三）：**转交**交给**已有**的一间（目标必须已存在）；
   // **派活**让调度器**新建**一间，把那件活交过去。两条路各自可判，互不干扰。
   //
-  // 三步（P1/P3）：① 建那一间 ＋ 把任务与由来投过去；② 它在那间里干；
-  // ③ 它交回一份**总结**（人话）⇒ 主进程里出现一条，同时记进那本**简登记**。
+  // ★ **契约 108 起：先问一句，答了才建**（主人 2026-09-25 拍的三条推荐项）——
+  //   · `job_start` **不再同步建**：只记一笔待确认 ＋ 推一帧问话（瞬态），
+  //     回给模型"已经问他了，等他答" ⇒ 那一轮就此收口（§一 第①步）；
+  //   · 他点【另开一处做】⇒ `answerJobAsk({yes:true})` **这时才建**
+  //     （工作区＋会话＋登记＋`job/start`）＋ 推 `scope/open`（§一 第②步）；
+  //   · 他点【就在这儿做】⇒ **什么都不建**，回给他"就在这儿做"（§一 第③步）；
+  //   · 超时 / 不答 ⇒ 那一笔记 `expired`、如实说一句、**不建**（§一 第④步）。
 
   /** ★ **派活那本简登记**（判据/诊断用；没有 ⇒ `null`）。 */
   get jobs() {
     return this.#jobs;
   }
 
+  /** ★ **现在等着他答的那一笔**（诊断/判据用；没有 ⇒ `null`）。 */
+  get pendingJobAsk() {
+    return this.#ask ? { ...this.#ask, timer: undefined } : null;
+  }
+
+  /** ★ **最近一笔的下场**（`{id, where, why, status}`；`status` ∈ pending/yes/no/expired）。 */
+  get lastJobAsk() {
+    return this.#lastAsk ? { ...this.#lastAsk } : null;
+  }
+
   /**
-   * ★ **派活**：把这件活交给**新建的那一间**做（契约 §一 第①步）。
+   * ★ **派活**：只**问一句**（契约 `docs/dev/108-JOB-ASK-FLOW.md` §一 第①步）。
    *
    * 顺序是死的：
    *   ① 裁决（`decideJobStart`：只有主进程能派 · 短名合法 · 不是保留名 · 那一处还没主）；
-   *   ② **建那一间**（`Worlds` 那一刀：工作区目录＋清单＋会话）——**真建**，失败了如实说；
-   *   ③ 由来落账（登记一行）＋ 那两帧里的一帧（`job/start`）落在**主进程那一间**；
-   *   ④ 把**任务与由来**投给子进程（真投递、真 spawn —— P1）。
+   *   ② 把这笔**记在内存里**（谁在哪一间发起的 · `where` · `why`）——**盘上一个字都不写**；
+   *   ③ 推**一帧问话**（瞬态：不落盘、不占号、不重放）；
+   *   ④ 回给模型"已经问他了，等他答" ⇒ 这一轮就此收口。
    *
-   * @returns {{ok:boolean, id?:string, where?:string, error?:string, reason?:string, text?:string}}
+   * 🔴 **没答之前不许建**（§一 不许破的第 1 条）：这里**没有**任何 `#startScope` 调用，
+   *    也没有 `recordStart` / `job/start` —— 建那一刀全在 `answerJobAsk` 里。
+   *
+   * @returns {{ok:boolean, id?:string, where?:string, asked?:boolean, error?:string, reason?:string, text?:string}}
    */
   startJob({ by = null, where = null, why = null } = {}) {
     const from = this.sessionFor(by);
@@ -2207,48 +2317,151 @@ export class Dispatcher {
     if (!verdict.ok) {
       return { ok: false, error: verdict.reason, reason: verdict.reason, text: verdict.text };
     }
-    // ② **建那一间**（工作区 ＋ 会话）。建不成 ⇒ **如实说一句**，活留在主进程（P6）。
+    // ② **一次一件**：再来一笔就顶掉前一笔（前一笔按 `expired` 记 —— 它没有被回答）
+    if (this.#ask) this.#expireAsk({ quiet: true });
+    const at = Date.now();
+    this.#askSeq += 1;
+    const id = `j_ask_${at.toString(36)}_${this.#askSeq.toString(36)}`;
+    const timer = setTimeout(() => this.#expireAsk(), this.#jobAskTimeoutMs);
+    timer.unref?.();
+    this.#ask = { id, where: verdict.where, why: typeof why === 'string' ? why : null, by: from.scopeId, at, timer };
+    this.#lastAsk = { id, where: verdict.where, why: this.#ask.why, status: 'pending' };
+    // ③ 那帧问话：**瞬态**（不落盘、不占号 ⇒ `sinceSeq=0` 的补发里永远没有它）。
+    //   ⚠️ 推失败也**不许**把这笔待确认丢掉（他那一侧收不到就是收不到，
+    //      到点会按 `expired` 如实收场）—— 但必须报出来。
+    try {
+      this.#main?.noteTransient(jobAskEvent({ id, where: verdict.where, why: this.#ask.why, at }));
+    } catch (err) {
+      from.noteError(`那帧问话没推出去：${err?.message ?? err}`);
+    }
+    return { ok: true, id, where: verdict.where, asked: true, text: JOB_LINES.asked };
+  }
+
+  /**
+   * ★ **他答了**（契约 §一 第②/③步）：答"是"⇒ 这时才建；答"否"⇒ **什么都不建**。
+   *
+   * 🔴 **一次一件**：号对不上（超时作废 / 已经答过）⇒ 如实回一句"那件事我还没动手"，
+   *    **什么都不做**（绝不猜、绝不补建）。
+   *
+   * @param {object} o
+   * @param {string} o.id  那一笔的号（问话那帧带回来的）
+   * @param {boolean} o.yes
+   * @returns {{ok:boolean, yes?:boolean, where?:string, error?:string, reason?:string, text?:string}}
+   */
+  answerJobAsk({ id = null, yes = false } = {}) {
+    const ask = this.#ask;
+    if (!ask || String(id ?? '') !== ask.id) {
+      return { ok: false, error: 'ask-gone', reason: 'ask-gone', text: JOB_LINES.notYet };
+    }
+    clearTimeout(ask.timer);
+    this.#ask = null;
+    const from = this.sessionFor(ask.by) ?? this.#main;
+    if (yes !== true) {
+      // ③ **什么都不建**；回给他"就在这儿做" ⇒ 它就在主对话里把这件事做完。
+      this.#lastAsk = { id: ask.id, where: ask.where, why: ask.why, status: 'no' };
+      this.#tellAgent(from, JOB_LINES.noToAgent);
+      return { ok: true, yes: false, where: ask.where, text: JOB_LINES.noToAgent };
+    }
+    this.#lastAsk = { id: ask.id, where: ask.where, why: ask.why, status: 'yes' };
+    const built = this.#buildJob(ask, from);
+    if (!built.ok) {
+      // 🔴 **建不成 ⇒ 如实说一句，活留在主进程**（P6 那半照旧）：
+      //    告诉他"没成，我就在这儿接着做" ⇒ 主对话里那句请求**不会被吞掉**。
+      this.#tellAgent(from, built.text ?? JOB_LINES.failed);
+      return built;
+    }
+    // ② 回给主进程那位："他说另开一处做" ⇒ 它知道事已经交出去了（别自己再动一遍）。
+    this.#tellAgent(from, JOB_LINES.yesToAgent);
+    return { ok: true, yes: true, where: ask.where, id: built.id, text: JOB_LINES.yesToAgent };
+  }
+
+  /**
+   * ★ **答【是】之后真正建那一间**（契约 §一 第②步）——**只有这一处会建**。
+   *
+   * 四件、顺序是死的：
+   *   ① **建那一间**（工作区＋会话）——**真建**，失败了如实说（P6）；
+   *   ② 由来落账（登记一行 · `JobBook.recordStart`）＋ `job/start` 落在**主进程那一间**；
+   *   ③ 推 `scope/open`（**瞬态**：窗口自己跟过去 —— 既有那条路）；
+   *   ④ 把**任务与由来**投给子进程（真投递、真 spawn —— P1）。
+   */
+  #buildJob(ask, from) {
+    const where = ask.where;
+    // ① **建那一间**（工作区 ＋ 会话）。建不成 ⇒ **如实说一句**，活留在主进程（P6）。
     let created = null;
     try {
-      created = this.#startScope ? this.#startScope(verdict.where) : null;
+      created = this.#startScope ? this.#startScope(where) : null;
     } catch (err) {
-      from.noteError(`派活那一间没建起来：${err?.message ?? err}`);
+      from?.noteError(`派活那一间没建起来：${err?.message ?? err}`);
       return { ok: false, error: 'create-failed', reason: 'create-failed', text: JOB_LINES.failed };
     }
-    const to = this.sessionFor(verdict.where) ?? created ?? null;
+    const to = this.sessionFor(where) ?? created ?? null;
     if (!to) {
-      from.noteError(`派活那一间没挂上来（${verdict.where}）`);
+      from?.noteError(`派活那一间没挂上来（${where}）`);
       return { ok: false, error: 'create-failed', reason: 'create-failed', text: JOB_LINES.failed };
     }
-    // ③ 由来落账 ＋ 那一帧落在**主进程那一间**（登记由它重建 · P5）
+    // ② 由来落账 ＋ 那一帧落在**主进程那一间**（登记由它重建 · P5）
     const at = Date.now();
     let rec;
     try {
-      rec = this.#jobs.recordStart({ where: verdict.where, why, at });
+      rec = this.#jobs.recordStart({ where, why: ask.why, at });
     } catch (err) {
-      from.noteError(`派活那件没记上账：${err?.message ?? err}`);
+      from?.noteError(`派活那件没记上账：${err?.message ?? err}`);
       // ⚠️ 登记写不下去 ⇒ **不派**（派了却查不到 = 那本账在说假话）。
       return { ok: false, error: 'record-failed', reason: 'record-failed', text: JOB_LINES.failed };
     }
     try {
-      this.#main?.noteProduct({ type: JOB_START, id: rec.id, where: verdict.where, at });
+      this.#main?.noteProduct({ type: JOB_START, id: rec.id, where, at });
     } catch (err) {
       // 那一帧是**登记重建**的依据：落不下去就如实记一笔（不假装它在盘上）
-      from.noteError(`派活那一帧没落盘：${err?.message ?? err}`);
+      from?.noteError(`派活那一帧没落盘：${err?.message ?? err}`);
     }
-    // ★ **⑤：告诉他"现在看这一间"**（契约 `102` 追加）：**瞬态**，只走实时。
+    // ③ **⑤：告诉他"现在看这一间"**（契约 `102` 追加）：**瞬态**，只走实时。
     //   🔴 不落盘、不占号 ⇒ `sinceSeq=0` 的补发里永远没有它（重连不会乱切房间）。
     //   ⚠️ 这一帧失败**不许**把派活本身带走（他自己点图标也照样看得到那一间）。
     try {
-      this.#main?.noteTransient(scopeOpenEvent({ scope: verdict.where, at }));
+      this.#main?.noteTransient(scopeOpenEvent({ scope: where, at }));
     } catch (err) {
-      from.noteError(`"该看哪一间"那一帧没推出去：${err?.message ?? err}`);
+      from?.noteError(`"该看哪一间"那一帧没推出去：${err?.message ?? err}`);
     }
     // ④ 投给子进程（**排着**：同一个用户同时只有一笔派活在飞）
     this.#jobChain = this.#jobChain
-      .then(() => this.#jobDelivery(to, { id: rec.id, where: verdict.where, why: rec.why }))
+      .then(() => this.#jobDelivery(to, { id: rec.id, where, why: rec.why }))
       .catch(() => {});
-    return { ok: true, id: rec.id, where: verdict.where, text: JOB_LINES.started };
+    return { ok: true, id: rec.id, where, text: JOB_LINES.started };
+  }
+
+  /**
+   * ★ **超时 / 不答 ⇒ 那一笔作废**（契约 §一 第④步 · 判据 S4）。
+   *
+   * 🔴 **不许猜**：**什么都不建**、那一笔记 `expired`、如实说一句
+   *    （推一帧 `job/ask-expired` 让屏上那层收掉 ＋ 一句人话）。
+   */
+  #expireAsk({ quiet = false } = {}) {
+    const ask = this.#ask;
+    if (!ask) return;
+    clearTimeout(ask.timer);
+    this.#ask = null;
+    this.#lastAsk = { id: ask.id, where: ask.where, why: ask.why, status: 'expired' };
+    if (quiet) return; // 被下一笔顶掉：不用再喊一声（他正看着新那一笔）
+    try {
+      this.#main?.noteTransient(jobAskExpiredEvent({ id: ask.id }));
+    } catch {
+      /* 推不出去也不影响"没建"这个事实 */
+    }
+  }
+
+  /**
+   * ★ **把一句话交回主进程那位**（答"是"/"否"之后各一句 —— 契约 §一 第②/③步）。
+   *
+   * ⚠️ 走的是**投递那条老路**（`Session.deliver`：真 spawn、真 prompt）——
+   *    不是"在盘上写一句话"。它进去之后那一轮的回话落在**主进程那一间**。
+   */
+  #tellAgent(from, text) {
+    const target = from ?? this.#main;
+    if (!target) return;
+    target.deliver(text).catch((err) => {
+      target.noteError(`回给它的那句话没送出去：${err?.message ?? err}`);
+    });
   }
 
   /**
@@ -2259,6 +2472,9 @@ export class Dispatcher {
    *      它是登记的**唯一真相**（P5：删掉登记，重扫它又对得上）；
    *   ② 登记推进（`JobBook.recordReport`：谁·什么·最后一条总结）；
    *   ③ 讲给主进程听（P1 那本 `work-*` 出口 · **不另造通道**）。
+   *
+   * ★ **契约 108 第④步**：他**正开着那一间** ⇒ **自动把那个东西打开**（C5）＋
+   *   旁边留一句总结；**他不在那一间 ⇒ 一帧都不推**（C6：不许抢屏）。
    *
    * 🔴 **"叫什么"用 `name`（它自己交的）**，不用宿主侧的 `whereTitle`（B20）。
    * 🔴 **只回报总结**，绝不把子进程那段对话抄进来（P3）。
@@ -2293,17 +2509,43 @@ export class Dispatcher {
     }
     // ③ 那条人话总结扔回主进程（它在**主进程那一间**里说话）
     s.noteJobReported();
+    // ★ **B39**：这件交回来了 ⇒ 那本"我替它接了几次"的账销掉（重来一件时从零算）。
+    s.clearJobNudges(s.scopeId);
     // ⚠️ 时间词：带没依据的时间词的那半句**不重复**（`jobSummaryText` 里已经滤过），
     //    所以这里不该再被闸挡下来；真被挡了也只是那句话不发，事实仍在①。
-    this.#main?.announceJobDone(jobSummaryText({ name: n, summary: m }, { hasTimeClaim }));
+    const line = jobSummaryText({ name: n, summary: m }, { hasTimeClaim });
+    this.#main?.announceJobDone(line);
+    // ④ ★ **他正开着那一间 ⇒ 自动把那个东西打开**（契约 §一 第④步 · C5/C6）。
+    this.#autoOpenFinished(s, line);
     return { ok: true, where: s.scopeId, name: n, text: JOB_LINES.done };
+  }
+
+  /**
+   * ★ **做完自动给他看**（契约 §一 第④步 · 判据 C5/C6）。
+   *
+   * 🔴 **只有他正开着那一间才推**（`#focusScope` 就是他最近一次被告知在看哪一间）——
+   *    他在看别处时**一帧都不许推**（抢屏 = 把他正在看的东西顶掉）。
+   * 🔴 **瞬态**（`Session.noteTransient` ⇒ 帧上带 `scopeId = 那一间`）：
+   *    · 只发给**正开着那一间**的那条连接（路由那一层就是按它筛的）；
+   *    · **不落盘** ⇒ 那一间里**不会多出第二份总结**（一条事实一个家：
+   *      那句总结的家是主进程那条 `job/report`）。
+   */
+  #autoOpenFinished(s, line) {
+    if (typeof line !== 'string' || line.trim() === '') return;
+    // 🔴 **他不在那一间 ⇒ 一帧都不推**（抢屏 = 把他正在看的东西顶掉）。
+    if (this.#focusScope !== s.scopeId) return;
+    try {
+      s.noteTransient(appOpenEvent({ app: s.scopeId, text: line }));
+    } catch (err) {
+      s.noteError(`"做完给你看"那一帧没推出去：${err?.message ?? err}`);
+    }
   }
 
   /** 把那份任务书**真投给**子进程那一间（`deliverJob` ⇒ 真 spawn、真 prompt）。 */
   async #jobDelivery(to, rec) {
     const packet = jobPacketText({ where: rec.where, why: rec.why });
     try {
-      await to.deliverJob(packet);
+      await to.deliverJob(packet, { where: rec.where });
     } catch (err) {
       to.noteError(`派过去的活没送出去：${err?.message ?? err}`);
     }
@@ -2350,6 +2592,12 @@ export class Dispatcher {
 
   /** 收工：**每一条会话**都要把话说圆（漏一条 = 那条被切断）。 */
   async shutdown() {
+    // ★ **那一笔待确认不再等了**（契约 108）：进程要收了 ⇒ 计时器收掉，
+    //   **什么都不建**（下次开机他再问一次就是新的一笔 —— 待确认本来就不落盘）。
+    if (this.#ask) {
+      clearTimeout(this.#ask.timer);
+      this.#ask = null;
+    }
     for (const s of this.#sessions.values()) {
       try {
         await s.shutdown();

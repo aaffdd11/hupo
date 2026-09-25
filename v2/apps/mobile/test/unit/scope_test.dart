@@ -114,6 +114,17 @@ class _FakeStream implements StreamClient {
     focuses.add((scope, sinceSeq));
   }
 
+  /// ★ **契约 108**：答那一句问话（走同一条流）。判据要读得到"发了没有、发的是什么"。
+  @override
+  bool answerJob(String id, {required bool yes}) {
+    if (id.trim().isEmpty) return false;
+    answers.add((id.trim(), yes));
+    return !closed;
+  }
+
+  /// 判据要读的账：每次答话（号, 是/否）。
+  final List<(String, bool)> answers = [];
+
   /// 判据用：从"服务端"推一帧进来（走和真那条一样的入口）。
   void push(Map<String, dynamic> e) => _events.add(e);
 

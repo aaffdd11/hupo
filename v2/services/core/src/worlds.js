@@ -801,6 +801,8 @@ export class Worlds {
       //      （`workspaces.ensure`：目录＋清单），再把它挂成这个人的一条会话
       //      （`roomFor`：cwd＝那个工作区、自己的 agent 键）。两条路互不干扰。
       jobs,
+      // ★ **契约 108**：那帧问话等他多久（阈值住 `job.js`；这里只是"判据能把它调小"）。
+      jobAskTimeoutMs: cfg.jobAskTimeoutMs,
       startScope: (where) => {
         const id = checkScope(where);
         workspaces.ensure(id);

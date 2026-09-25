@@ -33,6 +33,79 @@ export function resolveDshBin() {
 }
 
 /**
+ * **一个 dsh 进程该带哪些环境变量** —— 这也是"一套配置"的一部分。
+ *
+ * 🔴 为什么它必须是一个**导出**的纯函数（契约 109）：能力层那支 patch
+ *    （`hupo-capabilities.yml`）用 `!!js process.env.HUPO_LEDGER_SERVER` 那几样
+ *    **从环境里取**。少了它们 ⇒ 那几条 `- insert:` 的 `args` 变成 `[null]`
+ *    ⇒ **整个 plugin tree 加载失败、dsh 当场退**（真机读数见 `test/dev-mode.test.js`）。
+ *    ⇒ 调度器那台与开发者入口那台**必须用同一处产出的 env**。
+ *
+ * ⚠️ 那几个值**都不是秘密**：node 的绝对路径、几支脚本的绝对路径、一条域套接字
+ *    的路径。准入靠套接字文件的权限（0600），不靠令牌。
+ * ⚠️ **只放有值的**：把 `undefined` 塞进 env 会变成字符串 "undefined"
+ *    ——那比"没设"更难查（能力层会拿到一个字面量 "undefined" 的路径）。
+ */
+export function agentEnv(cfg = {}) {
+  return childEnv({
+    home: cfg.dshHome,
+    // ★ 能力层那三个变量（`hupo-capabilities.yml` 用 `!!js process.env.…` 读它们）。
+    extra: {
+      HUPO_NODE_BIN: process.execPath,
+      ...(cfg.ledgerServerPath ? { HUPO_LEDGER_SERVER: cfg.ledgerServerPath } : {}),
+      ...(cfg.ledgerSocketPath ? { HUPO_LEDGER_SOCKET: cfg.ledgerSocketPath } : {}),
+      // ★ 小程序那几条工具（乙-2）：脚本路径 + 那条域套接字。**都不是秘密**。
+      ...(cfg.appsServerPath ? { HUPO_APPS_SERVER: cfg.appsServerPath } : {}),
+      ...(cfg.appsSocketPath ? { HUPO_APPS_SOCKET: cfg.appsSocketPath } : {}),
+      // ★ **画图那一支**（P1-27 后半）：它自己那个文件 ＋ **同一条**通道
+      ...(cfg.imageServerPath ? { HUPO_IMAGE_SERVER: cfg.imageServerPath } : {}),
+      // ★ **这一间是哪一间**（`scope`）：那几条工具把它原样带回来 ⇒ 用量账
+      //   才知道"这一张图是哪个 app 叫的"（P2-3 一个账本三个计数器）。
+      //   ⚠️ 它**不是秘密**（就是房间名，客户端也看得到）⇒ 走 env 不破纪律。
+      // ★ **`HUPO_SCOPE` 是同一件事的通用名字**（2026-09-25 加）：账本那支工具
+      //   也要知道"我这一轮是在哪一间里跑的"。
+      ...(cfg.scope ? { HUPO_APPS_SCOPE: String(cfg.scope) } : {}),
+      HUPO_SCOPE: String(cfg.scope ?? 'main'),
+    },
+  });
+}
+
+/**
+ * **那一层配置**：人格 ＋ 能力层 ＋ 模型那条 patch（**顺序就是它们叠加的顺序**）。
+ *
+ * 🔴 这是"一套配置"的**唯一出处**（契约 `docs/dev/109-DEV-ENTRY-IS-YOURS.md`）：
+ *    `agentArgs()`（调度器按轮起的那台）与 `devWebArgs()`（开发者入口那台）
+ *    **都**从这儿取 —— 两处不可能各挂各的（那正是"第二个 harness"的形状）。
+ *
+ * 顺序（`--patch` **可重复**，`dsh --help` 原文）：
+ *   ① **人格**（`system-prompt` 只有它会碰）；
+ *   ② **能力层**（挂在人格**之后** ⇒ 它改不了人格那一条）；
+ *   ③ **模型那条**（挂最后：它只改 `llm-deepseek` / `web-search-deepseek`，不碰上面两层）。
+ *
+ * @param {object} cfg `config.js` 那份
+ * @returns {string[]}
+ */
+export function agentPatchArgs(cfg = {}) {
+  const out = [];
+  if (cfg.personaPath) out.push('--patch', cfg.personaPath);
+  if (cfg.capabilitiesPath) out.push('--patch', cfg.capabilitiesPath);
+  if (cfg.modelPatchPath) out.push('--patch', cfg.modelPatchPath);
+  return out;
+}
+
+/**
+ * **一个 dsh 进程该带哪些参数**（调度器按轮起的那台用的就是它）。
+ *
+ * ⚠️ `--patch` 是**全局选项**，必须写在 `--profile` **后面** —— 这个顺序就是那个保证。
+ *
+ * @param {object} cfg `config.js` 那份
+ * @returns {string[]}
+ */
+export function agentArgs(cfg = {}) {
+  return ['--profile', String(cfg.agentProfile || 'sdk'), ...agentPatchArgs(cfg)];
+}
+
+/**
  * 该给子进程哪些环境变量。
  *
  * 手册 §4.4：**先做减法**——先传全部，只删密钥类。
@@ -312,17 +385,9 @@ export class DshAgent extends EventEmitter {
 
   async #spawnAndInit() {
     const cfg = this.#cfg;
-    const args = ['--profile', cfg.agentProfile];
-    if (cfg.personaPath) args.push('--patch', cfg.personaPath);
-    // ★ **能力层**（批 4 · 契约 `docs/dev/31-LEDGER.md` v2 §7.1）：
-    //   `--patch` 是**可重复**的（`dsh --help` 原文），人格一层、能力一层。
-    //   ⚠️ 顺序：能力层挂在人格**之后** ⇒ 它改不了人格那一条
-    //      （`system-prompt` 只有人格那份 patch 会碰）。
-    if (cfg.capabilitiesPath) args.push('--patch', cfg.capabilitiesPath);
-    // ★ **模型那条路**（多租户 ②-3）：让 dsh 把请求发给盒内的 root 小代理
-    //   （它持有真 key，而 agent 那一侧只有一个占位符）。
-    //   ⚠️ 挂在**最后**：它只改 `llm-deepseek` 那一条，不碰上面两层。
-    if (cfg.modelPatchPath) args.push('--patch', cfg.modelPatchPath);
+    // ★ **一套配置的唯一出处**：`agentArgs()`（契约 109）。参数顺序与那几层
+    //   patch 的道理都写在那个函数上面 —— 这里**不许**再拼一遍。
+    const args = agentArgs(cfg);
 
     const gen = (this.#gen += 1);
 
@@ -348,33 +413,10 @@ export class DshAgent extends EventEmitter {
       //      ⇒ 那条路会**大声失败**，不会静默退回 root。**这正是要的。**
       ...(cfg.agentUid !== null && cfg.agentUid !== undefined ? { uid: cfg.agentUid } : {}),
       ...(cfg.agentGid !== null && cfg.agentGid !== undefined ? { gid: cfg.agentGid } : {}),
-      env: childEnv({
-        home: cfg.dshHome,
-        // ★ 能力层那三个变量（`hupo-capabilities.yml` 用 `!!js process.env.…` 读它们）。
-        //   ⚠️ 它们**都不是秘密**：node 的绝对路径、一支脚本的绝对路径、
-        //      一个域套接字的路径。准入靠套接字文件的权限（0600），不靠令牌。
-        extra: {
-          HUPO_NODE_BIN: process.execPath,
-          // ⚠️ 只放**有值**的：把 `undefined` 塞进 env 会变成字符串 "undefined"，
-          //    那比"没设"更难查（能力层会拿到一个字面量 "undefined" 的路径）。
-          ...(cfg.ledgerServerPath ? { HUPO_LEDGER_SERVER: cfg.ledgerServerPath } : {}),
-          ...(cfg.ledgerSocketPath ? { HUPO_LEDGER_SOCKET: cfg.ledgerSocketPath } : {}),
-          // ★ 小程序那几条工具（乙-2）：脚本路径 + 那条域套接字。**都不是秘密**。
-          ...(cfg.appsServerPath ? { HUPO_APPS_SERVER: cfg.appsServerPath } : {}),
-          ...(cfg.appsSocketPath ? { HUPO_APPS_SOCKET: cfg.appsSocketPath } : {}),
-          // ★ **画图那一支**（P1-27 后半）：它自己那个文件 ＋ **同一条**通道
-          ...(cfg.imageServerPath ? { HUPO_IMAGE_SERVER: cfg.imageServerPath } : {}),
-          // ★ **这一间是哪一间**（`scope`）：那几条工具把它原样带回来 ⇒ 用量账
-          //   才知道"这一张图是哪个 app 叫的"（P2-3 一个账本三个计数器）。
-          //   ⚠️ 它**不是秘密**（就是房间名，客户端也看得到）⇒ 走 env 不破纪律。
-          // ★ **`HUPO_SCOPE` 是同一件事的通用名字**（2026-09-25 加）：账本那支工具
-          //   也要知道"我这一轮是在哪一间里跑的" —— 因为"他随时能问哪几件还挂着"
-          //   那一条**必须把"正在问的那一轮"自己排除掉**（否则答案永远是
-          //   "那件还在做"，而那件就是这句提问本身）。主线也要给（`main`）。
-          ...(cfg.scope ? { HUPO_APPS_SCOPE: String(cfg.scope) } : {}),
-          HUPO_SCOPE: String(cfg.scope ?? 'main'),
-        },
-      }),
+      // ★ env 只有**一处出处**：`agentEnv(cfg)`（摘密钥 ＋ `DSH_HOME` ＋ 能力层那几样）。
+      //   ⚠️ 开发者入口那台也用同一个 —— 少了那几样，能力层那支 patch 会让 dsh
+      //      整个 plugin tree 加载失败（真机读数见 `agentEnv` 的注释）。
+      env: agentEnv(cfg),
     });
     this.#child = child;
     this.#buf = '';

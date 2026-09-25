@@ -168,6 +168,8 @@ function rememberSession(id) {
 let buf = '';
 let seq = 0;
 let turn = 0;
+/** ★ 最近一次 `session/prompt` 喂进来的那句话（最后那个内容块）—— 见 `session/prompt` 那一段。 */
+let lastPromptText = '';
 const timers = [];
 
 process.stdin.setEncoding('utf8');
@@ -269,6 +271,13 @@ function onMessage(msg) {
       role: 'user',
       id: `pm_${seq}`,
     });
+    // ★ 记下**这一次喂进来的那句话**（最后那个内容块：背景那几块在前）——
+    //   "服务端到底回给 agent 了什么"就靠它验（判据 S2/S3/P6b：那句人话真送到了）。
+    {
+      const blocks = msg.params?.contentBlocks ?? [];
+      const last = blocks.length > 0 ? blocks[blocks.length - 1] : null;
+      lastPromptText = typeof last?.text === 'string' ? last.text : '';
+    }
     reply(msg.id, { messageId: `pm_${seq}` });
     turn += 1;
     runScenario(turn);
@@ -427,8 +436,15 @@ function runScenario(t) {
       break;
     }
 
-    case 'job': {
+    case 'job':
+    case 'job-stall':
+    case 'job-stall-then-done': {
       // ★ **派活**（契约 `docs/dev/102-APP-BIRTH-SCOPE.md`）：两条身份走**同一个场景**。
+      //   ★ **108 起**：主对话那一侧第 1 轮只**问一句**（`job_start` 回来的是
+      //     "已经问他了"）；他答了之后服务端才建那一间、才会把任务书投到这一处。
+      //   ★ `job-stall*`：**子进程停在那儿等回话**（B39 的真机形状）——
+      //     说一句"这条我说太长了…你回一句「接着说」"，然后这一轮收口，
+      //     **不调 `job_done`**。兜底该替它接一句（有上限）。
       const where = process.env.FAKE_JOB_WHERE ?? '';
       const why = process.env.FAKE_JOB_WHY ?? '';
       const name = process.env.FAKE_JOB_NAME ?? '一件东西';
@@ -440,6 +456,19 @@ function runScenario(t) {
       const delay = Number.parseInt(process.env.FAKE_JOB_DELAY ?? '0', 10);
 
       if (SCOPE_OF_FAKE === 'main') {
+        // ★ **108：答话之后服务端还会回主进程一句**（"他说另开一处做 / 就在这儿做"）
+        //   ⇒ 主对话那位会**再开一轮**。那一轮**绝不许再派一次**（一次一件）——
+        //   照老形状无条件调 `job_start` 的话，这里会当场派第二件（判据会抓到）。
+        if (t > 1) {
+          notifyEvent('step/start', { turn: t, step: 1 });
+          // ★ **把服务端回给它的那句话说出来**（真 agent 会转述它）——
+          //   判据 S2/S3/P6b 要的正是"那句人话真送到了 agent 手上"。
+          assistantMessage(t, 1, lastPromptText !== '' ? lastPromptText : '好，我接着说。', null);
+          notifyEvent('step/end', { turn: t, step: 1 });
+          notifyEvent('turn/end', { turn: t, reason: { kind: 'completed' } });
+          notifyStatus('idle');
+          break;
+        }
         // ① **主对话那一侧**：调 `job_start`（真域套接字那一帧），再把结果说成一句话。
         notifyEvent('step/start', { turn: t, step: 1 });
         notifyToolCall(t, 1, 'job_start');
@@ -448,16 +477,28 @@ function runScenario(t) {
           process.stderr.write(`[fake-agent] job_start → ${JSON.stringify(r)}\n`);
           notifyEvent('step/end', { turn: t, step: 1 });
           notifyEvent('step/start', { turn: t, step: 2 });
-          // ⚠️ 拒了也要**照它给的话说一句**（P6：不许把话吞掉）——
-          //    能派成 / 派不成，主对话里都要有一条人话。
-          const line = r.ok
-            ? '好，这件事我另开一处专门做，做完把结果告诉你。'
-            : String(r.text ?? '这件事我自己接着做。');
-          assistantMessage(t, 2, line, null);
+          // ⚠️ 拒了 / 还没建成都**照它给的话说一句**（P6：不许把话吞掉）——
+          //    ⚠️ **文案由服务端给**（`r.text`）：这里自己拼一句就成了第二个口径。
+          assistantMessage(t, 2, String(r.text ?? '这件事我自己接着做。'), null);
           notifyEvent('step/end', { turn: t, step: 2 });
           notifyEvent('turn/end', { turn: t, reason: { kind: 'completed' } });
           notifyStatus('idle');
         });
+        break;
+      }
+
+      // ★ **B39 的真机形状**：第 1 轮（`job-stall-then-done` 是"接一句之后真做完了"）
+      //   停在那儿等回话 —— 一句话说完就收口，`job_done` 一个字都没提。
+      if (scenario === 'job-stall' || (scenario === 'job-stall-then-done' && t === 1)) {
+        notifyEvent('step/start', { turn: t, step: 1 });
+        assistantMessage(t, 1, '收到，我这就动手做。', null);
+        notifyEvent('step/end', { turn: t, step: 1 });
+        notifyEvent('step/start', { turn: t, step: 2 });
+        assistantMessage(t, 2, '这条我说太长了，没说完。你回一句「接着说」，我就接着上面往下讲。', null);
+        notifyEvent('step/end', { turn: t, step: 2 });
+        // ⚠️ 真机上这一轮就是这么收的（半句 ⇒ `max-tokens`）
+        notifyEvent('turn/end', { turn: t, reason: { kind: 'max-tokens' } });
+        notifyStatus('idle');
         break;
       }
 
