@@ -14,6 +14,11 @@ Type=simple
 WorkingDirectory=/home/deploy/proj/hupo/v2/services/core
 # 钥匙那三样（0600）可选：没有就不带（服务自己会说"没配"）
 EnvironmentFile=-/home/deploy/proj/hupo/v2/services/core/data/asr.env
+# ★ **这台机器的部署状态**（不进仓库）：`data/tenants.env` —— `restart-core.sh` 也 source 它。
+#   🔴 **少了这一行就出事**：`HUPO_TENANT_MAP`（多租户那张表）与
+#     `HUPO_APPS_PUBLIC_BASE` / `HUPO_APPS_FRAME_ANCESTORS`（制品口那个域名与 CSP）
+#     全丢 ⇒ 租户通道不开、制品口 origin 判错。开头的 `-` = 文件不在也不报错。
+EnvironmentFile=-/home/deploy/proj/hupo/v2/services/core/data/tenants.env
 Environment=HUPO_DATA=/home/deploy/proj/hupo/v2/services/core/data
 Environment=HUPO_PORT=8020
 Environment=HUPO_WEB=/home/deploy/proj/hupo/v2/services/core/web

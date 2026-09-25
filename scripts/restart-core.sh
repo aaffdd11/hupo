@@ -22,10 +22,21 @@
 #    别的 dsh 会话（几百个）。杀错了是**毁别人的活**。
 #    我们的 agent 是**本服务的子进程**；优雅地 SIGTERM 服务本身，
 #    `serve.js` 会 `dispatcher.shutdown()` → `runtime.shutdown()` 把子进程带走。
-# ⚠️ **这个脚本不解决"开机自启"**（P1-21，2026-09-24 写清）：
-#    它只是"现在把服务重启成新的那一版"。**机器重启之后，服务不会自己回来** ——
-#    那一件要 systemd（见 `docs/dev/00-PROGRESS.md` §六 #48，**还没做**）。
-#    ⚠️ 同一条也写在 `scripts/start-tunnels.sh` 顶上（那几条隧道一样不会自己回来）。
+# ⚠️ 同一条也写在 `scripts/start-tunnels.sh` 顶上（那几条隧道由 `hupo-frpc-*` 单元管）。
+#
+# ── ★ 两条路，按 `systemctl --user is-active hupo-core` 选 ─────────
+#    （2026-09-25 加；口径写在 `deploy/systemd/README.md` §六）
+#
+#    · **单元在跑** ⇒ 走 **systemd 那条路**：
+#        - 停/起都只点**这个具体单元**（`systemctl --user stop/start hupo-core`）；
+#        - **不看也不写 `serve.pid`**（systemd 不写它，老脚本因此会再起一个抢 8020 ⇒ EADDRINUSE）；
+#        - 真指纹用 drop-in `~/.config/systemd/user/hupo-core.service.d/10-hupo-build-id.conf`
+#          递进去再 `daemon-reload`（systemd **不做命令替换**，`Environment=` 只能来自文件）。
+#
+#    · **单元没在跑**（`is-active` 假：退回手动之后 / 开发机上）⇒ **原样走手动那条路**：
+#        `serve.pid` → `SIGTERM` → 自己 `node src/serve.js`，行为**一个字节都不改**。
+#
+#    开机自启归 `hupo-core.service`（`deploy/systemd/`）；本脚本只管"现在重启成新的那一版"。
 #
 set -uo pipefail
 
@@ -55,6 +66,38 @@ USAGE
     *) echo "✗ 不认识的选项：$arg" >&2; exit 2 ;;
   esac
 done
+
+# ── 0.1) ★ 判：这次走哪条路（**认单元 / 手动**）──────────────────
+# 判据只有一条：`systemctl --user is-active --quiet hupo-core`。
+# ⚠️ **只问这一个具体单元**：不许写裸 `systemctl --user stop`（不带单元）——
+#    那会顺手清掉 DSH 的 scope，把别的会话一起杀掉（`AGENTS.md` §一，本项目真出过事）。
+# ⚠️ 没有 systemctl / 没有 user manager 时（老环境）也当"没单元"，走手动路。
+UNIT=hupo-core
+USE_SYSTEMD=0
+if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet "$UNIT" 2>/dev/null; then
+  USE_SYSTEMD=1
+fi
+
+# ★ 把真指纹递给 systemd：**它不做命令替换**，只能写文件。
+#   路径：`~/.config/systemd/user/hupo-core.service.d/10-hupo-build-id.conf`（drop-in）。
+# ⚠️ 为什么不用 `systemctl --user set-environment`：manager 的环境**不落盘**，
+#    机器一重启就没了 —— 而"开机自启"正是这个单元存在的理由 ⇒ 重启之后 `/api/version`
+#    又会掉回 `dev`。drop-in 是文件，跟着单元一起活（重启机器也在）。
+DROPIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT.service.d"
+DROPIN="$DROPIN_DIR/10-hupo-build-id.conf"
+write_build_dropin() {
+  mkdir -p "$DROPIN_DIR" || return 1
+  cat > "$DROPIN" <<EOF
+# ⚠️ **这个文件是自动生成的**：scripts/restart-core.sh 每次走 systemd 那条路都会重写它。
+# 为什么要有它：systemd **不做命令替换**，而真指纹只能现从 web/index.html / web/main.<指纹>.dart.js 推。
+# 手动改指纹（两件都要做，否则改的是文件、跑的还是旧值）：
+#   systemctl --user daemon-reload && systemctl --user restart $UNIT
+# 改完对着公网核一遍：curl -s https://w.stalkerai.cn/api/version
+[Service]
+Environment=HUPO_BUILD_ID=$1
+EOF
+  systemctl --user daemon-reload
+}
 
 # 等它说完的两个量：**轮询间隔**与**最长等多久**。
 # ⚠️ 为什么有上限：**等一个已经死掉的服务 = 重启脚本永远卡住**，那比切一轮话更坏。
@@ -142,42 +185,20 @@ if [ "${HUPO_SKIP_PREFLIGHT:-0}" != "1" ]; then
   fi
 fi
 
-# ── 1) 停 ────────────────────────────────────────────────────
-if [ -f serve.pid ]; then
-  OLD="$(cat serve.pid)"
-  if kill -0 "$OLD" 2>/dev/null; then
-    echo "▶ 停掉旧服务（PID $OLD）——走优雅退出，让它把子 agent 一起带走"
-    kill -TERM "$OLD" 2>/dev/null
-    for _ in $(seq 1 20); do
-      kill -0 "$OLD" 2>/dev/null || break
-      sleep 0.5
-    done
-    if kill -0 "$OLD" 2>/dev/null; then
-      echo "  ⚠️ 它没在 10 秒内退出，硬杀"
-      kill -KILL "$OLD" 2>/dev/null
-    fi
-  else
-    echo "▶ serve.pid 里的进程（$OLD）已经不在跑了"
-  fi
-  rm -f serve.pid
-else
-  echo "▶ 没有 serve.pid（第一次起？）"
-fi
-
-# ── 2) 清 ────────────────────────────────────────────────────
-if [ "$FRESH" = "1" ]; then
-  # ⚠️ 这一步会**永久删掉**所有说过的话。所以它必须显式要，不能是默认。
-  echo "▶ --fresh：删掉 data/main.jsonl（**说过的话会没**）"
-  rm -f data/main.jsonl
-fi
-
-# ── 3) 起 ────────────────────────────────────────────────────
+# ── 0.9) ★ 算真指纹（**两条路都要，systemd 那条路要在"起"之前用**）────
 # ⚠️ 指纹**不许**默认成 `dev`：那样 `/api/version` 报的就是一句假话
 #    ——"我是哪个版本"和磁盘上真正在服务的产物对不上。
 #    （2026-09-21 实测踩到：手动重启一次，线上指纹就从 `54a882e213e9` 掉成 `dev`。）
-#    ⇒ 没显式给就从**真正部署的那份产物**里读：部署时入口文件叫 `main.<指纹>.dart.js`。
-#    ⇒ 读不到（没出过 Web 产物 / 还是没指纹的老办法）才算 `dev`。
+#    ⇒ 没显式给（`HUPO_BUILD_ID`）就**从 index.html 真正引用的那份产物**里读：
+#      部署时入口文件叫 `main.<指纹>.dart.js`，index.html 引的是
+#      `flutter_bootstrap.<指纹>.js`（同一个指纹）——这才是浏览器真正拿到的那一版。
+#    ⇒ index.html 读不到（没出过 Web 产物 / 还是没指纹的老办法）再退回 `ls web/main.*`，
+#      都读不到才算 `dev`。
 BUILD="${HUPO_BUILD_ID:-}"
+if [ -z "$BUILD" ] && [ -f web/index.html ]; then
+  BUILD="$(grep -o 'flutter_bootstrap\.[0-9a-f]*\.js' web/index.html 2>/dev/null | head -1 \
+    | sed -E 's/^flutter_bootstrap\.(.+)\.js$/\1/')"
+fi
 if [ -z "$BUILD" ]; then
   ENTRY="$(ls "$DIR"/web/main.*.dart.js 2>/dev/null | head -1 || true)"
   if [ -n "$ENTRY" ]; then
@@ -186,8 +207,73 @@ if [ -z "$BUILD" ]; then
     BUILD="dev"
   fi
 fi
+
+# ── 1) 停 ────────────────────────────────────────────────────
+if [ "$USE_SYSTEMD" = "1" ]; then
+  # ★ systemd 那条路：线上服务活在 `$UNIT` 的 cgroup 里（`…/app.slice/hupo-core.service`），
+  #   **它不写 `serve.pid`** ⇒ 决不能再去按 PID 停（那会看不见它、然后自己再起一个抢 8020）。
+  # 🔴 只点**这个具体单元**：`systemctl --user stop hupo-core`。
+  #    **不许**写裸 `systemctl --user stop`（不带单元）—— 那会顺手清掉 DSH 的 scope。
+  # ⚠️ 这里用 stop（而不是 restart），因为 `--fresh` 要在**停了之后、起之前**删日志文件；
+  #    不 fresh 时紧接着就 `start`，与 restart 等价。stop 是有意的 ⇒ `Restart=always` 不会抢跑。
+  echo "▶ 线上服务归系统单元管（$UNIT 在跑）—— 用 systemctl 停/起，**不看 serve.pid**"
+  systemctl --user stop "$UNIT" || {
+    echo "✗ 停不下 $UNIT；**什么都没动**，先看：systemctl --user status $UNIT --no-pager"
+    exit 1
+  }
+  # 手动时代留下的 pid 文件清掉（留着它，下次回退手动路会拿一个死 PID 去 kill）
+  rm -f serve.pid
+else
+  if [ -f serve.pid ]; then
+    OLD="$(cat serve.pid)"
+    if kill -0 "$OLD" 2>/dev/null; then
+      echo "▶ 停掉旧服务（PID $OLD）——走优雅退出，让它把子 agent 一起带走"
+      kill -TERM "$OLD" 2>/dev/null
+      for _ in $(seq 1 20); do
+        kill -0 "$OLD" 2>/dev/null || break
+        sleep 0.5
+      done
+      if kill -0 "$OLD" 2>/dev/null; then
+        echo "  ⚠️ 它没在 10 秒内退出，硬杀"
+        kill -KILL "$OLD" 2>/dev/null
+      fi
+    else
+      echo "▶ serve.pid 里的进程（$OLD）已经不在跑了"
+    fi
+    rm -f serve.pid
+  else
+    echo "▶ 没有 serve.pid（第一次起？）"
+  fi
+fi
+
+# ── 2) 清 ────────────────────────────────────────────────────
+# ★ 这一条**两条路口径一样**（README §六·2）：systemd 那条路也照删
+#   —— 因为上面刚把单元停掉，删文件是真的删（服务没开着那个句柄）。
+if [ "$FRESH" = "1" ]; then
+  # ⚠️ 这一步会**永久删掉**所有说过的话。所以它必须显式要，不能是默认。
+  echo "▶ --fresh：删掉 data/main.jsonl（**说过的话会没**）"
+  rm -f data/main.jsonl
+fi
+
+# ── 3) 起 ────────────────────────────────────────────────────
 PORT="${HUPO_PORT:-8020}"
-echo "▶ 起新服务：端口 $PORT，构建指纹 $BUILD"
+if [ "$USE_SYSTEMD" = "1" ]; then
+  # ★ **systemd 唯一认可的递法**：写 drop-in 再 `daemon-reload`（它不做命令替换）。
+  # ⚠️ 端口以**单元里的** `HUPO_PORT` 为准（`Environment=HUPO_PORT=8020`）——
+  #    这里把它读出来照实报，别拿 caller 的环境说假话。
+  UNIT_PORT="$(systemctl --user show "$UNIT" -p Environment 2>/dev/null \
+    | tr ' ' '\n' | sed -n 's/^HUPO_PORT=//p' | head -1)"
+  echo "▶ 起新服务（systemd 单元 $UNIT）：端口 ${UNIT_PORT:-（见单元里的 HUPO_PORT）}，构建指纹 $BUILD"
+  if [ -n "${HUPO_PORT:-}" ] && [ -n "$UNIT_PORT" ] && [ "$HUPO_PORT" != "$UNIT_PORT" ]; then
+    echo "  ⚠️ 你设了 HUPO_PORT=$HUPO_PORT，而**单元**里是 $UNIT_PORT ⇒ systemd 这条路以**单元**为准"
+  fi
+  write_build_dropin "$BUILD" || { echo "✗ 指纹 drop-in 写不下去：$DROPIN"; exit 1; }
+  echo "   （指纹已写进 $DROPIN，并 daemon-reload 过了）"
+  systemctl --user start "$UNIT" || { echo "✗ systemctl --user start $UNIT 失败"; exit 1; }
+  sleep 3
+else
+  # ── 手动那条路（**原样保留**：退回 systemd 之后 / 开发机上还要用）──────
+  echo "▶ 起新服务：端口 $PORT，构建指纹 $BUILD"
 # ⚠️ **这一段 2026-09-23 修过**，原来长这样：
 #       setsid nohup env \
 #         HUPO_DATA="$DIR/data" \
@@ -199,8 +285,8 @@ echo "▶ 起新服务：端口 $PORT，构建指纹 $BUILD"
 #      ② `HUPO_DATA / HUPO_PORT / HUPO_WEB` **根本没传给服务** —— 服务一直在用默认值，
 #         而脚本却照着变量 echo「端口 $PORT」⇒ 谁改了 `HUPO_PORT`，**脚本就在说假话**。
 #    ⇒ 改成显式 `export`：**一个字节都不打印**，而值真的进到服务里。
-#    ⚠️ **起进程那一段没动**（没有加 `setsid`）：线上服务的 cgroup 现在是
-#       DSH 的 subprocess scope（`AGENTS.md` §一 记着这件事），换 detach 方式会动到它。
+#    ⚠️ **起进程那一段没动**（没有加 `setsid`）：手动路的 cgroup 是 DSH 的 subprocess scope
+#       （`AGENTS.md` §一 记着这件事），换 detach 方式会动到它。
 export HUPO_DATA="$DIR/data"
 export HUPO_PORT="$PORT"
 export HUPO_WEB="$DIR/web"
@@ -237,20 +323,45 @@ fi
   node src/serve.js > serve.log 2>&1 < /dev/null &
 echo $! > serve.pid
 sleep 3
+fi
 
 # ── 4) 报状态（**报告它现在是什么样，不喊口号**）────────────
-if ! kill -0 "$(cat serve.pid)" 2>/dev/null; then
-  echo "✗ 没起来。serve.log 末尾："
-  tail -20 serve.log
-  exit 1
+if [ "$USE_SYSTEMD" = "1" ]; then
+  UNIT_PID="$(systemctl --user show "$UNIT" -p MainPID 2>/dev/null | cut -d= -f2)"
+  if ! systemctl --user is-active --quiet "$UNIT" || [ -z "$UNIT_PID" ] || [ "$UNIT_PID" = "0" ]; then
+    echo "✗ $UNIT 没起来。systemctl status（末 20 行）与 serve.log 末尾："
+    systemctl --user status "$UNIT" --no-pager -n 20 2>&1 | sed 's/^/  /'
+    tail -20 serve.log
+    exit 1
+  fi
+  echo "✓ 起来了（systemd 单元 $UNIT，PID $UNIT_PID）"
+else
+  if ! kill -0 "$(cat serve.pid)" 2>/dev/null; then
+    echo "✗ 没起来。serve.log 末尾："
+    tail -20 serve.log
+    exit 1
+  fi
+  echo "✓ 起来了（PID $(cat serve.pid)）"
 fi
-echo "✓ 起来了（PID $(cat serve.pid)）"
 # ⚠️ **整段横幅照原样打出来，不许挑词过滤**（2026-09-21 改）：
 #    原来是 `grep -E "监听|鉴权|接记忆|..."`，而那个词表**漏了 `完整性` 与 `准入`** ——
 #    正好是**两道闸**那一行。⇒ 主人跑重启脚本时，**看不到"完整性有没有对上"**
 #    （实测：横幅 20 行，被过滤成 12 行）。
 #    这种"新加一行横幅就悄悄看不见"的缺陷**会复发**，所以不补词，改成**按形状取**：
-#    从日志头打到**收尾那条纯 `─` 规则线**为止。横幅长什么样就报什么，加多少行都不会漏。
+#    从**横幅头**打到**收尾那条纯 `─` 规则线**为止。横幅长什么样就报什么，加多少行都不会漏。
 #    ⚠️ 终止条件不能用 `/^─/` —— **头行自己就以 `─` 开头**（`── 琥珀 · 调度器…`），
-#       那样会在头行就停下（我第一次就是这么写的，实测只打出 1 行）。必须是 `/^─+$/`。
-awk 'NR==1{print;next} /^─+$/{print;exit} {print}' serve.log || tail -20 serve.log
+#       那样会在头行就停下（我第一次就是这么写的，实测只打出 1 行）。必须是"全破折线"。
+#    ⚠️ **而且要从"最后一个横幅头"开始取，不是从文件第 1 行**（2026-09-25 修）：
+#       单元用 `StandardOutput=append:` ⇒ `serve.log` **不再被截断**，
+#       而 `awk '/^─+$/'` 这个全破折线条件在本机的 **mawk** 下**匹配不上**
+#       （实测：它一路打到 EOF）⇒ 旧写法会把**历史几个横幅**一起打出来
+#       （含旧的 `构建 dev`）—— 那正是这个项目最恨的"脚本在说假话"。
+#       ⇒ 取最后一个横幅头（形如 `^── `）到它后面那条**非空全破折线**为止。
+#         手动路那边 `serve.log` 是刚截断的、只有一个横幅，取出来与原意一致。
+BAN_START="$(grep -n '^── ' serve.log 2>/dev/null | tail -1 | cut -d: -f1)"
+BAN_END="$(grep -n -x '[─]\+' serve.log 2>/dev/null | tail -1 | cut -d: -f1)"
+if [ -n "$BAN_START" ] && [ -n "$BAN_END" ] && [ "$BAN_END" -ge "$BAN_START" ]; then
+  sed -n "${BAN_START},${BAN_END}p" serve.log
+else
+  tail -20 serve.log
+fi
