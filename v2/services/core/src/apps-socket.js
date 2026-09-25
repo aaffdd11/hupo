@@ -158,7 +158,7 @@ export async function handleAppsOp(apps, req, ctx = {}) {
       // ── 发布 / 下架 / 装上 / 看共享库（乙-3）────────────────
       case 'publish': {
         if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
-        // 🔴 **`.exp/` 那条出界闸先跑**（92 §③ 阶段 2 的硬规矩）：说不清来路的东西
+        // 🔴 **申报那条出界闸先跑**（92 §③ 阶段 2／98 §② 阶段 3 的硬规矩）：说不清来路的东西
         //    一份都不许出去。预审是**上架流程的第一步**，但它跑在这条**前置校验**之后
         //    —— 顺序是"先说清来路 → 再申报与评审"。
         //    ⚠️ `published.publish` 里还会再跑一次同一道闸（幂等，不是第二份逻辑）。
@@ -190,7 +190,7 @@ export async function handleAppsOp(apps, req, ctx = {}) {
         }
         // 🔴 **出界那一条独木桥**（92 §③ 阶段 2）：`published.publish` 是共享库唯一的写入者，
         //    而它第一件事就是过 `outbound.assertOutboundAllowed`。这里把**这一间房**递过去
-        //    （申报住 `<scope>/.exp/`）—— 少了它，出界检查就只能按默认布局找了。
+        //    （申报住 `<scope>/.exp/` 与 `<scope>/.data/`）—— 少了它，出界检查就只能按默认布局找了。
         //    ⚠️ `published.publish` 里还有**外联申报（A16）**那道闸（读不到 ⇒ 拒）。
         const r = ctx.published.publish(apps, {
           id: req.id,

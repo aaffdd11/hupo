@@ -34,7 +34,7 @@ import {
   OutboundError,
   adjudicate,
   assertOutboundAllowed,
-  readExpPacks,
+  readPacks,
 } from '../src/outbound.js';
 import { Published } from '../src/published.js';
 import { buildReviewPolicy } from '../src/review.js';
@@ -290,7 +290,7 @@ test('§2-8 `.exp/` 下的散文件（未归类）⇒ 不拦；也没有任何 `
   const exp = nodePath.join(w.workspaces.dirFor('news'), '.exp');
   nodeFs.mkdirSync(exp, { recursive: true });
   nodeFs.writeFileSync(nodePath.join(exp, 'notes.json'), JSON.stringify({ note: '未归类的东西' }));
-  assert.deepEqual(readExpPacks({ scopeDir: w.workspaces.dirFor('news') }), [], '散文件连"可分享"都申报不了');
+  assert.deepEqual(readPacks({ scopeDir: w.workspaces.dirFor('news') }), [], '散文件连"可分享"都申报不了');
   const idx = w.published.publish(w.apps, { id: 'news', authorSub: 'u1' });
   assert.equal(idx.id, 'news');
 

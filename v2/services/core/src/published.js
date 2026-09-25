@@ -112,8 +112,8 @@ export class Published {
    *    的「第二出口」判据扫出来）。
    *
    * @param {object} o
-   * @param {object} [o.workspaces] `AppWorkspaces`（读 `<scope>/.exp/` 那些申报要用它；
-   *   不给就按默认布局 `<apps.dir>/workspaces/<id>/` 找 —— **默认也要读**，不许留旁路）
+   * @param {object} [o.workspaces] `AppWorkspaces`（读 `<scope>/.exp/` 与 `<scope>/.data/`
+   *   那些申报要用它；不给就按默认布局 `<apps.dir>/workspaces/<id>/` 找 —— **默认也要读**，不许留旁路）
    * @returns {{id:string,version:number,title:string,icon:string,permissions:string[],publishedAt:number}}
    */
   publish(apps, { id, authorSub, authorName = '一位用户', workspaces = null }) {
@@ -140,7 +140,7 @@ export class Published {
     // 🔴 **外联申报（A16）** —— 93 §2.4：**读不到申报 ⇒ 拒上架**（fail-closed，
     //    **不是**"当没有外联"）。申报是制品里的一个普通文件 ⇒ **随 `rootHash` 冻结**
     //    （主人第 5 条）；它同时也被**逐个出网点对照代码**（93 §三 R1／R2）。
-    //    ⚠️ 顺序刻意：它在 `assertOutboundAllowed`（`.exp/` 那条）**之后**、
+    //    ⚠️ 顺序刻意：它在 `assertOutboundAllowed`（两格申报那条）**之后**、
     //       在**任何一次写盘之前** —— 拒的时候共享库一个字节都不动。
     assertDeclarationAllowed({ files, version: mine.version });
 
