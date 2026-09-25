@@ -50,6 +50,7 @@ import { BoxError, INTERNAL_PREFIX, parseArtifactQuery, parseInternalPath } from
 // ⚠️ 只用它的**错误类型**（内部写入那条路要把"校验不过"如实回给宿主，而不是 500）
 //    与那个总量上限（内部口的身体上限由它推出来，**不另写一个数**）。
 import { AppsError, MAX_TOTAL_BYTES } from './apps.js';
+import { RoomReclaimError } from './reclaim.js';
 import { USAGE_KINDS } from './usage.js';
 import { ASR_PATH } from './asr.js';
 import { HARNESS_PATH } from './harness-session.mjs';
@@ -922,6 +923,60 @@ export function createServer({
           }
           log(`[app-remove] 没删掉：${err?.message ?? err}`);
           return sendJson(res, 500, { error: 'remove-failed', text: '这一下没删掉，等会儿再试。' });
+        }
+      }
+
+      // ── ★ **B28：按房间回收**（一间**没有制品**的工作区）──────────────────
+      //
+      // 🔴 **它补的是哪一个洞**：`/api/app-remove` 是按 **app id** 走的 ⇒ 一间
+      //    **还没做出东西**的工作区（没有制品 / 制品早被删了）**删不掉**，
+      //    只能永远躺在盘上（B28；`#152` 真机在房间清单里见到十来个）。
+      // 🔴 **以盒子为准**（照上面那条同一条纪律）：工作区 / 那一间的对话 /
+      //    助手那边的原件**都在他盒子里** ⇒ 租户这一下**在盒里落**。
+      // ⚠️ 它**不动制品库**：有制品的那一间要走 `/api/app-remove`
+      //    （那条连制品一起搬；从这条走会留下"点不开的图标"）⇒ 这里**拒**。
+      if (path === '/api/room-remove' && req.method === 'POST') {
+        let body;
+        try {
+          body = await readJson(req, 16 * 1024);
+        } catch {
+          return sendJson(res, 400, { error: '这一条看不懂' });
+        }
+        const scope = typeof body?.scope === 'string' ? body.scope.trim() : '';
+        if (scope === '') return sendJson(res, 404, { error: 'not-found', text: '没说清是哪一间。' });
+        const src = appsFor(claim.sub);
+        if (!src) {
+          return tenant
+            ? sendJson(res, 503, { error: 'tenant-not-ready', text: '你那台还在准备，稍等一下再试。' })
+            : sendJson(res, 404, { error: '这台部署还没开小程序' });
+        }
+        try {
+          if (src.isBox === true) {
+            // 盒代理 ⇒ 问盒子那份权威（与 `remove()` 同一条隧道 · 同一套错误分岔）
+            if (typeof src.reclaimRoom !== 'function') {
+              return sendJson(res, 500, { ok: false, error: '这条"清房间"的取值来源接错了' });
+            }
+            const r = await src.reclaimRoom(scope);
+            if (!r.ok) return sendJson(res, r.status, { error: r.error, text: r.error });
+            return sendJson(res, 200, { ok: true, record: r.record });
+          }
+          const w = worldFor(claim.sub);
+          if (!w || typeof w.reclaimRoom !== 'function') {
+            return sendJson(res, 500, { ok: false, error: '这条"清房间"的取值来源接错了' });
+          }
+          const record = w.reclaimRoom(scope, { sub: claim.sub });
+          return sendJson(res, 200, { ok: true, record });
+        } catch (err) {
+          if (err instanceof BoxError) {
+            log(`[room-remove] 盒子没应：${err?.message ?? err}`);
+            return sendJson(res, 503, { error: 'tenant-not-ready', text: '你那台刚才没应，等会儿再试。' });
+          }
+          if (err instanceof RoomReclaimError) {
+            // 人话就在 `message` 里（"没有这一间" / "内置的那几间不许回收"…）⇒ 原样带回去
+            return sendJson(res, err.status, { error: err.message, text: err.message });
+          }
+          log(`[room-remove] 没清掉：${err?.message ?? err}`);
+          return sendJson(res, 500, { error: 'room-reclaim-failed', text: '这一下没清掉，等会儿再试。' });
         }
       }
 
@@ -2447,6 +2502,39 @@ const TENANT_ROUTES = [
         const msg = String(err?.message ?? '这一下没删掉');
         const notFound = err instanceof AppsError;
         return sendJson(res, 200, { ok: false, status: notFound ? 404 : 500, error: msg });
+      }
+    }
+
+    // ── ★ **B28：按房间回收**（在**权威那份**上落）────────────────────────
+    // ⚠️ 与上面那条同一个前缀、同一条隧道：**只在可信 UDS 上**（公网口在这之前就 404 了）。
+    if (hit.kind === 'room-remove') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method' });
+      const w = worldFor(trustedSub);
+      // 盒里这一侧**必须是本机那个世界**（盒里的世界就是权威那份）
+      if (!w || typeof w.reclaimRoom !== 'function') {
+        return sendJson(res, 500, { ok: false, status: 500, error: '这条"清房间"的取值来源接错了' });
+      }
+      let body;
+      try {
+        body = await readJson(req, 16 * 1024);
+      } catch {
+        return sendJson(res, 400, { ok: false, status: 400, error: '这一条看不懂' });
+      }
+      try {
+        const record = w.reclaimRoom(body?.scope, { sub: trustedSub });
+        // HTTP 200 是"这条口答上来了"；裁决在正文里（`ok` / `status` / `error`）。
+        return sendJson(res, 200, {
+          ok: true,
+          record: {
+            scopeId: record.scopeId,
+            takenSeqs: record.takenSeqs,
+            items: record.items,
+          },
+        });
+      } catch (err) {
+        const known = err instanceof RoomReclaimError;
+        const status = known && Number.isInteger(err.status) ? err.status : known ? 400 : 500;
+        return sendJson(res, 200, { ok: false, status, error: String(err?.message ?? '这一下没清掉') });
       }
     }
 

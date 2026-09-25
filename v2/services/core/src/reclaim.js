@@ -38,6 +38,21 @@ import nodePath from 'node:path';
 import { groupSlugFor } from './prune.js';
 
 /**
+ * ★ **"按房间回收"那条路上的错**（B28：一间**没有制品**的工作区怎么拿走）。
+ *
+ * 🔴 它带 `status`：调用方（宿主那条 HTTP 口 / 盒里那条内部口）据此**如实回同一个码**，
+ *    而不是把"没有这一间"说成 500、"内置那几间不许动"说成 404。
+ * ⚠️ `message` 本身就是**人话**（照 `AppsError` 那条既有规矩）。
+ */
+export class RoomReclaimError extends Error {
+  constructor(message, status = 400) {
+    super(message);
+    this.name = 'RoomReclaimError';
+    this.status = status;
+  }
+}
+
+/**
  * 留痕那个文件名（**只有这一处**：写它的、扫它的、判据读的都是这一个常量）。
  */
 export const RECLAIMED_FILE = 'reclaimed.json';
@@ -111,6 +126,10 @@ function relocate(from, to, fs) {
  * @param {string} [o.timelineId]       那条日志的 id（默认 `main`）
  * @param {object} [o.unread]           `UnreadBook`（有就清掉那一间的记数）
  * @param {object} [o.work]             `WorkLog`（有就把那一间开着的活收成"已停"）
+ * @param {boolean} [o.hasApp]          **制品那一格是不是已经搬走了**（默认 `true`）。
+ *    `false` = **这一间根本没有制品**（"按房间回收"那条路 · B28）：这条路
+ *    **不动制品库**，只搬工作区 / 那一间的对话 / 助手那边的原件 —— 留痕里
+ *    `items.app` 如实写 `false`（不许把它记成"有个制品被拿走了"）。
  * @param {string} [o.sub]              谁（写进留痕的"谁删的"）
  * @param {number} [o.at]               什么时候
  * @param {object} [o.fs]               注入文件系统（测试用）
@@ -127,6 +146,7 @@ export function reclaimScope({
   unread = null,
   work = null,
   sub = null,
+  hasApp = true,
   at = Date.now(),
   fs = nodeFs,
   log = () => {},
@@ -148,7 +168,7 @@ export function reclaimScope({
   try {
     fs.mkdirSync(into, { recursive: true, mode: 0o755 });
 
-    const items = { app: true, workspace: false, conversation: 0, session: false };
+    const items = { app: hasApp === true, workspace: false, conversation: 0, session: false };
 
     // ② 那一间的工作区
     if (exists(fs, cwd)) {

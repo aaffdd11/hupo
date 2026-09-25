@@ -26,7 +26,7 @@ import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
 import { Apps, APPS_REL, REFUSED_APP_IDS, REMOVED_DIRNAME } from './apps.js';
-import { readReclaimedSeqs } from './reclaim.js';
+import { RoomReclaimError, readReclaimedSeqs, reclaimScope } from './reclaim.js';
 import { AppWorkspaces, checkScope, scopeDirFor, safeScope, workspacesRoot } from './workspace.js';
 import { AppsSocket, appsSocketPath } from './apps-socket.js';
 import { appendAudit, auditLine, auditPath } from './audit.js';
@@ -77,6 +77,12 @@ import { JobBook } from './job.js';
  *    动它等于动历史字节（协议字段一旦上线就冻结）。
  */
 export const MAIN_SCOPE = 'main';
+
+/**
+ * 审计里"按房间回收"那一条叫什么（B28）。
+ * ⚠️ **只有这一处**：写它的与判据读的是同一个常量。
+ */
+export const ROOM_RECLAIM_WHAT = 'reclaim-room';
 
 /**
  * **桌面上的内置磁贴**（设置 / 发现 /「我自己那台」）。
@@ -542,21 +548,25 @@ export class Worlds {
     //      —— 不许两处各抄一遍。
     //   ⚠️ 传**函数**（用到时才取）：`workspaces` / `unread` / `work` 在下面才建，
     //      而 `remove()` 一定发生在 `worldFor()` 返回**之后** ⇒ 读得到。
+    //   🔴 **这一份上下文只有一处**：`Apps.remove()`（有制品那条路）与
+    //      `world.reclaimRoom()`（没制品那条路 · B28）**都用它** —— 两处各抄一遍
+    //      就会漂（"搬走的四样"那套语义只能有一份）。
+    const reclaimCtx = () => ({
+      dir: t.dir,
+      dshHome: paths.dshHome,
+      store: t.store,
+      timelineId: 'main',
+      cwdFor: (scope) => workspaces.dirFor(scope),
+      workspaces,
+      unread,
+      work,
+      sub: t.userId,
+      log: (m) => this.#warn(m),
+    });
     const apps = new Apps({
       dir: t.dir,
       sub: t.userId,
-      reclaim: () => ({
-        dir: t.dir,
-        dshHome: paths.dshHome,
-        store: t.store,
-        timelineId: 'main',
-        cwdFor: (scope) => workspaces.dirFor(scope),
-        workspaces,
-        unread,
-        work,
-        sub: t.userId,
-        log: (m) => this.#warn(m),
-      }),
+      reclaim: reclaimCtx,
     });
     // ★ **子工作区**（契约 `83-APP-WORKSPACE.md` §三·1）：**按人一份**，
     //   落在 `<dir>/workspaces/`（**与主目录平行** —— 手册 §2.2 第二条）。
@@ -857,6 +867,59 @@ export class Worlds {
       delivery,
       apps,
       workspaces,
+      /**
+       * ★ **按房间回收**（**B28** 那条口 · `103` §七 的兄弟）：一间**没有制品**的工作区。
+       *
+       * 🔴 **为什么要有它**：`Apps.remove(id)` 是按 **app id** 走的 ⇒ 一个**还没做出东西**
+       *    的工作区（没有制品，或者制品早就删了）**删不掉** —— 那一间就只能永远躺在盘上
+       *    （B28 记的那几个空工作区就是这么来的；`#152` 真机在清单里又见到十来个）。
+       * ⇒ 这一条按 **scope** 走：拿走的还是那三样（工作区 / 那一间的对话 / 助手那边的原件），
+       *    **不动制品库**（留痕里 `items.app` 如实写 `false`）。
+       *
+       * 🔴 **四道闸**（缺一条就有"按错名字把别人的房间删了"的形状）：
+       *    · `main` —— 那是他自己的主线，**没有"回收主线"这回事**；
+       *    · **内置那三个**（`BUILTIN_SCOPES`）—— 桌面上就有它们的图标，撤了界面少一块；
+       *    · **制品库里还有它** ⇒ 这一间有东西在桌面上 ⇒ **走 `/api/app-remove` 那条路**
+       *      （那条连制品一起搬；从这条走会留下一个点不开的图标）；
+       *    · **认不出这一间**（工作区目录不在）⇒ 404，**不猜**。
+       *
+       * ⚠️ `scope` 只有**一个入口**校验（`safeScope`）—— 不许拿一个随手字符串去拼路径。
+       */
+      reclaimRoom: (scope, { sub = null, at = Date.now() } = {}) => {
+        const id = safeScope(scope);
+        if (!id) throw new RoomReclaimError('这个名字不合法（只许小写字母、数字、短横）。', 400);
+        if (id === MAIN_SCOPE) throw new RoomReclaimError('主线不许回收 —— 那是他自己那条对话。', 409);
+        if (isBuiltinScope(id)) throw new RoomReclaimError('内置的那几间不许回收（桌面上就有它们）。', 409);
+        let hasApp = false;
+        try {
+          hasApp = apps.current(id) !== null;
+        } catch {
+          hasApp = false;
+        }
+        if (hasApp) {
+          throw new RoomReclaimError(
+            '这一间还有东西在桌面上 —— 用"从桌面上删掉"那个（那样才是连它一起拿走）。',
+            409,
+          );
+        }
+        if (!workspaces.has(id)) throw new RoomReclaimError('没有这一间。', 404);
+        // 回收处：与"从桌面上删掉"那条路**同一个 `.removed/`**（留痕才扫得到 ——
+        // `readReclaimedSeqs` 扫的就是这个目录下每一格的 `reclaimed.json`）。
+        const into = nodePath.join(t.dir, APPS_REL, REMOVED_DIRNAME, `ws-${id}-${at}`);
+        const record = reclaimScope({ ...reclaimCtx(), id, into, hasApp: false, sub, at });
+        // 账：与"文件落错地方"那一条**同一个文件、同一个写入口**
+        appendAudit({
+          file: auditPath(this.#cfg.dataDir),
+          line: auditLine({
+            what: ROOM_RECLAIM_WHAT,
+            userId: t.userId,
+            detail: `${id}（带走 ${record.items.conversation} 条对话${record.items.session ? ' ＋ 助手那边那份原件' : ''}）`,
+          }),
+          fs: nodeFs,
+          onError: (m) => this.#warn(m),
+        });
+        return record;
+      },
       // ★ **用量账**（93 §五）：`worlds.noteUsage()` 用它接语音那一路的账。
       usage,
       // ★ **P2-8 出网留痕**（一个人一本；`read()` 就是"可查"那一半）。

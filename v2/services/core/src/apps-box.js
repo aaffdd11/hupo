@@ -80,6 +80,16 @@ export const BOX_APP_RENAME_PATH = '/internal/app-rename';
 export const BOX_APP_COPY_PATH = '/internal/app-copy';
 
 /**
+ * ★ **B28：按房间回收一间"没有制品"的工作区** —— 让**盒子那份权威**自己动
+ * （`world.reclaimRoom()`，落点还是 `src/reclaim.js` 的 `reclaimScope()`）。
+ *
+ * ⚠️ 为什么也要走盒子：工作区 / 那一间的对话 / 助手那边的原件**都在盒子里**
+ *    （宿主那份是空的）⇒ 这一下必须在盒里落，否则"清掉了"是一句假话。
+ * 🔴 失败就说失败：盒子不通 / 答的话认不出 ⇒ 抛 `BoxError`，调用方**如实 503**。
+ */
+export const BOX_ROOM_REMOVE_PATH = '/internal/room-remove';
+
+/**
  * 一次内部请求最多等多久。
  *
  * ⚠️ 必须有上限：隧道那头要是不回话，这个请求会**一直挂着** ——
@@ -111,6 +121,7 @@ export function parseInternalPath(pathname) {
   if (pathname === BOX_APP_REMOVE_PATH) return { kind: 'app-remove' };
   if (pathname === BOX_APP_RENAME_PATH) return { kind: 'app-rename' };
   if (pathname === BOX_APP_COPY_PATH) return { kind: 'app-copy' };
+  if (pathname === BOX_ROOM_REMOVE_PATH) return { kind: 'room-remove' };
   return null;
 }
 
@@ -124,6 +135,19 @@ export function parseArtifactQuery(search) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return null;
   if (!/^[1-9][0-9]*$/.test(version)) return null;
   return { id, version, rel };
+}
+
+/**
+ * 传输层的错 ⇒ **一律当成"盒子不通"**（`why:'unreachable'`）。
+ *
+ * 🔴 为什么非要有它：`http.request` 那条路上的 `error` 事件给的是**裸** `Error`
+ *    （`ECONNREFUSED` / `EPIPE` / 对端析构…），而调用方的分岔是
+ *    `instanceof BoxError ⇒ 503`，别的 ⇒ 500。⇒ 裸错会让"盒子不通"变成 500。
+ * ⚠️ 已经是 `BoxError` 的**原样放行**（超时那条就是），不许把它降级成普通的"不通"。
+ */
+function asBoxError(e) {
+  if (e instanceof BoxError) return e;
+  return new BoxError(`你那台现在连不上：${e?.message ?? e}`, 'unreachable');
 }
 
 /**
@@ -168,10 +192,15 @@ export function requestOverSocket(sock, {
             body: Buffer.concat(chunks),
           }),
         );
-        upRes.on('error', (e) => finish(e));
+        upRes.on('error', (e) => finish(asBoxError(e)));
       },
     );
-    up.on('error', (e) => finish(e));
+    // ★ **"盒子不通"必须一路都是 503**：这条隧道上的**传输层**错误
+    //   （连接被拒 / 对端析构 / 半路断）原先会原样抛出去，落到调用方那个
+    //   `else ⇒ 500` 上 —— 而契约写的是"盒子不通 ⇒ **如实 503**"
+    //   （`103`/`104`/B28 三条口都一样）。⇒ 在这里**一处**把非 `BoxError`
+    //   的传输错误包成 `unreachable`，五条口一起就对上了。
+    up.on('error', (e) => finish(asBoxError(e)));
     up.end(body === null ? undefined : body);
   });
 }
@@ -313,6 +342,43 @@ export function createBoxApps({ sub = 'owner', dial, log = () => {} } = {}) {
         ok: false,
         status: Number.isFinite(j.status) ? j.status : 500,
         error: typeof j.error === 'string' && j.error !== '' ? j.error : '这一下没删掉',
+      };
+    },
+    /**
+     * ★ **B28：按房间回收**（一间没有制品的工作区）—— **交给盒子那份权威来动**。
+     *
+     * 盒子那侧调的是 `world.reclaimRoom()`（落点 `reclaimScope()`：工作区 / 那一间的
+     * 对话 / 助手那边的原件，留痕写 `reclaimed.json`），所以这里只做一件事：
+     * **把它的结论原样带回来**。
+     *
+     * 🔴 **失败就说失败**：盒子不通 / 答的话认不出 ⇒ **抛 `BoxError`**，调用方如实 503
+     *    —— **绝不许**退回宿主那份（那清的是另一个人的地方）。
+     *
+     * @param {string} scope
+     * @returns {Promise<{ok:true,record:object|null}|{ok:false,status:number,error:string}>}
+     */
+    async reclaimRoom(scope) {
+      const payload = Buffer.from(JSON.stringify({ scope: String(scope ?? '') }), 'utf8');
+      const r = await requestOverSocket(dialOnce(dial), {
+        method: 'POST',
+        path: BOX_ROOM_REMOVE_PATH,
+        headers: { 'content-type': 'application/json', 'content-length': String(payload.length) },
+        body: payload,
+      });
+      if (r.status !== 200) {
+        log(`盒子里那条"清房间"没答（HTTP ${r.status}）`);
+        throw new BoxError(`盒子里那条"清房间"没答（HTTP ${r.status}）`, 'bad-status');
+      }
+      const j = parseJson(r.body);
+      // ⚠️ 形状**逐字段核**：认不出就是认不出，不许当成"清掉了"（fail-closed）。
+      if (!j || typeof j.ok !== 'boolean') {
+        throw new BoxError('盒子里那条"清房间"答的话看不懂', 'bad-json');
+      }
+      if (j.ok === true) return { ok: true, record: j.record ?? null };
+      return {
+        ok: false,
+        status: Number.isFinite(j.status) ? j.status : 500,
+        error: typeof j.error === 'string' && j.error !== '' ? j.error : '这一下没清掉',
       };
     },
     /**
