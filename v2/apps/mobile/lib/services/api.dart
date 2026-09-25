@@ -231,7 +231,7 @@ class Api {
       return switch (r.statusCode) {
         200 => TokenProbe.ok,
         401 => TokenProbe.unauthorized,
-        503 => TokenProbe.notSetup,
+        503 => probeFrom503(r.body),
         _ => TokenProbe.unknown,
       };
     } catch (_) {
@@ -920,6 +920,21 @@ int retryAfterSecOf(String body) {
   return 0;
 }
 
+/// 从回执正文里取那句**人话**（服务端给 `text` 就用它）；取不到就退回 [fallback]。
+///
+/// ⚠️ 只用在"服务端已经说了句人话、我们原样转述"的地方（不许拿它编话）。
+String _textOr(String body, String fallback) {
+  try {
+    final j = jsonDecode(body);
+    if (j is Map && j['text'] is String && (j['text'] as String).trim().isNotEmpty) {
+      return (j['text'] as String).trim();
+    }
+  } catch (_) {
+    // 读不出来 ⇒ 用兜底那句
+  }
+  return fallback;
+}
+
 SayOutcome sayOutcomeOf(int status, String body) {
   switch (status) {
     case 200:
@@ -931,7 +946,14 @@ SayOutcome sayOutcomeOf(int status, String body) {
     case 401:
       return const SayUnauthorized();
     case 503:
-      return const SayNotSetup();
+      // 🔴 **503 在这条路上也有两个意思**（和 `probeFrom503` 同一条；2026-09-25 线上真事故）：
+      //   · `{"error":"not-setup"}` ⇒ 这台机器**真没设密码** ⇒ [SayNotSetup]（那句话是对的）；
+      //   · 别的（租户那条 `tenant-not-ready`）⇒ **他那台盒子这一下没应** ⇒
+      //     **照服务端那句原话**说（"你那台刚才没应，等会儿再试。"）——
+      //     ⚠️ 不许说成"这台机器还没设密码"（那是另一件事，而且会把人误导去重设密码）。
+      //   认法照 429 那条既有的风格：**看显式字段，不按状态码猜**。
+      if (probeFrom503(body) == TokenProbe.notSetup) return const SayNotSetup();
+      return SayRejected(_textOr(body, '你那台刚才没应，等会儿再试。'));
     case 429:
       // ⚠️ **429 在这条路上有两种意思，必须分开**（同一个码、两个端点、两种事，
       //    是这个项目既有的风格：`/api/login` 上 429 也是另一回事）。
@@ -1047,7 +1069,25 @@ class RenewMalformed extends RenewOutcome {
 }
 
 /// 令牌状态探针。
-enum TokenProbe { ok, unauthorized, notSetup, unknown }
+enum TokenProbe { ok, unauthorized, notSetup, boxDown, unknown }
+
+/// 503 有**两个意思**，必须分开（2026-09-25 线上真事故：混成一个 ⇒ 用户被锁在门外）。
+///
+///   * `{"error":"not-setup"}` ⇒ 这台机器**真没设密码**（宿主 fail-closed）⇒ 该说的话是"先设密码"，**别再重试**；
+///   * 别的（`tenant-not-ready` 之类）⇒ **他那台刚才没应** ⇒ 该说的话是"我在重试"，而且**必须继续重试**。
+///
+/// 🔴 混成一件的后果（真发生过）：盒子抖一下 ⇒ 界面上写「这台机器还没设密码」，而且**不再重连**
+///    ⇒ 用户看到的是"对话无响应"。
+/// ⚠️ 读不出来时按 `boxDown` 处理 —— 宁可多试几次，也别把人锁在门外。
+TokenProbe probeFrom503(String body) {
+  try {
+    final j = jsonDecode(body);
+    if (j is Map && j['error'] == 'not-setup') return TokenProbe.notSetup;
+  } catch (_) {
+    // 读不出来 ⇒ 不知道 ⇒ 落到下面那条"他那台没应"（继续重试）
+  }
+  return TokenProbe.boxDown;
+}
 
 /// 登录结果。四种情况**分清楚**——对用户说的话完全不同。
 class LoginResult {

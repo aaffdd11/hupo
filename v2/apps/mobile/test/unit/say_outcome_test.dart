@@ -184,4 +184,21 @@ void main() {
       expect(c.token, 'tok');
     });
   });
+
+  test('🔴 /api/say 的 503 也分两件事：not-setup ⇒ 没设密码；tenant-not-ready ⇒ 照服务端那句说', () {
+    // 这条与 `probeFrom503` 同源（2026-09-25 线上真事故）：混成一个 ⇒ 用户看到"这台机器还没设密码"，
+    // 于是去重设密码（而真相是"你那台盒子刚才没应"）。
+    final a = sayOutcomeOf(503, '{"error":"not-setup","text":"这台机器还没设密码，先设好再用。"}');
+    expect(a, isA<SayNotSetup>(), reason: '★ 真没设密码 ⇒ 走原来那条');
+
+    final b = sayOutcomeOf(503, '{"error":"tenant-not-ready","text":"你那台刚才没应，等会儿再试。"}');
+    expect(b, isA<SayRejected>(), reason: '★ 盒子没应 ⇒ 不是"没设密码"，是"你那台没应"');
+    expect((b as SayRejected).message, '你那台刚才没应，等会儿再试。',
+        reason: '★ 照服务端那句原话说（不许自己编、也不许说成"没设密码"）');
+
+    // 读不出来 ⇒ 也不许猜成"没设密码"（宁可说那句兜底的人话）
+    final c = sayOutcomeOf(503, '不是 JSON');
+    expect(c, isA<SayRejected>(), reason: '★ 认不出就不许猜成"没设密码"');
+    expect((c as SayRejected).message, contains('没应'));
+  });
 }

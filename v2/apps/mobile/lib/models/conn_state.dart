@@ -39,6 +39,11 @@ enum ConnState {
 
   /// 这台机器还没设密码。
   notSetup,
+
+  /// ⚠️ **不是"没设密码"**：是**他那台（盒子）刚才没应** —— 网是通的、这台机器也在，
+  /// 只是这一下没问到盒子。⇒ 该说的话是"我在重试"，而且**必须继续重试**。
+  /// （2026-09-25 线上真事故：这条被当成 [notSetup] ⇒ 界面写"还没设密码"且不再重连。）
+  boxDown,
 }
 
 /// 顶部状态条上那句话。`(话, 是不是出错了)`；话为 `null` = **不占地方**。
@@ -55,5 +60,7 @@ enum ConnState {
       ConnState.streamBlocked => ('网是通的，只是我还接不上它，在重试', false),
       ConnState.unauthorized => ('登录过期了，重新登录一下', true),
       ConnState.notSetup => ('这台机器还没设密码', true),
+      // ⚠️ **不许**写成"这台机器还没设密码"（那是另一件事）；也别只写"网断了"（网是通的）
+      ConnState.boxDown => ('你那台刚才没应，我在重试', false),
       ConnState.idle => ('还没连上', false),
     };

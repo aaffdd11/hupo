@@ -67,4 +67,38 @@ void main() {
     expect(src.contains('retrySeconds('), isTrue, reason: '退避要用 models/retry.dart 那一档');
     expect(retrySeconds(4), 8);
   });
+
+  // ── 2026-09-25 线上真事故：**503 有两个意思**，混成一个 ⇒ 用户被锁在门外 ──────
+  //
+  // 症状（主人报的）：*"对话无响应了。我看到刚才说这台机器没有设置密码"* ——
+  //   客户端把 `/api/health` 的 **503 一律当"这台机器还没设密码"**，于是
+  //   ① 屏幕上写「这台机器还没设密码」（而真相是"你盒子那一下没应"）；
+  //   ② `_wantOpen = false` ⇒ **不再重连** ⇒ 看起来就是"对话无响应"。
+
+  test('🔴 503 的**正文**决定它是哪一件事：not-setup ⇒ 没设密码；别的 ⇒ 你那台没应', () {
+    expect(probeFrom503('{"error":"not-setup","text":"这台机器还没设密码，先设好再用。"}'),
+        TokenProbe.notSetup, reason: '★ 真没设密码 ⇒ 该说"先设密码"，而且**别再重试**');
+    expect(probeFrom503('{"error":"tenant-not-ready","text":"你那台还在准备，稍等一下再试。"}'),
+        TokenProbe.boxDown, reason: '★ 盒子没应 ⇒ 该说"我在重试"（**必须继续重试**）');
+    // ⚠️ 读不出来 ⇒ 不许猜成"没设密码"（那会把人在门外锁死）：按"那台没应"处理
+    expect(probeFrom503('不是 JSON'), TokenProbe.boxDown);
+    expect(probeFrom503(''), TokenProbe.boxDown);
+  });
+
+  test('🔴 探针说 `boxDown` ⇒ **继续重试**（不是 unauthorized、也不是 notSetup）', () async {
+    final c = client((_) async => TokenProbe.boxDown);
+    final seen = <ConnState>[];
+    c.states.listen(seen.add);
+    c.open();
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+
+    expect(seen.contains(ConnState.notSetup), isFalse,
+        reason: '★ 写成"这台机器还没设密码" = 那句真事故的原话');
+    expect(seen.contains(ConnState.unauthorized), isFalse, reason: '不是令牌的问题');
+    expect(seen.contains(ConnState.boxDown), isTrue,
+        reason: '★ 状态条该说"你那台刚才没应，我在重试"');
+    // 负向对照：它**还在**重试（连接被重新拉起来了）
+    expect(c.state, ConnState.boxDown, reason: '★ "没应"不是终点 ⇒ 停在 boxDown（还没连上，但**在重试**）');
+    c.dispose();
+  });
 }

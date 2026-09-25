@@ -119,9 +119,23 @@ void main() {
       }
     });
 
-    test('🔴 续期没碰既有那几张表：say 的 401 / 503 / 429 语义一个都没变', () {
+    test('🔴 续期没碰既有那几张表：say 的 401 / 503 / 429 语义都在（503 按**正文**分义）', () {
       expect(sayOutcomeOf(401, '{}'), isA<SayUnauthorized>());
-      expect(sayOutcomeOf(503, '{}'), isA<SayNotSetup>());
+      // 🔴 2026-09-25 **更正**（线上真事故）：503 在 `/api/say` 上**有两个意思**，
+      //    必须按**显式字段**分（和下面那条 429 一个风格）：
+      //      · `{"error":"not-setup"}` ⇒ 真没设密码 ⇒ [SayNotSetup]；
+      //      · 别的（租户那条 `tenant-not-ready`）⇒ **他那台没应** ⇒ [SayRejected] 照原话说。
+      //    ⚠️ 这条原来钉的是"**任何** 503 都算没设密码" —— 那正是缺陷本身
+      //      （盒子抖一下，界面就写"这台机器还没设密码"，而且不再重连）。
+      expect(
+        sayOutcomeOf(503, '{"error":"not-setup","text":"这台机器还没设密码，先设好再用。"}'),
+        isA<SayNotSetup>(),
+      );
+      expect(
+        sayOutcomeOf(503, '{"error":"tenant-not-ready","text":"你那台刚才没应，等会儿再试。"}'),
+        isA<SayRejected>(),
+        reason: '★ 别的 503 ⇒ 不许猜成"没设密码"',
+      );
       expect(sayOutcomeOf(429, '{"error":"busy"}'), isA<SayBusy>());
       final locked = sayOutcomeOf(429, '{"error":"locked","retryAfterSec":9}');
       expect(locked, isA<SayLocked>());

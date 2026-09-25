@@ -295,10 +295,19 @@ class StreamClient {
         return;
       case TokenProbe.ok:
       case TokenProbe.unknown:
+      // ★ 2026-09-25（线上真事故）：`boxDown` 也走这一条 —— **继续重试**。
+      //   它不是"令牌不行"（不重试）也不是"这台机器没设密码"（那是另一件事）：
+      //   是**他那台盒子这一下没应**，退避接着问就对。
+      case TokenProbe.boxDown:
         break;
     }
     _scheduleRetry(
-      state: answer == TokenProbe.ok ? ConnState.streamBlocked : ConnState.reconnecting,
+      state: switch (answer) {
+        TokenProbe.ok => ConnState.streamBlocked,
+        // 状态条就说这句 —— **不许**说"这台机器还没设密码"
+        TokenProbe.boxDown => ConnState.boxDown,
+        _ => ConnState.reconnecting,
+      },
     );
   }
 
