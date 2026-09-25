@@ -1,0 +1,64 @@
+# 琥珀 —— **我们自己的 SDK server 那一层**（契约 `docs/dev/110-ONE-SESSION-PER-ROOM.md`）
+#
+# 用法（`v2/services/core` 起 agent 进程时带；已经在 `agentPatchArgs()` 里，
+# **只有那一处出处** —— 开发者入口那台走 `devWebArgs()`，跟着一起拿到）：
+#   dsh --profile sdk --patch <repo>/v2/services/core/hupo-persona.yml \
+#                     --patch <repo>/v2/services/core/hupo-capabilities.yml \
+#                     --patch <repo>/v2/services/core/hupo-model-proxy.yml \
+#                     --patch <repo>/v2/services/core/hupo-sdk-server.yml
+#
+# ── 为什么要有这一层（三件事，都是真机读数）──────────────────────
+#
+# ① **官方那个 SDK server 只能 create、不能 resume。**
+#    同一个会话 id 再进去，它报 `session "…" already exists`，而 DSH 的会话记录
+#    落在 `$DSH_HOME/sessions/` 里**跨进程活着** ⇒ 结果只能是"每换一个进程实例
+#    就换一个会话 id" ⇒ 界面里**一个工作区 N 个对话**
+#    （真机读数：`/data/main` 38 条、`/data/workspaces/aoshu-bank` 16 条）。
+#    `src/sdk-server-hupo.mjs` 是那份的替代品：**先看这条会话在不在**，
+#    在就 `ctx.agents.resume(...)`、不在才 `ctx.agents.create(...)`。
+#
+# ② 🔴 **必须把官方那个关掉。** 两个 server 都读 stdin ⇒ **互相抢帧**
+#    （各读到半行，谁都解析不出来）。实测过 `--dump-config` 里那一条
+#    确实变成 `disabled: true`。
+#
+# ③ **factory 要等。** 插件加载那一刻 agent factory **还没注册上来**
+#    （真机读数：那一刻调 create/resume 报
+#    `no agent factory registered (load an agent-loop plugin)`）。
+#    ⇒ 我们的 server 只在 `initialize` 之后处理帧，而且 `initialize` 里先
+#      `await ctx.get('loader').await()`（照官方那份）——
+#      万一还撞上，只有那一句话会触发一小段**有上限的**重试，到点如实报错。
+#
+# ④ **插件本体怎么找**：`name: ./src/sdk-server-hupo.mjs`（相对**这份 patch**）
+#    —— 见下面那段"实测过的坑"。
+#
+# ⚠️ 路径**不写死绝对路径**（这台机器与盒里是两个 checkout），而是**相对这份 patch 文件**
+#    写（`./src/sdk-server-hupo.mjs`）—— DSH 那边有一条明确的规矩：
+#    `dsh-app-boot` 的 `anchorInsertedPluginNames()` 会把 `insert` 里的
+#    `.`/`..`/绝对路径**按 patch 文件所在目录**转成 `file://` URL。
+#    ⇒ 本机 = `<repo>/v2/services/core/src/sdk-server-hupo.mjs`，
+#      盒里 = `/app/code/src/sdk-server-hupo.mjs`，同一条 patch 两处都对。
+#
+# 🔴 **实测过的坑（别改回去）**：这里**不能**写 `name: !!js process.env.HUPO_SDK_SERVER`。
+#    loader 只对**条目的 `config`** 做 `!!js` 求值（`interpolate(this.ctx, config)`），
+#    **不碰 `name`**；`name` 留着一个 `{__jsExpr: …}` 的对象 ⇒ 启动时当场炸：
+#      `dsh: plugin tree failed to load: failed to import loader entry hupo-sdk-server
+#       ([object Object]): name.startsWith is not a function`
+#    （真机读数：2026-09-26，临时 DSH_HOME）。所以那一条 env 也不再需要了。
+#
+# ⚠️ 形状必须是 `- insert: [ … ]`（写成 `- id: <一个新 id>` 会被当成改一个
+#    **已存在**的条目 ⇒ `patch: entry "…" not found`，而且树里不会有它）。
+
+- id: sdk-jsonrpc-server
+  # ★ 官方那个：**只 create、不能 resume**，而且会和下面这一个抢 stdin。
+  disabled: true
+
+- insert:
+    - id: hupo-sdk-server
+      name: ./src/sdk-server-hupo.mjs
+      inject:
+        - sdkAppStartup
+        - loader
+      config:
+        # 官方那份的语义：`stopReason === 'max-tokens'` 也算成功
+        # （半句被截断不算失败 —— 与官方 `Config` 的默认 `false` 相反，是我们显式要的）。
+        maxTokensAsSuccess: true

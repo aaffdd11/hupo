@@ -1263,10 +1263,20 @@ class Session {
       if (needsRecap) this.#recapFedTo = null; // 没喂成 ⇒ 下次补
       this.#lastError = String(err?.message ?? err);
       // 起不来的时候**也要有个交代**——静默失败等于"它不理我"
+      //
+      // 🔴 **2026-09-26 真机读数（这一处原来是个真缺陷）**：`prompt` 被拒时
+      //    （服务端回 error 帧，例如 id 形状那条），DSH **一轮都没开**
+      //    （`turn/start` 永远不来）⇒ 原来那句 `forceClose` 收的是 `#turns` 里
+      //    **已经开过的轮**，这里收 **0** 轮 ⇒ **一个字都没写**。
+      //    现场：`/api/say` 200，之后**五分钟里一个新事件都没有** ——
+      //    用户那一句永远没有答复、盘上像没发生过。
+      //    （下面那条瞬态 `error` 客户端今天**不渲染** ⇒ 不算"看得见"。）
+      //    ⇒ 换成 `deliveryFailed`：先走既有的失败收口，**一轮都没开**时
+      //      再主动落一条给用户的话（`AGENT_UNAVAILABLE_LINE`，**落盘**）。
       try {
-        this.#translator.forceClose('failed', { line: AGENT_UNAVAILABLE_LINE });
-      } catch {
-        /* 没有未收口的，正常 */
+        this.#translator.deliveryFailed('failed', { line: AGENT_UNAVAILABLE_LINE });
+      } catch (terr) {
+        this.#lastError = `投递失败的话没写出去：${terr?.message ?? terr}`;
       }
       this.#timeline.emitTransient({
         type: 'error',
@@ -1503,10 +1513,13 @@ class Session {
       this.#lastError = `交接包没送出去：${err?.message ?? err}`;
       // ⚠️ **不许静默**：这一轮没能接上 ⇒ 那条消息必须收口（N19），
       //    而且要说清"我这边没接上"（与别处起不来时同一句）。
+      //    🔴 同 `deliver` 那一处：交接包被拒时这一间**可能一轮都没开**
+      //    （`forceClose` 收 0 轮 ⇒ 一个字都不写）⇒ 用 `deliveryFailed`
+      //    保证落一条用户看得见的话。
       try {
-        this.#translator.forceClose('failed', { line: AGENT_UNAVAILABLE_LINE });
-      } catch {
-        /* 没有未收口的，正常 */
+        this.#translator.deliveryFailed('failed', { line: AGENT_UNAVAILABLE_LINE });
+      } catch (terr) {
+        this.#lastError = `交接失败的话没写出去：${terr?.message ?? terr}`;
       }
     }
   }

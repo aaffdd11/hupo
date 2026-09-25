@@ -69,6 +69,10 @@ const RATCHET = [
   //    93 照同一条纪律）。它们定的是"出界只许一条路""外联要申报"这些**要承重**的规矩。
   'docs/dev/92-TRIPLE-PLAN.md',
   'docs/dev/93-OUTBOUND-USAGE.md',
+  // ⚠️ 2026-09-26：110 **出生就进名单**（同一条纪律）。
+  //    它定的是"一个房间一条会话 ＋ 那份 mapping"这个**正在承重**的形状
+  //    （`agent-runtime.js` / `dsh-sessions.mjs` / `sdk-server-hupo.mjs` 三处都按它写）。
+  'docs/dev/110-ONE-SESSION-PER-ROOM.md',
 ];
 
 /** ② L0 = 路由层：零事实、零数值、零状态 */

@@ -696,6 +696,13 @@ export class Worlds {
       appsSocketPath: paths.appsSocketPath,
       appsServerPath: this.#cfg.appsServerPath,
       imageServerPath: this.#cfg.imageServerPath,
+      // ★ **一个房间一条会话**那份映射（契约 `110-ONE-SESSION-PER-ROOM.md`）：
+      //   **按人一份**，落 `<他自己那一格>/dsh-sessions.json`（与审计/账本那些同级）。
+      //   ⚠️ 它是**这个人所有房间共用的一份**（键是 scope）——
+      //      房间那份 cfg 由 `roomFor()` 从这里派生（`{...world.cfg, agentCwd, scope}`），
+      //      所以每一间拿到的都是**同一份**映射（这一点必须是：
+      //      两间各拿一份就会各算各的 id，`110` 那个"一间一条"就守不住）。
+      sessionMapPath: nodePath.join(t.dir, 'dsh-sessions.json'),
     };
 
     // ★ **A1·「发现就报」**（契约 `83-APP-WORKSPACE.md` §四 · 主人 2026-09-25）：

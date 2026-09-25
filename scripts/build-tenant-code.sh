@@ -46,7 +46,11 @@ NODE="${NODE_BIN:-$(command -v node || true)}"
 #    ★ `review-policy.json` = **预审规则本体**（96 第 3b 条：住产品层、只读挂载＋指纹、
 #      用户改不了）。它是**一份**（不按人不同）⇒ 放这儿。⚠️ 它的 `fingerprint` 字段是
 #      **自指的**：算指纹时当空串看（`fp_calc` 的 `canonBytes`），构建这一刻才盖上。
-INPUTS=(src package.json hupo-persona.yml hupo-capabilities.yml hupo-model-proxy.yml review-policy.json)
+#    ★ `hupo-sdk-server.yml` = **SDK server 那一层**（契约 `110`）。它是**一份**
+#      （不按人不同）⇒ 放这儿。⚠️ 少了它盒里**整个 agent 起不来**：
+#      官方那个 `sdk-jsonrpc-server` 被它关掉了，而 insert 的那条要它。
+#      （`src/` 是整目录搬的 ⇒ 插件本体 `src/sdk-server-hupo.mjs` 跟着走。）
+INPUTS=(src package.json hupo-persona.yml hupo-capabilities.yml hupo-model-proxy.yml hupo-sdk-server.yml review-policy.json)
 
 say()  { echo "  $1"; }
 plan() { echo "▶ $1"; }

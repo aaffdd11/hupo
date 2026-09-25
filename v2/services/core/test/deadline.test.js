@@ -54,6 +54,8 @@ function cfg(over = {}) {
     agentProfile: 'sdk',
     agentCwd: dir,
     dshHome: dir,
+    // ★ **一个房间一条会话**那份映射（契约 110）：落在这一格临时目录里。
+    sessionMapPath: nodePath.join(dir, 'dsh-sessions.json'),
     agentProvider: 'fake',
     agentModel: 'fake',
     agentEffort: 'low',
@@ -66,22 +68,27 @@ function cfg(over = {}) {
   };
 }
 
-function setup({ scenario, turnDeadlineMs = 150, dshSessions = false }) {
+function setup({ scenario, turnDeadlineMs = 150, dshSessions = false, createOnlySdk = false }) {
   // `scenario` 可以是数组：第 N 个进程用第 N 个场景
   const store = new Store({
     dataDir: nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-hang-')),
     fsync: false,
   });
   const timeline = new Timeline({ id: 'main', store });
-  // `dshSessions: true` ⇒ 让假 agent **真的执行** DSH 那条"会话 id 只能 create"的规矩
-  // （会话记录写在一个跨进程共享的文件里）。不打开的话，
-  // "换了实例却沿用同一个会话 id"这类 bug 在 CI 里**永远测不出来**。
+  // `dshSessions: true` ⇒ 假 agent 把"这个 DSH_HOME 里开过哪几条会话"写进
+  // 一个**跨进程共享**的文件里（真 DSH 的会话记录就是跨进程活着的）。
+  //   · 默认形状（契约 110）：**同一个 id 再来 = resume ⇒ 不重复记** ⇒ 两代之后只有一行；
+  //   · `createOnlySdk: true` ⇒ 模拟**旧**形状（官方那个只能 create）：
+  //     同一个 id 再来报 `already exists` —— 判据要能反着验。
   const sessionFile = dshSessions
     ? nodePath.join(nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-dshsess-')), 'sessions.txt')
     : null;
   const runtime = new AgentRuntime({
     cfg: cfg(),
-    spawnFn: fakeSpawn(scenario, dshSessions ? { FAKE_SESSION_FILE: sessionFile } : {}),
+    spawnFn: fakeSpawn(scenario, {
+      ...(dshSessions ? { FAKE_SESSION_FILE: sessionFile } : {}),
+      ...(createOnlySdk ? { FAKE_SDK_CREATE_ONLY: '1' } : {}),
+    }),
     onEvict: (sessionId) => dispatcher.onEvict(sessionId),
   });
   const dispatcher = new Dispatcher({ timeline, runtime, store, turnDeadlineMs });
@@ -233,15 +240,19 @@ test('🔴 卸掉之后用户再说话：起**新的** agent（而且是好的�
   }
 });
 
-test('🔴★ 恢复时必须**换一个 DSH 会话 id**（真 DSH 只 create 不 resume）', async () => {
-  // ⚠️ 这一条差点漏过去，是**端到端真 agent** 才抓到的：
-  //    超时硬收口在**同一个 runtime 里**把 agent 卸掉再起一个，
-  //    而 `bootId` 是整个 runtime 一份、永不改变 ⇒ 新实例沿用同一个会话 id
-  //    ⇒ 真 DSH 报 `session "main.<bootId>" already exists`
-  //    ⇒ **用户接下来每一句都发不出去**，而看起来只是"它不理我了"。
+test('🔴★ 恢复时必须**沿用同一个** DSH 会话 id（一个房间一个对话 · 契约 110）', async () => {
+  // ⚠️ 这一条**原来是反的**，如实记：
+  //    那时断言"两代的 DSH 会话 id 必须不同"，因为官方那个 SDK server
+  //    **只能 create、不能 resume**（沿用同一个 id 会报
+  //    `session "main.<bootId>" already exists` ⇒ 用户接下来每一句都发不出去）。
+  //    代价是界面里"一个工作区 N 个对话"（真机读数：`/data/main` 38 条）。
   //
-  //    这里让假 agent **真的执行**那条规矩（会话记录写在跨进程共享的文件里），
-  //    于是这条 bug 从此在 CI 里就能被抓住，不用每次都花真模型调用。
+  //    现在那一层换成了我们自己的 `sdk-server-hupo.mjs`（先看这条会话在不在：
+  //    在就 resume、不在才 create）⇒ **沿用同一个 id 才是对的**，
+  //    而"沿用会不会撞 already exists"由 `test/dsh-server-hupo.test.js` 的 S2 钉着。
+  //
+  //    这里让假 agent 真的把"哪几条会话被开过"写进跨进程共享的文件里：
+  //    两代进程之后**盘上仍然只有一行** —— 那就是"一个房间一条会话"。
   const s = setup({ scenario: ['hang', 'normal'], turnDeadlineMs: 150, dshSessions: true });
   try {
     await s.saying('第一句（这轮会卡住）', 'u_1');
@@ -251,16 +262,43 @@ test('🔴★ 恢复时必须**换一个 DSH 会话 id**（真 DSH 只 create �
 
     const r = await s.saying('第二句（恢复）', 'u_2');
     await wait(400);
-    assert.equal(r.delivered, true, '★ 恢复投递必须成功——不许撞 already exists');
+    assert.equal(r.delivered, true, '★ 恢复投递必须成功（沿用同一个 id 也必须投得出去）');
 
-    const ids = nodeFs.readFileSync(s.sessionFile, 'utf8').trim().split('\n');
-    assert.equal(ids.length, 2, '真起了两代会话');
-    assert.notEqual(ids[0], ids[1], '★ 两代的 DSH 会话 id 必须不同');
+    const ids = nodeFs.readFileSync(s.sessionFile, 'utf8').trim().split('\n').filter(Boolean);
+    assert.equal(ids.length, 1, '★ 两代进程**只许有一条会话** —— 多一行就是界面里多了一个对话');
+    assert.equal(ids[0], 'main', '会话 id 就是映射里那一个');
 
     const answered = s.store.readAll('main').some(
       (e) => e.type === 'message/end' && e.reason === 'completed',
     );
     assert.ok(answered, '★ 而且新 agent 好好答完了');
+  } finally {
+    await disposeAll(s);
+  }
+});
+
+test('🔴★ 反例（留着做证据）：官方那个只 create 的 SDK server ⇒ 沿用同一个 id 会撞', async () => {
+  // ⚠️ 这一条**故意**模拟旧形状（`FAKE_SDK_CREATE_ONLY=1`）：
+  //    它是"为什么不许回到官方那个 server"的**可执行的证据**。
+  //    真 agent 那边的读数：`session "main.<bootId>" already exists`。
+  const s = setup({
+    scenario: ['hang', 'normal'],
+    turnDeadlineMs: 150,
+    dshSessions: true,
+    createOnlySdk: true,
+  });
+  try {
+    await s.saying('第一句（这轮会卡住）', 'u_1');
+    await wait(450);
+    const r = await s.saying('第二句（恢复）', 'u_2');
+    await wait(400);
+    assert.equal(r.delivered, false, '★ 只 create 的那条路：第二句话**根本投不出去**');
+    assert.match(String(r.error ?? ''), /already exists/u, '★ 原话就是这句（真机读数一模一样）');
+    // 而且不许留一个永远不结束的气泡（每一轮都要有收口）
+    const evs = s.store.readAll('main');
+    const starts = new Set(evs.filter((e) => e.type === 'message/start').map((e) => e.messageId));
+    const ends = new Set(evs.filter((e) => e.type === 'message/end').map((e) => e.messageId));
+    assert.deepEqual([...ends].sort(), [...starts].sort(), '★ 每一轮都要收口（第二句投不出去也不许留白）');
   } finally {
     await disposeAll(s);
   }

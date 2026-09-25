@@ -18,6 +18,19 @@
 //      ⇒ 这里失败时**把两种可能都报出来**，不让下一个人重踩。
 //   ③ 换进程要**代号**（generation）：旧进程的 stdout 一律丢弃，
 //      否则两个进程的输出会串在一起。
+//
+// ── ★ 2026-09-25：**一个房间一条会话，而且每一轮都续用同一条**（契约 110）──
+//
+// 这里原来有一段历史：官方那个 SDK server（`@deepseek-ai/dsh-sdk-jsonrpc-server`）
+// **只能 create、不能 resume** —— 同一个 id 再进去报 `session "…" already exists`，
+// 而 DSH 的会话记录**跨进程活着** ⇒ 只能"每换一个进程实例就换一个会话 id"
+// （`<会话>.<bootId>.<第几个>`）。代价是界面里**一个工作区 N 个对话**
+// （真机读数：`/data/main` 38 条、`/data/workspaces/aoshu-bank` 16 条）。
+//
+// 现在那一层换成了我们自己的 `src/sdk-server-hupo.mjs`（`hupo-sdk-server.yml`：
+// 先看这条会话在不在 —— 在就 `resume`、不在才 `create`），而**这边的会话 id
+// 不再变**：它从**每个用户一份的映射**里取（`src/dsh-sessions.mjs`，
+// 落 `<他的数据目录>/dsh-sessions.json`）。⇒ 一个房间**永远**同一条会话。
 
 import { spawn as nodeSpawn } from 'node:child_process';
 import nodeFs from 'node:fs';
@@ -26,6 +39,8 @@ import { EventEmitter } from 'node:events';
 // ★ **"它是不是被挤掉的"要有证据**（账 #33 的后半）：拿内核那个 cgroup 计数当证据，
 //   而不是拿 `SIGKILL` 当 OOM（那是猜）。见 `oom.js` 顶上那三条纪律。
 import { createOomWatcher } from './oom.js';
+// ★ **一个房间一条会话**（契约 110）：那份映射（每个用户一份）。
+import { dshSessionIdFor } from './dsh-sessions.mjs';
 
 /** 默认的 dsh 可执行文件。 */
 export function resolveDshBin() {
@@ -71,22 +86,30 @@ export function agentEnv(cfg = {}) {
 }
 
 /**
- * **那一层配置**：人格 ＋ 能力层 ＋ 模型那条 patch（**顺序就是它们叠加的顺序**）。
+ * **那一层配置**：SDK server ＋ 人格 ＋ 能力层 ＋ 模型那条 patch
+ * （**顺序就是它们叠加的顺序**）。
  *
  * 🔴 这是"一套配置"的**唯一出处**（契约 `docs/dev/109-DEV-ENTRY-IS-YOURS.md`）：
  *    `agentArgs()`（调度器按轮起的那台）与 `devWebArgs()`（开发者入口那台）
  *    **都**从这儿取 —— 两处不可能各挂各的（那正是"第二个 harness"的形状）。
  *
  * 顺序（`--patch` **可重复**，`dsh --help` 原文）：
+ *   ⓪ **SDK server 那一层**（契约 110）：它换的是"**谁来收发帧**"；
+ *      它是**第一条**只是为了让人先看到它（几层 patch 之间没有依赖，
+ *      每条都是按 id 定点覆盖 —— 顺序不影响结果）；
  *   ① **人格**（`system-prompt` 只有它会碰）；
  *   ② **能力层**（挂在人格**之后** ⇒ 它改不了人格那一条）；
  *   ③ **模型那条**（挂最后：它只改 `llm-deepseek` / `web-search-deepseek`，不碰上面两层）。
+ *
+ * ⚠️ 缺了 `sdkServerPatchPath` 就**不挂那一层**（判据里手搭的 cfg 就是这样）——
+ *    生产上 `config.js` 有默认值、`preflight` 还会再拦一道（见 `agentEnv` 里那段）。
  *
  * @param {object} cfg `config.js` 那份
  * @returns {string[]}
  */
 export function agentPatchArgs(cfg = {}) {
   const out = [];
+  if (cfg.sdkServerPatchPath) out.push('--patch', cfg.sdkServerPatchPath);
   if (cfg.personaPath) out.push('--patch', cfg.personaPath);
   if (cfg.capabilitiesPath) out.push('--patch', cfg.capabilitiesPath);
   if (cfg.modelPatchPath) out.push('--patch', cfg.modelPatchPath);
@@ -132,8 +155,6 @@ export class AgentRuntime extends EventEmitter {
   #cfgFor;
   #spawnFn;
   #agents = new Map(); // 我们的 sessionId → DshAgent
-  /** 这个 runtime 已经起过**几个 agent 实例**。只用来造 DSH 会话 id，见下。 */
-  #incarnation = 0;
   #access = []; // 访问序（**真的是 LRU**：每次取用把它挪到队尾）
   #onEvict;
   #bootId;
@@ -145,51 +166,21 @@ export class AgentRuntime extends EventEmitter {
     this.#spawnFn = spawnFn;
     this.#onEvict = onEvict;
     /**
-     * ⚠️ **每次启动换一个 DSH 会话 id。**
+     * ⚠️ **`bootId` 不再是会话 id 的一部分**（2026-09-25 改，契约 110）。
      *
-     * 实测：`session/prompt` 对**已存在**的会话 id 会直接报
-     * `session "main" already exists` —— **SDK 只能 create，不能 resume**。
-     * 不换 id 的话，服务重启后**第一句话就投不出去**，
-     * 而现象只是"它不理我了"（我第一次跑就撞上了）。
+     * 它原来在 DSH 会话 id 里（`<会话>.<bootId>.<第几个>`），因为官方那个
+     * SDK server **只能 create**：沿用同一个 id 会报 `already exists`
+     * ⇒ 只能每次启动/每个实例换一个 id ⇒ 界面里一个工作区 N 个对话。
      *
-     * ⚠️ 光有 `bootId` **不够**——见 `#nextDshSessionId()`：
-     *    同一个进程里换一个 agent 实例，也必须换 id。
-     *
-     * ⚠️ **连带后果（要记住）**：换了 id ⇒ **agent 重启后不记得之前**。
-     *    所以"跨重启接记忆"必须靠**喂上下文**（recap），不能指望会话自己还在。
+     * 现在 id 从**映射**里取（`dsh-sessions.mjs`，一个房间永远同一条），
+     * `bootId` 只剩"**这是哪一次运行**"这一个用途（排障时对日志用），
+     * 而且**不再**决定会话的身份。
      */
     this.#bootId = bootId ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   }
 
   get bootId() {
     return this.#bootId;
-  }
-
-  /**
-   * 给**某一个 agent 实例**造一个 DSH 会话 id。
-   *
-   * ⚠️⚠️ **每个实例都要不同——不只是"每次启动不同"。**
-   *
-   * 为什么：DSH 的会话记录**落在 `$DSH_HOME/sessions/` 里，跨进程活着**
-   * （实测：那个目录下已经躺着 19 个 `main.<bootId>`）。
-   * 所以"同一个 runtime 里把 agent 卸掉再起一个"这条路上，
-   * 沿用同一个 id 会直接报：
-   *
-   * ```
-   * session "main.mu9rmdgzijr2" already exists
-   * ```
-   *
-   * ⇒ **用户接下来每一句都发不出去**，而看起来只是"它不理我了"。
-   *
-   * ⚠️ 这条路的触发者是**超时硬收口**：它 `stop()` 掉卡住的 agent，
-   *    而 `bootId` 是整个 runtime 一份、**永不改变** ⇒ 下一句必撞。
-   *    （这个是端到端测试抓出来的：卡住→收口→恢复那一步过不去。）
-   *
-   * ⇒ 所以 id 里再加**第几个实例**。三级：`会话名.bootId.第几个`。
-   */
-  #nextDshSessionId(sessionId) {
-    this.#incarnation += 1;
-    return `${sessionId}.${this.#bootId}.${this.#incarnation}`;
   }
 
   get maxProcesses() {
@@ -214,14 +205,19 @@ export class AgentRuntime extends EventEmitter {
   agent(sessionId) {
     let a = this.#agents.get(sessionId);
     if (!a) {
+      // ★ **按会话取 cfg**（多租户）：`DSH_HOME` / `agentCwd` / **会话映射**
+      //   都长在里面，给它一份全局 cfg，甲和乙就会共用一个 DSH_HOME
+      //   ⇒ 会话记录互相看得见（N21：键是绝对路径，换个 home 就是换个账号）。
+      const cfg = this.#cfgFor(sessionId);
       a = new DshAgent({
         sessionId,
-        // ★ 传给 agent 的是**带 bootId 的那个**（见 constructor 的注释）
-        dshSessionId: this.#nextDshSessionId(sessionId),
-        // ⚠️ **按会话取 cfg**（多租户）：`DSH_HOME` 与 `agentCwd` 都长在里面，
-        //    给它一份全局 cfg，甲和乙就会共用一个 DSH_HOME
-        //    ⇒ 会话记录互相看得见（N21：键是绝对路径，换个 home 就是换个账号）。
-        cfg: this.#cfgFor(sessionId),
+        // ★ **一个房间一个会话 id**（契约 110）：从映射里取，**不再**带 bootId /
+        //   第几个实例 —— 同一个房间换多少代进程，DSH 那边都是同一条会话。
+        //   ⚠️ 它会读盘（`<他的数据目录>/dsh-sessions.json`），第一次会**落一条**；
+        //      那份文件坏掉时**抛**（不猜、也不改它 —— 见 `dsh-sessions.mjs`
+        //      `readSessions` 顶上那段：猜 = 悄悄多出一条对话）。
+        dshSessionId: dshSessionIdFor({ agentKey: sessionId, cfg }),
+        cfg,
         spawnFn: this.#spawnFn,
       });
       a.on('exit', (info) => {
@@ -369,7 +365,7 @@ export class DshAgent extends EventEmitter {
     return this.#sessionId;
   }
 
-  /** 传给 DSH 的会话 id（**带 bootId**，见 `AgentRuntime` 的注释）。 */
+  /** 传给 DSH 的会话 id（**从映射里来的那个**，一个房间一个，见 `AgentRuntime` 的注释）。 */
   get dshSessionId() {
     return this.#dshSessionId;
   }
@@ -509,7 +505,8 @@ export class DshAgent extends EventEmitter {
       ? input.map((b) => ({ type: 'text', text: String(b?.text ?? '') }))
       : [{ type: 'text', text: String(input ?? '') }];
     return this.#request('session/prompt', {
-      // ★ 用带 bootId 的那个 id，否则重启后第一句就报 already exists
+      // ★ **同一个房间永远同一个 id**（契约 110）：服务端那边靠它
+      //   决定 resume 还是 create —— 见 `sdk-server-hupo.mjs` 顶上那段。
       sessionId: this.#dshSessionId,
       contentBlocks,
     });

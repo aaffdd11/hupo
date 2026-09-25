@@ -1002,16 +1002,47 @@ export class TurnTranslator extends EventEmitter {
    * 用在超时硬收口上：我们把 agent 卸了，排队里那些话就再也没有下一轮了。
    * **不许让它们静默消失**——用户看到的会是一个永远等不到回答的气泡。
    */
-  turnUndelivered({ reason = 'timeout' } = {}) {
+  turnUndelivered({ reason = 'timeout', line = DEADLINE_QUEUED_LINE } = {}) {
     const w = new MessageWriter({
       timeline: this.#timeline,
       agent: 'agent',
       origin: 'reactive',
       scopeId: this.#scopeId,
     });
-    w.chunk('deep', DEADLINE_QUEUED_LINE);
+    w.chunk('deep', line);
     w.end(reason);
     return true;
+  }
+
+  /**
+   * **这一句话投不出去**（`session/prompt` / 交接包被对端拒了）——
+   * 既有的失败收口 ＋ **保证**给用户留下一条看得见的话。
+   *
+   * ── 为什么不能只调 `forceClose`（2026-09-26 真机读数）──────────────
+   *
+   * `forceClose` 收的是**已经开过的轮**（`#turns` 里那些 —— 由 `turn/start` 建账）。
+   * 而 `session/prompt` 被拒时，DSH 那边**一轮都没开**（`turn/start` 永远不来）
+   * ⇒ `forceClose` 收 **0** 轮、**一个字都不写**。
+   * 真机现场：`/api/say` 200，之后**五分钟里一个新事件都没有** ——
+   * 盘上像那句话没发生过，用户永远等不到答复（N19 要挡的形状）。
+   * （调度器还会发一条瞬态 `error`，但客户端今天**不渲染**它 —— 见
+   *  `dispatcher.js` 里那句注释 ⇒ 它**不算**"看得见"。）
+   *
+   * ⇒ 这里：先走既有的失败收口（有半截的轮照旧补"没说完"）；
+   *   **一轮都没开**时，才**主动**落一条给用户的话（`line`，走 `MessageWriter`，
+   *   **落盘** ⇒ 用户看得见）。
+   *
+   * @param {string} reason 收尾理由（`message/end.reason`）
+   * @param {object} [o]
+   * @param {string} [o.line] **一轮都没开**时说的那句（默认"没说完"那句）
+   * @returns {number} 收掉了／写了几个（0 不可能：至少写一条）
+   */
+  deliveryFailed(reason = 'failed', { line = INTERRUPTED_LINE } = {}) {
+    const closed = this.forceClose(reason, { line });
+    if (closed > 0) return closed;
+    // 一轮都没开过（这正是"prompt 被拒"的形状）⇒ 主动交代，**落盘**
+    this.turnUndelivered({ reason, line });
+    return 1;
   }
 
   /**

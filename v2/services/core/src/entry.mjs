@@ -26,6 +26,15 @@ process.env.HUPO_PERSONA ??= inCode('hupo-persona.yml');
 process.env.HUPO_CAPABILITIES ??= inCode('hupo-capabilities.yml');
 process.env.HUPO_LEDGER_SERVER ??= nodePath.join(SRC, 'mcp-ledger-server.mjs');
 process.env.HUPO_MODEL_PATCH ??= inCode('hupo-model-proxy.yml');
+// ★ **我们自己的 SDK server 那一层**（契约 `docs/dev/110-ONE-SESSION-PER-ROOM.md`）：
+//   只需指 **patch 那条路径**（它默认按 `cwd` 算 ⇒ 盒里会算成 `/app/hupo-sdk-server.yml`，
+//   而那一份在**产品层** `/app/code` 里）。
+//   ⚠️ **插件本体不用指**：那份 patch 里写的是相对它自己的 `./src/sdk-server-hupo.mjs`
+//      （DSH 会按 patch 文件所在目录锚成绝对 URL）⇒ 盒里自动就是
+//      `/app/code/src/sdk-server-hupo.mjs`。
+//   ⚠️ 缺了它 ⇒ 官方那个只能 create 的 SDK server 关不掉、我们那个也挂不上
+//      ⇒ **盒里整个 agent 起不来**（`preflight` 会先拦一道，不会带病启动）。
+process.env.HUPO_SDK_PATCH ??= inCode('hupo-sdk-server.yml');
 
 // ★ **钥匙住哪**：规则住在 `key-path.mjs`（**只有那一处**）。这里只打印实际会用哪个。
 try {

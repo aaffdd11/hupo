@@ -790,6 +790,11 @@ test('🔴 D9：`/h…` 的升级**只在 `trusted`（那条 0600 UDS）上接**
 test('🔴 D1/D7′：起那台的参数 —— **patch 集合与真那台同一处出处**，只听回环', () => {
   const cfg = {
     agentProfile: 'sdk',
+    // ★ 契约 110：开发者入口那台**也**要挂 SDK server 那一层（与调度器同源）——
+    //   它换的是"谁来收发帧"，那一层在 `--profile web` 下不会生效
+    //   （那个 profile 里没有 `sdk-jsonrpc-server`，也没有 `sdkAppStartup`），
+    //   但**参数必须同源**：两处各拼一份就是这个契约要防的那种漂。
+    sdkServerPatchPath: '/app/code/hupo-sdk-server.yml',
     personaPath: '/app/code/hupo-persona.yml',
     capabilitiesPath: '/app/code/hupo-capabilities.yml',
     modelPatchPath: '/app/code/hupo-model-proxy.yml',
@@ -798,6 +803,8 @@ test('🔴 D1/D7′：起那台的参数 —— **patch 集合与真那台同一
   const want = [
     '--profile',
     'web', // ← D7″：界面这个 app（DSH 只在它里面提供浏览器界面）
+    '--patch',
+    '/app/code/hupo-sdk-server.yml',
     '--patch',
     '/app/code/hupo-persona.yml',
     '--patch',

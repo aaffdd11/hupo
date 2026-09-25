@@ -8,6 +8,9 @@
 //   normal     正常一轮（含**推理原文**——用来验它不会被推给用户）
 //   truncated  turn/end 的 reason 是 max-tokens（半句）
 //   silent     一句话都不说就收尾（不许留白）
+//   prompt-reject ★ **投递失败**（判据 T3）：`session/prompt` **一帧就回 error、
+//              不发 `turn/start`** —— 2026-09-26 真机那种形状（id 形状不认）。
+//              用它验"投递失败必须给用户一条看得见的话"（`deliveryFailed`）。
 //   crash      中途进程退出（必须收口）
 //   slow       答得很慢（用来验淘汰前会先收口）
 //   two-step   两步：先应一声（quick），再给结论（deep）
@@ -41,18 +44,23 @@ const scenario = process.env.FAKE_SCENARIO ?? 'normal';
 /**
  * ⚠️ **DSH 的会话记录是"跨进程活着"的**——这是真 DSH 的行为，不是我们编的。
  *
- * 实测：`session/prompt` 对一个**已经存在**的会话 id 直接报
- * `session "main.xxx" already exists`（SDK 只能 create，不能 resume）。
- * 会话记录落在 `$DSH_HOME/sessions/` 里（实测那个目录下有 19 个 `main.<bootId>`）。
+ * 会话记录落在 `$DSH_HOME/sessions/` 里，所以"上一个进程创建过这条会话"
+ * 这件事，下一个进程看得见（`FAKE_SESSION_FILE` 就是那条跨进程的记录）。
  *
- * 为什么假 agent 也要模拟这一条：**真 bug 差点漏过去。**
- * 超时硬收口会在**同一个 runtime 里**把 agent 卸掉再起一个；
- * 如果沿用同一个会话 id，用户接下来每一句都发不出去。
- * 假 agent 不模拟"已存在"的话，**这一条在 CI 里永远测不出来**
- * （它当时确实是靠端到端真 agent 才抓到的）。
+ * ── ★ 2026-09-25 改（契约 `110-ONE-SESSION-PER-ROOM.md`）──────────
  *
- * `FAKE_SESSION_FILE` 给一个路径就开启这个行为（**跨进程共享**，
- * 所以"上一个进程创建过"这件事真的能被下一个进程看见）。
+ * **默认形状变了**：同一个会话 id 再进来**应当成功**（我们自己的
+ * `src/sdk-server-hupo.mjs` 会 `resume`，不再报 `already exists`）。
+ * ⇒ 假 agent 默认也这样（第二次投同一个 id ⇒ 正常回 `{messageId}`）。
+ *
+ * 而**旧**那条形状（官方 SDK server：只能 create ⇒ 同一个 id 报
+ * `session "…" already exists`）**用一个开关留着**
+ * （`FAKE_SDK_CREATE_ONLY=1`）：它是这个契约存在的原因，
+ * 判据要能反着验（见契约 §五 的变异读数）。
+ *
+ * ⚠️ 这么做**不是**把老 bug 忘掉：老 bug 的判据现在由
+ * `test/dsh-server-hupo.test.js` 的 S2 钉着（"在 ⇒ resume，不在 ⇒ create"），
+ * 而这里只需要模拟"真 DSH 那一侧的会话记录跨进程活着"。
  */
 /**
  * ★ **D 期**：照 `mcp-ledger-server.mjs` 那一层的样子，**真的**问一次账本那口。
@@ -141,6 +149,8 @@ function askApps(payload, timeoutMs = 5000) {
 }
 
 const sessionFile = process.env.FAKE_SESSION_FILE ?? null;
+/** ★ 旧那条形状（官方那个只能 create 的 SDK server）—— 只在变异/反例里开。 */
+const sdkCreateOnly = process.env.FAKE_SDK_CREATE_ONLY === '1';
 
 /**
  * ★ **D 期**：这一轮是在**哪一间**里跑的（服务端按房间给的 `HUPO_SCOPE`）。
@@ -250,9 +260,31 @@ function onMessage(msg) {
     return;
   }
   if (msg.method === 'session/prompt') {
-    // ★ 和真 DSH 一样：**已存在**的会话 id 直接报错（只能 create，不能 resume）
     const sid = msg.params?.sessionId;
-    if (sid && sessionExists(sid)) {
+    // ★ **投递失败**（判据 T3 · 真机 2026-09-26 的形状）：`session/prompt` 被拒 ⇒
+    //   **回 error 帧、而且一个 `turn/start` 都不发**（所以调度器那边"一轮都没开"）。
+    //   ⚠️ 这正是"用户那句话永远没有答复"的现场：客户端 `#onStdout` 把 error 帧
+    //   reject 掉，而翻译层没有任何一轮可以收口。
+    if (scenario === 'prompt-reject') {
+      process.stdout.write(
+        `${JSON.stringify({
+          jsonrpc: '2.0',
+          id: msg.id,
+          error: {
+            code: -32603,
+            message:
+              `sessionId 形状不认（只收 [A-Za-z0-9._~-]、最长 200）：${JSON.stringify(sid)}` +
+              ' ⇒ 不猜、也不替它换一个 —— 请用映射（dsh-sessions.mjs）产出的那个 id',
+          },
+        })}\n`,
+      );
+      return;
+    }
+    // ★ 默认（契约 110）：同一个 id 再来一次**是好的** —— 真那一侧是我们自己的
+    //   SDK server，它先看这条会话在不在（在就 resume）。
+    // ⚠️ `FAKE_SDK_CREATE_ONLY=1` 才模拟旧那条形状（官方那个只能 create）——
+    //   那是变异/反例用的开关，不是默认。
+    if (sid && sessionExists(sid) && sdkCreateOnly) {
       process.stdout.write(
         `${JSON.stringify({
           jsonrpc: '2.0',
@@ -262,7 +294,10 @@ function onMessage(msg) {
       );
       return;
     }
-    if (sid) rememberSession(sid);
+    // ★ 只记"**新开**的那一条"（同一个 id 再来 = resume ⇒ 不重复记）——
+    //   于是那份文件就是"这个 DSH_HOME 里到底有几条会话"的**证据**：
+    //   两代进程投同一个 id ⇒ 盘上仍然只有一行（`110` 的判据就看这个）。
+    if (sid && !sessionExists(sid)) rememberSession(sid);
     // ★ 真 agent 会发 `user/message`（把收到的那几个内容块回显出来），
     //   假 agent 也发——这样"我们到底喂了什么进去"可以在**真 stdio 上**验，
     //   而不用去猜。翻译层会忽略它（它不进产品事件）。

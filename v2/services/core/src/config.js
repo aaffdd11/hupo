@@ -12,6 +12,12 @@ import { RECAP_DEFAULTS } from './recap.js';
 import { appsSocketPath } from './apps-socket.js';
 import { ledgerSocketPath } from './ledger-socket.js';
 import { REVIEW_AGENT_TIMEOUT_MS } from './review-agent.js';
+// ★ 那份映射的读法（契约 110）——**只有一处出处**（`dsh-sessions.mjs`）。
+import { readSessions } from './dsh-sessions.mjs';
+// ★ 会话 id 的形状判据（**一处出处** · `session-id.mjs`）——开机逐个 id 过一遍它。
+//   为什么要有这一条：2026-09-26 真机事故（产品层发布之后**任何一句话都没有答复**）
+//   的根因就是"映射里钉着 DSH 自己的 id（带 `/`），而服务端不收 `/`"。
+import { sessionIdProblem } from './session-id.mjs';
 
 /**
  * 读一个 uid/gid；**没设、空串、或者不是非负整数 ⇒ `null`**（= 不换手）。
@@ -116,6 +122,41 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      *    写进配置就等于把令牌放进仓库）。
      */
     capabilitiesPath: env.HUPO_CAPABILITIES ?? nodePath.resolve(cwd, 'hupo-capabilities.yml'),
+
+    /**
+     * **我们自己的 SDK server 那一层**（契约 `docs/dev/110-ONE-SESSION-PER-ROOM.md`）。
+     *
+     * ⚠️ 这里**是两样东西、两条路径**（别合成一个）：
+     *   · `sdkServerPatchPath` = **那一层 patch**（`hupo-sdk-server.yml`）：
+     *     它把官方那条 `sdk-jsonrpc-server` 关掉、把我们的插进去 ——
+     *     走 `--patch`（`agentPatchArgs()`，**只有那一处出处**）；
+     *   · `sdkServerPath` = **插件本体**（`sdk-server-hupo.mjs`）：那份 patch 里
+     *     写的是**相对它自己**的 `./src/sdk-server-hupo.mjs`
+     *     （DSH 会把 `insert` 里的相对路径**按 patch 文件所在目录**锚成 `file://`
+     *     —— `dsh-app-boot` 的 `anchorInsertedPluginNames()`）。
+     *     ⇒ 这一项**只给 `preflight` 用**：文件不在就**别启动**（免得 dsh
+     *       起来了才发现 import 失败，那种现场只有一句 `[object Object]`）。
+     *       ⚠️ 它**没有 env 口子**：能改它就等于能让"检查的那份"与"真加载的那份"
+     *       变成两个文件（而那份 patch 里的相对路径**改不动**）—— 那是假绿。
+     *
+     * 🔴 **为什么不用 env 递插件路径**（原来那一版是这么想的）：loader 只对条目的
+     *    `config` 做 `!!js` 求值，**不碰 `name`** ⇒ `name: !!js process.env.…`
+     *    会留一个对象 ⇒ 真机当场炸 `name.startsWith is not a function`。
+     *    读数与结论记在 `hupo-sdk-server.yml` 顶上。
+     *
+     * ⚠️ **两样缺一样 agent 都起不来**：官方那个被关了，而 insert 的那条 import 不到。
+     *    所以 `preflight` 里是**硬拦**（和人格/能力层那两条同一个道理）。
+     */
+    sdkServerPatchPath: env.HUPO_SDK_PATCH ?? nodePath.resolve(cwd, 'hupo-sdk-server.yml'),
+    sdkServerPath: nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname), 'sdk-server-hupo.mjs'),
+
+    /**
+     * **一个房间一条会话**的那份映射（契约 110）：`{"main":"main", …}`。
+     *
+     * ⚠️ **按人一份**：`worlds.js` 建世界时会把它换成
+     *    `<他那一格>/dsh-sessions.json`（这条默认值是单租户/手搭场景的兜底）。
+     */
+    sessionMapPath: env.HUPO_SESSION_MAP ?? nodePath.join(dataDir, 'dsh-sessions.json'),
 
     /**
      * 账本那条本地通道（域套接字）。
@@ -341,6 +382,34 @@ export function preflight(cfg) {
     notes.push(`DSH_HOME 不存在：${cfg.dshHome}（agent 起来时才可能报错）`);
   }
 
+  // ★ **一个房间一条会话**那份映射（契约 110）：**坏掉就在开机时说**。
+  //   为什么不在用到时才发现：那时用户正等着答话，而这条错会让那一轮**说不出话**
+  //   （`dsh-sessions.mjs` 的纪律：宁可当场失败，也不许偷偷多开一条对话）。
+  //   ⚠️ 只查**这一份**（全局那份）：租户各有一份、住在他自己的盒子里，
+  //      他们那一份由他们那台开机时查。
+  if (cfg.sessionMapPath && nodeFs.existsSync(cfg.sessionMapPath)) {
+    let entries = null;
+    try {
+      entries = readSessions({ file: cfg.sessionMapPath });
+    } catch (err) {
+      problems.push(`会话映射读不了：${cfg.sessionMapPath}\n    ⇒ ${err?.message ?? err}`);
+    }
+    // ★ **逐个 id 过一遍那个形状函数**（同一个 `sessionIdProblem`，"宁可开机就说"）。
+    //   ⚠️ `readSessions` 自己已经逐条校验并会抛（同一处判据）；这一遍是**开机这一处**
+    //      的明账：两处都用 `sessionIdProblem`，**不是两套口径**。
+    //   ⚠️ 真机那条 `owner/aoshu-bank.…`（**带 `/`**）**必须过**（它不收 `/` 就是那次事故）。
+    for (const [scope, id] of Object.entries(entries ?? {})) {
+      const problem = sessionIdProblem(id);
+      if (problem !== null) {
+        problems.push(
+          `会话映射里 "${scope}" 钉住的 id DSH 收不了（${problem}）：${JSON.stringify(id)}\n` +
+            `    ⇒ ${cfg.sessionMapPath}\n` +
+            '    ⇒ 改**映射**（别改代码）；否则那一间每一句话都投不出去、用户永远等不到答复',
+        );
+      }
+    }
+  }
+
   // ★ **能力层**（批 4）。同样按人格那条规矩：**缺了要当场说**，
   //   因为"少一个能力"这件事在界面上看起来只是"它今天没记"，没人会去查配置。
   if (!cfg.capabilitiesPath) {
@@ -360,6 +429,32 @@ export function preflight(cfg) {
       `账本那支 MCP 服务器不在：${cfg.ledgerServerPath}\n` +
         `    ⇒ 能力层会以"起不来"告终（那份 patch 里 failOnStartupError: true），agent 会整个起不来。\n` +
         `    ⇒ 修：把 v2/services/core/src/mcp-ledger-server.mjs 放回去`,
+    );
+  }
+
+  // ★ **我们自己的 SDK server**（契约 110）。它和上面那几条**不一样**：
+  //   上面缺了是"少一个能力"，这一条缺了是 **agent 整个起不来** ——
+  //   官方那个 SDK server 被我们关了（两个都读 stdin 会抢帧），
+  //   而 `hupo-sdk-server.yml` 的 insert 拿不到路径 ⇒ 树加载失败。
+  //   ⇒ 所以它是**问题**（拦启动），不是提示。
+  //   ⚠️ **两份都要在**：那份 patch 本体，和它要 insert 的插件本体。
+  if (!cfg.sdkServerPatchPath || !nodeFs.existsSync(cfg.sdkServerPatchPath)) {
+    problems.push(
+      `SDK server 那一层 patch 不在：${cfg.sdkServerPatchPath}\n` +
+        '    ⇒ 官方那个只能 create 的 SDK server 就关不掉、我们那个也挂不上 ⇒ agent 起不来。\n' +
+        '    ⇒ 修：把 v2/services/core/hupo-sdk-server.yml 放回去，或设 HUPO_SDK_PATCH',
+    );
+  }
+  if (!cfg.sdkServerPath) {
+    problems.push(
+      'sdkServerPath 是空的 ⇒ 我们那份 SDK server 挂不上，而官方那个已被关掉 ⇒ **agent 起不来**。\n' +
+        '    ⇒ 修：别覆盖它的默认值（默认指向 v2/services/core/src/sdk-server-hupo.mjs）',
+    );
+  } else if (!nodeFs.existsSync(cfg.sdkServerPath)) {
+    problems.push(
+      `我们那份 SDK server 不在：${cfg.sdkServerPath}\n` +
+        '    ⇒ 官方那个已被关掉（`hupo-sdk-server.yml`）⇒ **agent 起不来**。\n' +
+        '    ⇒ 修：把 v2/services/core/src/sdk-server-hupo.mjs 放回去',
     );
   }
 

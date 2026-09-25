@@ -32,6 +32,9 @@ function cfg(over = {}) {
     agentProfile: 'sdk',
     agentCwd: dir,
     dshHome: dir,
+    // ★ **一个房间一条会话**那份映射（契约 110）：落在这一格临时目录里，
+    //   所以判据能真读到它（"同一个 scope 永远同一个 id"就靠它钉）。
+    sessionMapPath: nodePath.join(dir, 'dsh-sessions.json'),
     agentProvider: 'fake',
     agentModel: 'fake',
     agentEffort: 'low',
@@ -314,50 +317,98 @@ test('★ env 先做减法：只删密钥类，**PATH/HOME 一定留着**', () =
   }
 });
 
-// ── DSH 会话 id：**唯一性是"每个实例"，不只是"每次启动"** ──────
+// ── DSH 会话 id：**一个房间一条，而且每一轮都续用同一条**（契约 110）──
 //
-// 实测：`session/prompt` 对**已存在**的会话 id 直接报
-// `session "main" already exists` —— SDK 只能 create，不能 resume。
-// 我第一次跑真 agent 就撞上了这个，现象只是"它不理我了"。
+// ⚠️ 这一节**原来钉的是反的**：那时断言"每换一个 agent 实例就必须换一个 id"，
+//    因为官方那个 SDK server **只能 create、不能 resume**
+//    （同一个 id 再进去报 `session "…" already exists`）。
+//    代价是界面里"一个工作区 N 个对话"（真机读数：`/data/main` 38 条）。
+//
+//    现在那一层换成了 `src/sdk-server-hupo.mjs`（先看这条会话在不在：
+//    在就 resume、不在才 create）⇒ **id 必须稳定**，而且它从**映射**里取
+//    （`src/dsh-sessions.mjs`，落 `<他的数据目录>/dsh-sessions.json`）。
+//    ⇒ 判据跟着反过来：**两轮、两个实例、两次启动，都必须是同一个 id**。
 
-test('★ DSH 会话 id 带 bootId，而且每次启动都不一样', () => {
-  const a = new AgentRuntime({ cfg: cfg(), spawnFn: fakeSpawn('normal') });
-  const b = new AgentRuntime({ cfg: cfg(), spawnFn: fakeSpawn('normal') });
-  assert.match(a.agent('main').dshSessionId, new RegExp(`^main\\.${a.bootId}\\.`));
-  assert.notEqual(a.bootId, b.bootId, '两次启动的 bootId 必须不同，否则会撞上上次留下的会话');
+test('🔴★ S1：同一间换实例 / 重启 ⇒ **同一个** DSH 会话 id（一个房间一个对话）', async () => {
+  const c = cfg(); // 一份 cfg：同一个 DSH_HOME ＋ 同一份映射
+  const rt = new AgentRuntime({ cfg: c, spawnFn: fakeSpawn('normal') });
+  const first = rt.agent('main').dshSessionId;
+  assert.equal(first, 'main', '会话 id 就是映射给的那个（人看得懂）');
+  await rt.stop('main'); // ← 超时硬收口走的就是这条路
+  assert.equal(rt.agent('main').dshSessionId, first, '★ 换实例必须沿用同一个 id（不许再多一个对话）');
+  await rt.shutdown();
+
+  // 整个服务重启：新 runtime、同一个 DSH_HOME ＋ 同一份映射
+  const rt2 = new AgentRuntime({ cfg: c, spawnFn: fakeSpawn('normal') });
+  assert.equal(rt2.agent('main').dshSessionId, first, '★ 重启之后还是那一条');
+  await rt2.shutdown();
+
+  // 映射里真的落了那一条（**不是**每次现算 —— 父 agent 那一手要能钉正本）
+  const mapFile = nodePath.join(c.agentCwd, 'dsh-sessions.json');
+  assert.deepEqual(JSON.parse(nodeFs.readFileSync(mapFile, 'utf8')), { main: 'main' });
+  assert.equal(nodeFs.statSync(mapFile).mode & 0o777, 0o600, '映射 0600');
 });
 
-test('🔴★ 同一个 runtime 里换一个 agent 实例 ⇒ **必须换 DSH 会话 id**', async () => {
-  // ⚠️ 这条是**改过的**，原先它是反的（断言"同一进程内每次拿到同一个 id"），
-  //    而那个断言编码的是一个**错的**信念："id 一样才不丢记忆"。
-  //    真相：记忆在**进程**里，不在 id 里；而 DSH 的会话记录
-  //    **落在 $DSH_HOME/sessions/ 里、跨进程活着**
-  //    （实测那目录下躺着 19 个 `main.<bootId>`）。
-  //
-  //    实测复现（`/tmp/probe-session-reuse.mjs`）：
-  //      同一个 runtime：起 agent → stop() → 再起 agent → prompt
-  //      ⇒ `session "main.mu9rmdgzijr2" already exists`
-  //      ⇒ **用户接下来每一句都发不出去**，而看起来只是"它不理我了"。
-  //
-  //    触发它的正是**超时硬收口**：它会在同一个 runtime 里卸掉再起。
-  const rt = new AgentRuntime({ cfg: cfg(), spawnFn: fakeSpawn('normal') });
-  const id1 = rt.agent('main').dshSessionId;
-  await rt.stop('main');
-  const id2 = rt.agent('main').dshSessionId;
-  assert.notEqual(id1, id2, '★ 换实例必须换 id —— 否则 `already exists`');
-  assert.match(id1, /^main\./);
-  assert.match(id2, /^main\./);
-  // 会话名还在最前面（人看得出这是哪个会话）
-  assert.equal(id1.split('.')[0], 'main');
-  assert.equal(id2.split('.')[0], 'main');
+test('🔴★ S1：两轮之间换过一次进程 ⇒ **送出去**的会话 id 一模一样', async () => {
+  // 这条打的是"线上真的发出去的那一帧"（不是内存里的字段）——
+  // 契约 110 要的正是这个形状：客户端每一轮都给同一个 id。
+  const c = cfg();
+  const sent = [];
+  const recSpawn = (scenario) => (bin, args, opts) => {
+    const child = realSpawn(process.execPath, [FAKE], {
+      ...opts,
+      env: { ...opts.env, FAKE_SCENARIO: scenario, FAKE_SESSION_FILE: '' },
+    });
+    const write = child.stdin.write.bind(child.stdin);
+    child.stdin.write = (s, ...rest) => {
+      sent.push(String(s));
+      return write(s, ...rest);
+    };
+    return child;
+  };
+  const store = new Store({ dataDir: nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-tl-')), fsync: false });
+  const timeline = new Timeline({ id: 'main', store });
+  const runtime = new AgentRuntime({ cfg: c, spawnFn: recSpawn('normal') });
+  const dispatcher = new Dispatcher({ timeline, runtime, store });
+  try {
+    await turn(dispatcher);
+    await runtime.stop('main'); // 换手：下一轮是新进程
+    await turn(dispatcher);
+  } finally {
+    await runtime.shutdown();
+  }
+  const ids = sent
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter((r) => r?.method === 'session/prompt')
+    .map((r) => r.params.sessionId);
+  assert.equal(ids.length, 2, `必须真的投过两轮（收到 ${ids.length} 条 session/prompt）`);
+  assert.deepEqual(ids, [ids[0], ids[0]], '★ 两轮必须是同一个会话 id（否则 DSH 里会多出一条对话）');
+});
+
+test('🔴★ S3：两个不同的 scope ⇒ 两个不同的会话 id（不许串）', async () => {
+  const c = cfg();
+  const rt = new AgentRuntime({ cfg: c, spawnFn: fakeSpawn('normal') });
+  assert.equal(rt.agent('u1/main').dshSessionId, 'main');
+  assert.equal(rt.agent('u1/aoshu-bank').dshSessionId, 'aoshu-bank');
+  assert.notEqual(rt.agent('u1/main').dshSessionId, rt.agent('u1/aoshu-bank').dshSessionId);
+  assert.deepEqual(
+    JSON.parse(nodeFs.readFileSync(nodePath.join(c.agentCwd, 'dsh-sessions.json'), 'utf8')),
+    { main: 'main', 'aoshu-bank': 'aoshu-bank' },
+  );
   await rt.shutdown();
 });
 
-test('★ 投给 agent 的是带后缀的那个 id（不是时间线 id）', async () => {
+test('★ 投给 agent 的 id 与"进程池那把键"不是一回事（键带 userId，id 只认 scope）', async () => {
   const rt = new AgentRuntime({ cfg: cfg(), spawnFn: fakeSpawn('normal') });
-  const a = rt.agent('main');
-  assert.equal(a.sessionId, 'main', '时间线 id 不变');
-  assert.match(a.dshSessionId, /^main\./, '给 DSH 的要带后缀');
+  const a = rt.agent('u1/main');
+  assert.equal(a.sessionId, 'u1/main', '进程池那把键是 `<userId>/<scope>`（它没变）');
+  assert.equal(a.dshSessionId, 'main', '给 DSH 的按 scope 取（同一个人的两间才会分开）');
   await rt.shutdown();
 });
 

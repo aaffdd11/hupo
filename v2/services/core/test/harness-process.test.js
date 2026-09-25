@@ -247,8 +247,8 @@ test('🔴 H7：harness 那一路**不动**琥珀自己的实例（另一个进�
   assert.equal(runtime.count, 1);
   const amberPid = amberKids[0].pid;
   assert.ok(alive(amberPid));
-  /** 琥珀那套会话 id 的形状：`main.<bootId>.<第几个>`（**不是** UUID）。 */
-  assert.match(amber.dshSessionId, /^main\./u);
+  /** 琥珀那套会话 id：**按 scope 取的稳定 id**（契约 110）——不是 UUID，也不是 `<scope>.<bootId>.<n>`。 */
+  assert.equal(amber.dshSessionId, 'main');
 
   // ★ 现在接上 harness（同一个工作目录 / 同一个 DSH_HOME —— 故意的：
   //   连"住在一起"都不许互相动）
