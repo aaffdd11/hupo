@@ -247,3 +247,39 @@
 
 **判据**：`test/dsh-server-hupo.test.js` 的 **T1 / T2** ＋ 新 `test/deliver-failed.test.js` 的 **T3**；
 变异读数见 §五 **M11–M15**（每刀都真跑过、md5 自查还原）。
+
+### 八·补2 · 🔴 那一层 patch 把**开发者入口**弄挂了（`#155·补2` · 2026-09-26 真机）
+
+**现象**：`#155` 落地之后，开发者入口（`dsh<手机号>.stalkerai.cn`）点任何一间 ⇒ **502**。
+
+**读数（盒里日志原话）**：
+```
+盒里那台 dsh web 没起来（房间 主对话）：read ECONNRESET
+```
+本机复现（同一条 patch 挂 `--profile web`）⇒ 真原因当场现形：
+```
+dsh: plugin tree failed to load: dsh: 1 entry did not activate
+…/src/sdk-server-hupo.mjs: pending (waiting for service: sdkAppStartup)
+```
+
+**根因**：我们的 insert 那条 `inject: [sdkAppStartup, loader]` 是照**官方那支**抄的，
+而 `sdkAppStartup` **只有 `sdk` profile 有**（它是那个 app 的启动标记）。
+**开发者入口那台是 `--profile web`、挂的却是同一套 patch**（`agentPatchArgs()` 一处出处 · 契约 109 §七）
+⇒ 在 web profile 里这个条目**永远 pending** ⇒ DSH 认为"有一条没激活" ⇒ **整棵树加载失败**
+⇒ 那台 `dsh web` 打印完端口行就死（所以中继在换 cookie 那一步读到 `ECONNRESET`）⇒ 入口 502。
+
+**修法**：那份 patch 的 `inject` **只留 `loader`**（我们只需要它：`initialize` 里那句
+`loader.await()`；`agents` / `sessions` 是**模块级**的 `inject`，与 profile 无关）。
+⇒ 同一套 patch 在 **sdk** 与 **web** 两个 profile 下都起得来（本机两个 profile 各验一遍：
+sdk 那台照样由我们这份 `serverInfo: hupo-sdk-runtime` 作答；web 那台正常打印端口、活着）。
+
+**判据（两道，都要）**：
+- 夹具级：`test/dsh-server-hupo.test.js` 的 **S4**（`inject` 里只许有 `loader`，**不许** `sdkAppStartup`）
+  ＋ `test/dev-mode.test.js` 末尾那一条（同一件事的第二道）；
+- **真机级**：`scripts/check-dev-mode.mjs` 的 **③c**（"带 cookie 再取 `/` ⇒ 200 且含 `__DSH_BOOT__`"）
+  —— **就是它抓到这个 502 的**（夹具全绿、入口全挂 ⇒ 又一次证明"判据要打在被测的那一侧"）。
+
+⚠️ **一条错误的旧断言被这一轮改对**：`dsh-server-hupo.test.js` 的 S4 原来把
+`inject: [sdkAppStartup, loader]` **当成正确形状钉住**（写它的人照官方抄的）⇒
+修完 patch 之后那条当场红 —— **它钉的是缺陷**。⇒ 教训：判据要写"**为什么**是这个形状"，
+不许把"照抄来的形状"当结论。

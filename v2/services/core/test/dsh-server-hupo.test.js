@@ -472,7 +472,18 @@ test('🔴 S4：`hupo-sdk-server.yml` 必须①关掉官方那个 ②挂上我�
   //    `!!js` 求值，`name` 会留一个对象 ⇒ 真机当场
   //    `name.startsWith is not a function`（读数见 patch 顶上那段）。
   assert.doesNotMatch(yml, /name: !!js/u, '★ `name` 不能走 `!!js`（loader 不求值它）');
-  assert.match(yml, /inject:\n(\s+)- sdkAppStartup\n\s+- loader/u);
+  // 🔴 **`inject` 里只许有 `loader`**（2026-09-26 真机 · `#155·补2`）：
+  //    `sdkAppStartup` **只有 `sdk` profile 有** —— 而**开发者入口那台是 `--profile web`、
+  //    挂的是同一套 patch**（契约 109 §七）⇒ 在 web profile 里这个条目会永远 pending
+  //    ⇒ DSH 当场 `plugin tree failed to load: dsh: 1 entry did not activate …
+  //    pending (waiting for service: sdkAppStartup)` ⇒ 那台 `dsh web` 打印完端口就死
+  //    ⇒ 开发者入口一片 **502**（真机读数）。我们这份**不需要**它（官方那支才要）。
+  assert.match(yml, /inject:\n(\s+)- loader\n/u, '`loader` 必须在（`initialize` 里要 `loader.await()`）');
+  assert.doesNotMatch(
+    yml,
+    /^\s*-\s*sdkAppStartup\s*$/mu,
+    '🔴 不许 inject `sdkAppStartup`（web profile 没这个服务 ⇒ 入口起不来）',
+  );
   assert.match(yml, /maxTokensAsSuccess: true/u);
 
   // ★ 那条相对路径**指的就是** `preflight` 看着的那个文件（两处不许漂）

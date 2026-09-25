@@ -1788,3 +1788,33 @@ test('★ 换不过手（chown 失败）⇒ **原文一个字节都不许改**�
   );
   nodeFs.rmSync(dir, { recursive: true, force: true });
 });
+
+// ════════════════════════════════════════════════════════════
+// 🔴 我们那一层 SDK server patch **不许** inject `sdkAppStartup`（2026-09-26 真机）
+//
+// 只有 `sdk` profile 有 `sdkAppStartup`（它是那个 app 的启动标记）。而**开发者入口
+// 那台是 `--profile web`、挂的是同一套 patch**（契约 109 §七）⇒ 在 web profile 里
+// 那个条目会**永远 pending** ⇒ DSH 当场：
+//   `dsh: plugin tree failed to load: dsh: 1 entry did not activate … pending (waiting for service: sdkAppStartup)`
+// ⇒ 那台 `dsh web` 打印完端口就死 ⇒ 开发者入口一片 502（真机读数，见 `110` §八·补）。
+// ⇒ 判据：那份 yml 里**不许**有 `- sdkAppStartup`；`- loader` 必须在（`initialize` 要它）。
+// ════════════════════════════════════════════════════════════
+test('🔴 那一层 patch：inject 只有 `loader`，**没有** `sdkAppStartup`（否则开发者入口那台 web 起不来）', () => {
+  const yml = nodeFs.readFileSync(
+    nodePath.resolve(import.meta.dirname, '..', 'hupo-sdk-server.yml'),
+    'utf8',
+  );
+  // ⚠️ 注释里当然会提到这个名字（那是在解释"为什么不能加"）⇒ 只看**没被注释掉的行**
+  const live = yml.split('\n').filter((l) => !l.trim().startsWith('#'));
+  assert.equal(
+    live.some((l) => /^\s*-\s*sdkAppStartup\s*$/u.test(l)),
+    false,
+    '🔴 不许 inject `sdkAppStartup`：web profile 里没有这个服务 ⇒ 条目永远 pending ⇒ 入口 502',
+  );
+  assert.equal(
+    live.some((l) => /^\s*-\s*loader\s*$/u.test(l)),
+    true,
+    '`loader` 必须在（`initialize` 里要 `loader.await()`）',
+  );
+  assert.match(yml, /disabled: true/u, '官方那支（只 create、不能 resume）必须关掉');
+});
