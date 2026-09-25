@@ -73,15 +73,25 @@ export class Timeline {
    * @param {() => number} [o.clock]
    * @param {(err: Error, event: object) => void} [o.onSubscriberError]
    *        订阅者自己抛错时调用。**不许静默吞**——但也不该拖垮时间线。
+   * @param {number} [o.seqFloor]
+   *        ★ **`103` §七：号的"地板"**（决策 D3.11）。取号的下限，缺省 0。
+   *        🔴 为什么需要它：某一间被回收时，它的行**可能正好是尾巴** ⇒ 重写之后
+   *           盘上最大号会**变小**。重启时 `#resumeSeq()` 只看盘上最后一条 ⇒
+   *           会把**已经被拿走、已经进了留痕**的那些号**再发一遍**。
+   *           而"重编号／复用号 = 客户端手里的游标错位"（架构 §5.1·补 明写）——
+   *           所以要把留痕里的最大号当地板，让"已发出的号"永不回头。
+   *        ⚠️ 缺省 0 ⇒ 既有调用方与既有判据逐字不变。
    */
-  constructor({ id, store, clock = Date.now, onSubscriberError }) {
+  constructor({ id, store, clock = Date.now, onSubscriberError, seqFloor = 0 }) {
     if (!id) throw new StoreError('timeline id 必填');
     if (!store) throw new StoreError('store 必填');
     this.#id = id;
     this.#store = store;
     this.#clock = clock;
     this.#onSubscriberError = onSubscriberError ?? (() => {});
-    this.#seq = this.#resumeSeq();
+    const resumed = this.#resumeSeq();
+    const floor = Number.isInteger(seqFloor) && seqFloor > 0 ? seqFloor : 0;
+    this.#seq = Math.max(resumed, floor);
   }
 
   get id() {

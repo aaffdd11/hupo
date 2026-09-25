@@ -176,6 +176,26 @@ export class UnreadBook {
   }
 
   /**
+   * ★ **那一间没了 ⇒ 把它的记数清掉**（`103` §七）。
+   *
+   * 🔴 为什么必须清：那一间的行已经从日志上**抽走**了，而这里留着的
+   *    `lastRead[scope]` 就是一条**指向空房间的账** —— 清单里不会再列它，
+   *    但盘上那份 `unread.json` 会一直带着一个已经不存在的 scope。
+   * ⚠️ 它**不是**"留下来的两样"之一（那两样是审计与用量）—— 清掉只是不许留脏账。
+   *
+   * @param {string} scope
+   * @returns {number|null} 清掉的那一个读数（留痕用）；本来没有 ⇒ `null`
+   */
+  forget(scope) {
+    const key = typeof scope === 'string' && scope !== '' ? scope : MAIN_SCOPE;
+    if (!Object.prototype.hasOwnProperty.call(this.#lastRead, key)) return null;
+    const had = this.#lastRead[key];
+    delete this.#lastRead[key];
+    this.#save();
+    return typeof had === 'number' && Number.isFinite(had) ? had : null;
+  }
+
+  /**
    * **哪些图标该带点**（一次算全 —— 服务端答得出"有未读"）。
    * @returns {Array<{scopeId: string, lastSeq: number, lastReadSeq: number}>}
    */

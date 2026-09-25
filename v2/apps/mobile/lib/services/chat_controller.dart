@@ -114,6 +114,34 @@ class ChatController extends ChangeNotifier {
   final Api api;
   final TokenStore tokens;
 
+  /// **把某一间在本机那份缓存丢掉**（契约 `docs/dev/103-APP-DELETE.md` §七 · 决策 D3.11）。
+  ///
+  /// 服务端把那一间的工作区／对话／数据一起拿走了 ⇒ **本机这份缓存也算那一间的数据**
+  ///    —— 不丢的话，"拿不回来"在**这台设备上**还留着一份副本（下一任用户、或者
+  ///    以后哪次重放，就可能把它画出来 ⇒ 那就是"删了又回来了"）。
+  ///
+  /// ⚠️ 做法：把命名空间**临时切到那一间**再 `clear()`（两个 store 的 `clear()` 都是
+  ///    "清当前那个键"）⇒ 清完**切回现在这一间**。⚠️ **主线那一间不许从这儿丢**
+  ///    （删图标这条路永远不该动主线；真按错了也宁可不删）。
+  Future<void> dropRoomCache(String scope) async {
+    if (scope == mainScope) return;
+    final keepLocal = local.namespace;
+    final keepDrafts = drafts.namespace;
+    final keepCompose = compose.namespace;
+    final scoped = scopedCacheNamespace(cacheNamespaceOf(_token), scope);
+    local.namespace = scoped;
+    drafts.namespace = scoped;
+    compose.namespace = scoped;
+    try {
+      await local.clear();
+      await drafts.clear();
+    } finally {
+      local.namespace = keepLocal;
+      drafts.namespace = keepDrafts;
+      compose.namespace = keepCompose;
+    }
+  }
+
   /// 服务端明说"这个令牌没得续了"（续期 401）时叫一声——
   /// **界面那一层靠它回登录页**（services 不 import material，所以只能回调）。
   ///

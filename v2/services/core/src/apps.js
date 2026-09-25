@@ -16,12 +16,21 @@
 //    不认识令牌（调用方已经知道这是谁）。
 
 import { pickIcon, resolveIcon } from './app-icons.js';
+import { reclaimScope } from './reclaim.js';
 import nodeCrypto from 'node:crypto';
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
 /** 制品放在每个人世界的哪个相对目录下（`hupo/apps/`）。 */
 export const APPS_REL = nodePath.join('hupo', 'apps');
+
+/**
+ * **回收处那一格叫什么**（`<root>/.removed/`）—— **只有这一处**。
+ *
+ * ⚠️ 单独导出是给 `worlds.js` 用的：它建那条日志时要按留痕抬一个"号的地板"
+ *    （见 `reclaim.js` 顶上"尾巴被抽走"那段）—— 那个目录名不许在别处再抄一遍。
+ */
+export const REMOVED_DIRNAME = '.removed';
 
 /** 清单的形状版本。**加字段要能分辨**，所以它进 manifest 一起存。 */
 export const SCHEMA = 1;
@@ -41,6 +50,12 @@ export const MAX_TOTAL_BYTES = 2 * 1024 * 1024;
 export const MAX_VERSIONS = 20;
 /** 制品内相对路径的长度上限。 */
 export const MAX_REL_CHARS = 120;
+/**
+ * **复制时最多试几个新名字**（`104` §三）：新 id 撞了往后加数字（`-copy` / `-copy2`…），
+ * 新标题重名也一样往后加。试到这个数还撞 ⇒ **如实拒**（不是无限试 —— 那会变成
+ * 一个永远转圈、永远不出结果的请求）。
+ */
+export const MAX_COPY_TRIES = 50;
 
 /**
  * **图标名白名单**。
@@ -90,11 +105,20 @@ const CONTENT_TYPES = Object.freeze({
   '.woff2': 'font/woff2',
 });
 
-/** 制品库出的错。**人话**，而且够具体。 */
+/**
+ * 制品库出的错。**人话**，而且够具体。
+ *
+ * ⚠️ `status`（可选）是给调用方分岔用的：**没给就是 `null`** ⇒ 调用方按老规矩当 404
+ *    （"没这个东西"，`/api/app-remove` 那条就是这么读的，**一个字没改**）。
+ *    给了就是**这一条路该回的那个码** —— `104` 的两条口要分清
+ *    "名字不合法（400）" / "试不出来（409）" / "不在他这儿（404）"。
+ *    形状照 `src/say.js` 的 `SayError(message, status)`（那里也是 400 起）。
+ */
 export class AppsError extends Error {
-  constructor(message) {
+  constructor(message, status = null) {
     super(message);
     this.name = 'AppsError';
+    this.status = status;
   }
 }
 
@@ -222,14 +246,23 @@ export class Apps {
    * @param {object} [o.fs]       注入文件系统（测试用）
    * @param {()=>number} [o.now]  注入时钟
    * @param {(e:object)=>void} [o.onAudit]  额外审计落点（全局 `audit.log`）；**它出错不许挡住主流程**
+   * @param {object|(()=>object)} [o.reclaim]
+   *        ★ **`103` §七：真回收的上下文**（一个人一份）。给了 ⇒ `remove()` 除了软删
+   *        制品那一格，还会把**那一间的工作区 / 对话 / 助手那边的会话记录**一起搬进
+   *        同一个回收处，并写 `reclaimed.json`（`src/reclaim.js` · **一处实现**）。
+   *        `null`（缺省）⇒ 只有软删 ＋ 审计，**逐字是第一轮的行为**（老测试与
+   *        单测里那两个"只有 `{dir, sub}`"的用法不受影响）。
+   *        ⚠️ 传**函数**（惰性取）是有意的：`worlds.js` 里那几本账（`unread`/`work`）
+   *        在 `new Apps()` 之后才建 —— 但 `remove()` 一定发生在它们建好之后。
    */
-  constructor({ dir, sub = null, fs = nodeFs, now = Date.now, onAudit = () => {} }) {
+  constructor({ dir, sub = null, fs = nodeFs, now = Date.now, onAudit = () => {}, reclaim = null }) {
     if (!dir) throw new AppsError('dir 必填');
     this.dir = dir;
     this.sub = sub;
     this.fs = fs;
     this.now = now;
     this.onAudit = onAudit;
+    this.reclaim = reclaim;
   }
 
   /** 这个人的制品库根目录（不在时装不建 —— 只在真的要写的时候建）。 */
@@ -558,18 +591,218 @@ export class Apps {
   }
 
   /**
-   * **卸载**：从桌面上撤掉。
+   * ★ **`104`：给"我的小程序"改个名字**（主人 2026-09-25：桌面那个面板里的一项）。
    *
-   * ⚠️ **软删**（挪进 `<root>/.removed/`），不是真删 ——
+   * 改的是**那一版 manifest 里的 `title`** —— 桌面上显示的就是它，所以 `list()`
+   * 跟着变（不需要另存一份"显示名"）。
+   *
+   * ⚠️ **只动 `title` 这一个字段**：`files` / `rootHash` / `version` / 权限…一个字节不动
+   *    ⇒ "读回来的字节要对得上 hash"那几条判据照旧成立。
+   * ⚠️ 版本本来是**不可变**的（规矩①）；这是**唯一**一处例外，而且是主人点名要的形状
+   *    （契约 `docs/dev/104-APP-MENU.md` §三）。
+   * ⚠️ **上限复用 `MAX_TITLE_CHARS`**（不许另写一个数）。
+   *
+   * 🔴 **落点只有这一处**：宿主那条路与盒里那条路都只调它（盒里调的是**同一个**方法）。
+   *
+   * @returns {string} 改完之后的那个名字（回执里就是它）
+   */
+  setTitle(id, title) {
+    checkAppId(id);
+    const version = this.current(id);
+    // 认不出 / 不在他这儿 ⇒ 404（`status` 不写，由调用方按老规矩当 404）
+    if (version === null) throw new AppsError('这个小程序不在你这儿');
+    const name = typeof title === 'string' ? title.trim() : '';
+    // 空名字 / 太长 ⇒ 400 ＋ 人话
+    if (name.length === 0) throw new AppsError('名字不能是空的', 400);
+    if (name.length > MAX_TITLE_CHARS) {
+      throw new AppsError(`名字太长（上限 ${MAX_TITLE_CHARS} 个字）`, 400);
+    }
+    const m = this.manifest(id, version);
+    if (!m) throw new AppsError('这个小程序的清单坏了，改不了名字');
+    writeAtomic(
+      this.fs,
+      nodePath.join(this.versionDir(id, version), 'manifest.json'),
+      `${JSON.stringify({ ...m, title: name }, null, 2)}\n`,
+    );
+    this.#audit({ what: 'rename', id, version, title: name });
+    return name;
+  }
+
+  /**
+   * ★ **`104`：把"我的小程序"复制出一个新的一格**（主人 2026-09-25）。
+   *
+   * | 件 | 怎么做 |
+   * |---|---|
+   * | 新 id | `<原id>-copy`；撞了往后加数字（`-copy2`/`-copy3`…），**有上限** ⇒ 试不出来**如实拒** |
+   * | 新名字 | `<原标题> 副本`；重名再加 2、3…（同样有上限）|
+   * | 字节 | **所有版本的字节照搬**（逐文件再核一次 hash ⇒ 源那份被人动过就当场拒）|
+   * | 🔴 新那一间 | **是空的**：只有制品。**用量 / 授予 / 血缘 / 对话 / 工作区一个都不复制** |
+   *
+   * ⚠️ **复制的是"东西"，不是"那一段经历"**（主人原话）—— 所以这里只搬
+   *    `versions/` 与 `current.json`；`usage.jsonl` / `grant.json` / `ask.json` /
+   *    `lineage.json` 都**不进新格**（它们记的是那一间干过什么，不是制品本身）。
+   * ⚠️ 清单里的 `id` / `title` 必须换掉（`manifest()` 会核 `j.id === id`），
+   *    其余字段**逐字保留**（`rootHash` 照旧 —— 文件字节没动，hash 天然一致）。
+   * ⚠️ 先在内存里把源那份**全读完、逐文件核过 hash**，再动盘（规矩②：不留"复制了一半"）。
+   *
+   * 🔴 **落点只有这一处**：宿主那条路与盒里那条路都只调它。
+   *
+   * @returns {{id:string, title:string}} 新那一格的 id 与名字
+   */
+  copy(id) {
+    checkAppId(id);
+    const from = this.current(id);
+    if (from === null) throw new AppsError('这个小程序不在你这儿');
+    const newId = this.#freeCopyId(id);
+    const title = this.#freeCopyTitle(this.manifest(id, from)?.title ?? '');
+
+    // ── ① 源那份全读进内存（顺便逐文件核 hash：源被人动过 ⇒ 如实拒）──────
+    const packs = [];
+    for (let v = 1; v <= MAX_VERSIONS; v += 1) {
+      const m = this.manifest(id, v);
+      if (!m) continue;
+      const files = [];
+      for (const rec of m.files ?? []) {
+        let buf;
+        try {
+          buf = this.fs.readFileSync(nodePath.join(this.versionDir(id, v), rec.path));
+        } catch {
+          throw new AppsError(`那一版里有个文件读不出来，复制不了：${rec.path}`);
+        }
+        if (sha256hex(buf) !== rec.sha256) {
+          throw new AppsError(`那一版里有个文件的内容对不上 hash，复制不了：${rec.path}`);
+        }
+        files.push({ path: rec.path, buf });
+      }
+      packs.push({ manifest: m, files });
+    }
+
+    // ── ② 动盘（出错就把新那一格整个收掉，不留"复制了一半"）─────────────
+    try {
+      this.fs.mkdirSync(this.appDir(newId), { recursive: false, mode: 0o755 });
+      this.fs.mkdirSync(this.versionsDir(newId), { recursive: true, mode: 0o755 });
+      for (const p of packs) {
+        const vdir = this.versionDir(newId, p.manifest.version);
+        this.fs.mkdirSync(vdir, { recursive: false, mode: 0o755 });
+        for (const f of p.files) {
+          const target = nodePath.join(vdir, f.path);
+          this.fs.mkdirSync(nodePath.dirname(target), { recursive: true, mode: 0o755 });
+          writeAtomic(this.fs, target, f.buf);
+        }
+        // 清单：**只换 id 与 title**，别的字段逐字保留（rootHash 照旧）
+        writeAtomic(
+          this.fs,
+          nodePath.join(vdir, 'manifest.json'),
+          `${JSON.stringify({ ...p.manifest, id: newId, title }, null, 2)}\n`,
+        );
+      }
+      // 最后才移指针（与 `create()` 同一个顺序：中途断电最坏是多一个没人指向的版本）
+      writeAtomic(
+        this.fs,
+        nodePath.join(this.appDir(newId), 'current.json'),
+        `${JSON.stringify({ version: from })}\n`,
+        0o644,
+      );
+    } catch (err) {
+      try {
+        this.fs.rmSync(this.appDir(newId), { recursive: true, force: true });
+      } catch {
+        /* 收不干净也不许盖住原来那个错 */
+      }
+      throw err;
+    }
+
+    this.#audit({ what: 'copy', id, newId, title });
+    return { id: newId, title };
+  }
+
+  /** 挑一个没被占的新 id（`<原id>-copy`，撞了往后加数字；**有上限**）。 */
+  #freeCopyId(id) {
+    for (let n = 1; n <= MAX_COPY_TRIES; n += 1) {
+      const suffix = n === 1 ? '-copy' : `-copy${n}`;
+      // ⚠️ id 也有长度上限 ⇒ 短一点的源头截一段，绝不拼出一个超长的 id
+      const base = id.slice(0, Math.max(1, MAX_ID_CHARS - suffix.length));
+      const cand = `${base}${suffix}`;
+      if (cand.length > MAX_ID_CHARS) continue;
+      if (this.fs.existsSync(this.appDir(cand))) continue;
+      return cand;
+    }
+    throw new AppsError(
+      `连着试了 ${MAX_COPY_TRIES} 个名字都被占了，复制不出来（先给它改个名字再试）`,
+      409,
+    );
+  }
+
+  /** 挑一个没重名的新标题（`<原标题> 副本`，重名再加 2、3…；**有上限**）。 */
+  #freeCopyTitle(baseTitle) {
+    const taken = new Set(this.list().map((a) => a.title));
+    const clean = typeof baseTitle === 'string' ? baseTitle.trim() : '';
+    for (let n = 1; n <= MAX_COPY_TRIES; n += 1) {
+      const suffix = n === 1 ? ' 副本' : ` 副本${n}`;
+      // 原标题可能已经顶到上限 ⇒ 截一段，绝不拼出一个超长的标题
+      const base = clean.slice(0, Math.max(0, MAX_TITLE_CHARS - suffix.length));
+      const cand = `${base}${suffix}`;
+      if (!taken.has(cand)) return cand;
+    }
+    throw new AppsError(
+      `连着试了 ${MAX_COPY_TRIES} 个名字都重名，复制不出来（先给它改个名字再试）`,
+      409,
+    );
+  }
+
+  /**
+   * **从桌面上删掉**：软删制品那一格 ＋（`103` §七起）**把那一间整个回收掉**。
+   *
+   * ⚠️ **软删**（挪进 `<root>/.removed/<id>-<ts>/`），不是真删 ——
    *    这个项目的规矩是"删错了能拿回来"（回收站那条）。真删要人自己说。
    * ⚠️ 挪走之后 `list()` 里就没有它了（`.` 开头的不算 app）。
+   *
+   * ★ **`103` §七（D3.11）**：主人拍的是**真回收** —— 除了制品那一格，还要把
+   *   **那一间的工作区 / 那条日志里 `scopeId==id` 的行 / 助手那边的会话记录**
+   *   一起搬进**同一个**回收处，并写 `reclaimed.json`（号洞的留痕）。
+   *   🔴 **一处实现**：这三样住 `src/reclaim.js` 的 `reclaimScope()`，**宿主那条路
+   *      与盒里那条路都走这里**（两条路都只调 `remove()`，见 `server.js`）。
+   *   🔴 **失败不许留"删了一半"**：回收没做完 ⇒ 连制品那一格也**搬回原位**再抛。
+   *      ⇒ 调用方只有"全成"与"如实失败"两种结局，**没有第二种成功形状**。
+   *
+   * @returns {string} 回收处那个目录（`.removed/<id>-<ts>`）
    */
   remove(id) {
     checkAppId(id);
     if (this.current(id) === null) throw new AppsError('这个小程序不在你这儿');
-    const to = nodePath.join(this.root, '.removed', `${id}-${this.now()}`);
+    const at = this.now();
+    const to = nodePath.join(this.root, REMOVED_DIRNAME, `${id}-${at}`);
     this.fs.mkdirSync(nodePath.dirname(to), { recursive: true, mode: 0o755 });
     this.fs.renameSync(this.appDir(id), to);
+
+    // ★ 惰性取"真回收"的上下文（`worlds.js` 里那几本账在 `new Apps()` 之后才建）
+    let ctx = null;
+    if (this.reclaim) {
+      ctx = typeof this.reclaim === 'function' ? this.reclaim() : this.reclaim;
+    }
+    if (ctx) {
+      try {
+        reclaimScope({
+          ...ctx,
+          // ⚠️ 显式的这几样**最后给**：它们以 `Apps` 自己那份为准（上下文覆盖不了）
+          id,
+          into: to,
+          sub: this.sub,
+          at,
+          fs: this.fs,
+          log: (m) => ctx.log?.(m),
+        });
+      } catch (err) {
+        // 回收没做完 ⇒ 制品那一格也搬回去（**不留"删了一半"**）
+        try {
+          this.fs.renameSync(to, this.appDir(id));
+        } catch (back) {
+          (ctx.log ?? (() => {}))(`制品那一格没搬回原位：${back?.message ?? back}`);
+        }
+        throw err;
+      }
+    }
+
     this.#audit({ what: 'remove', id });
     return to;
   }

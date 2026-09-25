@@ -17,6 +17,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:hupo_app/models/desktop_words.dart';
+import 'package:hupo_app/models/scope.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -47,6 +48,8 @@ class _Fake {
     this.removeBody = '{"ok":true}',
     this.withSecondApp = false,
     this.appsFailFrom,
+    this.renameStatus = 200,
+    this.copyStatus = 200,
   });
 
   final int removeStatus;
@@ -59,13 +62,26 @@ class _Fake {
   /// 用来钉"删成功、但重拉清单没问上"那一下。
   final int? appsFailFrom;
 
+  /// 改名 / 复制那两条口按什么答（契约 `104` §四 C14/C15）。
+  final int renameStatus;
+  final int copyStatus;
+
   /// 服务端把那一格拿走了没有（决定 `/api/apps` 之后还给不给它）。
   bool removed = false;
+
+  /// **现在这一格叫什么**（改名成功之后它就变了 ⇒ 重拉清单要看得见新名字）。
+  String appTitle = _appTitle;
+
+  /// **复制成功之后桌上多一格**（C15：要看得出"新那一格真的长出来了"）。
+  bool copied = false;
 
   /// 拉过几次清单（C6：删成功之后必须**重新拉一遍**）。
   int appsCalls = 0;
   int removeCalls = 0;
+  int renameCalls = 0;
+  int copyCalls = 0;
   final List<Map<String, dynamic>> removeBodies = [];
+  final List<Map<String, dynamic>> renameBodies = [];
 
   MockClient client() => MockClient((r) async {
         if (r.url.path == '/api/apps') {
@@ -79,16 +95,16 @@ class _Fake {
               if (!removed)
                 {
                   'id': _appId,
-                  'title': _appTitle,
+                  'title': appTitle,
                   'icon': 'casino',
                   'version': 1,
                   'entryUrl': 'https://apps.example/dice/index.html?sig=x',
                   'expiresAt': 0,
                 },
-              if (withSecondApp)
+              if (withSecondApp || copied)
                 {
                   'id': _appId2,
-                  'title': _appTitle2,
+                  'title': copied ? '$_appTitle 副本' : _appTitle2,
                   'icon': 'timer',
                   'version': 1,
                   'entryUrl': 'https://apps.example/timer/index.html?sig=y',
@@ -102,6 +118,18 @@ class _Fake {
           removeBodies.add(jsonDecode(r.body) as Map<String, dynamic>);
           if (removeStatus == 200) removed = true;
           return _json(removeBody, removeStatus);
+        }
+        if (r.url.path == '/api/app-rename') {
+          renameCalls += 1;
+          final body = jsonDecode(r.body) as Map<String, dynamic>;
+          renameBodies.add(body);
+          if (renameStatus == 200) appTitle = body['title'] as String;
+          return _json(renameStatus == 200 ? '{"ok":true}' : '{"error":"no"}', renameStatus);
+        }
+        if (r.url.path == '/api/app-copy') {
+          copyCalls += 1;
+          if (copyStatus == 200) copied = true;
+          return _json(copyStatus == 200 ? '{"ok":true,"id":"$_appId-copy"}' : '{"error":"no"}', copyStatus);
         }
         return _json('{}');
       });
@@ -167,6 +195,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text(desktopRemoveAction));
     await tester.pumpAndSettle();
+    // ★ 第二轮（契约 §七.4 · 决策 D3.11）：第一下**只出确认层**（一个请求都不发）
+    //   ⇒ 还要按一次【确实删掉】才真的发那一条。
+    await tester.tap(find.text(desktopRemoveConfirmYes));
+    await tester.pumpAndSettle();
 
     expect(fake.removeCalls, 1, reason: '选了"从桌面上删掉"就必须发那一条请求');
     expect(
@@ -208,6 +240,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text(desktopRemoveAction));
     await tester.pumpAndSettle();
+    // ★ 第二轮（契约 §七.4 · 决策 D3.11）：第一下**只出确认层**（一个请求都不发）
+    //   ⇒ 还要按一次【确实删掉】才真的发那一条。
+    await tester.tap(find.text(desktopRemoveConfirmYes));
+    await tester.pumpAndSettle();
 
     expect(fake.removeCalls, 1);
     expect(find.text(desktopRemoveFailed), findsOneWidget, reason: '★ 没成必须如实说一句人话');
@@ -227,6 +263,10 @@ void main() {
     await tester.longPress(find.text(_appTitle));
     await tester.pumpAndSettle();
     await tester.tap(find.text(desktopRemoveAction));
+    await tester.pumpAndSettle();
+    // ★ 第二轮（契约 §七.4 · 决策 D3.11）：第一下**只出确认层**（一个请求都不发）
+    //   ⇒ 还要按一次【确实删掉】才真的发那一条。
+    await tester.tap(find.text(desktopRemoveConfirmYes));
     await tester.pumpAndSettle();
 
     expect(find.text(desktopRemoveFailed), findsOneWidget);
@@ -248,6 +288,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text(desktopRemoveAction));
     await tester.pumpAndSettle();
+    // ★ 第二轮（契约 §七.4 · 决策 D3.11）：第一下**只出确认层**（一个请求都不发）
+    //   ⇒ 还要按一次【确实删掉】才真的发那一条。
+    await tester.tap(find.text(desktopRemoveConfirmYes));
+    await tester.pumpAndSettle();
 
     expect(fake.removeCalls, 1);
     expect(fake.appsCalls, greaterThanOrEqualTo(2), reason: '重拉过（只是这一次没答上来）');
@@ -258,5 +302,223 @@ void main() {
       findsOneWidget,
       reason: '★ 反例就是"重拉失败 ⇒ 整桌被清空"：**别的小程序一个都不许跟着消失**',
     );
+  });
+
+  // ── 第二轮：**先提醒、再要一次确认**（契约 §七.4 · 决策 D3.11 · 判据 C7/C8/C9）──
+  //
+  // 🔴 主人 2026-09-25：*"点击删除，也会提醒用户，回收相应的工作区、经验、数据。
+  //    需要用户二次确认。"* ⇒ 第一下**只出这一层**（C7 的反例就是"第一下就发了请求"）。
+
+  testWidgets('C7：点【从桌面上删掉】⇒ **一个请求都不发**，先出第二层确认', (tester) async {
+    final fake = _Fake();
+    await _pump(tester, _controller(fake));
+
+    await tester.longPress(find.text(_appTitle));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(desktopRemoveAction));
+    await tester.pumpAndSettle();
+
+    expect(
+      fake.removeCalls,
+      0,
+      reason: '★ 第一下只是提醒 ⇒ 请求根本不许发（这一条的反例就是"第一下就发了"）',
+    );
+    expect(find.text(desktopRemoveConfirmTitle), findsOneWidget, reason: '★ 第二层没出来');
+    expect(find.text(desktopRemoveConfirmYes), findsOneWidget, reason: '★ 少了那个"确实删掉"');
+    expect(find.text(desktopRemoveConfirmNo), findsOneWidget, reason: '★ 少了那个"算了"');
+  });
+
+  testWidgets('C8：第二层把"会一起拿走哪几样"**逐条**摆出来，而且明说"拿不回来"', (tester) async {
+    final fake = _Fake();
+    await _pump(tester, _controller(fake));
+
+    await tester.longPress(find.text(_appTitle));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(desktopRemoveAction));
+    await tester.pumpAndSettle();
+
+    expect(find.text(desktopRemoveConfirmLead), findsOneWidget, reason: '★ 少了正文那个头');
+    for (final one in desktopRemoveConfirmItems) {
+      expect(find.text('· $one'), findsOneWidget, reason: '★ **少列了一样**：$one');
+    }
+    expect(
+      find.text(desktopRemoveConfirmTail),
+      findsOneWidget,
+      reason: '★ 没明说"拿不回来"（这一批最要紧的诚实边界）',
+    );
+  });
+
+  testWidgets('C9：【算了】⇒ 还是不发请求、图标还在（而【确实删掉】才发 —— 见上面 C2+C6）',
+      (tester) async {
+    final fake = _Fake();
+    await _pump(tester, _controller(fake));
+
+    await tester.longPress(find.text(_appTitle));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(desktopRemoveAction));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(desktopRemoveConfirmNo));
+    await tester.pumpAndSettle();
+
+    expect(fake.removeCalls, 0, reason: '★ 点了【算了】⇒ 一个请求都不许发');
+    expect(find.text(_appTitle), findsOneWidget, reason: '★ 算了 ⇒ 那一格还在');
+    expect(fake.appsCalls, 1, reason: '什么都没发生 ⇒ 不许顺手重拉清单');
+  });
+
+  // ── `104`：面板三项 ＋ 🔴 **手机那条"按住"**（主人 2026-09-25 报的真缺陷）──────
+  //
+  // 主人原话：*"长按没有别（被）劫持，而是点开小程序了。"* —— 在**手机浏览器**上。
+  // 根因：`InkWell.onLongPress` 要"满 500ms 且手指不挪出 18 逻辑像素"，真手指两样都容易
+  // 失手 ⇒ **一失手松手就照旧算"点了一下"**。⇒ `app_desktop.dart` 改成自己按住。
+  // ⚠️ 合成事件**测不出**这条（我拿合成触摸在真浏览器里验过是好的）⇒ 夹具要**像真手指**：
+  //    **挪出 `kTouchSlop`（18）再松手**（旧形状在这种夹具下**既不出面板** ⇒ 红）。
+
+  testWidgets('C11：手机那条按住（按住期间挪出 kTouchSlop）⇒ 出面板，而且**不打开**它',
+      (tester) async {
+    final fake = _Fake();
+    final c = _controller(fake);
+    await _pump(tester, c);
+
+    final center = tester.getCenter(find.text(_appTitle));
+    final g = await tester.startGesture(center);
+    await tester.pump(const Duration(milliseconds: 150));
+    await g.moveBy(const Offset(24, 0)); // 真手指会挪（24 > kTouchSlop 18）
+    await tester.pump(const Duration(milliseconds: 400)); // 累计 > 按住阈值
+    await g.up();
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byType(DesktopIconMenu),
+      findsOneWidget,
+      reason: '★ 按住没出面板（手机那条真缺陷就是这个形状）',
+    );
+    expect(c.scope, mainScope, reason: '★ 按住之后松手把它**打开了** —— 主人报的就是这一条');
+    expect(fake.removeCalls, 0, reason: '只是出面板 ⇒ 一个请求都不许发');
+  });
+
+  testWidgets('C12：负向对照 —— 短按一下 ⇒ 照旧**打开**它（别把点击弄坏）', (tester) async {
+    final fake = _Fake();
+    final c = _controller(fake);
+    await _pump(tester, c);
+
+    await tester.tap(find.text(_appTitle));
+    await tester.pumpAndSettle();
+
+    expect(c.scope, 'dice', reason: '★ 短按没打开它（把点击弄坏了）');
+    expect(find.byType(DesktopIconMenu), findsNothing, reason: '短按不该出面板');
+  });
+
+  testWidgets('C13：面板上**三项都在** ＋ 取消', (tester) async {
+    final fake = _Fake();
+    await _pump(tester, _controller(fake));
+
+    await tester.longPress(find.text(_appTitle));
+    await tester.pumpAndSettle();
+
+    expect(find.text(desktopRenameAction), findsOneWidget, reason: '少了"改个名字"');
+    expect(find.text(desktopCopyAction), findsOneWidget, reason: '少了"复制一个"');
+    expect(find.text(desktopRemoveAction), findsOneWidget, reason: '少了"从桌面上删掉"');
+    expect(find.text(desktopRemoveCancel), findsOneWidget, reason: '少了"取消"');
+  });
+
+  testWidgets('C14：改个名字 —— 预填旧名字；【算了】不发；【改好了】才发（带 id ＋ 新名字）＋ 重拉清单',
+      (tester) async {
+    final fake = _Fake();
+    final c = _controller(fake);
+    await _pump(tester, c);
+
+    await tester.longPress(find.text(_appTitle));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(desktopRenameAction));
+    await tester.pumpAndSettle();
+
+    // ⚠️ 屏幕上本来就有一个输入框（聊天那个）⇒ **只找那一层里的那一个**
+    final nameField = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.byType(TextField),
+    );
+    expect(nameField, findsOneWidget, reason: '★ 没出那个输入框');
+    expect(
+      tester.widget<TextField>(nameField).controller!.text,
+      _appTitle,
+      reason: '★ 没预填现在的名字（他要改一两个字，不是从头打一遍）',
+    );
+    expect(fake.renameCalls, 0, reason: '★ 还没确定 ⇒ 一个请求都不许发');
+
+    await tester.tap(find.text(desktopRenameNo));
+    await tester.pumpAndSettle();
+    expect(fake.renameCalls, 0, reason: '★ 点了【算了】⇒ 一个请求都不许发');
+
+    // 再来一次，这回真的改
+    await tester.longPress(find.text(_appTitle));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(desktopRenameAction));
+    await tester.pumpAndSettle();
+    await tester.enterText(nameField, '新名字');
+    await tester.tap(find.text(desktopRenameOk));
+    await tester.pumpAndSettle();
+
+    expect(fake.renameCalls, 1, reason: '确定了就必须发那一条');
+    expect(fake.renameBodies.single['id'], _appId, reason: '★ 必须带**服务端那一份的 id**');
+    expect(fake.renameBodies.single['title'], '新名字');
+    expect(find.text('新名字'), findsOneWidget, reason: '★ 成了之后要重拉清单：桌上那一格的字跟着变');
+    expect(find.text(desktopRenameDone), findsOneWidget, reason: '成了也要如实说一句');
+  });
+
+  testWidgets('C15：复制一个 ⇒ 发那一条（带 id）⇒ 成了重拉清单（新那一格长出来）＋ 如实说一句',
+      (tester) async {
+    final fake = _Fake();
+    await _pump(tester, _controller(fake));
+
+    await tester.longPress(find.text(_appTitle));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(desktopCopyAction));
+    await tester.pumpAndSettle();
+
+    expect(fake.copyCalls, 1, reason: '选了"复制一个"就必须发那一条');
+    expect(fake.appsCalls, greaterThanOrEqualTo(2), reason: '★ 成了之后必须重拉清单');
+    expect(
+      find.text('$_appTitle 副本'),
+      findsOneWidget,
+      reason: '★ 新那一格没长出来（只本地加一格也是假话）',
+    );
+    expect(find.text(desktopCopyDone), findsOneWidget, reason: '成了也要如实说一句');
+    expect(fake.removeCalls, 0, reason: '复制不是删除');
+  });
+
+  testWidgets('C14·补：改名**没成**（500）⇒ 如实说一句，而且名字一个像素都不许变', (tester) async {
+    final fake = _Fake(renameStatus: 500);
+    await _pump(tester, _controller(fake));
+
+    await tester.longPress(find.text(_appTitle));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(desktopRenameAction));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.descendant(of: find.byType(AlertDialog), matching: find.byType(TextField)),
+      '新名字',
+    );
+    await tester.tap(find.text(desktopRenameOk));
+    await tester.pumpAndSettle();
+
+    expect(fake.renameCalls, 1);
+    expect(find.text(desktopRenameFailed), findsOneWidget, reason: '★ 没成必须如实说一句');
+    expect(find.text(_appTitle), findsOneWidget, reason: '★ 没成 ⇒ 桌上那一格的名字不许变');
+    expect(find.text('新名字'), findsNothing, reason: '★ 界面不许先把新名字画上去（那就是假话）');
+  });
+
+  testWidgets('C15·补：复制**没成**（500）⇒ 如实说一句，桌上不多不少', (tester) async {
+    final fake = _Fake(copyStatus: 500);
+    await _pump(tester, _controller(fake));
+
+    await tester.longPress(find.text(_appTitle));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(desktopCopyAction));
+    await tester.pumpAndSettle();
+
+    expect(fake.copyCalls, 1);
+    expect(find.text(desktopCopyFailed), findsOneWidget, reason: '★ 没成必须如实说一句');
+    expect(find.text('$_appTitle 副本'), findsNothing, reason: '★ 没成 ⇒ 桌上不许长出那一格');
+    expect(fake.appsCalls, 1, reason: '没成 ⇒ 不许重拉清单（什么都没发生）');
   });
 }

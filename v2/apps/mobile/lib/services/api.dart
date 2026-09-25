@@ -338,6 +338,51 @@ class Api {
     }
   }
 
+  /// **给它改个名字**（契约 `docs/dev/104-APP-MENU.md` §三）。
+  ///
+  /// ⚠️ 回执只分三种（同 [appRemove] 那条纪律）：只有服务端**明说** `{ok:true}` 才算成了；
+  ///    非 200 与"200 但读不出来"**都算没成**（"以为改了其实没改"就是界面在说假话）。
+  Future<AppEditOutcome> appRename({
+    required String token,
+    required String id,
+    required String title,
+  }) async {
+    try {
+      final r = await _c
+          .post(
+            _u('/api/app-rename'),
+            headers: {'content-type': 'application/json', 'authorization': 'Bearer $token'},
+            body: jsonEncode({'id': id, 'title': title}),
+          )
+          .timeout(const Duration(seconds: 20));
+      return appEditOutcomeOf(r.statusCode, r.body);
+    } catch (_) {
+      return const AppEditFailed();
+    }
+  }
+
+  /// **复制出一个新的一格**（契约 `docs/dev/104-APP-MENU.md` §三）。
+  ///
+  /// ⚠️ 回执规纪同 [appRename]。⚠️ 新那一格的名字与 id 由**服务端**定（客户端不猜），
+  ///    所以这里只带回"成没成"—— 成了之后**重拉一遍清单**，桌子照服务端那一份画。
+  Future<AppEditOutcome> appCopy({
+    required String token,
+    required String id,
+  }) async {
+    try {
+      final r = await _c
+          .post(
+            _u('/api/app-copy'),
+            headers: {'content-type': 'application/json', 'authorization': 'Bearer $token'},
+            body: jsonEncode({'id': id}),
+          )
+          .timeout(const Duration(seconds: 30));
+      return appEditOutcomeOf(r.statusCode, r.body);
+    } catch (_) {
+      return const AppEditFailed();
+    }
+  }
+
   /// 问一次「在浏览器里打开那一台」的短时效链接
   /// （契约 `docs/dev/82-DEV-MODE.md` §五 · `GET /api/dev-harness`，**要琥珀登录**）。
   ///
@@ -666,16 +711,46 @@ class AppRemoveFailed extends AppRemoveOutcome {
 ///   `200` **且** `{ok:true}` ⇒ 成了；
 ///   `401` ⇒ 这个令牌不行；
 ///   其余（含"200 但回执不是明说的 ok"）⇒ **没成** —— 一个字节都不当成功。
-AppRemoveOutcome appRemoveOutcomeOf(int status, String body) {
-  if (status == 401) return const AppRemoveUnauthorized();
-  if (status != 200) return const AppRemoveFailed();
+AppRemoveOutcome appRemoveOutcomeOf(int status, String body) =>
+    switch (appEditOutcomeOf(status, body)) {
+      AppEditOk() => const AppRemoveOk(),
+      AppEditUnauthorized() => const AppRemoveUnauthorized(),
+      AppEditFailed() => const AppRemoveFailed(),
+    };
+
+/// **「改个名字 / 复制一个 / 从桌面上删掉」三条共用的一套回执**（契约 `104` §三）。
+///
+/// ⚠️ 三条都是"破坏性或写盘的动作" ⇒ 纪律同 [AppRemoveOutcome]：
+///    只有服务端**明说** `{ok:true}` 才算成了；401 是"该回登录页"；其余**都算没成**。
+/// ⚠️ 它们**共用同一个映射**（[appEditOutcomeOf]）—— 三条口的分岔只有一处，
+///    不然后面加一条口就会有人把 401 也当成"没成"（那是两句话，两件事）。
+sealed class AppEditOutcome {
+  const AppEditOutcome();
+}
+
+class AppEditOk extends AppEditOutcome {
+  const AppEditOk();
+}
+
+class AppEditUnauthorized extends AppEditOutcome {
+  const AppEditUnauthorized();
+}
+
+class AppEditFailed extends AppEditOutcome {
+  const AppEditFailed();
+}
+
+/// 三条口**共用**的那个映射（纯函数）。
+AppEditOutcome appEditOutcomeOf(int status, String body) {
+  if (status == 401) return const AppEditUnauthorized();
+  if (status != 200) return const AppEditFailed();
   try {
     final j = jsonDecode(body);
-    if (j is Map && j['ok'] == true) return const AppRemoveOk();
+    if (j is Map && j['ok'] == true) return const AppEditOk();
   } catch (_) {
     // 读不出来 ⇒ 落到下面那条"没成"（**不许猜成成功**）
   }
-  return const AppRemoveFailed();
+  return const AppEditFailed();
 }
 
 /// 回执 + 解析器 → 结果。**纯函数**（不起网络、不碰界面、不看钟）⇒

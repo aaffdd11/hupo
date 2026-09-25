@@ -63,6 +63,23 @@ export const BOX_APP_ASK_CHECK_PATH = '/internal/app-ask-check';
 export const BOX_APP_REMOVE_PATH = '/internal/app-remove';
 
 /**
+ * ★ **`104`：给"我的小程序"改个名字** —— 让**盒子那份库**自己动（`Apps.setTitle()`）。
+ *
+ * ⚠️ 与 `app-remove` 同一个道理：租户的制品库在**他盒子里** ⇒ 改的必须是**那一份**，
+ *    否则桌面上显示的还是老名字（"页面在说假话"）。
+ * 🔴 失败就说失败：盒子不通 / 答的话认不出 ⇒ 抛 `BoxError`，调用方**如实 503**。
+ */
+export const BOX_APP_RENAME_PATH = '/internal/app-rename';
+
+/**
+ * ★ **`104`：把"我的小程序"复制出一个新的一格** —— 让**盒子那份库**自己动（`Apps.copy()`）。
+ *
+ * ⚠️ 同上：源那份的字节在盒里 ⇒ 复制也必须**在盒里落**（宿主那份是空的）。
+ * 🔴 失败就说失败：盒子不通 / 答的话认不出 ⇒ 抛 `BoxError`，调用方**如实 503**。
+ */
+export const BOX_APP_COPY_PATH = '/internal/app-copy';
+
+/**
  * 一次内部请求最多等多久。
  *
  * ⚠️ 必须有上限：隧道那头要是不回话，这个请求会**一直挂着** ——
@@ -92,6 +109,8 @@ export function parseInternalPath(pathname) {
   if (pathname === BOX_ARTIFACT_PATH) return { kind: 'artifact' };
   if (pathname === BOX_APP_ASK_CHECK_PATH) return { kind: 'app-ask-check' };
   if (pathname === BOX_APP_REMOVE_PATH) return { kind: 'app-remove' };
+  if (pathname === BOX_APP_RENAME_PATH) return { kind: 'app-rename' };
+  if (pathname === BOX_APP_COPY_PATH) return { kind: 'app-copy' };
   return null;
 }
 
@@ -294,6 +313,85 @@ export function createBoxApps({ sub = 'owner', dial, log = () => {} } = {}) {
         ok: false,
         status: Number.isFinite(j.status) ? j.status : 500,
         error: typeof j.error === 'string' && j.error !== '' ? j.error : '这一下没删掉',
+      };
+    },
+    /**
+     * ★ **`104`：给"我的小程序"改个名字 —— 交给盒子那份权威来改**。
+     *
+     * 盒子那侧调的是**同一个** `Apps.setTitle()`（改那一版 manifest 里的 `title` ＋ 审计），
+     * 所以这里只做一件事：**把它的结论原样带回来**。
+     *
+     * 🔴 **失败就说失败**：盒子不通 / 答的话认不出 ⇒ **抛 `BoxError`**，
+     *    调用方如实回 503 —— **绝不许**退回宿主那份（改的会是另一个人的库）。
+     *
+     * @returns {Promise<{ok:true,title:string}|{ok:false,status:number,error:string}>}
+     */
+    async setTitle(appId, title) {
+      const payload = Buffer.from(
+        JSON.stringify({ id: String(appId ?? ''), title: String(title ?? '') }),
+        'utf8',
+      );
+      const r = await requestOverSocket(dialOnce(dial), {
+        method: 'POST',
+        path: BOX_APP_RENAME_PATH,
+        headers: { 'content-type': 'application/json', 'content-length': String(payload.length) },
+        body: payload,
+      });
+      if (r.status !== 200) {
+        log(`盒子里那条"改名"没答（HTTP ${r.status}）`);
+        throw new BoxError(`盒子里那条"改名"没答（HTTP ${r.status}）`, 'bad-status');
+      }
+      const j = parseJson(r.body);
+      // ⚠️ 形状**逐字段核**：认不出就是认不出，不许当成"改好了"（fail-closed）。
+      if (!j || typeof j.ok !== 'boolean') throw new BoxError('盒子里那条"改名"答的话看不懂', 'bad-json');
+      if (j.ok === true) {
+        if (typeof j.title !== 'string' || j.title === '') {
+          throw new BoxError('盒子里那条"改名"答的话看不懂', 'bad-json');
+        }
+        return { ok: true, title: j.title };
+      }
+      return {
+        ok: false,
+        status: Number.isFinite(j.status) ? j.status : 500,
+        error: typeof j.error === 'string' && j.error !== '' ? j.error : '这一下没改成',
+      };
+    },
+    /**
+     * ★ **`104`：把"我的小程序"复制出一个新的一格 —— 交给盒子那份权威来复制**。
+     *
+     * 盒子那侧调的是**同一个** `Apps.copy()`（所有版本的字节照搬 ＋ 新 id ＋ 新标题 ＋ 审计），
+     * 所以这里只做一件事：**把它的结论原样带回来**。
+     *
+     * 🔴 **失败就说失败**：盒子不通 / 答的话认不出 ⇒ **抛 `BoxError`**，
+     *    调用方如实回 503 —— **绝不许**退回宿主那份（复制出来的会是另一个人的东西）。
+     *
+     * @returns {Promise<{ok:true,id:string,title:string}|{ok:false,status:number,error:string}>}
+     */
+    async copy(appId) {
+      const payload = Buffer.from(JSON.stringify({ id: String(appId ?? '') }), 'utf8');
+      const r = await requestOverSocket(dialOnce(dial), {
+        method: 'POST',
+        path: BOX_APP_COPY_PATH,
+        headers: { 'content-type': 'application/json', 'content-length': String(payload.length) },
+        body: payload,
+      });
+      if (r.status !== 200) {
+        log(`盒子里那条"复制"没答（HTTP ${r.status}）`);
+        throw new BoxError(`盒子里那条"复制"没答（HTTP ${r.status}）`, 'bad-status');
+      }
+      const j = parseJson(r.body);
+      // ⚠️ 形状**逐字段核**：认不出就是认不出，不许当成"复制好了"（fail-closed）。
+      if (!j || typeof j.ok !== 'boolean') throw new BoxError('盒子里那条"复制"答的话看不懂', 'bad-json');
+      if (j.ok === true) {
+        if (typeof j.id !== 'string' || j.id === '' || typeof j.title !== 'string' || j.title === '') {
+          throw new BoxError('盒子里那条"复制"答的话看不懂', 'bad-json');
+        }
+        return { ok: true, id: j.id, title: j.title };
+      }
+      return {
+        ok: false,
+        status: Number.isFinite(j.status) ? j.status : 500,
+        error: typeof j.error === 'string' && j.error !== '' ? j.error : '这一下没复制成',
       };
     },
     /**

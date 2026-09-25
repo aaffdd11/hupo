@@ -924,6 +924,74 @@ export function createServer({
         }
       }
 
+      // ── ★ **`104`：改个名字 / 复制一个**（主人 2026-09-25 · 桌面那个面板）────
+      //
+      // 🔴 **两条都"以盒子为准"**（与上面 `/api/app-remove` 逐字同源）：租户的制品库在
+      //    **他盒子里** ⇒ `appsFor(sub)` 对租户解析成**盒里那份**的客户端，这两下都在盒里落。
+      // 🔴 **失败就说失败**：盒子不通 ⇒ **如实 503**，**绝不**去动宿主那份。
+      // 🔴 **落点只有一处**：`Apps.setTitle()` / `Apps.copy()` —— 宿主与盒里调的是同一个方法
+      //    （盒里那条内部口在下面 `handleInternal()`）。
+      // ⚠️ 两条的**协议形状是本批新加的**：旧口一个字都没改。
+      if (path === '/api/app-rename' && req.method === 'POST') {
+        let body;
+        try {
+          body = await readJson(req, 16 * 1024);
+        } catch {
+          return sendJson(res, 400, { error: '这一条看不懂' });
+        }
+        const appId = typeof body?.id === 'string' ? body.id : '';
+        if (appId === '') return sendJson(res, 404, { error: 'not-found', text: '没说清要改哪一个的名字。' });
+        // ⚠️ 不是字符串就按"空名字"处理 ⇒ 400 ＋ 人话（**两条路同一种裁决**）
+        const title = typeof body?.title === 'string' ? body.title : '';
+        const src = appsFor(claim.sub);
+        if (!src) {
+          return tenant
+            ? sendJson(res, 503, { error: 'tenant-not-ready', text: '你那台还在准备，稍等一下再试。' })
+            : sendJson(res, 404, { error: '这台部署还没开小程序' });
+        }
+        try {
+          // 🔴 两处同名方法语义不同（见 `apps-box.js` 的 `isBox` 那一段）：
+          //    盒代理 ⇒ 异步回 `{ok:false,status,error}`；本机那份 ⇒ 同步抛错、返回新名字。
+          if (src.isBox === true) {
+            const r = await src.setTitle(appId, title);
+            if (!r.ok) return sendJson(res, r.status, { error: r.error, text: r.error });
+            return sendJson(res, 200, { ok: true, title: r.title });
+          }
+          const got = src.setTitle(appId, title);
+          return sendJson(res, 200, { ok: true, title: got });
+        } catch (err) {
+          return appMenuFail(res, err, 'app-rename');
+        }
+      }
+
+      if (path === '/api/app-copy' && req.method === 'POST') {
+        let body;
+        try {
+          body = await readJson(req, 16 * 1024);
+        } catch {
+          return sendJson(res, 400, { error: '这一条看不懂' });
+        }
+        const appId = typeof body?.id === 'string' ? body.id : '';
+        if (appId === '') return sendJson(res, 404, { error: 'not-found', text: '没说清要复制哪一个。' });
+        const src = appsFor(claim.sub);
+        if (!src) {
+          return tenant
+            ? sendJson(res, 503, { error: 'tenant-not-ready', text: '你那台还在准备，稍等一下再试。' })
+            : sendJson(res, 404, { error: '这台部署还没开小程序' });
+        }
+        try {
+          if (src.isBox === true) {
+            const r = await src.copy(appId);
+            if (!r.ok) return sendJson(res, r.status, { error: r.error, text: r.error });
+            return sendJson(res, 200, { ok: true, id: r.id, title: r.title });
+          }
+          const got = src.copy(appId);
+          return sendJson(res, 200, { ok: true, id: got.id, title: got.title });
+        } catch (err) {
+          return appMenuFail(res, err, 'app-copy');
+        }
+      }
+
       // ── 「发现」：大家发出来的小程序（乙-3）──────────────────
       // 🔴 **只读**：这一屏没有任何"装 / 发 / 改"的动作（那些都在对话里做）。
       if (path === '/api/discover' && req.method === 'GET') {
@@ -2162,6 +2230,31 @@ const TENANT_ROUTES = [
   }
 
   /**
+   * **`104` 两条口（改名 / 复制）共用的失败分岔**（`/api/app-rename` · `/api/app-copy`）。
+   *
+   * 顺序刻意（与 `/api/app-remove` 那条同源）：
+   *   ① **先认"盒子不通"** ⇒ **503**（绝不许拿宿主那份顶替）；
+   *   ② 再认制品库自己抛的**人话** —— `AppsError.status` 就是该回的那个码
+   *      （400 名字不合法 / 404 不在他这儿 / 409 试不出来）；**没带 status 就按老规矩 404**；
+   *   ③ 其余 ⇒ 500（不说内部细节，别把栈丢给用户）。
+   */
+  function appMenuFail(res, err, tag) {
+    if (err instanceof BoxError) {
+      log(`[${tag}] 盒子没应：${err?.message ?? err}`);
+      return sendJson(res, 503, { error: 'tenant-not-ready', text: '你那台刚才没应，等会儿再试。' });
+    }
+    if (err instanceof AppsError) {
+      const code = Number.isInteger(err.status) ? err.status : 404;
+      return sendJson(res, code, {
+        error: code === 404 ? 'not-found' : 'app-menu-failed',
+        text: err.message,
+      });
+    }
+    log(`[${tag}] 没做成：${err?.message ?? err}`);
+    return sendJson(res, 500, { error: 'app-menu-failed', text: '这一下没做成，等会儿再试。' });
+  }
+
+  /**
    * **`ask` 的四道闸**（乙-4b）：这一条在他这儿 · 清单里**声明了** · 他**授予了** · 配额还有。
    *
    * ⚠️ 收成一个函数是刻意的：**中心**与**匣子**用的是同一份判断，
@@ -2259,7 +2352,7 @@ const TENANT_ROUTES = [
   }
 
   /**
-   * **盒子那几个内部口**（B15 · 以盒子为准；B17 补了第 4 个）。
+   * **盒子那几个内部口**（B15 · 以盒子为准；B17 补了第 4 个；`103`/`104` 又各补一个）。
    *
    * 只有 `handleRequest` 在 `trusted === true` 上会调到它（公网口那一条在那边就 404 了）。
    * 几个动作都**极小**，而且**不认识令牌、不验签**（验签在宿主那侧，顺序不许反）：
@@ -2268,6 +2361,9 @@ const TENANT_ROUTES = [
    *   · `POST /internal/app`             ⇒ 收一版制品（**迁移用**；落在 `Apps.create()` 上）
    *   · `POST /internal/app-ask-check`   ⇒ ★ **B17**：`/api/app-ask` 的预闸**在这一侧判**
    *     （宿主**请盒子自己判**：盒里调的是**同一个** `checkAppAsk()` ⇒ 两边不可能分叉）
+   *   · `POST /internal/app-remove`      ⇒ ★ **`103`**：从桌面上删掉（落在 `Apps.remove()` 上）
+   *   · `POST /internal/app-rename`      ⇒ ★ **`104`**：改个名字（落在 `Apps.setTitle()` 上）
+   *   · `POST /internal/app-copy`        ⇒ ★ **`104`**：复制一个（落在 `Apps.copy()` 上）
    *
    * ⚠️ 身份**只有一个来源**：`trustedSub`（盒子里那个租户就是 `owner`）。
    *    请求里报谁都不算数 —— 和 `/api` 那条一样的规矩。
@@ -2326,6 +2422,43 @@ const TENANT_ROUTES = [
         const msg = String(err?.message ?? '这一下没删掉');
         const notFound = err instanceof AppsError;
         return sendJson(res, 200, { ok: false, status: notFound ? 404 : 500, error: msg });
+      }
+    }
+
+    // ── ★ **`104`：改个名字 / 复制一个**（在**权威那份**上落）──────────────
+    // ⚠️ 与上面两条同一个前缀、同一条隧道：**只在可信 UDS 上**（公网口在这之前就 404 了）。
+    // 🔴 **落点只有一处**：这里调的就是宿主那条路调的同一个 `Apps.setTitle()` / `Apps.copy()`。
+    if (hit.kind === 'app-rename' || hit.kind === 'app-copy') {
+      const isRename = hit.kind === 'app-rename';
+      const what = isRename ? '改名' : '复制';
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method' });
+      const method = isRename ? 'setTitle' : 'copy';
+      // 盒里这份 `src` **必须是本机那格**（照上面 `app-remove` 同一条纪律）：
+      // 出现"盒代理"就是接线错了 —— 说出来，别静默。
+      if (src.isBox === true || typeof src[method] !== 'function') {
+        return sendJson(res, 500, { ok: false, status: 500, error: `这条"${what}"的取值来源接错了` });
+      }
+      let body;
+      try {
+        body = await readJson(req, 16 * 1024);
+      } catch {
+        return sendJson(res, 400, { ok: false, status: 400, error: '这一条看不懂' });
+      }
+      try {
+        // HTTP 200 是"这条口答上来了"；裁决在正文里（`ok` / `status` / `error`）。
+        if (isRename) {
+          const title = src.setTitle(body?.id, body?.title);
+          return sendJson(res, 200, { ok: true, title });
+        }
+        const r = src.copy(body?.id);
+        return sendJson(res, 200, { ok: true, id: r.id, title: r.title });
+      } catch (err) {
+        // ⚠️ `AppsError.message` 本身就是人话（"名字不能是空的"…）⇒ 原样带回去；
+        //    `status` 带上（400/404/409），宿主据此如实回同一个码。
+        const msg = String(err?.message ?? `这一下没${what === '改名' ? '改' : '复制'}成`);
+        const known = err instanceof AppsError;
+        const status = known && Number.isInteger(err.status) ? err.status : known ? 404 : 500;
+        return sendJson(res, 200, { ok: false, status, error: msg });
       }
     }
 

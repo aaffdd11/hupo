@@ -218,9 +218,12 @@ const TOOLS = [
   {
     name: 'app_uninstall',
     description:
-      '把**他自己桌面上**的某个小程序撤掉。'
-      + '⚠️ 只有他明确说"删了它""不要了"才调。'
-      + '⚪ 撤掉是**收起来**（不是真没了），所以可以跟他说"以后想要我再给你放回来"。',
+      '把**他自己桌面上**的那一格撤掉。'
+      + '⚠️ 只有他明确说"删了它""不要了"才调 —— **不许**你自己替他决定。'
+      + '🔴 **撤掉是真删**（决策 D3.11）：那一格、**它那一间**、那一间里说过的话、'
+      + '那一间里存下来的东西**一起拿走，拿不回来**（只留审计与用量账）。'
+      + '⇒ 调之前先跟他说清"会一起拿走什么"，等他再说一句才动手；'
+      + '**不许**承诺"以后还能放回来"（今天没有那种入口）。',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string', description: '要撤掉的那个短名' } },
@@ -327,7 +330,7 @@ async function callTool(name, args) {
     const id = typeof args?.id === 'string' ? args.id.trim().toLowerCase() : '';
     if (!id) return textResult('没说清是哪一个，什么都没动。', true);
     const r = await ask({ op: 'uninstall', id });
-    if (r.ok) return textResult('撤下来了（是收起来，不是真删）。');
+    if (r.ok) return textResult('撤下来了 —— 那一格、它那一间、还有那一间里说过的话和存下来的东西都一起拿走了（拿不回来）。');
     return textResult(`没撤成：${r.error}`, true);
   }
 

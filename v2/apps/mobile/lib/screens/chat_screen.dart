@@ -373,11 +373,14 @@ class _ChatScreenState extends State<ChatScreen> {
                     id: '$_minePrefix${a.id}',
                     icon: miniAppIconFor(a.icon),
                     onOpen: (from) => _openMiniApp(from, '$_minePrefix${a.id}'),
-                    // ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §一）：
-                    //   **只有"他自己的小程序"才给这个入口** —— 内置那几格
+                    // ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §一 ·
+                    //   `docs/dev/104-APP-MENU.md` §一）：
+                    //   **只有"他自己做的那几个"才给这个面板** —— 内置那几格
                     //   （设置 / 奥数题 / 发现 /「我自己那台」）不在 `/api/apps` 里，
-                    //   服务端那条路认不出它们（传 `null` = 连面板都不出）。
+                    //   服务端那三条路都认不出它们（传 `null` = 连面板都不出）。
                     //   ⚠️ 传下去的是**服务端那一份的 id**（`a.id`），不是屏幕上带前缀那串。
+                    onRename: () => _renameMyApp(a.id, a.title),
+                    onCopy: () => _copyMyApp(a.id),
                     onRemove: () => _removeMyApp(a.id),
                   ),
               ],
@@ -706,9 +709,134 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  /// **第二次确认**（契约 `docs/dev/103-APP-DELETE.md` §七.4 · 决策 **D3.11**）。
+  ///
+  /// 主人 2026-09-25：*"点击删除，也会提醒用户，回收相应的工作区、经验、数据。
+  /// 需要用户二次确认。"* ⇒ 这一层把"会一起拿走哪几样"**逐条**摆出来（措辞住
+  /// `models/desktop_words.dart`），再点一下才真的删。
+  ///
+  /// 🔴 **这一层之前一个请求都不发**（判据 C7 的反例就是"第一下就发了"）。
+  /// ⚠️ 形状照 `trash_screen.dart` 的 `_purge`（§8.2：破坏性动作不许手滑就触发），
+  ///    两个按钮都 ≥44；字放大时这一屏会高过手机 ⇒ **要能滚**（§6.7 第 7 条那族）。
+  Future<bool> _confirmRemove() async {
+    final yes = await showDialog<bool>(
+      context: context,
+      // ⚠️ 形参**别叫 `d`** —— 那会把 `design.dart as d` 遮住（这一处踩过一次）
+      builder: (dialogCtx) => AlertDialog(
+        scrollable: true,
+        title: const Text(desktopRemoveConfirmTitle),
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(desktopRemoveConfirmLead),
+            for (final one in desktopRemoveConfirmItems)
+              Padding(
+                // ⚠️ 间距走 `design.dart` 那几档（棘轮：`chat_screen.dart` 的写死尺寸只许少）
+                padding: const EdgeInsets.only(top: d.gapXs),
+                child: Text('· $one'),
+              ),
+            const Padding(
+              padding: EdgeInsets.only(top: d.gapM),
+              child: Text(desktopRemoveConfirmTail),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
+            child: const Text(desktopRemoveConfirmNo),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            style: FilledButton.styleFrom(minimumSize: const Size(44, 44)),
+            child: const Text(desktopRemoveConfirmYes),
+          ),
+        ],
+      ),
+    );
+    return yes == true;
+  }
+
+  /// **给它改个名字**（契约 `docs/dev/104-APP-MENU.md` §一 / 判据 C14）。
+  ///
+  /// 三步：① 弹出那一层（**预填现在的名字**）；②【算了】⇒ 一个请求都不发；
+  /// ③【改好了】⇒ 发 `POST /api/app-rename {id, title}`（`id` = **服务端那一份的 id**），
+  ///    成了就**重拉清单**（桌上那一格的字跟着变）＋ 如实说一句。
+  ///
+  /// ⚠️ **空名字本地就拦住**（`desktopRenameEmpty`）：发一个注定被拒的请求，
+  ///    然后拿服务端那句工程话去解释，比不说更坏。
+  Future<void> _renameMyApp(String id, String currentTitle) async {
+    final name = await _askNewName(currentTitle);
+    if (name == null || !mounted) return;
+    final token = widget.controller.token;
+    if (token == null) {
+      _say(desktopRenameFailed);
+      return;
+    }
+    final out = await widget.controller.api.appRename(token: token, id: id, title: name);
+    if (!mounted) return;
+    switch (out) {
+      case AppEditOk():
+        await _loadMyApps();
+        if (mounted) _say(desktopRenameDone);
+      case AppEditUnauthorized():
+        _unauthorized();
+      case AppEditFailed():
+        // 🔴 没成 ⇒ 名字一个像素都不许变（"先说改了"就是界面在说假话）
+        _say(desktopRenameFailed);
+    }
+  }
+
+  /// 改名那一层：**一个输入框 ＋ 两个按钮**（照回收站那个二次确认的形状）。
+  ///
+  /// ⚠️ 输入框**预填现在的名字**（他要的多半是改一两个字，不是从头打一遍 ——
+  ///    目标用户里有不会拼音的人，别让他打第二遍）。
+  /// ⚠️ 返回 `null` = 【算了】/ 点外面 ⇒ 什么都不做；返回空串 = 他按了确定但没写字
+  ///    （**本地就拦住**，别发一个注定被拒的请求）。
+  Future<String?> _askNewName(String current) async {
+    final v = await showDialog<String>(
+      context: context,
+      builder: (_) => _RenameDialog(initial: current),
+    );
+    if (v == null) return null;
+    final name = v.trim();
+    if (name.isEmpty) {
+      _say(desktopRenameEmpty);
+      return null;
+    }
+    return name;
+  }
+
+  /// **复制出一个新的一格**（契约 `docs/dev/104-APP-MENU.md` §一 / 判据 C15）。
+  ///
+  /// ⚠️ 新那一格的 **id 与名字由服务端定**（客户端不许猜）⇒ 成了之后**重拉清单**，
+  ///    桌子照服务端那一份画（新那一格就自己长出来了）。
+  Future<void> _copyMyApp(String id) async {
+    final token = widget.controller.token;
+    if (token == null) {
+      _say(desktopCopyFailed);
+      return;
+    }
+    final out = await widget.controller.api.appCopy(token: token, id: id);
+    if (!mounted) return;
+    switch (out) {
+      case AppEditOk():
+        await _loadMyApps();
+        if (mounted) _say(desktopCopyDone);
+      case AppEditUnauthorized():
+        _unauthorized();
+      case AppEditFailed():
+        _say(desktopCopyFailed);
+    }
+  }
+
   /// **从桌面上删掉一个**（契约 `docs/dev/103-APP-DELETE.md` §一 / 判据 C6）。
   ///
-  /// 三步，**一步都不许省**：
+  /// 四步，**一步都不许省**：
+  ///   ⓪ 🔴 **第二次确认**（§七.4）：这一下会把**那一间**一起拿走 ⇒ 先提醒、再要一次确认
+  ///      （【算了】⇒ 到这里就回去了，**一个请求都不发**）；
   ///   ① 请服务端把那一格拿走（`POST /api/app-remove {id}`；`id` = **服务端那一份的 id**）；
   ///   ② 🔴 **服务端明说成了**才**重新拉一遍** `/api/apps` —— 桌面上真的少一个，
   ///      不是"只把本地那一项抹掉"（C6 点名的就是这一条）；
@@ -717,6 +845,8 @@ class _ChatScreenState extends State<ChatScreen> {
   ///
   /// ⚠️ 401 走 [`_unauthorized`]（**说一句 + 回登录页**），和回收站那一路同一句人话。
   Future<void> _removeMyApp(String id) async {
+    if (!await _confirmRemove()) return;
+    if (!mounted) return;
     final token = widget.controller.token;
     if (token == null) {
       // 没登录 ⇒ 请求根本发不出去；照样**如实说**（不许静默当成功）
@@ -727,6 +857,14 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
     switch (out) {
       case AppRemoveOk():
+        // ★ 第二轮（契约 §七 · 决策 D3.11）：那一间**真被拿走了** ⇒ 两件跟着做：
+        //   ① 他现在要是**正开着那一间**，回主对话（那间没了，别把他留在一个空洞里）；
+        //   ② **这台设备上那一间的缓存一起丢掉** —— 它也算"那一间的数据"，
+        //      不丢的话，"拿不回来"在本机还留着一份副本（哪天又被画出来就是"删了又回来"）。
+        if (widget.controller.scope == id) {
+          await widget.controller.setScope(mainScope);
+        }
+        await widget.controller.dropRoomCache(id);
         // ② 真的重拉一遍（桌面照服务端那一份画）。⚠️ 带上 `dropId`：万一这一次没问上，
         //    只把这一个从本地清单里去掉（它的去处服务端确认过了），**别的都不动**。
         await _loadMyApps(dropId: id);
@@ -1339,6 +1477,59 @@ class _EmptyState extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 改名那一层（契约 `docs/dev/104-APP-MENU.md` §一 · 判据 C14）。
+///
+/// ⚠️ **它自己持有那个 `TextEditingController`**，理由很实（2026-09-25 实测栽过）：
+///    在 `showDialog` 返回之后马上 `dispose()` 它 ⇒ 弹层**还没拆完**，里面的输入框
+///    还在用 ⇒ 当场抛 `A TextEditingController was used after being disposed`。
+///    ⇒ 交给这一层（`State.dispose` 是框架在真正卸载时调的）。
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.initial});
+
+  /// 现在的名字（**预填**：改一两个字的人不用从头打一遍）。
+  final String initial;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _name = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      // 字放大到 3.1 倍时这一层会高过手机 ⇒ **要能滚**（§6.7 第 7 条那族）
+      scrollable: true,
+      title: const Text(desktopRenameTitle),
+      content: TextField(
+        controller: _name,
+        autofocus: true,
+        decoration: const InputDecoration(hintText: desktopRenameHint),
+        onSubmitted: (_) => Navigator.of(context).pop(_name.text),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
+          child: const Text(desktopRenameNo),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_name.text),
+          style: FilledButton.styleFrom(minimumSize: const Size(44, 44)),
+          child: const Text(desktopRenameOk),
+        ),
+      ],
     );
   }
 }

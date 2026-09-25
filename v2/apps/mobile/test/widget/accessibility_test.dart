@@ -183,6 +183,33 @@ Future<void> _openDesktopRemoveMenu(WidgetTester tester, double scale) async {
   expect(find.text(desktopRemoveAction), findsOneWidget, reason: '★ 面板上那句没画出来');
 }
 
+/// ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §七.4 · 决策 **D3.11**）：
+/// **像用户那样**点面板里那个【从桌面上删掉】⇒ 出**第二层确认**。
+///
+/// ⚠️ 它也是**新加的界面**（5 行字 ＋ 两个按钮）⇒ 同一条理由要过五档不溢出 + 命中区 ≥44。
+///    字放大到 3.1 倍时这一层最容易顶出屏幕（所以正文是可滚的）。
+/// ⚠️ 这一下**不会**发出删除请求（那正是 C7 钉着的）—— 确认层只是提醒。
+Future<void> _openRemoveConfirm(WidgetTester tester, double scale) async {
+  await _openDesktopRemoveMenu(tester, scale);
+  await tester.tap(find.text(desktopRemoveAction));
+  await tester.pumpAndSettle();
+  // 负向对照：**那一层真的出来了**才算数
+  expect(find.text(desktopRemoveConfirmTitle), findsOneWidget, reason: '★ 确认层没进这棵树');
+  expect(find.text(desktopRemoveConfirmYes), findsOneWidget, reason: '★ 那个"确实删掉"没画出来');
+}
+
+/// ★ 2026-09-25（契约 `docs/dev/104-APP-MENU.md` §一 · 判据 C14）：
+/// **像用户那样**在面板里点【改个名字】⇒ 出**改名那一层**（一个输入框 ＋ 两个按钮）。
+///
+/// ⚠️ 同一条理由：它也是**新加的界面**（还有键盘弹起来那一档最容易顶出去）⇒ 要过这两道硬闸。
+Future<void> _openRenameDialog(WidgetTester tester, double scale) async {
+  await _openDesktopRemoveMenu(tester, scale);
+  await tester.tap(find.text(desktopRenameAction));
+  await tester.pumpAndSettle();
+  expect(find.text(desktopRenameTitle), findsOneWidget, reason: '★ 改名那一层没进这棵树');
+  expect(find.text(desktopRenameOk), findsOneWidget, reason: '★ 那个"改好了"没画出来');
+}
+
 /// **像用户那样**打开「奥数题」小程序（桌面上的图标 ⇒ 主人 2026-09-22 新加的第二个小程序）。
 ///
 /// ⚠️ 和配置页同一条理由：**新加的界面必须也过五档不溢出那道硬闸**，
@@ -890,6 +917,18 @@ void main() {
               reason: '桌面小面板 @${s}x：一行的命中区只有 ${size.height}');
         }
       });
+
+      testWidgets('桌面删除的**第二层确认**（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-25（契约 `103` §七.4）：5 行字 ＋ 两个按钮 ⇒ 字放大时最容易顶出屏幕。
+        await _openRemoveConfirm(tester, s);
+        expect(_drain(tester), isEmpty, reason: '删除确认层在 ${s}x 溢出了');
+      });
+
+      testWidgets('桌面图标的**改名那一层**（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-25（契约 `104` §一）：输入框 ＋ 标题 ＋ 两个按钮 —— 字放大那一档最险。
+        await _openRenameDialog(tester, s);
+        expect(_drain(tester), isEmpty, reason: '改名那一层在 ${s}x 溢出了');
+      });
     }
 
     // ⚠️ "不封顶"这条分**三个测试**量：同一个测试里连续 pump 两棵树时，
@@ -1142,6 +1181,19 @@ void main() {
         //       那一组单独量（同气泡长按菜单的摆法）。
         await _openDesktopRemoveMenu(tester, s);
         await sweep(tester, '桌面小面板 @${s}x');
+      });
+
+      testWidgets('桌面删除的**第二层确认**（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-25（契约 `103` §七.4 · D3.11）：【算了】/【确实删掉】两个按钮
+        //    都要进这份扫描 —— 破坏性动作那一下的命中区更不许小。
+        await _openRemoveConfirm(tester, s);
+        await sweep(tester, '删除确认层 @${s}x');
+      });
+
+      testWidgets('桌面图标的**改名那一层**（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-25（契约 `104` §一）：【算了】/【改好了】两个按钮也要进这份扫描。
+        await _openRenameDialog(tester, s);
+        await sweep(tester, '改名那一层 @${s}x');
       });
     }
 

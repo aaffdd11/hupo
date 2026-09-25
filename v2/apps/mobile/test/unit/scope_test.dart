@@ -568,6 +568,53 @@ void main() {
       expect(c.local.namespace, 'single', reason: '回主线 ⇒ 键也回老那个');
     });
 
+    test('★ 真回收（契约 `103` §七 · D3.11）：把某一间在**本机**那份缓存丢掉 —— 别间与主线一动不动',
+        () async {
+      // 🔴 为什么要有这一条：服务端把那一间拿走了，而"那一间的数据"**也包括这台设备上
+      //    那份缓存** —— 不丢的话"拿不回来"在本机还留着一份副本（哪天被画出来就是"删了又回来"）。
+      final c = ChatController(api: Api(base: 'http://127.0.0.1:1'), tokens: TokenStore());
+      final p = await SharedPreferences.getInstance();
+
+      // ① 主线写一句（主线沿用老键）
+      _feed(c, _mainFrames());
+      await c.local.flush();
+      final mainKey = '${TimelineStore.keyPrefix}single';
+      expect(p.getStringList(mainKey), isNotNull, reason: '夹具：主线那份要真的落盘');
+      final mainSaved = p.getStringList(mainKey)!.length;
+      expect(mainSaved, greaterThan(0));
+
+      // ② 切到骰子那一间，写一句（那一间自己的键）
+      await c.setScope('dice');
+      _feed(c, [
+        {'type': 'user/echo', 'seq': 9, 'messageId': 'u9', 'text': '骰子那一间那句话'},
+      ]);
+      await c.local.flush();
+      final diceKey = '${TimelineStore.keyPrefix}single@dice';
+      expect(p.getStringList(diceKey), isNotNull, reason: '夹具：那一间那份要真的落盘');
+
+      // ③ 丢掉那一间
+      await c.dropRoomCache('dice');
+      expect(
+        p.getStringList(diceKey),
+        isNull,
+        reason: '★ 那一间的本机缓存没丢掉 ⇒ "拿不回来"在这台设备上还留着一份副本',
+      );
+      expect(
+        p.getStringList(mainKey)!.length,
+        mainSaved,
+        reason: '★ 主线那份**一个字节都不许动**（这条路上永远不该碰主线）',
+      );
+      expect(
+        c.local.namespace,
+        'single@dice',
+        reason: '清完要把命名空间**切回现在这一间**（不切回 = 后面写的东西落进别的键）',
+      );
+
+      // ④ 负向对照：拿主线去调它 ⇒ 什么都不许删
+      await c.dropRoomCache(mainScope);
+      expect(p.getStringList(mainKey), isNotNull, reason: '★ 主线不许从这条路上被丢掉');
+    });
+
     test('★ 退出登录 ⇒ **丢掉所有房间**，而且回到主线那一间', () async {
       final c = ChatController(api: Api(base: 'http://127.0.0.1:1'), tokens: TokenStore());
       _feed(c, _mainFrames());

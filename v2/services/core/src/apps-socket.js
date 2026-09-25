@@ -325,7 +325,12 @@ export async function handleAppsOp(apps, req, ctx = {}) {
         return { ok: true, apps: ctx.published.discover(), me: authorHashOf(ctx.sub ?? '') };
       }
       case 'uninstall': {
-        // ★ **卸载**（乙-4）：软删（挪进 `.removed/`）—— 这个项目的规矩是"删错了能拿回来"。
+        // ★ **卸载**（乙-4）：🔴 **真回收**（决策 D3.11，契约 `docs/dev/103-APP-DELETE.md` §七）——
+        //   `Apps.remove()` 是**唯一落点**：制品挪进 `.removed/`，另外三样（那一间的工作区、
+        //   那条日志里 `scopeId==id` 的行、助手那边那一间的会话目录）一起搬走，
+        //   并且记下被拿走的号（`reclaimed.json`，N22 的唯一例外）。
+        //   ⚠️ **不是"删错了能拿回来"** —— 今天没有任何入口能把它装回来（B29）；
+        //   工具那边说的话也照这条改过（`mcp-apps-server.mjs` 的 `app_uninstall`）。
         apps.remove(req.id);
         return { ok: true, id: req.id, removed: true };
       }

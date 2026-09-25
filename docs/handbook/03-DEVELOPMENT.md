@@ -489,7 +489,7 @@ deadlineTimer（长）后到 → :611 guard 读到**新** id ⇒ undefined !== i
 | N19 挂起必有收尾 | 超时后必有 `message/end`——**必须覆盖"升格过的轮次"** |
 | N20 事实不能静默 | 桌面新增物件 ⇒ 必有一条 notice |
 | N21 一份 `DSH_HOME` | 配置断言（只允许一个 dshHome） |
-| N22 `seq` 只增不减、**无空洞** | `seq-monotonic.test.js`：重启后取号**单调** + **瞬态不落盘** |
+| N22 `seq` 只增不减、**无空洞**（⚠️ **唯一例外：主动回收**，见 `02-ARCHITECTURE.md` §5.1·补 · 决策 D3.11） | `seq-monotonic.test.js`：重启后取号**单调** + **瞬态不落盘**；回收那一条另配判据（能解释的洞通过 / 解释不了的红） |
 | N23 协议带 `scopeId` 与来源 | `protocol-fields.test.js`（**推后到服务端有身份之后**） |
 | N24 收起 ≠ 删掉 | 删前必列清单；回收站可恢复 |
 | N25 注入不能持久化 | `grep = 0`（含 persona / `AGENTS.md` / settings preset） |

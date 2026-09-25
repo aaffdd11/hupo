@@ -31,6 +31,48 @@ export class StoreError extends Error {
   }
 }
 
+/**
+ * 把"一份回收留痕"归成一个号集合（`verifyMonotonic` 的输入）。
+ *
+ * 认几种形状（**认不出的就当没有** —— 那正是红的那一侧）：
+ *   · 号 / 号的数组 / `Set`；
+ *   · 记录（`reclaimed.json` 那种）里的 `takenSeqs` / `taken` / `seqs`；
+ *   · 上面这些的数组。
+ *
+ * ⚠️ 它**不许**把"认不出"当成"这个洞解释得了" —— 只有**显式列出来**的号才算数。
+ */
+function normalizeReclaimed(raw) {
+  const out = new Set();
+  const seen = new Set();
+  const walk = (x) => {
+    if (x === null || x === undefined) return;
+    if (typeof x === 'number') {
+      if (Number.isInteger(x)) out.add(x);
+      return;
+    }
+    if (typeof x !== 'object') return;
+    if (seen.has(x)) return;
+    seen.add(x);
+    if (x instanceof Set) {
+      for (const v of x) walk(v);
+      return;
+    }
+    if (Array.isArray(x)) {
+      for (const v of x) walk(v);
+      return;
+    }
+    for (const k of ['takenSeqs', 'taken', 'seqs']) {
+      if (Array.isArray(x[k])) for (const v of x[k]) walk(v);
+    }
+    // 另一个常见形状：`{ 2: true, 3: true }` 那种号做键的映射
+    for (const [k, v] of Object.entries(x)) {
+      if (/^\d+$/.test(k) && v) out.add(Number(k));
+    }
+  };
+  walk(raw);
+  return out;
+}
+
 export class Store {
   #dataDir;
   #fs;
@@ -151,20 +193,50 @@ export class Store {
    *
    * ⚠️ 只校验**有 seq 的**事件。瞬态事件不落盘（决策 P-g），
    * 所以"盘上没有它们"是**正确**的，不是空洞。
+   *
+   * ★ **`103` §7.3 的唯一例外**（决策 **D3.11** · 架构 §5.1·补）：
+   *    "某一间被主动回收"会在那条日志上留下一段号洞 —— 这是**唯一**允许有洞的那一种。
+   *    所以现在它能**带一份回收留痕**地判：
+   *      · 洞在留痕里找得到解释（`reclaimed` 里有这个号）⇒ **过**；
+   *      · 找不到 ⇒ **红**（**反向也咬得动**：把留痕删掉一条 ⇒ 当场红）；
+   *      · 留痕说被拿走的号**盘上却还在** ⇒ 红（留痕跟盘对不上）。
+   *    ⚠️ **不给留痕时行为逐字不变**（老调用方与老判据一个字节都不用改）。
+   *
+   * @param {string} timelineId
+   * @param {object} [o]
+   * @param {Iterable<number>|Set<number>|Array<object>} [o.reclaimed]
+   *        回收留痕：号，或者带 `takenSeqs`/`taken`/`seqs` 的记录（`reclaimed.json` 那种）。
    */
-  verifyMonotonic(timelineId) {
+  verifyMonotonic(timelineId, { reclaimed = null } = {}) {
     const events = this.readAll(timelineId);
+    const taken = normalizeReclaimed(reclaimed);
     let prev = 0;
     for (const [i, e] of events.entries()) {
       if (typeof e.seq !== 'number') {
         throw new StoreError(`${timelineId} 第 ${i + 1} 条落了盘却没有 seq：${e.type}`);
       }
       if (e.seq !== prev + 1) {
-        throw new StoreError(
-          `${timelineId} 编号不连续：第 ${i + 1} 条是 ${e.seq}，上一条是 ${prev}`,
-        );
+        // 洞（`prev+1 .. e.seq-1`）逐个要留痕解释；解释不了的那一个就是红的读数。
+        const unexplained = [];
+        for (let s = prev + 1; s < e.seq; s += 1) if (!taken.has(s)) unexplained.push(s);
+        if (e.seq <= prev || unexplained.length > 0) {
+          const extra = e.seq <= prev ? '（没有前进）' : `（第 ${unexplained[0]} 号没有回收留痕能解释）`;
+          throw new StoreError(
+            `${timelineId} 编号不连续：第 ${i + 1} 条是 ${e.seq}，上一条是 ${prev}${extra}`,
+          );
+        }
       }
       prev = e.seq;
+    }
+    // 反向也咬一口：留痕说被拿走的号，**盘上却还在** ⇒ 留痕与盘对不上（红）
+    const present = new Set();
+    for (const e of events) if (typeof e.seq === 'number') present.add(e.seq);
+    for (const s of taken) {
+      if (present.has(s)) {
+        throw new StoreError(
+          `${timelineId} 的回收留痕说第 ${s} 号被拿走了，可它还在盘上 —— 留痕跟盘对不上`,
+        );
+      }
     }
     return { count: events.length, maxSeq: prev };
   }

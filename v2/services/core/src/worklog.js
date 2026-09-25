@@ -455,6 +455,29 @@ export class WorkLog {
   }
 
   /**
+   * ★ **那一间被回收了 ⇒ 它开着的活逐件诚实收成"已停"**（`103` §七）。
+   *
+   * 🔴 为什么必须收：房间都没了，那些活**永远不会有下一句**。留着"还开着"的记录
+   *    就是**发不出去的话** —— 而契约 §二.2 要的是"有收口"，`stopped` 正是
+   *    "挂着"的诚实结局（**不是"没发生过"**）。
+   * ⚠️ 只收**这一间**的（别的间一个都不许动）；已收口的原样不动（`close` 幂等）。
+   *
+   * @param {string} scopeId
+   * @param {{reason?:string|null}} [o]
+   * @returns {string[]} 刚收掉的那几件的 id（留痕用）
+   */
+  settleScope(scopeId = 'main', { reason = null } = {}) {
+    const scope = scopeId ?? 'main';
+    const closedNow = [];
+    for (const rec of this.live()) {
+      if (rec.scopeId !== scope) continue;
+      const r = this.close({ id: rec.id, outcome: WORK_STATES.stopped, reason });
+      if (r.closed) closedNow.push(rec.id);
+    }
+    return closedNow;
+  }
+
+  /**
    * 每件活的耗时样本（做分位用）。**删失（超时/被杀）也要算**（契约 §二.4）。
    *
    * @returns {{ms:number, censored:boolean, id:string}[]}

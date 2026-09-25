@@ -1,18 +1,16 @@
-// 桌面图标上的小面板：**长按 / 右键 ⇒ 从桌面上删掉**
-// （契约 `docs/dev/103-APP-DELETE.md` §一 的形状）。
+// 桌面图标上的小面板：**按住 / 右键 ⇒ 改个名字 / 复制一个 / 从桌面上删掉**
+// （契约 `docs/dev/104-APP-MENU.md` §一；"删掉"那一条走 `103` §七 那套）。
 //
-// ⚠️ 形状**照 `bubble_menu.dart` 那一份**（那一批刻意定的最小形态）：底栏一个小面板，
-//    **只有一个动作 + 一个取消**。位置等主人看过再定 ⇒ 将来挪地方只丢这一个文件。
+// ⚠️ 形状**照 `bubble_menu.dart` 那一份**（那一批刻意定的最小形态）：底栏一个小面板。
+//    位置等主人看过再定 ⇒ 将来挪地方只丢这一个文件。
 //
-// 🔴 面板上**只有两句**（契约 §三）：`desktopRemoveAction` 与 `desktopRemoveCancel`。
-//    不另加标题、不另加解释 —— 这一批最忌讳的就是"多说一句，多一句假话"
-//    （服务端是软删，但今天没有拿回来的入口 ⇒ 任何"还能拿回来"的说法都是假话）。
-//
-// ⚠️ 文案不写在这儿——在 `models/desktop_words.dart`，
-//    那样它才进得了 `test/unit` 的禁用词硬闸。
+// 🔴 面板上**只有四项**（三项动作 + 取消），每一项的文案都住 `models/desktop_words.dart`：
+//    `desktopRenameAction` / `desktopCopyAction` / `desktopRemoveAction` / `desktopRemoveCancel`。
+//    ⚠️ **主人说的"删除小程序"没有照字面写**：「小程序」是上屏禁用词
+//    （`06` 禁令 4，`test/unit/forbidden_words_test.dart` 一直扫这一份表）。
 //
 // ⚠️ 用 `ListView(shrinkWrap: true)`（和气泡菜单 / 过程四档同一条理由）：
-//    最大字号那一档（3.1x）下这一行 + 取消会顶出屏幕 ——
+//    最大字号那一档（3.1x）下这几行 + 取消会顶出屏幕 ——
 //    列表能滚，溢出就永远不会发生（D3.5 那道硬闸）。
 
 import 'package:flutter/material.dart';
@@ -20,9 +18,8 @@ import 'package:flutter/material.dart';
 import '../models/design.dart' as d;
 import '../models/desktop_words.dart';
 
-/// 长按 / 右键桌面图标之后选了什么。现在只有一样，但**写成枚举**：
-/// 将来加"改个名字"之类不用改调用方的形状（同 `BubbleAction`）。
-enum DesktopIconAction { remove }
+/// 按住 / 右键桌面图标之后选了什么。
+enum DesktopIconAction { rename, copy, remove }
 
 class DesktopIconMenu extends StatelessWidget {
   const DesktopIconMenu({super.key});
@@ -33,6 +30,16 @@ class DesktopIconMenu extends StatelessWidget {
       child: ListView(
         shrinkWrap: true,
         children: [
+          ListTile(
+            leading: const Icon(Icons.drive_file_rename_outline),
+            title: const Text(desktopRenameAction),
+            onTap: () => Navigator.of(context).pop(DesktopIconAction.rename),
+          ),
+          ListTile(
+            leading: const Icon(Icons.copy_all_outlined),
+            title: const Text(desktopCopyAction),
+            onTap: () => Navigator.of(context).pop(DesktopIconAction.copy),
+          ),
           ListTile(
             leading: const Icon(Icons.remove_circle_outline),
             title: const Text(desktopRemoveAction),

@@ -404,7 +404,7 @@ test('装上 / 发布 都要留一行审计（可倒查）', () => {
   assert.equal(blob.includes('"u1"'), false, '共享库这边只许出现作者哈希');
 });
 
-test('乙-4：卸载 ⇒ 清单里没了、但盘上还在（软删，能拿回来）', async () => {
+test('乙-4：卸载 ⇒ 清单里没了、盘上还在回收处（⚠️ **真回收**，不是"能拿回来"）', async () => {
   const s = setup();
   const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
   try {
@@ -412,7 +412,12 @@ test('乙-4：卸载 ⇒ 清单里没了、但盘上还在（软删，能拿回�
     await c.call('tools/call', { name: 'app_create', arguments: APP });
     const gone = await c.call('tools/call', { name: 'app_uninstall', arguments: { id: 'dice' } });
     assert.equal(gone.result.isError, false, JSON.stringify(gone.result));
-    assert.match(gone.result.content[0].text, /收起来/);
+    // 🔴 2026-09-25（**D3.11** · 契约 `docs/dev/103-APP-DELETE.md` §七）改的：
+    //    这句回执原来写"是收起来，不是真删"—— 那是**假话**（界面上没有拿回来的入口，
+    //    而且这一下现在连那一间的工作区 / 对话 / 助手那边的会话一起拿走）。
+    //    ⇒ 判据跟着改成"必须说清一起拿走了、拿不回来"，**不许**再出现"收起来/放回来"那种承诺。
+    assert.doesNotMatch(gone.result.content[0].text, /收起来|放回来/);
+    assert.match(gone.result.content[0].text, /拿不回来/);
     assert.deepEqual(s.apps.list(), [], '清单里该没了');
     assert.equal(nodeFs.existsSync(nodePath.join(s.dir, 'hupo', 'apps', '.removed')), true, '★ 软删：挪进 .removed');
   } finally {

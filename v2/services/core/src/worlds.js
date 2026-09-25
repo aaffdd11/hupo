@@ -25,7 +25,8 @@
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
-import { Apps, REFUSED_APP_IDS } from './apps.js';
+import { Apps, APPS_REL, REFUSED_APP_IDS, REMOVED_DIRNAME } from './apps.js';
+import { readReclaimedSeqs } from './reclaim.js';
 import { AppWorkspaces, checkScope, scopeDirFor, safeScope, workspacesRoot } from './workspace.js';
 import { AppsSocket, appsSocketPath } from './apps-socket.js';
 import { appendAudit, auditLine, auditPath } from './audit.js';
@@ -149,6 +150,27 @@ export function agentKeyFor(userId, scope = MAIN_SCOPE) {
  */
 export function scopeTimelineId(_scope = MAIN_SCOPE) {
   return 'main';
+}
+
+/**
+ * ★ **`103` §七（D3.11）：这条日志的"号的地板"** —— 回收留痕里最大的那个号。
+ *
+ * 🔴 为什么需要它：某一间被回收时，它的行**可能正好是尾巴** ⇒ 重写之后盘上最大号
+ *    变小。重启时 `Timeline` 只看盘上最后一条 ⇒ 会把**已经拿走的号再发一遍**
+ *    （而"复用号 = 客户端游标错位"正是架构 §5.1·补点名要避免的）。
+ * ⇒ 建那条日志时把留痕里的最大号当**取号下限**。
+ *
+ * ⚠️ 读不到留痕（没有 / 坏了）⇒ `0` ⇒ 逐字是回收之前的行为。
+ * @param {string} dir 这个人世界的根
+ * @returns {number}
+ */
+function reclaimSeqFloor(dir) {
+  try {
+    const seqs = readReclaimedSeqs({ removedRoot: nodePath.join(dir, APPS_REL, REMOVED_DIRNAME) });
+    return seqs.length > 0 ? seqs[seqs.length - 1] : 0;
+  } catch {
+    return 0; // 留痕读不动不许把建世界带走（那时校验器会如实红）
+  }
 }
 
 /**
@@ -467,9 +489,16 @@ export class Worlds {
     // ★ **一条可见时间线 = 一条日志**（P-l · 契约 84 §三·2）：
     //   这是**这个用户唯一那条** `Timeline`（`main.jsonl`、一套号）。
     //   每个房间拿到的不是新 `Timeline`，而是**它自己那层 `ScopeView`**。
+    //
+    // ★ **`103` §七（D3.11）：号的"地板"** —— 被回收拿走的号**不许复用**。
+    //   某一间的行可能就是**尾巴** ⇒ 回收重写完，盘上最大号会变小；只看盘上
+    //   最后一条的话，重启会把已经进了留痕的号**再发一遍**（游标错位的那个病）。
+    //   ⇒ 把留痕里的最大号当取号下限（回收自己也会拿这份留痕做自检）。
+    const reclaimedFloor = reclaimSeqFloor(t.dir);
     const timeline = new Timeline({
       id: 'main',
       store: t.store,
+      seqFloor: reclaimedFloor,
       onSubscriberError: (err, event) => {
         this.#warn(`[timeline] 订阅者出错（${event.type}）：${err?.message ?? err}`);
       },
@@ -505,7 +534,30 @@ export class Worlds {
     // ★ **小程序制品库**（乙-1 · 契约 `docs/dev/59-USER-APPS.md`）：**按人一份**，
     //   落在**他自己那一格**下面（`<dir>/hupo/apps/`）—— 这就是"只有他自己可见"的落点。
     //   ⚠️ 它**不认识令牌**；它是"谁的世界"由这里定，路由那边按 `claim.sub` 取。
-    const apps = new Apps({ dir: t.dir, sub: t.userId });
+    //
+    // ★ **`103` §七：真回收的上下文**（决策 D3.11 · **一处实现** `src/reclaim.js`）：
+    //   `Apps.remove()` 除了软删制品那一格，还要把**那一间的工作区 / 那一间的对话 /
+    //   助手那边的会话记录**一起搬进同一个回收处，并写 `reclaimed.json`（号洞留痕）。
+    //   🔴 宿主那条路与盒里那条路**都走这里**（两条路都只调 `remove()`，见 `server.js`）
+    //      —— 不许两处各抄一遍。
+    //   ⚠️ 传**函数**（用到时才取）：`workspaces` / `unread` / `work` 在下面才建，
+    //      而 `remove()` 一定发生在 `worldFor()` 返回**之后** ⇒ 读得到。
+    const apps = new Apps({
+      dir: t.dir,
+      sub: t.userId,
+      reclaim: () => ({
+        dir: t.dir,
+        dshHome: paths.dshHome,
+        store: t.store,
+        timelineId: 'main',
+        cwdFor: (scope) => workspaces.dirFor(scope),
+        workspaces,
+        unread,
+        work,
+        sub: t.userId,
+        log: (m) => this.#warn(m),
+      }),
+    });
     // ★ **子工作区**（契约 `83-APP-WORKSPACE.md` §三·1）：**按人一份**，
     //   落在 `<dir>/workspaces/`（**与主目录平行** —— 手册 §2.2 第二条）。
     //   ⚠️ 这里是"服务端那一刀"的落点：造 app 时**服务端**建目录，不靠模型记得。

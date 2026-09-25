@@ -22,6 +22,9 @@
 // ⚠️ **不用 `GestureDetector`**：`accessibility_test.dart` 有一条**源码级禁令**，
 //    用它就等于让"命中区 ≥44"那份扫描多一个没人检查的缺口。点空白用 `InkWell`。
 
+import 'dart:async';
+
+import 'package:flutter/gestures.dart' show kPrimaryButton;
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
@@ -46,6 +49,8 @@ class DesktopApp {
     this.badge = 0,
     this.id,
     this.onRemove,
+    this.onRename,
+    this.onCopy,
   });
 
   final String label;
@@ -67,6 +72,14 @@ class DesktopApp {
   ///    它们**不在 `/api/apps` 里**，服务端那条路认不出它们 ⇒ 摆一个点下去
   ///    只会 404 的入口，就是"看着像有、其实是空的"（这个项目最忌的形状）。
   final VoidCallback? onRemove;
+
+  /// **改个名字 / 复制一个**（契约 `docs/dev/104-APP-MENU.md` §一）。
+  ///
+  /// ⚠️ 和 [onRemove] 一样：`null` = 这一格不给那一项（内置那四个全传 `null`）。
+  /// ⚠️ 三项**共用同一个面板**（按住 / 右键 ⇒ 出三项 + 取消）；只做其中一项
+  ///    会得到"面板上有、点下去没反应"那种形状。
+  final VoidCallback? onRename;
+  final VoidCallback? onCopy;
 
   /// 未读小点（`02-ARCHITECTURE.md`：**动作可静默，事实不能静默**）。
   /// `0` = 不画。⚠️ 现在还没有人给它赋值 —— 等真有"未读"这件事时再接。
@@ -198,7 +211,7 @@ class AppDesktop extends StatelessWidget {
   }
 }
 
-class _DesktopIcon extends StatelessWidget {
+class _DesktopIcon extends StatefulWidget {
   const _DesktopIcon({
     required this.app,
     required this.width,
@@ -212,18 +225,99 @@ class _DesktopIcon extends StatelessWidget {
   final bool hideIcon;
 
   @override
+  State<_DesktopIcon> createState() => _DesktopIconState();
+}
+
+/// **按住多久算"按住"**（契约 `104` §二）。
+///
+/// ⚠️ **刻意比平台那个 `kLongPressTimeout`（500ms）短**：主人 2026-09-25 在手机浏览器上
+///    实测"按住反而把它点开了" —— 真手指那一下常常按不满 500ms，而**一失手就算点了一下**。
+/// ⚠️ 数值**住代码**（手册纪律 1：阈值不写文档）。
+const Duration _holdFor = Duration(milliseconds: 420);
+
+/// 按住期间**手指最多许挪多少**（逻辑像素）还能算"按住"。
+///
+/// ⚠️ **刻意比 `kTouchSlop`（18）宽**：真手指按住时是会挪的；挪出这条线就当"他在划"，
+///    把计时器撤掉（那时候松手就是普通一下 —— 交回 `InkWell` 那套）。
+/// ⚠️ 数值**住代码**。
+const double _holdSlop = 28;
+
+class _DesktopIconState extends State<_DesktopIcon> {
+  Timer? _hold;
+  Offset? _downAt;
+
+  /// **这一次按已经"按住过"了** ⇒ 松手那一下不许再当"点开"（见 `onTap` 里那一挡）。
+  bool _heldOnce = false;
+
+  /// 这一格给不给那个面板（三项里**任意一项**给了就给）。
+  bool get _hasMenu =>
+      widget.app.onRename != null ||
+      widget.app.onCopy != null ||
+      widget.app.onRemove != null;
+
+  @override
+  void dispose() {
+    _hold?.cancel();
+    super.dispose();
+  }
+
+  /// 按下：**只认主键/手指**（右键那一路走 `onSecondaryTap`，别在这儿也起一个计时器）。
+  void _onDown(PointerDownEvent e) {
+    if (!_hasMenu) return;
+    if (e.buttons != kPrimaryButton) return;
+    _downAt = e.position;
+    _hold?.cancel();
+    _hold = Timer(_holdFor, () {
+      _heldOnce = true;
+      if (mounted) _askMenu(context);
+    });
+  }
+
+  /// 按住期间挪出容差 ⇒ 他是在划，不是在按。
+  void _onMove(PointerMoveEvent e) {
+    final at = _downAt;
+    if (at == null) return;
+    if ((e.position - at).distance > _holdSlop) {
+      _hold?.cancel();
+      _hold = null;
+    }
+  }
+
+  void _onUp(PointerEvent e) {
+    _hold?.cancel();
+    _hold = null;
+    _downAt = null;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
+    final app = widget.app;
+    final width = widget.width;
+    final hideIcon = widget.hideIcon;
     // 🔴 **图标 + 它下面那行字，一起可点**（2026-09-22 实测抓到的）：
     //    第一版把 `InkWell` 只包在图标格上，**字在外面** ⇒ 点字落到了"点桌面空白"上
     //    （于是"点设置"变成"收起聊天"，而且判据还照样绿 —— 扫的是桌面，不是设置那一屏）。
     //    ⚠️ 字才是人第一眼看到的靶子，它必须能点。
-    return SizedBox(
-      width: width,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
+    return Listener(
+      // ⚠️ `deferToChild`（默认）：只有落在这一格上才算 —— 桌面空白处不受影响
+      onPointerDown: _onDown,
+      onPointerMove: _onMove,
+      onPointerUp: _onUp,
+      onPointerCancel: _onUp,
+      child: SizedBox(
+        width: width,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
           onTap: () {
+            // 🔴 **按住过 ⇒ 这一下不算"点开"**（契约 `104` §二）：
+            //    不吞掉的话，手机上"按住了 600ms"最后仍会把小程序打开 ——
+            //    那正是主人报的那个形状。
+            if (_heldOnce) {
+              _heldOnce = false;
+              return;
+            }
             // ★ **"从哪里打开"**：把图标此刻在屏幕上的矩形报上去
             final box = context.findRenderObject() as RenderBox?;
             final rect = (box != null && box.hasSize)
@@ -231,16 +325,18 @@ class _DesktopIcon extends StatelessWidget {
                 : null;
             app.onOpen(rect);
           },
-          // ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §一 / 判据 C1）：
-          //   **右键（桌面端）与长按（web / 手机）走同一个面板** —— 两条**都要有**，
-          //   不许只做一个（"只有长按、右键没反应 ⇒ 红"）。
-          // 🔴 用 `InkWell` 自己这两个回调，**不许**为了这件事引入裸 `GestureDetector`：
-          //   `test/widget/accessibility_test.dart` 有一条**源码级硬闸**
-          //   （裸 GestureDetector = 命中区 ≥44 那道扫描多一个没人检查的缺口）。
-          // ⚠️ 不给入口的那几格（`onRemove == null`）**两个回调都不挂**：
-          //   挂一个只会弹"删不掉的面板"的回调，比不挂更坏。
-          onLongPress: app.onRemove == null ? null : () => _askRemove(context),
-          onSecondaryTap: app.onRemove == null ? null : () => _askRemove(context),
+          // ★ 2026-09-25（契约 `docs/dev/104-APP-MENU.md` §二）：
+          //   **按住（手机 / 网页）与右键（桌面端）走同一个面板**。
+          // 🔴 **按住那一半不再交给 `InkWell.onLongPress`** —— 主人 2026-09-25 在**手机**
+          //    上实测：*"长按没有别（被）劫持，而是点开小程序了。"*
+          //    根因：`onLongPress` 要"按住满 500ms **且**手指不挪出 18 逻辑像素"，
+          //    真手指两样都容易失手 ⇒ **一失手，松手就照旧算"点了一下"**（于是把小程序点开了）。
+          //    ⇒ 改成**自己按住**（`Listener` + 计时器 + 更宽的容差，见 [_DesktopIconState]），
+          //    到点出面板，并把松手那一下**吞掉**。
+          // ⚠️ 仍然用 `InkWell` 接"点一下"与右键，**不许**引入裸 `GestureDetector`：
+          //    `test/widget/accessibility_test.dart` 有一条源码级硬闸
+          //    （裸 GestureDetector = 命中区 ≥44 那道扫描多一个没人检查的缺口）。
+          onSecondaryTap: _hasMenu ? () => _askMenu(context) : null,
           borderRadius: BorderRadius.circular(d.radiusCard),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -303,20 +399,30 @@ class _DesktopIcon extends StatelessWidget {
           ),
         ),
       ),
+      ),
     );
   }
 
-  /// **长按 / 右键 ⇒ 出那个底栏小面板**（契约 §一）。
+  /// **按住 / 右键 ⇒ 出那个底栏小面板**（契约 `104` §一）。
   ///
-  /// ⚠️ 这一层**只问"要不要"**：发请求、重拉清单、失败时怎么说，全在 `screens/`
+  /// ⚠️ 这一层**只问"选了哪一项"**：发请求、重拉清单、失败时怎么说，全在 `screens/`
   ///    那一层（`widgets` 是傻组件，**不许**碰 `services` —— 楼层闸）。
   /// ⚠️ 用户点了面板外面 / 系统返回键 ⇒ `showModalBottomSheet` 回 `null`
   ///    ⇒ 什么都不做（"取消"和"点外面"是同一件事，这是底栏面板的既有语义）。
-  Future<void> _askRemove(BuildContext context) async {
+  Future<void> _askMenu(BuildContext context) async {
     final action = await showModalBottomSheet<DesktopIconAction>(
       context: context,
       builder: (_) => const DesktopIconMenu(),
     );
-    if (action == DesktopIconAction.remove) app.onRemove?.call();
+    switch (action) {
+      case DesktopIconAction.rename:
+        widget.app.onRename?.call();
+      case DesktopIconAction.copy:
+        widget.app.onCopy?.call();
+      case DesktopIconAction.remove:
+        widget.app.onRemove?.call();
+      case null:
+        break; // 点外面 / 返回键 = 取消
+    }
   }
 }
