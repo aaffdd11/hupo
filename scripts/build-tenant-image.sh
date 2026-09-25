@@ -9,6 +9,7 @@
 #   node（宿主的那个，连同它依赖的动态库）· 调度器本体（`v2/services/core/src` + `ws`）
 #   · 人格层 / 能力层那两份 yml · MCP 服务器那支脚本
 #   · **`dsh`（agent 本体）** + 一个三行的启动器（见 ②·dsh 那段）
+#   · **shell ＋ 常用命令**（`/bin/bash` ＋ 静态 busybox 那批 applet，见 ①·补 那段）
 #   · 空目录 `/data`（**数据挂这里**，不放在容器那层可写层里）
 #
 # ✅ **2026-09-21：`dsh` 进来了**（多租户 ②-1）⇒ 镜像从 130MB 变成 ~435MB。
@@ -16,6 +17,10 @@
 #       所以"每人一台"并不等于"每人 435MB" —— 每人真正占的是**他自己的卷**。
 #    ⚠️ **没有带 profile 模板**：`dsh` 自带 `sdk` profile，空 `DSH_HOME` 就能起
 #       （见 ②·dsh 那三条实测）。
+# ✅ **2026-09-25：shell 进来了**（主人拍板「甲」· B18 / `#133`）。
+#    ⚠️ **在这之前这个镜像里没有 shell** ⇒ DSH 的 bash 工具（拼的是 `bash -c`）
+#       **每条命令都 ENOENT**，而它报的却是一句"沙箱后端起不来"（**原因归错**）。
+#       ⇒ 加 shell **不改**沙箱：盒里 landlock 本来就是好的（`--probe` = full）。
 #
 # ── 三条纪律 ──────────────────────────────────────────────
 #   ① **不联网、不拉镜像**：这台机器够不着 Docker Hub（实测），
@@ -46,7 +51,7 @@ R="$(mktemp -d)"
 trap 'rm -rf "$R"' EXIT
 echo "▶ 拼 rootfs（$R）"
 
-mkdir -p "$R"/{bin,proc,sys,tmp,dev,etc,data,app}
+mkdir -p "$R"/{bin,proc,sys,tmp,dev,etc,data,app,sbin,usr/bin,usr/sbin}
 
 # ── ① node + 它的动态库（连同 loader）──
 cp "$NODE" "$R/bin/node"
@@ -62,6 +67,65 @@ ldd "$NODE" | while read -r line; do
   cp -n "$lib" "$R$lib" 2>/dev/null || true
 done
 echo "  库: $(find "$R" -name '*.so*' | wc -l) 个"
+
+# ── ①·补 **shell ＋ 常用命令**（2026-09-25 主人拍板「甲」· 账见 B18 / `#133`）──
+#
+# 🔴 **为什么非有不可**：DSH 的 bash 工具**写死了** `["bash","-c",命令]`
+#    （`dsh-bash-local/lib/index.js` 的 `run()` 与 `start()` 两处），它按 **PATH**
+#    找一个**叫 `bash` 的可执行文件**。而本镜像原来是 `scratch + node`：
+#    `/bin` 里**只有 `dsh` 与 `node`** ⇒ 那条命令**永远** `ENOENT`；更坏的是
+#    DSH 会把这件事报成 **`no sandbox backend is usable on this host`**（原因归错）。
+#
+#    真机取证（`77-BLOCKERS.md` B18）：盒里 `landlock-run --probe` **是好的**
+#    （`fully enforced`，root 与 uid 1000 都试过），坏的只是"**没有 shell**"。
+#    ⇒ 补的不是沙箱，是**一个 shell**。
+#
+# 装两样 —— 都从**宿主已有的文件**来（**不联网、不拉镜像**，纪律①）：
+#   · **真 bash**（连它的动态库，沿用上面 node 那套 `ldd` 拷贝）—— DSH 找的就是它；
+#   · **busybox**（宿主那份是**静态**的）—— 一个二进制给几十个常用命令，
+#     靠 applet 软链（清单**在这儿**，只放"干活真用得上"的那些）。
+#
+# ⚠️ **不许顺手把宿主整套 rootfs 搬进来**：极简镜像是有意的（`39-PERMISSIONS.md`），
+#    多一个字节都是它的攻击面。这里只补"助手干活真正要用的那一小撮"。
+# ⚠️ `/bin/sh` 指到 bash（Debian 的形状）—— `/etc/passwd` 里写的登录 shell 就是它
+#    （第 ③ 段），两边从此一致。
+BASH="$(command -v bash || true)"
+BUSYBOX="$(command -v busybox || true)"
+if [ -x "$BASH" ]; then
+  cp "$BASH" "$R/bin/bash"
+  ldd "$BASH" | while read -r line; do
+    case "$line" in
+      *"=>"*) lib="${line##*=> }"; lib="${lib%% *}" ;;
+      /*)     lib="${lib%% *}" ;;
+      *)      continue ;;
+    esac
+    [ -f "$lib" ] || continue
+    mkdir -p "$R$(dirname "$lib")"
+    cp -n "$lib" "$R$lib" 2>/dev/null || true
+  done
+  ln -sf bash "$R/bin/sh"
+  echo "  shell: $BASH → /bin/bash（＋ /bin/sh 指过去）"
+else
+  echo "✗ 宿主上没有 bash —— 镜像里就没有 shell，盒里跑不了命令（不许这么造）"; exit 4
+fi
+if [ -x "$BUSYBOX" ] && file "$BUSYBOX" | grep -q "statically linked"; then
+  cp "$BUSYBOX" "$R/bin/busybox"
+  # ⚠️ **清单在这里，且只放"干活用得上"的**（不是 `--list` 全量：272 个里大半是
+  #    系统管理用的，放进来只会扩大攻击面）。少一个 ⇒ 用到时自己加，别图省事全量。
+  APPLETS="[ [[ awk base64 basename bunzip2 bzcat bzip2 cat chgrp chmod chown chroot cmp comm cp cpio cut date dd df diff dirname dmesg dos2unix du echo ed egrep env expand expr false fgrep find fold free getopt grep groups gunzip gzip head hexdump hostname id install join kill less link ln logname ls md5sum mkdir mkfifo mktemp more mv nc netstat nl nproc od paste patch pidof ping printf ps pwd readlink realpath rev rm rmdir sed seq sha1sum sha256sum sha512sum shuf sleep sort split stat strings stty tac tail tar tee test time timeout top touch tr traceroute true truncate ts tty uname unexpand uniq unix2dos unlink unxz uptime usleep uudecode uuencode wc wget which who whoami xargs xxd xz xzcat yes zcat"
+  for a in $APPLETS; do
+    # ⚠️ **`-F` 不能省**：清单里有 `[` 与 `[[` —— 当正则用是**没配对的方括号**，
+    #    `grep` 会报错、那两条就**悄悄不漏链**（`[` 是脚本里最常用的命令之一）。
+    if "$BUSYBOX" --list 2>/dev/null | grep -qxF -- "$a"; then ln -sf busybox "$R/bin/$a"; fi
+  done
+  # `/usr/bin/env`：一堆脚本的 shebang 写的是绝对路径 `/usr/bin/env`（本镜像原来**没有 /usr/bin**）
+  ln -sf /bin/busybox "$R/usr/bin/env"
+  ln -sf /bin/bash "$R/usr/bin/bash"
+  ln -sf /bin/bash "$R/usr/bin/sh"
+  echo "  busybox: $BUSYBOX → /bin/busybox ＋ $(find "$R/bin" -maxdepth 1 -type l | wc -l) 个 applet 软链"
+else
+  echo "✗ 宿主上的 busybox 不在或不是静态的 —— 盒里就只有 bash、没有常用命令（不许这么造）"; exit 4
+fi
 
 # ── ② 调度器本体 ──
 #
@@ -384,6 +448,30 @@ else
   echo -n "  对外开了吗："; ss -ltn 2>/dev/null | grep ":$PORT2" | awk '{print $4}' | tr '\n' ' '; echo "（应只有 127.0.0.1）"
   echo -n "  根真只读吗（挑存在的 /etc/hosts）："
   "$PODMAN" exec "$cid2" /bin/node -e 'try{require("node:fs").appendFileSync("/etc/hosts","# canary\n");console.log("🔴 写得进去 —— 根不是只读")}catch(e){console.log("✅ 【"+e.code+"】")}' 2>/dev/null
+
+  # ── ⑤·丙 **盒里那条命令真跑得起来**（2026-09-25 主人拍板「甲」· B18）──────────
+  #
+  # 🔴 判据要打在**DSH 真正会拼的那条 argv** 上：DSH 的 bash 工具是
+  #    `["bash","-c",命令]`（`dsh-bash-local` 里写死的），**按 PATH 找 `bash`**。
+  #    ⇒ 这里**故意写 `bash`（不写绝对路径）**：那才是它那条路；
+  #      顺带验 `/bin/bash`、`/bin/sh`、applet、以及 `/usr/bin/env`（shebang 那一路）。
+  insh() { "$PODMAN" exec "$cid2" /bin/bash -c "$1" 2>&1; }
+  echo "  盒里那条命令（DSH 拼的就是 bash -c 这一条）："
+  out_p="$(insh 'bash -c "echo hi"')"
+  printf '%s' "$out_p" | grep -qx 'hi' && ok "`bash -c 'echo hi'` → hi（**PATH 上找得到 bash**）" \
+                                     || bad "跑不起来：$(printf '%s' "$out_p" | tail -1)（盒里还是没 shell？）"
+  [ "$(insh 'readlink -f /bin/sh')" = "/bin/bash" ] && ok "/bin/sh → /bin/bash（与 /etc/passwd 里写的那个一致）" \
+                                                  || bad "/bin/sh 没指到 bash：$(insh 'ls -l /bin/sh')"
+  a_ok=1
+  for a in ls cat grep sed awk env find cp mv rm chmod tar; do
+    insh "command -v $a >/dev/null" || { a_ok=0; echo "    ✗ 缺 $a"; }
+  done
+  [ "$a_ok" = "1" ] && ok "常用命令都在（ls/cat/grep/sed/awk/env/find/cp/mv/rm/chmod/tar）" || bad "有常用命令缺（见上）"
+  [ "$(insh '/usr/bin/env node -e "console.log(1)"')" = "1" ] && ok "/usr/bin/env node …（shebang 那一路通）" || bad "/usr/bin/env 那一路不通"
+  # ⚠️ **负向对照**：我们装的是**一个 shell ＋ 一小撮命令**，不是"什么都有" ——
+  #    `python3` 不在里面，它必须**照样找不到**（否则说明这份清单根本没被当回事）。
+  if insh 'command -v python3 >/dev/null'; then bad "python3 居然在 —— 我们装多了？（判据失去意义）"; else ok "负向对照：python3 仍然**不在**（只补了该补的）"; fi
+
   # ⚠️ **先取日志、再杀**：`--rm` 一杀就什么都没了（上面那一台已经栽过一次）
   echo "  日志尾巴（有产品层那台）："
   "$PODMAN" logs "$cid2" 2>&1 | tail -4 | sed 's/^/    /' || true
