@@ -863,6 +863,27 @@ class ChatController extends ChangeNotifier {
       return;
     }
 
+    // ★ **"这件事搬到新的一处去了"**（契约 `docs/dev/102` 追加的 ⑤，主人定案"甲·变"）：
+    //   在主对话里派出去一件活 ⇒ 服务端另开一处 ⇒ 屏幕**自己跟过去**
+    //   （不用用户再手点一下那个图标 —— 主人报的正是"窗口没进该去的那一处"）。
+    //
+    //   ⚠️ 三条边界，每条都有理由：
+    //     ① **它是瞬态**（服务端 `emitTransient`：不占号、不写盘、不重放）
+    //        ⇒ 这里 `return`，**不许喂给 `timeline`**（喂了就会在历史里留下
+    //        一条谁也看不见的东西，重放时还会再切一次房间）；
+    //     ② **字段是 `scope` 不是 `scopeId`**：`scopeId` 是"这条帧属于哪一间"，
+    //        而这一帧是**发给主线那条连接的**（`eventInScope` 会按 `scopeId`
+    //        路由，带上就被主线自己丢掉）；
+    //     ③ **已经在那一间就不动**（`setScope` 自己也会挡，这里挡一次是免得
+    //        白跑一趟磁盘）。
+    if (event['type'] == 'scope/open') {
+      final to = event['scope'];
+      if (to is String && to.isNotEmpty && to != _scope) {
+        unawaited(setScope(to));
+      }
+      return;
+    }
+
     // ★ 服务端开口了：从这一刻起，"它正在做"才是我们**知道**的事
     timeline.markFresh();
 

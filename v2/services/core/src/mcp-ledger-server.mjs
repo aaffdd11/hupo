@@ -80,12 +80,12 @@ function ask(payload) {
   });
 }
 
-// ── 四条工具 ─────────────────────────────────────────────────
+// ── 那几条工具 ───────────────────────────────────────────────
 //
 // ⚠️ 这些描述**就是模型读到的说明书**：它决定模型什么时候调、怎么调。
 //    所以每一条都要写清"什么时候调"和"这一步写不写"。
 //
-// ⚠️ 工具定义会进**每一次请求**（token 成本）。四条已经是这件活需要的全部。
+// ⚠️ 工具定义会进**每一次请求**（token 成本）。
 
 const FIELD_SCHEMA = {
   type: 'object',
@@ -201,6 +201,56 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    // ★ **派活**（契约 `docs/dev/102-APP-BIRTH-SCOPE.md` · 主人 2026-09-25 拍「乙」）：
+    //   与 `handoff_to`（交给**已有**的一间）分开的**另一条路** —— 派活是**新建**一处，
+    //   把那件活交给它做，做完它会有一份总结扔回来。
+    //
+    //   🔴 **只在主对话里用**（主人的那一条）；别的地方调它不会成。
+    //   🔴 目标那一处**必须是还没用过的短名**（已经有一处了 ⇒ 这边会说没成）。
+    name: 'job_start',
+    description:
+      '主人让你做一件**新东西**（"帮我做一个……"这类）时调它：把这件事交给一个**另开的、专门做它的地方**去做。'
+      + 'where 传一个**短名**（只许小写字母、数字、短横，例如 math-drill），必须是没用过的；'
+      + 'why 传他让你做的那件事（**照他的原话**写上最好）。'
+      + '成了之后跟他说一句"我去做"就行，**不要**自己动手做那件东西；'
+      + '要是这边说没派成，就照它给的话跟他讲一声，然后你在这条对话里接着把这件事做完。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        where: { type: 'string', description: '新那一处的短名（小写字母/数字/短横，没用过的）' },
+        why: { type: 'string', description: '他让你做的那件事（照他的原话）' },
+      },
+      required: ['where', 'why'],
+      additionalProperties: false,
+    },
+  },
+  {
+    // ★ 同上：**在那一处做东西的那个**把结果交回来。
+    //   ⚠️ 它说的名字就是主对话里看到的名字（B20：宿主查不到他盒子里的名字）。
+    name: 'job_done',
+    description:
+      '你被派到一个专门做某件事的地方、把那件东西做完之后，用这个把结果**交回去**。'
+      + 'name 传这件东西**叫什么**（人话名字，例如"算数小练"）；summary 传它**做成了什么**（一两句人话）。'
+      + '⚠️ 只说你做成了什么、它在哪儿能打开，**别把过程抄一遍**。交回去之后，主对话那边就能看到这条总结。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '这件东西叫什么（人话名字）' },
+        summary: { type: 'string', description: '它做成了什么（一两句人话，不要抄过程）' },
+      },
+      required: ['name', 'summary'],
+      additionalProperties: false,
+    },
+  },
+  {
+    // ★ **P4**：主进程那条会话"未来聊天里问'我有哪些小程序／工作区'答得出"。
+    name: 'job_list',
+    description:
+      '看主人手上**有哪些小程序、哪些专门做过东西的地方**，以及各自最后一条总结。'
+      + '他问"我做过什么""我有哪些小程序""上次那个叫什么"这类时调它，然后把结果用一段人话回给他。',
+    inputSchema: { type: 'object', properties: {}, required: [], additionalProperties: false },
+  },
 ];
 
 /** 把一次工具调用的结果折成 MCP 的 content。**失败也是一条正常回答**（`isError`）。 */
@@ -270,6 +320,41 @@ async function callTool(name, args) {
     const r = await ask({ op: 'handoff', target: args?.target ?? null, reason: args?.reason ?? null, scope: SCOPE });
     if (r.ok) return textResult(r.text ?? '好的，我把它转过去。');
     return textResult(r.text || `没转成（${r.error}）。我跟你说一声，接着说这件事。`, true);
+  }
+
+  if (name === 'job_start') {
+    // ★ **派活**（契约 102）：文字（成/不成）**在服务端拼**（那边才知道能不能建那一处）。
+    //   ⚠️ 拒了也要把人话带回去（模型照着它说一句，**不许**把话吞掉 · P6）。
+    const r = await ask({
+      op: 'job',
+      action: 'start',
+      where: args?.where ?? null,
+      why: args?.why ?? null,
+      scope: SCOPE,
+    });
+    if (r.ok) return textResult(r.text ?? '好，这件事我另开一处专门做，做完把结果告诉你。');
+    return textResult(r.text || `没派成（${r.error}）。这件事我自己接着做。`, true);
+  }
+
+  if (name === 'job_done') {
+    // ★ **子进程交回总结**：服务端会把它扔回**主进程**（那边才知道主进程是哪一间）。
+    //   🔴 这里只递 `name` / `summary` 两个字段 —— 子进程那段对话**一个字都不许带**（P3）。
+    const r = await ask({
+      op: 'job',
+      action: 'done',
+      name: args?.name ?? null,
+      summary: args?.summary ?? null,
+      scope: SCOPE,
+    });
+    if (r.ok) return textResult(r.text ?? '好，我把结果告诉他了。');
+    return textResult(r.text || `没交回去（${r.error}）`, true);
+  }
+
+  if (name === 'job_list') {
+    // ★ **P4**：人话**在服务端拼**（能用名字就用名字，绝不把内部短名写上屏）。
+    const r = await ask({ op: 'job', action: 'list', scope: SCOPE });
+    if (!r.ok) return textResult(`这个我这边查不出：${r.error}`, true);
+    return textResult(r.text ?? '（还没交过总结）');
   }
 
   if (name === 'ledger_delete') {

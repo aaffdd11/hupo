@@ -9,7 +9,9 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'models/forbidden_words.dart';
 import 'screens/chat_screen.dart';
@@ -26,6 +28,33 @@ import 'services/token_store.dart';
 import 'widgets/soft_switch.dart';
 
 void main() {
+  // ★ **网页上关掉浏览器自己的右键菜单**（主人 2026-09-25 签字："关掉"）。
+  //
+  //   不关的话：右键桌面图标会**同时**弹出浏览器那份菜单，盖在我们
+  //   「从桌面上删掉」那个面板上面 ⇒ 网页上右键删除**根本点不到**
+  //   （引擎默认是开着的：`browser_context_menu.dart` 原话
+  //    *"On web, by default, the browser's context menu is enabled and
+  //    Flutter's context menus are hidden."*）。
+  //
+  //   ⚠️ 三条边界：
+  //     · **只在网页上**（`kIsWeb`）—— 别的平台上这个开关没有意义；
+  //     · **只关这一层壳**：小程序那一层是独立的 iframe（另一个文档），
+  //       它里面的右键照旧 —— 那份菜单不该由我们替它决定；
+  //     · 代价是聊天输入框里**右键粘贴**没有了（`Ctrl+V` 照旧）—— 主人认了。
+  //   它是一次 method channel 调用（引擎在 `<html>` 上加一个 `contextmenu`
+  //   的 preventDefault）⇒ 不 await：早一步发出去，少一帧原生菜单。
+  //
+  //   🔴 **必须先 `ensureInitialized()`**（2026-09-25 真机验出来的）：
+  //      `BrowserContextMenu` 用的是 **`OptionalMethodChannel`** —— 平台消息
+  //      **发丢了它不报错**。而 binding 没初始化时那一条消息就是发丢的
+  //      （实录：线上产物里有这次调用、面板也出来了，可 `<html>` 上**没有**
+  //      那个 preventDefault ⇒ 浏览器菜单照弹）。`runApp` 内部才初始化 binding
+  //      ⇒ 排在它前面 = 白调。判据：真浏览器里派一条 `contextmenu` 看
+  //      `defaultPrevented`（见 `103` §六）。
+  WidgetsFlutterBinding.ensureInitialized();
+  if (kIsWeb) {
+    unawaited(BrowserContextMenu.disableContextMenu());
+  }
   runApp(const HupoApp());
 }
 

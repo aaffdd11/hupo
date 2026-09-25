@@ -138,6 +138,56 @@ export function handleLedgerOp(ledger, req, ctx = null) {
         //    判据要的正是"拒"，所以这里把**档**（`reason`）也如实带回去。
         return { ok: false, error: String(r?.error ?? '转不了'), reason: r?.error, text: r?.text };
       }
+      // ── ★ **派活**（契约 `docs/dev/102-APP-BIRTH-SCOPE.md` · 主人 2026-09-25 拍「乙」）──
+      //
+      // 🔴 与**转交**（上面那一条）是**两条路**，各自可判：
+      //    · **转交** = 交给**已有**的一间（目标必须已存在 · N16 · **不建**）；
+      //    · **派活** = 让调度器**新建**一间，把那件活交过去，做完把**总结**扔回主进程。
+      //    主人拍的是「乙」：派活**单独一个工具**，加在**现有**这条 MCP 上
+      //    （能力层 `hupo-capabilities.yml` 是 strict ⇒ 不动它）。
+      //
+      // 三个动作（同一个 `op:'job'`）：
+      //    · `start`  —— 主进程说"这活给新的一处做"（`where`＝短名，`why`＝他那句原话）；
+      //    · `done`   —— **子进程**做完交回总结（`name`＝它起的名字，`summary`＝做了什么）；
+      //    · `list`   —— 他问"我有哪些小程序／工作区、各做到哪儿了"（P4）。
+      // ⚠️ 裁决、落账、把话扔回主进程**全在调度器那边**（`Dispatcher.startJob/finishJob`）；
+      //    这里只转发（这个文件**不碰盘**那条规矩照旧）。
+      case 'job': {
+        const d = (() => {
+          try {
+            return ctx?.dispatcher?.() ?? null;
+          } catch {
+            return null;
+          }
+        })();
+        // ★ **发起/交回那一间**以调度器给的那份为准（`HUPO_SCOPE` 只是"这一轮在哪间"）；
+        //   模型那一侧**不许**自己声称"我是哪一间"（那会变成自选身份）。
+        const by = typeof req.scope === 'string' && req.scope !== '' ? req.scope : null;
+        const action = req.action === 'done' || req.action === 'list' ? req.action : 'start';
+        if (action === 'list') {
+          if (!d || typeof d.jobList !== 'function') {
+            return { ok: false, error: '这一台还没接上派活那本登记，查不出' };
+          }
+          const r = d.jobList();
+          if (!r?.ok) return { ok: false, error: String(r?.error ?? '查不出'), text: r?.text };
+          return { ok: true, count: r.count, items: r.items, text: r.text };
+        }
+        if (!d || typeof d.startJob !== 'function') {
+          return { ok: false, error: '这一台还没接上派活那条路，派不了' };
+        }
+        if (action === 'done') {
+          if (typeof d.finishJob !== 'function') {
+            return { ok: false, error: '这一台还没接上派活那条路，交不回去' };
+          }
+          const r = d.finishJob({ by, name: req.name ?? null, summary: req.summary ?? null });
+          if (r?.ok) return { ok: true, where: r.where, name: r.name, text: r.text };
+          // ⚠️ 拒了**也是一条正常回答**（模型要能照着它回一句人话）——不许吞。
+          return { ok: false, error: String(r?.error ?? '交不回去'), reason: r?.error, text: r?.text };
+        }
+        const r = d.startJob({ by, where: req.where ?? null, why: req.why ?? null });
+        if (r?.ok) return { ok: true, id: r.id ?? null, where: r.where, text: r.text };
+        return { ok: false, error: String(r?.error ?? '派不了'), reason: r?.error, text: r?.text };
+      }
       case 'list': {
         // ⚠️ **文字在服务端渲染**（契约 §八 第 3 件）：口径只有一处
         //    （`foldTotals`）⇒ MCP 那一侧**只转述、不重算**。

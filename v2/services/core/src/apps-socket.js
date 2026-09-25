@@ -71,7 +71,16 @@ export async function handleAppsOp(apps, req, ctx = {}) {
       case 'create': {
         // ★ **他明说才许写**（P1-22）：造东西是"往他桌面上放一个他没要的东西"的唯一入口，
         //   所以闸装在**写盘之前**，而且看的是**他自己那一句话**（不是请求里带的任何字段）。
-        const turnInput = typeof ctx.turnInput === 'function' ? ctx.turnInput() : null;
+        //
+        // 🔴 **按房间取"他那句话"**（2026-09-26 修 · 契约 `102` 落地时发现）：
+        //   原来这里只问 `ctx.turnInput()` = **主线那一间**的当轮输入 ⇒
+        //   他在**某个小程序的房间里**说"帮我做一个…"时，读到的是主线那份（多半是空的）
+        //   ⇒ **误拒**。工具那侧把它这一轮在哪一间（`HUPO_APPS_SCOPE`）带在
+        //   `req.scope` 上回来了 ⇒ 这里问**那一间**。
+        //   ⚠️ 认不出那一间 / 取不到 ⇒ `null` ⇒ **拒**（fail-closed 不变）。
+        const turnInput = typeof ctx.turnInputFor === 'function'
+          ? ctx.turnInputFor(typeof req.scope === 'string' && req.scope.trim() !== '' ? req.scope.trim() : null)
+          : (typeof ctx.turnInput === 'function' ? ctx.turnInput() : null);
         if (!asksToMakeApp(turnInput)) {
           return { ok: false, error: NEEDS_ASK, refused: 'needs-ask' };
         }

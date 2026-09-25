@@ -25,6 +25,14 @@
 //              它发的是一帧 `tool/call` ＋ 一次**真的**套接字请求 ——
 //              不是"正文里说一句我转给某一间"。
 //              目标由 `FAKE_HANDOFF_TARGET` 给；套接字由 `FAKE_LEDGER_SOCKET` 给。
+//   job        ★ **派活**（契约 `docs/dev/102-APP-BIRTH-SCOPE.md`）：
+//              · **主对话那一侧**（`HUPO_SCOPE=main`）：调 `job_start`（`op:'job'`
+//                `action:'start'`，走**真那条域套接字**），再把结果说成一句话；
+//              · **被派到的那一处**（`HUPO_SCOPE=<where>`）：**真的**调一次
+//                `app_create`（走 `HUPO_APPS_SOCKET` 那条真口）把东西做出来，
+//                再调 `job_done`（`op:'job'` `action:'done'`）把**总结**交回去。
+//              ⚠️ 这样 P1（活真交到手上）· P2（活在那间干）· P3（总结扔回主进程）
+//                 三条判据打的都是**真那条路**，不是内存里直接调。
 
 import fs from 'node:fs';
 import nodeNet from 'node:net';
@@ -90,7 +98,50 @@ function askLedger(payload, timeoutMs = 3000) {
   });
 }
 
+/**
+ * ★ **派活**（契约 102）：照 `askLedger` 的样子，**真的**问一次小程序那条口
+ * （`HUPO_APPS_SOCKET`）。被派到的那一处用它把东西真做出来（`app_create`）——
+ * 判据 P2 打的是"创建过程发生在**那一间**"，不是"我们替它写了一句"。
+ */
+function askApps(payload, timeoutMs = 5000) {
+  const sock = process.env.HUPO_APPS_SOCKET ?? '';
+  return new Promise((resolve) => {
+    if (!sock) {
+      resolve({ ok: false, error: '假 agent 没拿到小程序那条口的路径' });
+      return;
+    }
+    const conn = nodeNet.connect(sock);
+    let buf = '';
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      try { conn.destroy(); } catch { /* 尽力 */ }
+      resolve(v);
+    };
+    const timer = setTimeout(() => finish({ ok: false, error: '那边没回话' }), timeoutMs);
+    conn.setEncoding('utf8');
+    conn.on('connect', () => conn.write(`${JSON.stringify(payload)}\n`));
+    conn.on('data', (chunk) => {
+      buf += chunk;
+      const nl = buf.indexOf('\n');
+      if (nl === -1) return;
+      clearTimeout(timer);
+      try {
+        finish(JSON.parse(buf.slice(0, nl)));
+      } catch {
+        finish({ ok: false, error: '回答读不懂' });
+      }
+    });
+    conn.on('error', (err) => {
+      clearTimeout(timer);
+      finish({ ok: false, error: String(err?.code ?? err?.message ?? err) });
+    });
+  });
+}
+
 const sessionFile = process.env.FAKE_SESSION_FILE ?? null;
+
 /**
  * ★ **D 期**：这一轮是在**哪一间**里跑的（服务端按房间给的 `HUPO_SCOPE`）。
  * 与真那条工具口**同一个来源**（`mcp-ledger-server.mjs` 顶上那个 `SCOPE`）——
@@ -373,6 +424,80 @@ function runScenario(t) {
         notifyEvent('turn/end', { turn: t, reason: { kind: 'completed' } });
         notifyStatus('idle');
       });
+      break;
+    }
+
+    case 'job': {
+      // ★ **派活**（契约 `docs/dev/102-APP-BIRTH-SCOPE.md`）：两条身份走**同一个场景**。
+      const where = process.env.FAKE_JOB_WHERE ?? '';
+      const why = process.env.FAKE_JOB_WHY ?? '';
+      const name = process.env.FAKE_JOB_NAME ?? '一件东西';
+      // ⚠️ **制品那个标题与它交回来的名字是两个字段**（B20）：租户那份 app 的名字
+      //    在**他盒子里**，宿主查不到 ⇒ P3 那句"叫什么"**只许**用 `name`。
+      //    把它俩设成不同的值，就能把"拿宿主侧标题顶替"那种错形状当场照出来。
+      const appTitle = process.env.FAKE_JOB_TITLE || name;
+      const summary = process.env.FAKE_JOB_SUMMARY ?? '做成了。';
+      const delay = Number.parseInt(process.env.FAKE_JOB_DELAY ?? '0', 10);
+
+      if (SCOPE_OF_FAKE === 'main') {
+        // ① **主对话那一侧**：调 `job_start`（真域套接字那一帧），再把结果说成一句话。
+        notifyEvent('step/start', { turn: t, step: 1 });
+        notifyToolCall(t, 1, 'job_start');
+        assistantMessage(t, 1, '我先应一声。', null);
+        askLedger({ op: 'job', action: 'start', where, why, scope: SCOPE_OF_FAKE }).then((r) => {
+          process.stderr.write(`[fake-agent] job_start → ${JSON.stringify(r)}\n`);
+          notifyEvent('step/end', { turn: t, step: 1 });
+          notifyEvent('step/start', { turn: t, step: 2 });
+          // ⚠️ 拒了也要**照它给的话说一句**（P6：不许把话吞掉）——
+          //    能派成 / 派不成，主对话里都要有一条人话。
+          const line = r.ok
+            ? '好，这件事我另开一处专门做，做完把结果告诉你。'
+            : String(r.text ?? '这件事我自己接着做。');
+          assistantMessage(t, 2, line, null);
+          notifyEvent('step/end', { turn: t, step: 2 });
+          notifyEvent('turn/end', { turn: t, reason: { kind: 'completed' } });
+          notifyStatus('idle');
+        });
+        break;
+      }
+
+      // ② **被派到的那一处**：**真的**把东西做出来（`app_create` 走真那条口），
+      //    再把**总结**交回去（`job_done`）。
+      notifyEvent('step/start', { turn: t, step: 1 });
+      notifyToolCall(t, 1, 'app_create');
+      // ⚠️ 这一段是**过程**：它**只该留在这一间**（P2/P3 的反例正身就靠它）
+      assistantMessage(t, 1, '我先把页面写出来。', null);
+      askApps({
+        op: 'create',
+        app: { id: where, title: appTitle, icon: '', entry: 'index.html', files: { 'index.html': `<p>${appTitle}</p>` } },
+        // ⚠️ 与真那条工具口同形：带上"我这一轮在哪一间"（`HUPO_APPS_SCOPE`）
+        ...(SCOPE_OF_FAKE ? { scope: SCOPE_OF_FAKE } : {}),
+      })
+        .then((r) => {
+          process.stderr.write(`[fake-agent] app_create → ${JSON.stringify(r)}\n`);
+          return new Promise((resolve) => setTimeout(resolve, Number.isFinite(delay) ? delay : 0));
+        })
+        .then(() => {
+          notifyEvent('step/end', { turn: t, step: 1 });
+          notifyEvent('step/start', { turn: t, step: 2 });
+          notifyToolCall(t, 2, 'job_done');
+          return askLedger({
+            op: 'job',
+            action: 'done',
+            name,
+            summary,
+            scope: SCOPE_OF_FAKE,
+          });
+        })
+        .then((r) => {
+          process.stderr.write(`[fake-agent] job_done → ${JSON.stringify(r)}\n`);
+          notifyEvent('step/end', { turn: t, step: 2 });
+          notifyEvent('step/start', { turn: t, step: 3 });
+          assistantMessage(t, 3, '做好了，我把它交回去了。', null);
+          notifyEvent('step/end', { turn: t, step: 3 });
+          notifyEvent('turn/end', { turn: t, reason: { kind: 'completed' } });
+          notifyStatus('idle');
+        });
       break;
     }
 

@@ -45,7 +45,7 @@ import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
 import { SIGNED_TTL_MS, entryUrl } from './app-serve.js';
 // ★ **盒子那三条内部口**（B15 · `docs/dev/77-BLOCKERS.md`）：小程序库以**盒子为准**。
 //   ⚠️ 它们**只在 `trusted === true`**（容器里那条 `0600` UDS）上接 —— 公网口一律 404。
-import { INTERNAL_PREFIX, parseArtifactQuery, parseInternalPath } from './apps-box.js';
+import { BoxError, INTERNAL_PREFIX, parseArtifactQuery, parseInternalPath } from './apps-box.js';
 // ⚠️ 只用它的**错误类型**（内部写入那条路要把"校验不过"如实回给宿主，而不是 500）
 //    与那个总量上限（内部口的身体上限由它推出来，**不另写一个数**）。
 import { AppsError, MAX_TOTAL_BYTES } from './apps.js';
@@ -874,6 +874,54 @@ export function createServer({
           left: left === null ? null : left - 1,
           max: MAX_ANSWER_CHARS,
         });
+      }
+
+      // ── ★ **`103`：从桌面上删掉一个小程序**（主人 2026-09-25）──────────────
+      //
+      // 🔴 **以盒子为准**（照 B15/B17 那条已有的做法）：租户的制品库在**他盒子里**
+      //    ⇒ `appsFor(sub)` 对租户解析成**盒里那份**的客户端，这一下**在盒里落**。
+      // 🔴 **失败就说失败**：盒子不通 ⇒ **如实 503**，**绝不**去动宿主那份
+      //    （那删的是另一个人的库 —— "两处库"那句假话的同一个形状）。
+      // ⚠️ 它是**软删**（`Apps.remove()` 挪进 `.removed/` ＋ 审计），所以盘上的东西还在；
+      //    但**今天没有"拿回来"的入口** ⇒ 界面上**不许**说"还能拿回来"（`103` §三）。
+      if (path === '/api/app-remove' && req.method === 'POST') {
+        let body;
+        try {
+          body = await readJson(req, 16 * 1024);
+        } catch {
+          return sendJson(res, 400, { error: '这一条看不懂' });
+        }
+        const appId = typeof body?.id === 'string' ? body.id : '';
+        if (appId === '') return sendJson(res, 404, { error: 'not-found', text: '没说清要删哪一个。' });
+        const src = appsFor(claim.sub);
+        if (!src) {
+          return tenant
+            ? sendJson(res, 503, { error: 'tenant-not-ready', text: '你那台还在准备，稍等一下再试。' })
+            : sendJson(res, 404, { error: '这台部署还没开小程序' });
+        }
+        try {
+          // 🔴 **两处同名方法语义不同**（见 `apps-box.js` 的 `isBox` 那一段）：
+          //    盒代理 ⇒ 异步回 `{ok:false,status,error}`；本机那份 ⇒ 同步抛错、返回落点。
+          //    ⚠️ 不许只按"有没有 remove"分岔 —— 那会把本机那条的**返回值**当裁决读。
+          if (src.isBox === true) {
+            const r = await src.remove(appId);
+            if (!r.ok) return sendJson(res, r.status, { error: r.error, text: r.error });
+            return sendJson(res, 200, { ok: true });
+          }
+          src.remove(appId);
+          return sendJson(res, 200, { ok: true });
+        } catch (err) {
+          if (err instanceof BoxError) {
+            log(`[app-remove] 盒子没应：${err?.message ?? err}`);
+            return sendJson(res, 503, { error: 'tenant-not-ready', text: '你那台刚才没应，等会儿再试。' });
+          }
+          if (err instanceof AppsError) {
+            // 不在他这儿 / id 不合法 —— 都是"没这个东西"，而且 `message` 本身就是人话
+            return sendJson(res, 404, { error: 'not-found', text: err.message });
+          }
+          log(`[app-remove] 没删掉：${err?.message ?? err}`);
+          return sendJson(res, 500, { error: 'remove-failed', text: '这一下没删掉，等会儿再试。' });
+        }
       }
 
       // ── 「发现」：大家发出来的小程序（乙-3）──────────────────
@@ -2251,6 +2299,34 @@ const TENANT_ROUTES = [
       // 🔴 与宿主那条路**同一个** `checkAppAsk()`（四道闸 ＋ 先记再花）。
       //    HTTP 200 是"这条口答上来了"；裁决在正文里（`ok` / `status` / `error`）。
       return sendJson(res, 200, checkAppAsk(src, body?.appId));
+    }
+
+    // ── ★ **`103`：从桌面上删掉那个小程序**（在**权威那份**上落）────────────
+    // ⚠️ 与上面那条同一个前缀、同一条隧道：**只在可信 UDS 上**（公网口在这之前就 404 了）。
+    if (hit.kind === 'app-remove') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method' });
+      // 盒里这份 `src` **就是**权威那份。真出现"盒里有别的盒子可问"就是接线错了 —— 说出来。
+      // 盒里这份 `src` **必须是本机那格**（照上面 `app-ask-check` 同一条纪律）：
+      // 出现"盒代理"就是接线错了 —— 说出来，别静默。
+      if (src.isBox === true || typeof src.remove !== 'function') {
+        return sendJson(res, 500, { ok: false, status: 500, error: '这条"删"的取值来源接错了' });
+      }
+      let body;
+      try {
+        body = await readJson(req, 16 * 1024);
+      } catch {
+        return sendJson(res, 400, { ok: false, status: 400, error: '这一条看不懂' });
+      }
+      try {
+        src.remove(body?.id);
+        return sendJson(res, 200, { ok: true });
+      } catch (err) {
+        // HTTP 200 是"这条口答上来了"；裁决在正文里（`ok` / `status` / `error`）。
+        // ⚠️ `AppsError.message` 本身就是人话（"这个小程序不在你这儿"…）⇒ 原样带回去。
+        const msg = String(err?.message ?? '这一下没删掉');
+        const notFound = err instanceof AppsError;
+        return sendJson(res, 200, { ok: false, status: notFound ? 404 : 500, error: msg });
+      }
     }
 
     if (hit.kind === 'list') {

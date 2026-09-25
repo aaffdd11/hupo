@@ -64,6 +64,10 @@ import { PromiseBook } from './time-words.js';
 import { HandoffBook } from './handoff.js';
 import { FocusBook } from './focus-book.js';
 import { UnreadBook } from './unread.js';
+// ★ **派活那本简登记**（契约 `docs/dev/102-APP-BIRTH-SCOPE.md`）：一个人一本，
+//   落 `<dir>/jobs.jsonl`；它是**索引**（谁·什么·在哪·最后一条总结），
+//   删掉它能从**那一条日志**重扫回来（`JobBook.rebuild`）。
+import { JobBook } from './job.js';
 
 /**
  * **主线那个房间的名字**（不属于任何 app 的对话 —— 契约 `83-APP-WORKSPACE.md` §三·2）。
@@ -585,6 +589,19 @@ export class Worlds {
         //   取的是**服务端记的**那一份（`dispatcher.turnInput`）；
         //   还没建好（`null`）⇒ 当作"没有明说"（那正是**开机那几秒**该有的保守行为）。
         turnInput: () => dispatcher?.turnInput ?? null,
+        // ★ **按房间取"他这一轮说了什么"**（2026-09-26，契约 102 落地时发现的真缺陷）：
+        //   上面那一句答的**只有主线**那一间 ⇒ 他在**某个小程序房间里**说
+        //   "帮我做一个…"时，那条闸读到的是主线那份（多半是空的）⇒ **误拒**。
+        //   工具那侧把 `HUPO_APPS_SCOPE`（= 它这一轮在哪一间跑）原样带回来，
+        //   这里按那个 scope 问调度器要**那一间**的当轮输入。
+        //   ⚠️ 认不出 / 取不到 ⇒ `null`（**fail-closed**：宁可拒，不许放过去写盘）。
+        turnInputFor: (scope) => {
+          try {
+            return dispatcher?.turnInputOf?.(scope) ?? null;
+          } catch {
+            return null;
+          }
+        },
         // ★ **画一张图**（P1-27 后半）：工具只递请求，真正去花他那把钥匙的是这里。
         //   ⚠️ 与 `/api/image`（配置页那个「试一张」）**同一套规则**（`image-use.js`）。
         drawImage: makeDrawImage({ dataDir: t.dir, log: (m) => this.#warn(`  ${m}`) }),
@@ -640,6 +657,17 @@ export class Worlds {
     const handoffs = new HandoffBook({ dir: t.dir, log: (m) => this.#warn(m) });
     const focusBook = new FocusBook({ dir: t.dir, log: (m) => this.#warn(m) });
     const unread = new UnreadBook({ dir: t.dir, store: t.store, timelineId: 'main', log: (m) => this.#warn(m) });
+    // ★ **派活那本简登记**（契约 102）：一个人一本，落 `<dir>/jobs.jsonl`。
+    //   🔴 它是**索引**，不是第二份日志（契约 §一 ④）：
+    //      · "有哪些小程序／工作区"的唯一出处是**盘上那两处**（这里只取，不另存）；
+    //      · "各自最后一条总结"住在**那一条日志**的 `job/report` 帧上
+    //        ⇒ 登记文件不在时，构造就从日志重扫（P5）。
+    const jobs = new JobBook({
+      dir: t.dir,
+      store: t.store,
+      log: (m) => this.#warn(m),
+      listScopes: () => ({ apps: apps.list(), workspaces: workspaces.list() }),
+    });
     let settled = [];
     try {
       settled = work.settleDead({ aliveGenerations: [] });
@@ -714,6 +742,18 @@ export class Worlds {
       // ★ **D 期**：焦点那本账（设备 → 焦点 · D-9）＋ 未读那本账（D-6）。
       focusBook,
       unread,
+      // ★ **派活**（契约 102）：那本简登记 ＋ "建那一间"那一刀。
+      //   🔴 与**转交**（`handoffs` / `scopeExists`）是两件事：
+      //      转交交给**已有**的一间（`scopeExists` 只查、不建）；
+      //      派活**现建**一间 —— `startScope` 先落"服务端那一刀"
+      //      （`workspaces.ensure`：目录＋清单），再把它挂成这个人的一条会话
+      //      （`roomFor`：cwd＝那个工作区、自己的 agent 键）。两条路互不干扰。
+      jobs,
+      startScope: (where) => {
+        const id = checkScope(where);
+        workspaces.ensure(id);
+        return this.roomFor(t.userId, id)?.session ?? null;
+      },
     });
 
     // ★ 账本那条本地通道：**套接字路径由这个人的目录派生** ⇒ 天然跟人走
@@ -779,6 +819,8 @@ export class Worlds {
       handoffs,
       focusBook,
       unread,
+      // ★ **派活那本简登记**（契约 102）：判据与"他有哪些东西"那条出口从这里读。
+      jobs,
       // 开机时逐件收成了"已停"的那几件（诊断用；**不是**给用户看的）。
       settledOnBoot: settled.map((r) => ({ scopeId: r.scopeId, ref: r.ref, turn: r.turn })),
       boot: { ...boot, reconciled },

@@ -331,6 +331,12 @@ async function main() {
     if (m.method === 'Network.webSocketFrameReceived') {
       wsEvents.received += 1;
       const p = m.params?.response?.payloadData ?? '';
+      // 🔴 **不许只认一张写死的名单**（2026-09-25 改）：原来只查 5 个类型
+      //    ⇒ `scope/open` 那类**新加的**瞬时帧明明收到了，报告里也**看不出来**
+      //    —— 我拿这份报告当过"浏览器没收到那一帧"的证据，**那是错的**（假红）。
+      //    现在按正文里的 `"type":"…"` **照实记**（认不出类型名也记下来）。
+      for (const hit of p.matchAll(/"type"\s*:\s*"([^"]+)"/g)) wsEvents.types.add(hit[1]);
+      // 老那 5 个也留着（有的帧型不在 `type` 字段上，靠名字兜底）
       for (const t of ['user/echo', 'message/start', 'message/text', 'message/end', 'client/hello']) {
         if (p.includes(`"${t}"`)) wsEvents.types.add(t);
       }

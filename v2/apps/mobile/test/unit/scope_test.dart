@@ -583,4 +583,103 @@ void main() {
       expect(c.local.namespace, 'single');
     });
   });
+
+  // ── 派活 ⇒ 窗口**自己**跟过去（契约 `docs/dev/102` 追加的 ⑤）──────────
+  //
+  // 🔴 主人 2026-09-25 报的就是这一条：*"聊天窗口没有进入该有的工作区：
+  //    workspace/aoshu，而是在未分区那里了"* —— 活已经派到新那一处去了，
+  //    而屏幕上还停在主对话。主人选的是"甲·变"：**窗口自己跟过去**。
+  //
+  // ⚠️ 服务端那一帧是**瞬态**（`emitTransient`：不占号、不写盘、不重放），
+  //    所以这里要钉的不只是"切过去了"，还有"它**没有**留下痕迹"。
+  group('收到"这件事搬到新的一处了"⇒ 窗口自己跟过去（契约 102 ⑤）', () {
+    /// 起一台控制器，返回（控制器, 那条假连接）。
+    Future<(ChatController, _FakeStream)> up() async {
+      final made = <_FakeStream>[];
+      final api = Api(
+        client: MockClient((r) async {
+          if (r.url.path == '/api/renew') {
+            return _json(jsonEncode({'token': 'tok2', 'expiresAt': 9000000000000}));
+          }
+          return _json('{}');
+        }),
+      );
+      final c = ChatController(
+        api: api,
+        tokens: TokenStore(),
+        token: 'tok',
+        newStream: ({required base, required token, required level, required scope}) {
+          final s = _FakeStream(base: base, token: token, api: api, level: level, scope: scope);
+          made.add(s);
+          return s;
+        },
+      );
+      await c.start(token: 'tok');
+      c.ingest({'type': '__caught_up__'}); // 首屏那段历史读完了（真实路径上一定发）
+      return (c, made.single);
+    }
+
+    test('★ 主线里派出去一件活 ⇒ 焦点切到那一间（发一帧焦点 · **不重连**）', () async {
+      final (c, s) = await up();
+      expect(c.scope, mainScope);
+
+      s.push({'type': 'scope/open', 'scope': 'math-drill', 'at': 7});
+      await pumpEventQueue();
+
+      expect(c.scope, 'math-drill', reason: '★ 窗口没跟过去（就是主人报的那一条）');
+      expect(
+        s.focuses.map((f) => f.$1).toList(),
+        ['math-drill'],
+        reason: '★ 切房间走**焦点那一帧**（C 期：一条连接），不是新开一条',
+      );
+      expect(s.opens, 1, reason: '★ 重连了 ⇒ 一间一条连接（手册 §四 核心原则 3 明令不做）');
+      expect(s.closed, false);
+    });
+
+    test('🔴 那一帧**不许**进时间线（瞬态：不占号、不写盘 ⇒ 重放时不会又切一次）', () async {
+      final (c, s) = await up();
+      // 反例的正身：**给它带上号**。真那一帧没有号（服务端 `emitTransient`），
+      // 而只要有人把它喂进 `timeline.apply`，号就会被吃掉 ⇒ 下面那一条当场红
+      // （"磁盘上多出一条谁也不认识的记录"就是这么来的）。
+      s.push({'type': 'scope/open', 'scope': 'math-drill', 'at': 7, 'seq': 9});
+      await pumpEventQueue();
+
+      expect(c.items, isEmpty, reason: '★ 它混进历史了 ⇒ 重放（`sinceSeq=0`）会把房间再切一遍');
+      expect(
+        c.timeline.lastSeq,
+        0,
+        reason: '★ 瞬态不许占号（占了号，磁盘上就多出一条谁也不认识的记录）',
+      );
+      // 负向对照：真事件照收（证明上面不是"什么都不进时间线"）
+      s.push({'type': 'user/echo', 'seq': 5, 'messageId': 'u1', 'text': '新那一处的一句话', 'scopeId': 'math-drill'});
+      await pumpEventQueue();
+      expect(c.items.length, 1, reason: '切过去之后那一间的话要看得见');
+    });
+
+    test('★ 已经在那一间 ⇒ 一个字节都不多发（白跑一趟）', () async {
+      final (c, s) = await up();
+      await c.setScope('math-drill');
+      final before = s.focuses.length;
+
+      s.push({'type': 'scope/open', 'scope': 'math-drill', 'at': 7});
+      await pumpEventQueue();
+
+      expect(s.focuses.length, before, reason: '在同一间里收到"去这一间" ⇒ 不该再发一帧');
+      expect(c.scope, 'math-drill');
+    });
+
+    test('🔴 帧上带 `scopeId` ⇒ 主线那条连接**收不到**（所以服务端不许带它）', () async {
+      // ⚠️ 这一条钉的是**帧的形状**：`scopeId` 的意思是"这条帧属于哪一间"，
+      //    而路由（`server.js` 的 `eventInScope`）按它分拣 —— 主线那条连接
+      //    只收"没有 `scopeId`（或者就是 main）"的帧。
+      //    ⇒ 派活时若"顺手"把新那一间写进 `scopeId`，最该收到它的那个人
+      //    （刚在主对话里派完活的用户）**恰好收不到**。
+      //    服务端 `job.js` 的 `scopeOpenEvent()` 就是照这条写的。
+      final (c, s) = await up();
+      s.push({'type': 'scope/open', 'scope': 'math-drill', 'scopeId': 'math-drill', 'at': 7});
+      await pumpEventQueue();
+
+      expect(c.scope, mainScope, reason: '★ 带了 `scopeId` 就被主线自己丢掉了（正中反例）');
+    });
+  });
 }

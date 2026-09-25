@@ -31,6 +31,12 @@ const DEFAULT_VERSION = '2024-11-05';
 
 const SOCKET = process.env.HUPO_APPS_SOCKET ?? '';
 const TIMEOUT_MS = Number.parseInt(process.env.HUPO_APPS_TIMEOUT_MS ?? '15000', 10);
+/**
+ * ★ **我这一轮是在哪一间里跑的**（`HUPO_APPS_SCOPE`，由 agent 那侧按房间给）。
+ * ⚠️ 它**不是秘密**（就是房间名，客户端也看得到），只是"这句话该按哪一间的当轮输入判"。
+ * ⚠️ 主线 / 没给 ⇒ 空串 ⇒ 不带这个字段（老行为一个字不变）。
+ */
+const SCOPE = process.env.HUPO_APPS_SCOPE ?? '';
 
 /** 一行一条的那个口。问一句、拿一句、挂断（服务端重启之后自己就好）。 */
 function ask(payload) {
@@ -245,7 +251,11 @@ async function callTool(name, args) {
       return textResult('这次没做成：短名、名字、内容都得有。', true);
     }
     const entry = typeof args?.entry === 'string' && args.entry ? args.entry : 'index.html';
-    const r = await ask({ op: 'create', app: { id, title, icon, entry, files } });
+    // ★ **带上"我这一轮在哪一间跑"**（`HUPO_APPS_SCOPE`，agent 那侧按房间给的）：
+    //   "他明说才许写"那条闸要读**那一间**的当轮输入 —— 不带它，服务端只能读主线那份，
+    //   他在某个小程序房间里说"帮我做一个…"就会被**误拒**
+    //   （`apps-socket.js` 的 `ctx.turnInputFor`；2026-09-26 修）。
+    const r = await ask({ op: 'create', app: { id, title, icon, entry, files }, ...(SCOPE ? { scope: SCOPE } : {}) });
     if (r.ok) {
       // ⚠️ 图标是**自动配**的时候要如实说一句：不然模型以为它挑的那个生效了
       const iconNote = icon && icon === r.icon ? '' : `（桌面上的图标我按名字配了一个：\`${r.icon}\`）`;

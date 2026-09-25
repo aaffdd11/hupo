@@ -277,16 +277,28 @@ class Api {
   ///
   /// ⚠️ **问不到就是空清单**（不抛）：摆不出图标，也不该把聊天弄挂。
   /// ⚠️ **认证只走令牌**（服务端按 `claim.sub` 取那一份）—— 客户端**不报身份**。
+  ///
+  /// 🔴 **两件事别混**（2026-09-25 修的真缺陷）：**"他没有小程序"** 与 **"这一次没问上"**
+  /// 在返回值上**必须分得开** —— 原来两条路都回 `[]`，而调用方直接拿它覆盖桌面
+  /// ⇒ 删完一个之后那次重拉只要抖一下，**整个桌面会被清空**（而界面刚说了"已经删掉了"）。
+  /// ⇒ 要覆盖旧清单的地方请用 [appsOrNull]（`null` = 没问上）。
   Future<List<MiniApp>> apps(String token) async {
+    return (await appsOrNull(token)) ?? const [];
+  }
+
+  /// 同 [apps]，但**分得清"空"与"没问上"**：`null` = 这一次没问上（网络/非 200/读不懂）。
+  ///
+  /// ⚠️ 调用方**只有**在拿到非 `null` 时才许拿它覆盖已有清单（否则"抖一下"就等于"全没了"）。
+  Future<List<MiniApp>?> appsOrNull(String token) async {
     try {
       final r = await _c
           .get(_u('/api/apps'), headers: {'authorization': 'Bearer $token'})
           .timeout(const Duration(seconds: 8));
-      if (r.statusCode != 200) return const [];
+      if (r.statusCode != 200) return null;
       final j = jsonDecode(r.body);
-      if (j is! Map) return const [];
+      if (j is! Map) return null;
       final raw = j['apps'];
-      if (raw is! List) return const [];
+      if (raw is! List) return null;
       final now = DateTime.now().millisecondsSinceEpoch;
       final out = <MiniApp>[];
       for (final one in raw) {
@@ -296,7 +308,33 @@ class Api {
       }
       return out;
     } catch (_) {
-      return const [];
+      return null;
+    }
+  }
+
+  /// **从桌面上删掉一个**（契约 `docs/dev/103-APP-DELETE.md` §二 / 判据 C6）。
+  ///
+  /// ⚠️ body 里那个 `id` 是**服务端 `/api/apps` 给的那个 id**（不是界面上带前缀那串）——
+  ///    认证照旧**只走令牌**，客户端**不替服务端解析身份**（同 [apps]）。
+  /// ⚠️ 结果分三种、**不许混**（同 [TrashAnswer] 那条纪律）：只有服务端**明说**
+  ///    `{ok:true}` 才算成了；非 200（含 4xx/5xx）与"200 但回执读不出来"**都算没成**。
+  ///    删是破坏性动作 —— "以为删了其实没删"是这一批最不许出现的形状。
+  Future<AppRemoveOutcome> appRemove({
+    required String token,
+    required String id,
+  }) async {
+    try {
+      final r = await _c
+          .post(
+            _u('/api/app-remove'),
+            headers: {'content-type': 'application/json', 'authorization': 'Bearer $token'},
+            body: jsonEncode({'id': id}),
+          )
+          .timeout(const Duration(seconds: 20));
+      return appRemoveOutcomeOf(r.statusCode, r.body);
+    } catch (_) {
+      // 网不通 / 超时 / 请求根本没发出去 ⇒ **什么都没发生**（界面不许当成功）
+      return const AppRemoveFailed();
     }
   }
 
@@ -595,6 +633,49 @@ class TrashUnauthorized<T> extends TrashAnswer<T> {
 class TrashFailed<T> extends TrashAnswer<T> {
   const TrashFailed(this.detail);
   final String detail;
+}
+
+/// 「从桌面上删掉」那一条路的结果（契约 `docs/dev/103-APP-DELETE.md` §四 C6）。
+///
+/// ⚠️ 三种**不许混**（和 [TrashAnswer] 同一条纪律）：
+///   * [AppRemoveOk]：服务端**明说** `{ok:true}`；
+///   * [AppRemoveUnauthorized]：令牌不行 ⇒ 该回登录页，**不是**"网不好"；
+///   * [AppRemoveFailed]：网 / 4xx / 5xx / 回执读不出来 ⇒ **什么都没发生**，
+///     界面**不许**把图标抹掉，只能**如实说一句**。
+sealed class AppRemoveOutcome {
+  const AppRemoveOutcome();
+}
+
+class AppRemoveOk extends AppRemoveOutcome {
+  const AppRemoveOk();
+}
+
+class AppRemoveUnauthorized extends AppRemoveOutcome {
+  const AppRemoveUnauthorized();
+}
+
+class AppRemoveFailed extends AppRemoveOutcome {
+  const AppRemoveFailed();
+}
+
+/// 回执 → 结果。**纯函数**（不起网络、不碰界面、不看钟）⇒ 进 `test/unit` 硬闸
+/// （和 [trashAnswerOf] / [sayOutcomeOf] 同一条理由：协议语义只有这一处，
+///  改错一个分支 = 屏幕上换一句话 / 把"没删掉"说成"删掉了"）。
+///
+/// 状态码的分工（**不许互相串**）：
+///   `200` **且** `{ok:true}` ⇒ 成了；
+///   `401` ⇒ 这个令牌不行；
+///   其余（含"200 但回执不是明说的 ok"）⇒ **没成** —— 一个字节都不当成功。
+AppRemoveOutcome appRemoveOutcomeOf(int status, String body) {
+  if (status == 401) return const AppRemoveUnauthorized();
+  if (status != 200) return const AppRemoveFailed();
+  try {
+    final j = jsonDecode(body);
+    if (j is Map && j['ok'] == true) return const AppRemoveOk();
+  } catch (_) {
+    // 读不出来 ⇒ 落到下面那条"没成"（**不许猜成成功**）
+  }
+  return const AppRemoveFailed();
 }
 
 /// 回执 + 解析器 → 结果。**纯函数**（不起网络、不碰界面、不看钟）⇒

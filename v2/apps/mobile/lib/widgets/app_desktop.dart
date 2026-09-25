@@ -26,6 +26,7 @@ import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
 import '../models/space_words.dart';
+import 'desktop_icon_menu.dart';
 
 /// **小程序没给图标时用的那个**（主人 2026-09-22：*"设置要给一个默认 icon"*）。
 ///
@@ -44,6 +45,7 @@ class DesktopApp {
     this.icon = defaultAppIcon,
     this.badge = 0,
     this.id,
+    this.onRemove,
   });
 
   final String label;
@@ -56,6 +58,15 @@ class DesktopApp {
   /// **打开**。参数 = **这个图标在屏幕上的位置**（"从哪里打开，就从哪里扩开"）。
   /// ⚠️ 由图标自己量、自己报 —— 上层不用去猜它在哪儿（猜的话换个排布就错了）。
   final ValueChanged<Rect?> onOpen;
+
+  /// **从桌面上删掉**（`null` = 这一格**不给**这个入口）。
+  ///
+  /// ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §一）：
+  ///   长按 / 右键 ⇒ 出那个小面板；只有**选了【从桌面上删掉】**才回调它。
+  /// 🔴 内置那几格（设置 / 奥数题 / 发现 /「我自己那台」）**传 `null`**：
+  ///    它们**不在 `/api/apps` 里**，服务端那条路认不出它们 ⇒ 摆一个点下去
+  ///    只会 404 的入口，就是"看着像有、其实是空的"（这个项目最忌的形状）。
+  final VoidCallback? onRemove;
 
   /// 未读小点（`02-ARCHITECTURE.md`：**动作可静默，事实不能静默**）。
   /// `0` = 不画。⚠️ 现在还没有人给它赋值 —— 等真有"未读"这件事时再接。
@@ -220,6 +231,16 @@ class _DesktopIcon extends StatelessWidget {
                 : null;
             app.onOpen(rect);
           },
+          // ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §一 / 判据 C1）：
+          //   **右键（桌面端）与长按（web / 手机）走同一个面板** —— 两条**都要有**，
+          //   不许只做一个（"只有长按、右键没反应 ⇒ 红"）。
+          // 🔴 用 `InkWell` 自己这两个回调，**不许**为了这件事引入裸 `GestureDetector`：
+          //   `test/widget/accessibility_test.dart` 有一条**源码级硬闸**
+          //   （裸 GestureDetector = 命中区 ≥44 那道扫描多一个没人检查的缺口）。
+          // ⚠️ 不给入口的那几格（`onRemove == null`）**两个回调都不挂**：
+          //   挂一个只会弹"删不掉的面板"的回调，比不挂更坏。
+          onLongPress: app.onRemove == null ? null : () => _askRemove(context),
+          onSecondaryTap: app.onRemove == null ? null : () => _askRemove(context),
           borderRadius: BorderRadius.circular(d.radiusCard),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -283,5 +304,19 @@ class _DesktopIcon extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// **长按 / 右键 ⇒ 出那个底栏小面板**（契约 §一）。
+  ///
+  /// ⚠️ 这一层**只问"要不要"**：发请求、重拉清单、失败时怎么说，全在 `screens/`
+  ///    那一层（`widgets` 是傻组件，**不许**碰 `services` —— 楼层闸）。
+  /// ⚠️ 用户点了面板外面 / 系统返回键 ⇒ `showModalBottomSheet` 回 `null`
+  ///    ⇒ 什么都不做（"取消"和"点外面"是同一件事，这是底栏面板的既有语义）。
+  Future<void> _askRemove(BuildContext context) async {
+    final action = await showModalBottomSheet<DesktopIconAction>(
+      context: context,
+      builder: (_) => const DesktopIconMenu(),
+    );
+    if (action == DesktopIconAction.remove) app.onRemove?.call();
   }
 }

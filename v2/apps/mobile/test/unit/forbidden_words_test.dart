@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/dev_harness.dart';
 import 'package:hupo_app/models/dev_harness_words.dart';
+import 'package:hupo_app/models/desktop_words.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
 import 'package:hupo_app/models/harness_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
@@ -240,6 +241,14 @@ void main() {
       devOpenFailed,
       // ⚠️ 每一档实际画出来的那一句也扫（`devEntryWords` 就是屏幕上的那句）
       for (final v in DevEntryView.values) devEntryWords(v),
+      // ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §三）：桌面图标长按 / 右键
+      //    那个小面板的两句 + 成没成那两句 —— **直接引数据源**（手抄会漂）。
+      //    ⚠️ 这一批的诚实边界（不许承诺"能拿回来"）在
+      //       `test/unit/desktop_remove_test.dart`（C4）。
+      desktopRemoveAction,
+      desktopRemoveCancel,
+      desktopRemoveDone,
+      desktopRemoveFailed,
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

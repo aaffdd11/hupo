@@ -53,6 +53,16 @@ export const BOX_APP_PATH = '/internal/app';
 export const BOX_APP_ASK_CHECK_PATH = '/internal/app-ask-check';
 
 /**
+ * ★ **`103`：从桌面上删掉那个小程序** —— 让**盒子那份库**自己动（`Apps.remove()`）。
+ *
+ * ⚠️ 与 B17 同一个道理：租户的制品库在**他盒子里**（宿主那份是空的，P2-6 之后连老库都删了）
+ *    ⇒ 这一下**必须在盒里落**，否则"删掉了"是一句假话（桌面上还在，或者删的是宿主那份空的）。
+ * 🔴 失败就说失败：盒子不通 / 答的话认不出 ⇒ 抛 `BoxError`，调用方**如实 503** ——
+ *    **绝不**退回宿主那份（那正是"两处库"那句假话）。
+ */
+export const BOX_APP_REMOVE_PATH = '/internal/app-remove';
+
+/**
  * 一次内部请求最多等多久。
  *
  * ⚠️ 必须有上限：隧道那头要是不回话，这个请求会**一直挂着** ——
@@ -81,6 +91,7 @@ export function parseInternalPath(pathname) {
   if (pathname === BOX_APP_PATH) return { kind: 'create' };
   if (pathname === BOX_ARTIFACT_PATH) return { kind: 'artifact' };
   if (pathname === BOX_APP_ASK_CHECK_PATH) return { kind: 'app-ask-check' };
+  if (pathname === BOX_APP_REMOVE_PATH) return { kind: 'app-remove' };
   return null;
 }
 
@@ -183,6 +194,16 @@ function dialOnce(dial) {
 export function createBoxApps({ sub = 'owner', dial, log = () => {} } = {}) {
   if (typeof dial !== 'function') throw new BoxError('dial 必填');
   return {
+    /**
+     * ★ **这是"盒子里那份"的标记**（`103` 加的）。
+     *
+     * 🔴 为什么非要一个标记：本机那份 `Apps` 与这份"盒代理"**有几个同名方法但语义不同** ——
+     *    例如 `remove()`：本机那份**同步抛错**，盒代理**异步回 `{ok:false,status,error}`**。
+     *    调用方只按 `typeof x.remove === 'function'` 分不开两者 ⇒ 会把本机那条的
+     *    **返回值（一个路径字符串）**当成盒代理的裁决读（`r.ok` 恒 undefined ⇒ 500）。
+     *    ⇒ 显式标记，**只有一处**（这里），调用方按它分岔。
+     */
+    isBox: true,
     /** 盒子里那份清单（形状与 `Apps.list()` 逐字段相同）。 */
     async list() {
       const r = await requestOverSocket(dialOnce(dial), { path: BOX_APPS_PATH });
@@ -239,6 +260,40 @@ export function createBoxApps({ sub = 'owner', dial, log = () => {} } = {}) {
         ok: false,
         status: Number.isFinite(j.status) ? j.status : 403,
         error: typeof j.error === 'string' && j.error !== '' ? j.error : '这个小程序问不了',
+      };
+    },
+    /**
+     * ★ **`103`：从桌面上删掉那个小程序 —— 交给盒子那份权威来动**。
+     *
+     * 盒子那侧调的是**同一个** `Apps.remove()`（**软删**：挪进 `.removed/` ＋ 审计），
+     * 所以这里只做一件事：**把它的结论原样带回来**。
+     *
+     * 🔴 **失败就说失败**：盒子不通 / 答的话认不出 ⇒ **抛 `BoxError`**，
+     *    调用方如实回 503 —— **绝不许**退回宿主那份（删的会是另一个人的库）。
+     *
+     * @param {string} appId
+     * @returns {Promise<{ok:true}|{ok:false,status:number,error:string}>}
+     */
+    async remove(appId) {
+      const payload = Buffer.from(JSON.stringify({ id: String(appId ?? '') }), 'utf8');
+      const r = await requestOverSocket(dialOnce(dial), {
+        method: 'POST',
+        path: BOX_APP_REMOVE_PATH,
+        headers: { 'content-type': 'application/json', 'content-length': String(payload.length) },
+        body: payload,
+      });
+      if (r.status !== 200) {
+        log(`盒子里那条"删"没答（HTTP ${r.status}）`);
+        throw new BoxError(`盒子里那条"删"没答（HTTP ${r.status}）`, 'bad-status');
+      }
+      const j = parseJson(r.body);
+      // ⚠️ 形状**逐字段核**：认不出就是认不出，不许当成"删掉了"（fail-closed）。
+      if (!j || typeof j.ok !== 'boolean') throw new BoxError('盒子里那条"删"答的话看不懂', 'bad-json');
+      if (j.ok === true) return { ok: true };
+      return {
+        ok: false,
+        status: Number.isFinite(j.status) ? j.status : 500,
+        error: typeof j.error === 'string' && j.error !== '' ? j.error : '这一下没删掉',
       };
     },
     /**

@@ -22,6 +22,7 @@ import '../models/dev_harness.dart';
 import '../models/image_outcome.dart';
 import '../models/conn_state.dart';
 import '../models/design.dart' as d;
+import '../models/desktop_words.dart';
 import '../models/export_words.dart';
 import '../models/scroll_follow.dart';
 import '../models/space.dart';
@@ -372,6 +373,12 @@ class _ChatScreenState extends State<ChatScreen> {
                     id: '$_minePrefix${a.id}',
                     icon: miniAppIconFor(a.icon),
                     onOpen: (from) => _openMiniApp(from, '$_minePrefix${a.id}'),
+                    // ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §一）：
+                    //   **只有"他自己的小程序"才给这个入口** —— 内置那几格
+                    //   （设置 / 奥数题 / 发现 /「我自己那台」）不在 `/api/apps` 里，
+                    //   服务端那条路认不出它们（传 `null` = 连面板都不出）。
+                    //   ⚠️ 传下去的是**服务端那一份的 id**（`a.id`），不是屏幕上带前缀那串。
+                    onRemove: () => _removeMyApp(a.id),
                   ),
               ],
               // ★ 2026-09-24：正在扩开/收回的那一格，**图标先消失**（打开那一瞬间就藏；
@@ -676,13 +683,60 @@ class _ChatScreenState extends State<ChatScreen> {
   /// **上一次看到的"我的小程序"版本号**（乙-3：服务端说"装上了"就重拉）。
   int _appsRevision = 0;
 
-  /// 拉一次"我的小程序"（乙-1）。**失败了就当空的**（不弹错 —— 它不是用户主动要的东西）。
-  Future<void> _loadMyApps() async {
+  /// 拉一次"我的小程序"（乙-1）。**失败了不当成"他没有"**（不弹错 —— 它不是用户主动要的东西）。
+  ///
+  /// 🔴 **问不到 ⇒ 绝不用空清单覆盖**（2026-09-25 修的真缺陷）：`Api.apps()` 在网络/非 200/
+  ///    读不懂时回的也是空清单，而这里原来直接 `_myApps = got` ⇒ 只要抖一下，
+  ///    **整个桌面会被清空**（界面上却刚说过"已经删掉了"）。
+  ///    ⇒ 现在分得清"他没有小程序"与"这一次没问上"；没问上时**保留旧清单**。
+  ///
+  /// @param dropId 服务端**明说成了**的那一次删除 —— 没问上清单时，只把**这一条**从本地
+  ///        清单里去掉（那一条的去处是服务端确认过的），别的**一个都不动**。
+  Future<void> _loadMyApps({String? dropId}) async {
     final token = widget.controller.token;
     if (token == null) return;
-    final got = await widget.controller.api.apps(token);
+    final got = await widget.controller.api.appsOrNull(token);
     if (!mounted) return;
-    setState(() => _myApps = got);
+    setState(() {
+      if (got != null) {
+        _myApps = got;
+        return;
+      }
+      if (dropId != null) _myApps = _myApps.where((a) => a.id != dropId).toList();
+    });
+  }
+
+  /// **从桌面上删掉一个**（契约 `docs/dev/103-APP-DELETE.md` §一 / 判据 C6）。
+  ///
+  /// 三步，**一步都不许省**：
+  ///   ① 请服务端把那一格拿走（`POST /api/app-remove {id}`；`id` = **服务端那一份的 id**）；
+  ///   ② 🔴 **服务端明说成了**才**重新拉一遍** `/api/apps` —— 桌面上真的少一个，
+  ///      不是"只把本地那一项抹掉"（C6 点名的就是这一条）；
+  ///   ③ 没成 ⇒ **如实说一句**，而且**图标一个像素都不动**
+  ///      （"先删了再说"就是界面上说假话）。
+  ///
+  /// ⚠️ 401 走 [`_unauthorized`]（**说一句 + 回登录页**），和回收站那一路同一句人话。
+  Future<void> _removeMyApp(String id) async {
+    final token = widget.controller.token;
+    if (token == null) {
+      // 没登录 ⇒ 请求根本发不出去；照样**如实说**（不许静默当成功）
+      _say(desktopRemoveFailed);
+      return;
+    }
+    final out = await widget.controller.api.appRemove(token: token, id: id);
+    if (!mounted) return;
+    switch (out) {
+      case AppRemoveOk():
+        // ② 真的重拉一遍（桌面照服务端那一份画）。⚠️ 带上 `dropId`：万一这一次没问上，
+        //    只把这一个从本地清单里去掉（它的去处服务端确认过了），**别的都不动**。
+        await _loadMyApps(dropId: id);
+        if (mounted) _say(desktopRemoveDone);
+      case AppRemoveUnauthorized():
+        _unauthorized();
+      case AppRemoveFailed():
+        // 🔴 失败 ⇒ 那句人话 + 图标留在原地（C6 的反例是"界面先删了、服务端其实没删"）
+        _say(desktopRemoveFailed);
+    }
   }
 
   /// **「我自己那台」那条通道**（契约 `docs/dev/81-HARNESS-ENTRY.md` §5.1 / §5.4）。

@@ -26,6 +26,7 @@ import 'package:http/testing.dart';
 import 'package:hupo_app/models/export_words.dart';
 import 'package:hupo_app/models/dev_harness.dart';
 import 'package:hupo_app/models/dev_harness_words.dart';
+import 'package:hupo_app/models/desktop_words.dart';
 import 'package:hupo_app/models/harness.dart';
 import 'package:hupo_app/models/message_state.dart';
 import 'package:hupo_app/models/process_levels.dart';
@@ -38,6 +39,7 @@ import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/widgets/bubbles.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
+import 'package:hupo_app/widgets/desktop_icon_menu.dart';
 import 'package:hupo_app/widgets/harness_pane.dart';
 import 'package:hupo_app/screens/landing_screen.dart';
 import 'package:hupo_app/screens/login_screen.dart';
@@ -158,6 +160,27 @@ Future<void> _openEmptyRoom(WidgetTester tester, double scale) async {
   // 负向对照：**那一句真的画出来了**才算数（没画出来的话这道闸扫的是别的屏）
   expect(find.text(roomEmptyTitle), findsOneWidget, reason: '★ 空房间那句没进这棵树 ⇒ 这道闸扫错了屏');
   expect(find.text(roomEmptyLine(roomAppTitle)), findsOneWidget, reason: '★ 那句普通话必须说出"这是哪间"');
+}
+
+/// ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §一 / 判据 C5）：
+/// **像用户那样**长按桌面那一格 ⇒ 出「从桌面上删掉 / 取消」那个小面板。
+///
+/// ⚠️ 和关于页 / 空房间同一条理由：**新加的界面必须也过这两道硬闸**
+///    （五档不溢出 + 命中区 ≥44），不然它们会随时间失效。
+/// ⚠️ **从真入口进**：`_roomController()`（假 `/api/apps` 给一条"我的小程序"）
+///    + 真长按。不直接 pump 那个面板 —— 那样它底下没有桌面，
+///    量的就不是用户真会看到的那棵树。
+/// ⚠️ 长按（不是右键）：这一档量的是"面板本身"；右键那条走的是**同一个**面板
+///    （两条手势都有，判据在 `test/widget/desktop_remove_test.dart` 的 C1）。
+Future<void> _openDesktopRemoveMenu(WidgetTester tester, double scale) async {
+  // 默认收起档进场 = 真实路径（桌面图标露着，长按才落得到它上面）
+  await _pump(tester, ChatScreen(controller: _roomController(), onLoggedOut: () {}), scale);
+  await tester.pumpAndSettle(); // 等 `/api/apps` 回来，桌面才长出那一格
+  await tester.longPress(find.text(roomAppTitle));
+  await tester.pumpAndSettle();
+  // 负向对照：**面板真的画出来了**才算数（没出来的话这道闸量的是别的东西）
+  expect(find.byType(DesktopIconMenu), findsOneWidget, reason: '★ 那个小面板没进这棵树 ⇒ 这道闸扫错了屏');
+  expect(find.text(desktopRemoveAction), findsOneWidget, reason: '★ 面板上那句没画出来');
 }
 
 /// **像用户那样**打开「奥数题」小程序（桌面上的图标 ⇒ 主人 2026-09-22 新加的第二个小程序）。
@@ -854,6 +877,19 @@ void main() {
         await _openEmptyRoom(tester, s);
         expect(_drain(tester), isEmpty, reason: '空房间在 ${s}x 溢出了');
       });
+
+      testWidgets('桌面图标的小面板（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-25（契约 `103-APP-DELETE.md`）：长按 / 右键那个**新加的界面**
+        //    必须也过五档不溢出（同关于页 / 空房间那条理由）。
+        await _openDesktopRemoveMenu(tester, s);
+        expect(_drain(tester), isEmpty, reason: '那个小面板在 ${s}x 溢出了');
+        // 面板里那一行是 `ListTile`（不在下面那份按钮扫描的种类里）⇒ 单独量它的命中区。
+        for (final t in find.byType(ListTile).evaluate()) {
+          final size = tester.getSize(find.byWidget(t.widget));
+          expect(size.height >= minTouch, isTrue,
+              reason: '桌面小面板 @${s}x：一行的命中区只有 ${size.height}');
+        }
+      });
     }
 
     // ⚠️ "不封顶"这条分**三个测试**量：同一个测试里连续 pump 两棵树时，
@@ -1097,6 +1133,15 @@ void main() {
         //    时间线、抓手、顶栏那三个动作、输入条都在屏幕上 ⇒ 它们的命中区也得量一次。
         await _openEmptyRoom(tester, s);
         await sweep(tester, '空房间 @${s}x');
+      });
+
+      testWidgets('桌面图标的小面板（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-25（契约 `103-APP-DELETE.md`）：那个「取消」按钮必须进这份扫描
+        //    —— 不然它的命中区没有任何东西守着（D3.6 就是"命中区 ≥44"）。
+        //    ⚠️ 面板里那一行（`ListTile`）不在 `sweep` 的种类里 ⇒ 它由上面 D3.5
+        //       那一组单独量（同气泡长按菜单的摆法）。
+        await _openDesktopRemoveMenu(tester, s);
+        await sweep(tester, '桌面小面板 @${s}x');
       });
     }
 

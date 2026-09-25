@@ -102,7 +102,7 @@ const FIELD_ARGS = {
 
 // ── 握手 + 工具名 ────────────────────────────────────────────
 
-test('握手给的是**标准 MCP**：initialize → tools/list 六条工具', async () => {
+test('握手给的是**标准 MCP**：initialize → tools/list 九条工具', async () => {
   const s = setup();
   const c = mcpClient({ HUPO_LEDGER_SOCKET: s.socketPath });
   try {
@@ -114,11 +114,85 @@ test('握手给的是**标准 MCP**：initialize → tools/list 六条工具', a
 
     const list = await c.call('tools/list', {});
     const names = list.result.tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ['handoff_to', 'ledger_delete', 'ledger_list', 'ledger_propose', 'ledger_write', 'work_status']);
+    // ★ **派活那三条**（契约 `docs/dev/102-APP-BIRTH-SCOPE.md` · 主人拍「乙」）：
+    //   `job_start`（主对话派活）· `job_done`（那一处交回总结）· `job_list`（有哪些东西）。
+    assert.deepEqual(names, [
+      'handoff_to',
+      'job_done',
+      'job_list',
+      'job_start',
+      'ledger_delete',
+      'ledger_list',
+      'ledger_propose',
+      'ledger_write',
+      'work_status',
+    ]);
     for (const t of list.result.tools) {
       assert.equal(t.inputSchema.type, 'object');
       assert.ok(typeof t.description === 'string' && t.description.length > 10, '每条都要说清什么时候调');
     }
+  } finally {
+    c.child.kill('SIGKILL'); s.sock.close();
+  }
+});
+
+// ── ★ **派活那三条**（契约 `docs/dev/102-APP-BIRTH-SCOPE.md`）────────────
+//
+// 🔴 判据打的是**工具 → 真域套接字 → 服务端**这一条：既然"派活单独一个工具"
+//    （主人拍的「乙」）要加在**现有**那条 MCP 上，就得证明它**真递得到**，
+//    而不是只在 `tools/list` 里挂了个名字。
+test('🔴 派活三条口：`job_start` / `job_done` / `job_list` 经**真域套接字**递到服务端', async () => {
+  const calls = [];
+  const d = {
+    startJob: (o) => {
+      calls.push(['start', o]);
+      // ⚠️ 拒了**也要有人话**（模型照着它说一句 · P6 "不许把话吞掉"）
+      return {
+        ok: false,
+        error: 'create-failed',
+        reason: 'create-failed',
+        text: '另开那一处没成。这件事我就在这儿接着做，做完告诉你。',
+      };
+    },
+    finishJob: (o) => {
+      calls.push(['done', o]);
+      return { ok: true, where: 'math-drill', name: o.name, text: '好，我把结果告诉他了。' };
+    },
+    jobList: () => {
+      calls.push(['list']);
+      return { ok: true, count: 1, items: [], text: '- 「算数小练」：能出题' };
+    },
+  };
+  const s = setup({ ctx: { dispatcher: () => d } });
+  const c = mcpClient({ HUPO_LEDGER_SOCKET: s.socketPath });
+  try {
+    await c.call('initialize', { protocolVersion: '2025-06-18' });
+
+    const started = await c.call('tools/call', {
+      name: 'job_start',
+      arguments: { where: 'math-drill', why: '帮我做一个练算数的小程序' },
+    });
+    assert.equal(started.result.isError, true, '★ 派不成 ⇒ isError（模型要能照着它回一句人话）');
+    assert.match(started.result.content[0].text, /接着做/, started.result.content[0].text);
+
+    const done = await c.call('tools/call', {
+      name: 'job_done',
+      arguments: { name: '算数小练', summary: '做成了一个能出题的算数小程序' },
+    });
+    assert.notEqual(done.result.isError, true, JSON.stringify(done.result));
+    assert.match(done.result.content[0].text, /告诉他/, done.result.content[0].text);
+
+    const listed = await c.call('tools/call', { name: 'job_list', arguments: {} });
+    assert.match(listed.result.content[0].text, /算数小练/, listed.result.content[0].text);
+
+    // ★ **三次都真到了服务端**，字段也没在路上被改样
+    assert.deepEqual(calls.map((x) => x[0]), ['start', 'done', 'list']);
+    assert.equal(calls[0][1].by, 'main', '★ "这一轮在哪一间"要带上去（服务端据此判身份）');
+    assert.equal(calls[0][1].where, 'math-drill');
+    assert.equal(calls[0][1].why, '帮我做一个练算数的小程序');
+    assert.equal(calls[1][1].by, 'main');
+    assert.equal(calls[1][1].name, '算数小练');
+    assert.equal(calls[1][1].summary, '做成了一个能出题的算数小程序');
   } finally {
     c.child.kill('SIGKILL'); s.sock.close();
   }
