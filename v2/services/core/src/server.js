@@ -33,7 +33,7 @@ import { MAIN_SCOPE, parseScope } from './worlds.js';
 //   ⇒ 客户端发的是**焦点**（"我正在看哪个图标"），**路由由服务端做**：
 //     焦点那条的输出现时投给用户；其它条照常进日志、但不实时推。
 //   判断那几件（收帧 / 该不该反问）住在 `focus.js`（纯函数，能反着验）。
-import { focusAskText, parseFocusFrame, routeTarget } from './focus.js';
+import { focusAskText, parseFocusFrame, routeTarget, FOCUS_UNKNOWN } from './focus.js';
 // 事件属不属于这一间 —— **只有这一处**（`ScopeView` 与这里共用它）。
 import { eventInScope } from './timeline.js';
 // ⚠️ 只借它**校验手机号形状**（`/api/send-code` 用）；模块本身不碰用户表
@@ -769,6 +769,44 @@ export function createServer({
       //   ⚠️ `sub` 只来自**验过签的令牌**（`claim`），不读 URL / body / 头。
       const W = worldFor(claim.sub);
       if (path === '/api/say' && req.method === 'POST') return handleSay(req, res, claim);
+      // ── ★ **D 期：未读**（契约 `docs/dev/100-DISPATCHER-D.md` §二② · 判据 D-6）──
+      //
+      // 服务端这半只做三件：**能查、能清、落盘**（"桌面上那个图标带小点"由客户端画）。
+      //   · `GET  /api/unread`      ⇒ 现在哪几间该带点；
+      //   · `POST /api/unread/read` ⇒ 他打开过那一间（带点没了）。
+      //
+      // ⚠️ **口径只有一处**：事实在**那条日志**上（每一间最后一条的 `seq`），
+      //    这里只记"他看到过哪一号"（`UnreadBook`）——
+      //    所以重启之后"有未读"照样答得出（这就是"落盘"那一半）。
+      // ⚠️ **转交那半的挂法**（§6.2）：续写事件打的是**发起那一间**的标签
+      //    ⇒ 未读点自然挂在**他提问的那一间**（他回到那儿就看到整条答案）。
+      if (path === '/api/unread' && req.method === 'GET') {
+        const d = W.dispatcher;
+        if (!d || typeof d.unreadScopes !== 'function') {
+          return sendJson(res, 503, { error: 'no-unread-book', text: '这一台还没接上未读那本账。' });
+        }
+        return sendJson(res, 200, { ok: true, unread: d.unreadScopes() });
+      }
+      if (path === '/api/unread/read' && req.method === 'POST') {
+        let body;
+        try {
+          body = await readJson(req, 4096);
+        } catch {
+          return sendJson(res, 400, { error: 'bad-json' });
+        }
+        const d = W.dispatcher;
+        if (!d || typeof d.markRead !== 'function') {
+          return sendJson(res, 503, { error: 'no-unread-book', text: '这一台还没接上未读那本账。' });
+        }
+        // ⚠️ 认不出的 scope ⇒ **不记**（**不建**、也不悄悄记到主线头上：
+        //    那会让"主对话"那个点被一句别的房间的话清掉）。
+        const s = typeof body?.scope === 'string' ? body.scope.trim() : '';
+        if (s === '') return sendJson(res, 400, { error: 'no-scope' });
+        const room = s === MAIN_SCOPE ? W : roomFor(claim.sub, s);
+        if (!room) return sendJson(res, 404, { error: 'no-such-scope', text: '这个房间还没建好。' });
+        d.markRead(s);
+        return sendJson(res, 200, { ok: true, scope: s, unread: d.unreadScopes() });
+      }
       if (path === '/api/health' && req.method === 'GET') {
         return sendJson(res, 200, { ok: true, timelineId: W.timeline.id, seq: W.timeline.seq });
       }
@@ -1185,7 +1223,13 @@ const BACKFILL_MAX = 200;
 // 🔴 **读的是「他自己那一份世界」的路由，必须进这张表**（否则宿主会替他那台盒子答 ——
 //    2026-09-23 真栽过：`/api/timeline` 只写了路由、忘了进表 ⇒ 每一个有容器的用户
 //    「往上翻」永远得到空页 ⇒ 屏幕说「没有更早的了」，而盒子里明明有。见 `test/tenant-routes.test.js`）
-const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '/api/app-ask', '/api/timeline'];
+// ⚠️ **2026-09-25 又栽了一次（同一形状，D 期）**：`/api/unread` 与 `/api/unread/read`
+//    刚落地时**没进这张表** ⇒ 租户的未读账在**他盒子里**（`unread.json`），宿主那一份是空的
+//    ⇒ 租户的未读点**永远答不出来**（而屏幕上的小点还归客户端画）。⇒ 加进表里。
+const TENANT_ROUTES = [
+  '/api/say', '/api/health', '/api/export', '/api/trash', '/api/app-ask', '/api/timeline',
+  '/api/unread', '/api/unread/read',
+];
 
   /**
    * 把一条 HTTP 请求**原样**转进那个人的容器，并把响应**流式**带回来。
@@ -1395,7 +1439,17 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     //    那一句**早就落盘了**，拿"归处不确定"拒它 ⇒ 界面会说一句假话
     //    （"没发出去"，而服务端其实收下了）。重发只认"是不是同一句"。
     const duplicate = W.say.isDuplicate(body?.messageId);
-    const route = routeTarget({ hint: scope, focus: W.dispatcher?.focusScope ?? null });
+    // ★ **D 期（§6.1·补 · 判据 D-9）：这一份焦点答得准吗**。
+    //   `device` 是**可选加的字段**（老客户端不给 ⇒ 走 C 期那一份，行为一个字不变）。
+    //   🔴 带设备标识而**答不准**（那台从没告知过 / 多台互相矛盾）⇒ 拿回来的焦点是
+    //      `'unknown'`，`routeTarget` 按"不知道"处理（**该问就问**）——
+    //      **绝不**拿"最新那台的"顶替（那正是 C 期要修掉的东西）。
+    const device = typeof body?.device === 'string' && body.device.trim() !== '' ? body.device.trim() : null;
+    const focusAnswer = W.dispatcher?.focusFor
+      ? W.dispatcher.focusFor(device)
+      : { scope: W.dispatcher?.focusScope ?? null, known: true };
+    const focusForRoute = focusAnswer.known === false ? FOCUS_UNKNOWN : (focusAnswer.scope ?? null);
+    const route = routeTarget({ hint: scope, focus: focusForRoute });
     if (!duplicate && route.ask) {
       // ⚠️ **不落盘、不投递**（`say.say()` 根本没被调用 ⇒ 盘上不留"没被回答的话"）。
       //    409 = 冲突，和 429（忙）/ 404（没这间）分得开；
@@ -1911,6 +1965,10 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     const devMode = url.searchParams.get('dev') === '1';
     // ★ **按连接**解一次档（契约 §二·2）；不认识的当默认档，不拒连接
     const level = parseLevel(url.searchParams);
+    // ★ **D 期（§6.1·补）：这条连接是哪台设备**（可选加的字段 —— 老客户端不带）。
+    //   ⚠️ 它**只是个标签**（不是身份、不是秘密）：焦点那本账按它各记一份
+    //      （判据 D-9"按连接/设备记"），而**准入与鉴权一个字都不靠它**。
+    const device = (url.searchParams.get('device') ?? '').trim() || null;
 
     /** 这一条连接**现在的焦点**（一条连接一份；`?scope=` 只是它的初始值）。 */
     let focus =
@@ -1937,7 +1995,10 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
     //   ⚠️ **实时路由不用它**（那是这条连接自己的 `focus`）；它只为 `/api/say`
     //      那条 HTTP 路服务 —— 那条路看不到这条连接。写不进去也不许把连接带走。
     try {
-      world?.dispatcher?.setFocus?.(focus);
+      // ★ **D 期**：带上 `device` ⇒ 按设备各记一份（`FocusBook` · D-9）。
+      world?.dispatcher?.setFocus?.(focus, device);
+      // ★ **D 期**：他连上来就看着他那一间 ⇒ **未读点没了**（D-6 的"打开过 ⇒ 没了"）。
+      world?.dispatcher?.markRead?.(focus);
     } catch {
       /* 焦点这件事不该把连接踹了 */
     }
@@ -2006,7 +2067,9 @@ const TENANT_ROUTES = ['/api/say', '/api/health', '/api/export', '/api/trash', '
       }
       focus = frame.scope;
       try {
-        world?.dispatcher?.setFocus?.(focus);
+        // ★ D 期：带上这台设备（见上面那段）＋ 打开过那一间 ⇒ 点没了（D-6）
+        world?.dispatcher?.setFocus?.(focus, device);
+        world?.dispatcher?.markRead?.(focus);
       } catch {
         /* 同上：焦点这件事不该把连接带走 */
       }

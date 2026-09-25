@@ -30,7 +30,12 @@ import { Timeline } from '../src/timeline.js';
 import { createServer } from '../src/server.js';
 
 /** **必须在他那台盒子里答**的路由（少一个 ⇒ 宿主就可能在替他的世界说话）。 */
-const IN_THE_BOX = ['/api/health', '/api/export', '/api/trash', '/api/timeline', '/api/say'];
+const IN_THE_BOX = [
+  '/api/health', '/api/export', '/api/trash', '/api/timeline', '/api/say',
+  // ★ 2026-09-25 补：未读那两本账也住在**他自己那一份**里（`unread.json`）
+  //   —— 漏了它俩，租户的未读点就永远答不出来（同一形状第二次栽）
+  '/api/unread', '/api/unread/read',
+];
 
 /** **中心的事**：不许被转发（它们是账号 / 续期 / 审计 / 空间状态那一类）。 */
 const CENTER = ['/api/space', '/api/audit'];

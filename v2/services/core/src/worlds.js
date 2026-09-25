@@ -59,6 +59,11 @@ import { reconcileOnBoot } from './reconcile.js';
 //   一人一份（和通知那本账同一条理由：它是"这个人的事"）。
 import { WorkLog } from './worklog.js';
 import { PromiseBook } from './time-words.js';
+// ★ **D 期**（契约 `docs/dev/100-DISPATCHER-D.md`）：转交（N16）、焦点告知（D-9）、
+//   未读（D-6）。三本账都**一个人一份**（和上面那几本同一条理由）。
+import { HandoffBook } from './handoff.js';
+import { FocusBook } from './focus-book.js';
+import { UnreadBook } from './unread.js';
 
 /**
  * **主线那个房间的名字**（不属于任何 app 的对话 —— 契约 `83-APP-WORKSPACE.md` §三·2）。
@@ -628,6 +633,13 @@ export class Worlds {
     //        一次开机只做一次，之后新开的活归这一代。
     const work = new WorkLog({ store: t.store, log: (m) => this.#warn(m) });
     const promises = new PromiseBook({ store: t.store });
+    // ★ **D 期三本账**（一个人各一份）：
+    //   · `handoffs` —— 转交（落盘：D-7"回收前必须在盘上"要它）；
+    //   · `focus`    —— 按设备记的焦点（判据 D-9）；
+    //   · `unread`   —— 他看到过哪一号（判据 D-6；事实在那条日志上）。
+    const handoffs = new HandoffBook({ dir: t.dir, log: (m) => this.#warn(m) });
+    const focusBook = new FocusBook({ dir: t.dir, log: (m) => this.#warn(m) });
+    const unread = new UnreadBook({ dir: t.dir, store: t.store, timelineId: 'main', log: (m) => this.#warn(m) });
     let settled = [];
     try {
       settled = work.settleDead({ aliveGenerations: [] });
@@ -677,6 +689,31 @@ export class Worlds {
       onEgress: ({ entries }) => {
         egress.noteAll(entries);
       },
+      // ★ **D 期**（契约 `100`）：转交那本账 ＋ "这一间存在吗"那个判据。
+      //   🔴 `scopeExists` **只查、不建**（D-3：转交给一间不存在的房 ⇒ 拒，
+      //      而且**不许顺手建一个**）——所以这里只问 `workspaces.has` / 制品库，
+      //      一个 `mkdir` 都没有。
+      handoffs,
+      //   ⚠️ **内置那四个**（`BUILTIN_SCOPES`）也算存在（它们桌面上就有图标 ·
+      //      见 `roomFor` 那段），别的必须真的在工作区或制品库里。
+      //   ★ **存在但还没挂上来**（他还没点开过那个图标）⇒ 由这里把它挂上来
+      //     （`roomFor` 自己会校验"真的存在"；不存在的那些已经被 `scopeExists` 拒了）。
+      //     ⚠️ 用 `this.roomFor`（**宿主这一个**实例）：`worlds` 这个名字在这一层
+      //        并不存在（它只在测试里叫那个名字）——写成它就会 `ReferenceError`，
+      //        而那正是"转交悄悄送不出去"的形状。
+      loadSession: (scope) => this.roomFor(t.userId, scope)?.session ?? null,
+      scopeExists: (scope) => {
+        const id = String(scope);
+        if (id === MAIN_SCOPE || isBuiltinScope(id)) return true;
+        try {
+          return workspaces.has(id) || apps.current(id) !== null;
+        } catch {
+          return false;
+        }
+      },
+      // ★ **D 期**：焦点那本账（设备 → 焦点 · D-9）＋ 未读那本账（D-6）。
+      focusBook,
+      unread,
     });
 
     // ★ 账本那条本地通道：**套接字路径由这个人的目录派生** ⇒ 天然跟人走
@@ -736,6 +773,12 @@ export class Worlds {
       // ★ P1：逐件活账 / 承诺账（判据与排障都从这里读）。
       work,
       promises,
+      // ★ **D 期三本账**（一个人各一份）：转交 / 焦点（按设备）/ 未读。
+      //   ⚠️ 它们**不是**给模型看的：转交走工具口（`ledgerSocket`），
+      //      未读与焦点走 HTTP 那两个口（`server.js`）。
+      handoffs,
+      focusBook,
+      unread,
       // 开机时逐件收成了"已停"的那几件（诊断用；**不是**给用户看的）。
       settledOnBoot: settled.map((r) => ({ scopeId: r.scopeId, ref: r.ref, turn: r.turn })),
       boot: { ...boot, reconciled },

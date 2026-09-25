@@ -242,6 +242,31 @@ export class TurnTranslator extends EventEmitter {
   /** `turn:step` → 工具名（`tool/result` 上没有名字，见 `#onToolCall`）。 */
   #stepTools = new Map();
   /**
+   * ★ **D 期：等着被接过去的那些"半条消息"**（FIFO）。
+   *
+   * 🔴 为什么要**排队**而不是"投递时就绑轮号"：`turn/start` 是**目标那一侧**
+   *    给的（`07-TIMEOUT.md` §一：DSH 的 `turn/start` 里没有 prompt id），
+   *    而"哪一轮接哪条消息"必须**一一对上**——绑错了就是"另一半答案写进
+   *    别人的气泡"（D-4 的反例）。⇒ 顺序由**投递顺序**保证（投递是排着的，
+   *    见 `Dispatcher.#handoffChain`），认领发生在 `turn/start` ——
+   *    那时才真的知道"来了一轮"。
+   *
+   * ⚠️ 只认**最早那条还没被认领的**（FIFO），与 `#delivered` 同一套纪律。
+   * ⚠️ 它**不落盘**：账在 `HandoffBook` 上（那个落盘）；这里只是"这一轮接哪条"。
+   */
+  #adoptions = [];
+
+  /**
+   * ★ **D 期：交出去之后那条消息**（`messageId` → 一条**不收口的挂账**）。
+   *
+   * 用途只有一个：模型调 `handoff_to` 的那一帧**可能比 `turn/end` 慢一步**
+   * （域套接字那一跳）——那时轮账已经收了，可那条消息还开着 ⇒ 谁要收它
+   * （`turnDeadline` / `forceClose`）得先在账上找得到它，否则就成了
+   * "永远马上说完"的气泡（N19）。**挂账的旗子是"交出去了"**（照常不收口）。
+   */
+  #openHandoffs = new Map();
+
+  /**
    * 已经由 `step/start` 报过的步（键 `turn:step`）。
    *
    * 用途只有一个：`tool/call` 的**类别补发**只认这一步已经报过——
@@ -268,6 +293,130 @@ export class TurnTranslator extends EventEmitter {
     this.#scopeId = scopeId;
     this.#notice = notice;
     this.#onEgress = typeof onEgress === 'function' ? onEgress : null;
+  }
+
+  /**
+   * ★ **D 期：排一条"等着被接过去的半条消息"**（由 `Dispatcher.handoffDelivery` 调）。
+   *
+   * 🔴 它**不改这一间的 `scopeId`** —— 续写事件的**可见标签**永远是
+   *    **发起那一间**（契约 §6.2）；`byScope` 只是审计字段。
+   *
+   * @param {string} messageId 要接着写的那条消息（A 那条）
+   * @param {string} byScope 真正干活的那一间（审计/用量）
+   * @param {object|null} [writer] **发起者那条 writer**（**同一个对象** ——
+   *        N22"同一时刻最多一条未收口"的登记在它身上，另建一个会当场撞上）
+   * @returns {boolean}
+   */
+  expectHandoff(messageId, byScope, writer = null) {
+    if (typeof messageId !== 'string' || messageId === '') return false;
+    this.#adoptions.push({ messageId, byScope: byScope ?? null, writer: writer ?? null });
+    return true;
+  }
+
+  /** 这一轮是不是**转交续写**（判据/诊断用）：给那条消息 id，没有 ⇒ `null`。 */
+  handoffTurn(messageId) {
+    if (typeof messageId !== 'string' || messageId === '') return null;
+    for (const [turn, rec] of this.#turns) {
+      const w = rec?.adopted ?? rec?.writer ?? null;
+      if (w && w.messageId === messageId) return turn;
+    }
+    return null;
+  }
+
+  /** ★ **D 期**：见 `turn`。 */
+  get liveTurn() {
+    let last = null;
+    for (const t of this.#turns.keys()) {
+      if (last === null || t > last) last = t;
+    }
+    return last;
+  }
+
+  /** 这一轮的**干活者**（没有 ⇒ `null` = 就是这一间自己）。 */
+  byScopeOfTurn(turn) {
+    return this.#turns.get(turn)?.byScope ?? null;
+  }
+
+  /**
+   * ★ **D 期：这一轮把话交出去了**（`Dispatcher.announceHandoff` 成功之后叫）。
+   *
+   * 后果有两个，第二个是致命的：
+   *   ① 这一轮收口时**不许**再往那条消息里补一句（它不是失败，是"换人接着做"）；
+   *   ② 🔴 **那条消息不许在本间收口** —— `end()` 了就成"挪走"（另起一条）
+   *      ＝ D-8 的反例。收口由**接活那一间**做。
+   *
+   * ⚠️ **两种时机都要能接住**：模型可能在 `turn/end` **之前**调工具
+   *    （那时轮账还在），也可能在**之后**（域套接字那一帧慢一步）——
+   *    所以忙时在轮账上打旗子，闲时开一条**不收口的挂账**（供 `turnDeadline`
+   *    兜底收口用：`N19` 挂起必有收尾）。
+   */
+  noteHandedOff(turn, messageId = null) {
+    if (Number.isInteger(turn)) {
+      const rec = this.#turns.get(turn);
+      if (rec) {
+        rec.handedOff = true;
+        if (typeof messageId === 'string' && messageId !== '') rec.handoffMessageId = messageId;
+        return true;
+      }
+    }
+    if (typeof messageId === 'string' && messageId !== '') {
+      this.#openHandoffs.set(messageId, { writer: null, startedAt: Date.now(), texts: 0, sources: [], handedOff: true });
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * **这一轮把话交出去了吗** —— 收口那条路要看它（见 `noteHandedOff`）。
+   * ⚠️ 认不出来 ⇒ `false`（老行为：照常收口）。
+   */
+  handedOffTurn(turn) {
+    const rec = this.#turns.get(turn);
+    if (rec?.handedOff) return true;
+    // 闲时那条挂账（工具慢一步）也要认
+    for (const r of this.#openHandoffs.values()) {
+      if (r.handedOff) return true;
+    }
+    return false;
+  }
+
+  /**
+   * **这一轮的账**（`turn` → 那条记录）——只给同一层的诊断/判据用。
+   * ⚠️ 返回的是**浅拷贝的表**：外面拿不到 `#turns` 本身。
+   */
+  turnRecords() {
+    return new Map(this.#turns);
+  }
+
+  /**
+   * ★ **先给这条消息开个口**（D-4：A 那条"不收口"的那半）。
+   *
+   * 用的场合只有一个：模型在一轮里**光调了工具、一个字都还没说**就把活转出去了 ——
+   * 那时还没有 `writer`，而"B 接着往**同一条消息**里写"要求那条消息**存在**。
+   * ⚠️ 所以这里**只开口、不写正文**（一个字都不编）。
+   * ⚠️ 开出来的那条会**挂到当前这一轮**的账上：那一轮收口时它照样收（N19）——
+   *    它只是**不收在转交那一刻**（`MessageWriter.handoff()` 不 end）。
+   *
+   * @param {string} messageId
+   * @returns {import('./message-writer.js').MessageWriter|null}
+   */
+  ensureOpenMessage(messageId, turn = null) {
+    if (typeof messageId !== 'string' || messageId === '') return null;
+    for (const rec of this.#turns.values()) {
+      const w = rec?.writer;
+      if (w && w.messageId === messageId && !w.ended) return w;
+    }
+    const w = new MessageWriter({
+      timeline: this.#timeline,
+      messageId,
+      agent: 'agent',
+      origin: 'reactive',
+      scopeId: this.#scopeId,
+    });
+    w.start();
+    const rec = Number.isInteger(turn) ? this.#turns.get(turn) : null;
+    if (rec && !rec.writer) rec.writer = w;
+    return w;
   }
 
   /** 当前有没有一轮还没收口。给淘汰回调判断用。 */
@@ -462,6 +611,9 @@ export class TurnTranslator extends EventEmitter {
    */
   #endWriter(writer, rec, reason) {
     if (rec && Array.isArray(rec.sources) && rec.sources.length > 0) writer.sources = rec.sources;
+    // ★ **转交续写：把"谁在干活"记上**（§6.2 · 审计/用量）。
+    //   ⚠️ 只在**真有别的 scope 在干活**时才加这个字段 —— 老行为的字节一个都不动。
+    if (rec?.byScope) writer.byScope = rec.byScope;
     writer.end(reason);
   }
 
@@ -569,9 +721,89 @@ export class TurnTranslator extends EventEmitter {
     if (typeof turn !== 'number') return;
     // ★ 键是 turn —— 见文件头 ②
     if (!this.#turns.has(turn)) {
-      this.#turns.set(turn, { writer: null, startedAt: ev.time ?? Date.now(), texts: 0, sources: [] });
+      // ★ **D 期：这一轮是不是来接那半条消息的**（FIFO · 见 `#adoptions`）。
+      //   认领发生在这里（`turn/start`）—— 这是唯一知道"来了一轮"的时刻。
+      const job = this.#adoptions.shift() ?? null;
+      this.#turns.set(turn, {
+        writer: null,
+        startedAt: ev.time ?? Date.now(),
+        texts: 0,
+        sources: [],
+        // ★ `adopted` = 被接过去的那条 writer（**同一个对象** —— 见 `expectHandoff`）
+        adopted: job?.writer ?? null,
+        // ★ 这一轮要接着写的那条消息（`null` = 不是续写）
+        handoffMessageId: job?.messageId ?? null,
+        // ★ **谁在干活**（**只**用于审计/用量 —— 可见标签还是本间 · §6.2）
+        byScope: job?.byScope ?? null,
+        // ★ **D 期：这一轮把话交出去了**（`MessageWriter.handoff()` 成功 ⇒ true）。
+        //   收口那条路要看它：交出去的那条消息**不许在本间收口**（D-4 / D-8）。
+        handedOff: false,
+      });
     }
     this.emit('turn-start', turn);
+  }
+
+  /**
+   * ★ **D 期：给这一轮拿一条 writer**（转交续写时**用 A 那条** · D-4）。
+   *
+   * 🔴 两条不许走样：
+   *   ① 续写时**沿用同一个 `messageId`**（客户端才是一个气泡）；
+   *   ② **可见标签永远是这一间**（`scopeId: this.#scopeId`）——
+   *      `byScope` 只是审计字段（§6.2）。
+   * @param {object} rec 这一轮的账（`#turns` 里那条）
+   * @param {number} turn
+   */
+  #writerFor(rec, turn) {
+    if (rec.writer && !rec.writer.ended) return rec.writer;
+    // ★ **交出去那条**：同一条消息的挂账（工具慢一步那种）。
+    const hung = rec.handoffMessageId ? this.#openHandoffs.get(rec.handoffMessageId) : null;
+    if (hung?.writer && !hung.writer.ended) {
+      rec.writer = hung.writer;
+      if (rec.byScope) rec.writer.byScope = rec.byScope;
+      return rec.writer;
+    }
+    // ★ **转交续写：用 A 那条**（D-4）——写的是**同一个 `messageId`**，
+    //   所以客户端那一个气泡前后半段连在一起。
+    const reused = rec.adopted && !rec.adopted.ended ? rec.adopted : null;
+    const w = reused
+      ? reused
+      : new MessageWriter({
+        timeline: this.#timeline,
+        // ⚠️ 续写时沿用那条消息 id（**同一个**）；否则照旧服务端生成
+        ...(rec.handoffMessageId ? { messageId: rec.handoffMessageId } : {}),
+        agent: 'agent',
+        origin: 'reactive',
+        // 🔴 **可见标签永远是这一间（发起那一间）** —— §6.2 定死。
+        scopeId: this.#scopeId,
+      });
+    // 🔴 **谁在干活**（只用于审计/用量）
+    if (rec.byScope) w.byScope = rec.byScope;
+    rec.writer = w;
+    if (hung) hung.writer = w;
+    return w;
+  }
+
+  /**
+   * ★ **D 期：先把那条"要交出去的消息"开着**（`Dispatcher.announceHandoff` 叫）。
+   *
+   * 模型光调工具、一个字都还没说时就得开这一个口：不开的话，"B 接着往**同一条
+   * 消息**里写"就没有"同一条"可谈（D-4 的反例）。⚠️ **只开口、不编正文**。
+   * @returns {import('./message-writer.js').MessageWriter|null}
+   */
+  openMessageForHandoff(messageId, turn = null) {
+    if (typeof messageId !== 'string' || messageId === '') return null;
+    for (const rec of this.#turns.values()) {
+      const w = rec?.writer;
+      if (w && w.messageId === messageId && !w.ended) return w;
+    }
+    const hung = this.#openHandoffs.get(messageId);
+    if (hung?.writer && !hung.writer.ended) return hung.writer;
+    const w = this.#writerFor(
+      { writer: null, adopted: null, handoffMessageId: messageId, byScope: null },
+      turn,
+    );
+    if (hung) hung.writer = w;
+    return w;
   }
 
   #onAssistantMessage(data, ev) {
@@ -604,16 +836,9 @@ export class TurnTranslator extends EventEmitter {
 
     // 一轮里第一段文本 = 快答，后面的 = 深答（协议 R2：同一个气泡）
     for (const piece of texts) {
-      if (!rec.writer) {
-        rec.writer = new MessageWriter({
-          timeline: this.#timeline,
-          agent: 'agent',
-          origin: 'reactive',
-          scopeId: this.#scopeId,
-        });
-      }
+      const w = this.#writerFor(rec, turn);
       const block = rec.texts === 0 ? 'quick' : 'deep';
-      rec.writer.chunk(block, piece);
+      w.chunk(block, piece);
       rec.texts += 1;
     }
     this.emit('text', { turn, text, usage: data.usage ?? null });
@@ -631,12 +856,30 @@ export class TurnTranslator extends EventEmitter {
       for (const key of this.#stepTools.keys()) {
         if (key.startsWith(`${turn}:`)) this.#stepTools.delete(key);
       }
+      // ★ 转交续写**不在这里清**：那是 `#adoptions` 的活（见 `expectHandoff`）；
+      //   这一轮绑的是 `adopted` / `byScope`，随 `rec` 一起被删掉。
     }
     const rec = this.#turns.get(turn);
     if (!rec) return;
     this.#turns.delete(turn); // ★ 用 turn 删 —— 键和存的时候一致
 
     const kind = data?.reason?.kind ?? 'completed';
+    // ★ **D 期：这一轮把话交出去了**（`handoff()` 成功 ⇒ `rec.handedOff`）。
+    //   🔴 **绝不许收口**：那条消息是留给**接活那一间**接着写的（D-4 / D-8），
+    //      在这儿 `end()` 就等于"挪走"（另起一条）—— 正是反例。
+    //   发起者这一轮照样**结束**（轮的账、过程提示照收），只是那条消息不收。
+    if (rec.handedOff) {
+      // ★ **把那条消息落实成"开着"**（工具慢一步那种），但**不收口**
+      //   —— 收口由接活那一间做（D-4 / D-8）。它在轮账上留一条**不收口的挂账**
+      //   （`#openHandoffs`），`turnDeadline` / `forceClose` 兜底收（N19）。
+      if (rec.handoffMessageId) {
+        const w = this.#writerFor(rec, turn);
+        const hung = this.#openHandoffs.get(rec.handoffMessageId);
+        if (hung) hung.writer = w;
+      }
+      this.emit('turn-end', { turn, kind, empty: true, handedOff: true });
+      return;
+    }
     // 🔴 **"钥匙不对"要说成"钥匙不对"**（见 `AUTH_LINE` 顶上那段）。
     //    它在两种情形下都要用：一句话都没说、以及只说了半句。
     // ★ 同样地，**"外面那条路不通"要说成"外面那条路不通"**（账 #33 · 2026-09-23）：
@@ -652,12 +895,8 @@ export class TurnTranslator extends EventEmitter {
 
     if (!writer) {
       // 一句话都没说。**不许留白**（手册：宁可说一句"没结论"，也不能空着）。
-      const w = new MessageWriter({
-        timeline: this.#timeline,
-        agent: 'agent',
-        origin: 'reactive',
-        scopeId: this.#scopeId,
-      });
+      // ★ 用 `#writerFor`：转交续写的那一轮**也**要接着写 A 那条（D-4）。
+      const w = this.#writerFor(rec, turn);
       w.chunk('deep', kind === 'completed' ? EMPTY_LINE : stuckLine);
       this.#endWriter(w, rec, 'failed');
       // ★ 「这一轮出事了」已经在这条通道上说过了（文件头 ⑥）
@@ -691,6 +930,13 @@ export class TurnTranslator extends EventEmitter {
     this.#turns.clear();
     this.#mutatedTurns.clear(); // 轮号在新进程里从 1 重来 ⇒ 这份账也是新的
     this.#stepTools.clear(); // 同上：轮号重来了，`turn:step` 那本账也是旧的
+    // ★ 那些"等着被接过去的半条消息"跟着这一代一起作废：轮号重来了，
+    //   再认领就会接到**别的轮**上（那正是 D-4 的反例形状）。
+    //   ⚠️ 作废**不等于**那条转交不作数了：账在落盘的 `HandoffBook` 上。
+    this.#adoptions.length = 0;
+    // ★ **交出去那条的挂账**也一起清：新进程接手之后它已经不在我们手里了
+    //   （`forceClose` 收过的那条已经收了口；没收过的由接活那一间收）。
+    this.#openHandoffs.clear();
   }
 
   /**
@@ -718,19 +964,30 @@ export class TurnTranslator extends EventEmitter {
     if (!rec) return false;
     this.#turns.delete(turn);
 
-    if (rec.writer && !rec.writer.ended) {
-      // ① 说了一半
-      rec.writer.chunk('deep', DEADLINE_PARTIAL_LINE);
-      this.#endWriter(rec.writer, rec, 'timeout');
-    } else if (!rec.writer) {
-      // ② 一句都没说 —— **不许留白**
-      const w = new MessageWriter({
-        timeline: this.#timeline,
-        agent: 'agent',
-        origin: 'reactive',
-        scopeId: this.#scopeId,
-      });
+    if (rec.handedOff) {
+      // ★ **D 期：交出去那一轮卡住了**：它在**这一间**是"没做完"，
+      //   所以那条消息**必须在盘上收个口**（N19：不许留"永远马上说完"的气泡）。
+      //   🔴 它**不是**"做完了"：`timeout` 那一档就写明了。谁真做完了由接活的
+      //      那一间说（它收口时是 `completed`，而且 `byScope` 记得住）。
+      const w = this.#writerFor(rec, turn);
+      const hung = rec.handoffMessageId ? this.#openHandoffs.get(rec.handoffMessageId) : null;
+      if (hung) hung.writer = w;
+      w.chunk('deep', DEADLINE_PARTIAL_LINE);
+      this.#endWriter(w, rec, 'timeout');
+      this.#claimProcess(turn, 'timeout');
+      this.emit('turn-deadline', { turn });
+      return true;
+    }
+
+    if (!rec.writer && !rec.adopted) {
+      // 一句都没说 —— **不许留白**
+      const w = this.#writerFor(rec, turn);
       w.chunk('deep', DEADLINE_EMPTY_LINE);
+      this.#endWriter(w, rec, 'timeout');
+    } else {
+      // ① 说了一半（转交续写也算"已经开了口"）
+      const w = this.#writerFor(rec, turn);
+      w.chunk('deep', DEADLINE_PARTIAL_LINE);
       this.#endWriter(w, rec, 'timeout');
     }
     // ★ 「这一轮卡住、收了口」在过程通道上说过了（文件头 ⑥）
@@ -780,12 +1037,27 @@ export class TurnTranslator extends EventEmitter {
    */
   forceClose(reason = 'failed', { line = INTERRUPTED_LINE } = {}) {
     let closed = 0;
+    // ★ **D 期：闲时那条挂账**（已经交出去、轮已经收了）——它照样是"挂着的气泡"，
+    //   收尾必须收它（N19），否则界面上永远"马上说完"。
+    for (const [messageId, hung] of [...this.#openHandoffs]) {
+      this.#openHandoffs.delete(messageId);
+      const w = hung.writer && !hung.writer.ended
+        ? hung.writer
+        : new MessageWriter({ timeline: this.#timeline, messageId, agent: 'agent', origin: 'reactive', scopeId: this.#scopeId });
+      if (!w.ended) {
+        w.chunk('deep', line);
+        w.end(reason);
+        closed += 1;
+      }
+    }
     for (const [turn, rec] of [...this.#turns]) {
       this.#turns.delete(turn);
-      if (rec.writer && !rec.writer.ended) {
-        // 用户已经看到半句 ⇒ 补一句"没说完"，别重复它的开头
-        rec.writer.chunk('deep', INTERRUPTED_LINE);
-        this.#endWriter(rec.writer, rec, reason);
+      if ((rec.writer && !rec.writer.ended) || rec.adopted) {
+        // 用户已经看到半句（或这条消息已经被转交出去、有人接着写）⇒
+        // 补一句"没说完"，别重复它的开头
+        const w = this.#writerFor(rec, turn);
+        w.chunk('deep', INTERRUPTED_LINE);
+        this.#endWriter(w, rec, reason);
       } else if (!rec.writer) {
         // 一句话都没说 ⇒ **主动交代**（不许留白）
         const w = new MessageWriter({

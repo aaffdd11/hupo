@@ -102,7 +102,7 @@ const FIELD_ARGS = {
 
 // ── 握手 + 工具名 ────────────────────────────────────────────
 
-test('握手给的是**标准 MCP**：initialize → tools/list 五条工具', async () => {
+test('握手给的是**标准 MCP**：initialize → tools/list 六条工具', async () => {
   const s = setup();
   const c = mcpClient({ HUPO_LEDGER_SOCKET: s.socketPath });
   try {
@@ -114,7 +114,7 @@ test('握手给的是**标准 MCP**：initialize → tools/list 五条工具', a
 
     const list = await c.call('tools/list', {});
     const names = list.result.tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ['ledger_delete', 'ledger_list', 'ledger_propose', 'ledger_write', 'work_status']);
+    assert.deepEqual(names, ['handoff_to', 'ledger_delete', 'ledger_list', 'ledger_propose', 'ledger_write', 'work_status']);
     for (const t of list.result.tools) {
       assert.equal(t.inputSchema.type, 'object');
       assert.ok(typeof t.description === 'string' && t.description.length > 10, '每条都要说清什么时候调');

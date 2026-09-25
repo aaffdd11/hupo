@@ -32,6 +32,29 @@ import { MAIN_SCOPE } from './worlds.js';
 export const FOCUS_FRAME_T = 'focus';
 
 /**
+ * ★ **D 期（`100` §6.1·补）：答不准时那个值**。
+ * ⚠️ 与 `focus-book.js` 的 `FOCUS_UNKNOWN` **逐字一致**（一处出处，别抄第二份）。
+ */
+export const FOCUS_UNKNOWN = 'unknown';
+
+/**
+ * 这一份焦点**答得准吗**（判据 D-9 的判据本体 · 纯函数）。
+ *
+ * ⚠️ **`unknown` 不等于"无所不知"**：它只表示"这一份说不准"，
+ *    **不许**拿"最新那台的"顶替 —— 用到焦点的地方一律按"不知道"处理。
+ *
+ * @param {object} o
+ * @param {string|null} [o.focus] 那一份焦点（可能是 `'unknown'`）
+ * @returns {{known: boolean, scope: string|null}}
+ */
+export function knownFocus(focus) {
+  if (focus === null || focus === undefined || focus === '') return { known: true, scope: null };
+  const s = String(focus);
+  if (s === FOCUS_UNKNOWN) return { known: false, scope: null };
+  return { known: true, scope: s };
+}
+
+/**
  * 把任意输入归一成 scope 名。
  * ⚠️ **认不出来 / 空 ⇒ 主线**（和 `worlds.parseScope` 同一条纪律：
  *    协议只加可选字段，缺了就是老行为）。
@@ -70,15 +93,24 @@ export function parseFocusFrame(raw) {
 /**
  * **这一句该不该按提示送出去**（第 16 条的判据本体 · 纯函数）。
  *
+ * ★ **D 期补的那一档**（`100` §6.1·补 · D-9）：`focus === 'unknown'` ⇒
+ *   **按"不知道"处理**（`ask: true`，该问就问）——**不许**拿别的设备的顶替。
+ *   ⚠️ 它与"没告知过"（`null`）**不是一档**：没告知过 ⇒ 老行为（照旧送，
+ *      协议只加可选字段）；`unknown` ⇒ **答不准**，那正是要反问的形状。
+ *
  * @param {object} o
  * @param {string} [o.hint]  客户端给的**归处提示**（`/api/say` 的 `scope`）
  * @param {string|null} [o.focus] 这个用户**最近一次被告知的焦点**
- *        （`null` = 没有告知过 ⇒ 不比较）
+ *        （`null` = 没有告知过 ⇒ 不比较；`'unknown'` = 答不准 ⇒ 反问）
  * @returns {{deliver: boolean, ask: boolean, focus: string|null, target: string}}
  */
 export function routeTarget({ hint, focus } = {}) {
   const target = normalizeScope(hint);
-  const f = focus === null || focus === undefined || focus === '' ? null : String(focus);
+  const k = knownFocus(focus);
+  // ★ **答不准 ⇒ 按"不知道"处理**（该问就问）——`focus` 如实回 `'unknown'`，
+  //   让客户端/排障看得见"这一份说不准"（不是伪装成某一间）。
+  if (!k.known) return { deliver: false, ask: true, focus: FOCUS_UNKNOWN, target };
+  const f = k.scope;
   if (f === null || f === target) return { deliver: true, ask: false, focus: f, target };
   return { deliver: false, ask: true, focus: f, target };
 }

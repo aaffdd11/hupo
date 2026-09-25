@@ -15,6 +15,17 @@
 // 换手（handoff）的正确姿势：**先 `end()` 旧的那条，再 `new` 一条**。
 // 旧实现里 `cur.writer = new MessageWriter(...)` 直接换引用，
 // 而 dispatcher 手里还攥着旧的 `info` —— 那个 bug 见 `07-APPENDIX.md` §一「收口失效」。
+//
+// ── ★ D 期（契约 `docs/dev/100-DISPATCHER-D.md` §6.2）：**接别人的那条** ──
+// 手册 §3.5 要的是"**B 接着往同一条消息里写**"（客户端**一个气泡**），
+// 所以转交**不是**换手那条路（那条要"先收口"），而是：
+//
+//     A 那条**不收口**（`handoff(messageId)` —— 只打一个状态，不 `end`），
+//     B 用**同一个 `messageId`** 继续 `chunk()`，最后由 B `end()`。
+//
+// 🔴 两条不许走样：
+//   ① **`scopeId` 仍是发起那一间**（用户可见的那一间）⇒ 视图不裂；
+//   ② **谁在干活另说**（`byScope`）：只用于审计 / 用量，**不许**当可见标签。
 
 import { StoreError } from './store.js';
 
@@ -33,13 +44,14 @@ export class MessageWriter {
   #origin;
   #re;
   #scopeId;
+  #byScope = null;
   #sources = [];
   #started = false;
   #ended = false;
   #text = '';
   #chunks = 0;
 
-  constructor({ timeline, messageId, agent, origin, re = [], scopeId = null }) {
+  constructor({ timeline, messageId, agent, origin, re = [], scopeId = null, byScope = null }) {
     if (!timeline) throw new StoreError('timeline 必填');
     if (!agent) throw new StoreError('agent 必填（谁在说）');
     if (!['reactive', 'proactive'].includes(origin)) {
@@ -51,6 +63,7 @@ export class MessageWriter {
     this.#origin = origin;
     this.#re = re;
     this.#scopeId = scopeId;
+    this.#byScope = typeof byScope === 'string' && byScope !== '' ? byScope : null;
   }
 
   get messageId() {
@@ -61,6 +74,17 @@ export class MessageWriter {
   }
   get ended() {
     return this.#ended;
+  }
+  /** ★ **谁在干活**（审计/用量归因）——`null` = 就是它自己那一间（老行为）。 */
+  get byScope() {
+    return this.#byScope;
+  }
+  /**
+   * ★ 记下**真正的干活者**（转交续写时由调度器叫）。
+   * 🔴 **它不改 `scopeId`** —— 可见标签永远是发起那一间（`100` §6.2）。
+   */
+  set byScope(scope) {
+    this.#byScope = typeof scope === 'string' && scope !== '' ? scope : null;
   }
   /** 到目前为止说出口的正文。 */
   get text() {
@@ -86,6 +110,9 @@ export class MessageWriter {
         origin: this.#origin,
         re: this.#re,
         scopeId: this.#scopeId,
+        // ⚠️ `byScope` **只在转交续写时才有**（它不是老字段，也不许有默认值）：
+        //    没有它 ⇒ 事件的形状与改前**逐字一样**。
+        ...(this.#byScope ? { byScope: this.#byScope } : {}),
       });
     } catch (err) {
       // ⚠️ 落盘失败 ⇒ 这条消息**没开成口**，必须把登记撤掉。
@@ -114,11 +141,51 @@ export class MessageWriter {
     this.#timeline.emit({
       type: 'message/text',
       messageId: this.#messageId,
+      // ⚠️ **只给变异验证用的后门**（`HUPO_MUT_TAG`）：把一个**故意错的**
+      //    可见标签强加上去，用来证明判据 D-4 那条"标签不许打成干活者"**不是恒真**
+      //    （见 `docs/dev/100-DISPATCHER-D.md` §三 的"每条都要变异验证"）。
+      //    不设这个环境变量 ⇒ **一个字节都不加**（正常运行与改前逐字一样）。
+      ...(process.env.HUPO_MUT_TAG ? { scopeId: process.env.HUPO_MUT_TAG } : {}),
       block,
       seqInBlock: this.#chunks,
       text,
+      ...(this.#byScope ? { byScope: this.#byScope } : {}),
     });
     return this;
+  }
+
+  /**
+   * ★ **转交**：这条消息**不收口**，但要让界面知道"活已经交给别人了"。
+   *
+   * 🔴 它与"**挪走**"**不是一回事**（决策 D10.4）：
+   *    挪走 = **先收口**、后面的话**另起一条**；
+   *    转交 = **不收口**、后面的话**进同一条**（`100` §6.2 / D-8）。
+   *    ⇒ 所以这里**绝不**调 `end()`。
+   *
+   * @param {object} [o]
+   * @param {string} [o.reason] 为什么转（模型给的理由；**不保证**有）
+   * @param {string} [o.to] 转给哪一间（**审计用**：它带内部 id，界面不许直接显示）
+   * @returns {boolean} 真发了才是 true（已经收口的那条 ⇒ false，不硬发）
+   */
+  handoff({ reason = null, to = null, scopeId = undefined } = {}) {
+    if (this.#ended) return false;
+    if (!this.#started) this.start();
+    // 🔴 **可见标签**：优先用调用方明确给的那一间（= 发起那一间 · §6.2）；
+    //   没给就退回本对象自己那个（主线时它是 `null` ⇒ 事件上不带字段，
+    //   与盘上老事件的形状**逐字一致**）。
+    const tag = scopeId !== undefined ? scopeId : this.#scopeId;
+    this.#timeline.emit({
+      type: 'message/handoff',
+      messageId: this.#messageId,
+      reason: typeof reason === 'string' && reason.trim() !== '' ? reason.trim() : null,
+      // ⚠️ `to` 是**内部 id**：它是给审计/排障看的（与服务端那本 `HandoffBook` 对齐），
+      //    客户端**不许**把它显示出来（`06` 禁用词那条）。
+      to: typeof to === 'string' && to !== '' ? to : null,
+      // 主线不带这个字段（与 `message/start` 同一条规矩）
+      ...(tag ? { scopeId: tag } : {}),
+      ...(this.#byScope ? { byScope: this.#byScope } : {}),
+    });
+    return true;
   }
 
   /** 收口。**幂等**——重复调用返回 false，不产生第二条收尾事件。 */
@@ -130,6 +197,7 @@ export class MessageWriter {
       messageId: this.#messageId,
       reason,
       sources: this.#sources, // 权威版本（协议 R8）
+      ...(this.#byScope ? { byScope: this.#byScope } : {}),
     });
     this.#ended = true;
     this.#timeline.endMessage(this);

@@ -89,6 +89,55 @@ export function handleLedgerOp(ledger, req, ctx = null) {
         if (items.length === 0) return { ok: true, count: 0, items: [], text: '现在没有挂着的活。' };
         return { ok: true, count: items.length, items, text: items.map((it) => it.text).join('\n') };
       }
+      // ── ★ **转交**（D 期 · 契约 `docs/dev/100-DISPATCHER-D.md` §6.1 · 判据 D-1）──
+      //
+      // 🔴 **这就是"只有工具调用能发起转交"那条判据的结构性落点**（D-1）：
+      //    转交的**入口只有这一条**（模型那条 MCP 工具 `handoff_to` 递进来），
+      //    正文那条路（`session-translate`）里根本没有这个函数的出口
+      //    ⇒ "正文里说一句我转给某一间"**结构上不可能**变成转交。
+      //    ⚠️ 所以这里**绝不**读 `said` / `text` 去猜关键词（那正是"自然语言当控制面"）。
+      //
+      // ⚠️ 裁决（目标存在 / 一轮一次 / 禁回环）**全在调度器那边**
+      //    （`Dispatcher.handoffTo` → `handoff.js` 的纯函数）：这里只转发。
+      //    这个文件**不碰盘**那条规矩照旧（`HandoffBook` 由 `worlds.js` 建）。
+      case 'handoff': {
+        const d = (() => {
+          try {
+            return ctx?.dispatcher?.() ?? null;
+          } catch {
+            return null;
+          }
+        })();
+        if (!d || typeof d.handoffTo !== 'function') {
+          return { ok: false, error: '这一台还没接上转交那本账，转不了' };
+        }
+        const target = typeof req.target === 'string' ? req.target.trim() : '';
+        if (target === '') return { ok: false, error: '没说要转给哪一间' };
+        // ★ **发起那一间**以调度器给的那份为准（`HUPO_SCOPE` 只是"这一轮在哪间"）；
+        //   模型那一侧**不许**自己声称"我是哪一间"（那会变成自选身份）。
+        const by = typeof req.scope === 'string' && req.scope !== '' ? req.scope : null;
+        // ⚠️ `messageId`：这条工具口**不用**从模型那边要（它不该知道我们的气泡 id）——
+        //    调度器取"这一间现在那条开口的"（N22 保证最多一条）。
+        const r = d.handoffTo({
+          by,
+          target,
+          messageId: null,
+          reason: typeof req.reason === 'string' && req.reason.trim() !== '' ? req.reason.trim() : null,
+        });
+        if (r?.ok) {
+          return {
+            ok: true,
+            target,
+            id: r.id ?? null,
+            duplicate: r.duplicate === true,
+            // ⚠️ 给模型的人话：**不许**出现内部 id / 机制名（`06` 禁用词那一条）。
+            text: r.duplicate === true ? '这件事已经转过去了，我接着说。' : '好的，我把它转过去。',
+          };
+        }
+        // ⚠️ 拒了**也是一条正常回答**（模型要能照着它回一句人话）——
+        //    判据要的正是"拒"，所以这里把**档**（`reason`）也如实带回去。
+        return { ok: false, error: String(r?.error ?? '转不了'), reason: r?.error, text: r?.text };
+      }
       case 'list': {
         // ⚠️ **文字在服务端渲染**（契约 §八 第 3 件）：口径只有一处
         //    （`foldTotals`）⇒ MCP 那一侧**只转述、不重算**。

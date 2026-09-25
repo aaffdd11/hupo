@@ -14,6 +14,11 @@
 
 import { RECAP_DEFAULTS, buildRecap } from './recap.js';
 import { TurnTranslator, isAuthFailure } from './session-translate.js';
+import { newMessageId } from './message-writer.js';
+// ★ **D 期（契约 `docs/dev/100-DISPATCHER-D.md`）**：转交（N16）、焦点告知（D-9）、
+//   未读那半（D-6）。裁决本体与那本落盘的账在 `handoff.js`，这里只做**调度**。
+import { HandoffBook, HandoffError, decideHandoff } from './handoff.js';
+import { resolveFocus } from './focus-book.js';
 // ★ P1 时间分级（契约 `docs/dev/88-P1-TIME-WAIT.md`）：
 //   **逐件落盘**的活账（T2）、后台四句（T4）、承诺行与再报（T5）。
 import { WORK_STATES, isOpen, pairKey } from './worklog.js';
@@ -68,6 +73,13 @@ export const TURN_DEADLINE_MS = 180_000;
  */
 export const BACKGROUND_AFTER_MS = 6000;
 
+/**
+ * ★ **D 期：交接包里最多带主人几句话**（上下文摘要 · 契约 `100` §7 第 4 条）。
+ *
+ * ⚠️ **阈值住代码，不写文档**（手册纪律 1）。文档只说"要带摘要"。
+ */
+export const HANDOFF_BRIEF_SAYS = 6;
+
 
 /**
  * **一条会话**（一个 scope/房间）的调度状态。
@@ -105,6 +117,33 @@ class Session {
   #onEgress = null;
   /** turn → 计时器。一轮一个，所以"后一轮开始把前一轮的计时器顶掉"不会丢东西。 */
   #deadlines = new Map();
+
+  /**
+   * ★ **D 期：这一间发出的转交**（`handoff.js` 那本账的引用 · 一个人一本）。
+   * `null` = 没接（离线测试 / 老调用方）⇒ 转交那条工具口**如实回"没接上"**。
+   */
+  #handoffs = null;
+
+  /**
+   * ★ **D 期：转交的投递排着**（一笔一笔来）。
+   * ⚠️ 不排队的话，"目标那间同时被两处投递"会让翻译层那个 FIFO 与
+   *    `turn/start` 的顺序**对不上**（两个 await 交错了 ⇒ 另一半写进别人的气泡）。
+   */
+  #handoffChain = Promise.resolve();
+
+  /**
+   * ★ **D 期：最近一次接下的那份交接包原文**（诊断 / 判据用）。
+   * ⚠️ 它是**服务端拼的**那一段（不是主人说的那句）—— 所以"带了什么"看它。
+   */
+  #lastHandoffPacket = null;
+
+  /** ★ **D 期**：见 `#lastHandoffPacket`。 */
+  get lastHandoffPacket() {
+    return this.#lastHandoffPacket;
+  }
+
+  /** ★ **D 期：怎么算"这一间存在"**（构造参数 `scopeExists`；缺省一律 false）。 */
+  #scopeExists = () => false;
   /**
    * **投出去了、还没变成一轮**的那些话。
    *
@@ -297,6 +336,16 @@ class Session {
      *   不接 ⇒ 老行为（与改前逐字一致）。
      */
     onEgress = null,
+    /**
+     * ★ **D 期：转交那本账**（`HandoffBook` · 一个人一本）。
+     * 不接 ⇒ 转交那条工具口如实回"这一台还没接上"（**fail-closed**，绝不假装转了）。
+     */
+    handoffs = null,
+    /**
+     * ★ **D 期：怎么算"这一间存在"**（`(scope) => boolean`；由 `Worlds` 给）。
+     * ⚠️ **不接 ⇒ 一律当作不存在**（D-3：宁可拒，也**不许顺手建一个**）。
+     */
+    scopeExists = null,
   }) {
     if (!store) {
       // ⚠️ **不许默认没有 recap 就悄悄开工。**
@@ -321,6 +370,9 @@ class Session {
     this.#onAuthFailure = onAuthFailure;
     this.#onUsage = onUsage;
     this.#onEgress = onEgress;
+    // ★ D 期：转交（一个人一本账 ＋ "这一间存不存在"那个判据）
+    this.#handoffs = handoffs;
+    this.#scopeExists = typeof scopeExists === 'function' ? scopeExists : () => false;
     this.#translator = new TurnTranslator({ timeline, scopeId, notice, onEgress });
 
     // ★ P1：记下这一轮最后说出口的正文 —— 完成提醒里那句"结果一句"就是它
@@ -369,7 +421,7 @@ class Session {
         this.#lastError = `动过东西这件事没记下来：${err?.message ?? err}`;
       }
     });
-    this.#translator.on('turn-end', ({ turn, kind }) => {
+    this.#translator.on('turn-end', ({ turn, kind, handedOff }) => {
       this.#clearDeadline(turn);
       this.#clearBackgroundNotice(turn);
       // ★ P1-22：**这一轮结束了 ⇒ 当轮输入立刻作废。**
@@ -378,8 +430,15 @@ class Session {
       //      不清的话它看到的是**上一句他说过的话** ⇒ 造东西那条闸会拿旧话当"他明说了"。
       this.#turnInput = '';
       // ★ P1：**逐件收口**（T2）。做完 ⇒ `done`；别的原因收场 ⇒ `stopped`（"已停"）。
-      const done = kind === 'completed';
-      this.#closeWork({ turn, outcome: done ? WORK_STATES.done : WORK_STATES.stopped, reason: kind });
+      // ★ **D 期**：这一轮把话**交出去**了 ⇒ 收成 `stopped`（理由明写 `handoff`）
+      //   —— 那件活**没有**做完，它换了一间接着做（`handoffDelivery` 会给
+      //   接活那间再记一件）。**不许**记成 `done`（那是"说完了"的意思）。
+      const done = kind === 'completed' && handedOff !== true;
+      this.#closeWork({
+        turn,
+        outcome: done ? WORK_STATES.done : WORK_STATES.stopped,
+        reason: handedOff === true ? 'handoff' : kind,
+      });
       this.#turnGeneration.delete(turn);
       // ★ P1 后台四句 ②③：**只对预告过的那件**发提醒（短活不许重复说）。
       if (this.#backgroundTurns.delete(turn)) {
@@ -440,6 +499,11 @@ class Session {
 
   get lastError() {
     return this.#lastError;
+  }
+
+  /** ★ **D 期：从同一个调度器里的别处**（例如转交那条投递路）如实记一笔错误。 */
+  noteError(msg) {
+    this.#lastError = String(msg);
   }
 
   /** 上一次喂回去的那段背景（诊断用；`null` = 还没喂过）。 */
@@ -521,6 +585,35 @@ class Session {
   /** **这一间**未收口的气泡（别的房间正说着不影响它）。 */
   get openMessageId() {
     return this.#timeline.openMessageId ?? null;
+  }
+
+  /**
+   * ★ **D 期：这一间现在跑到第几轮**（末了一条；没有 ⇒ `null`）。
+   * 只用于转交那条记录上的审计字段（"谁在哪一轮转的"）。
+   */
+  get turn() {
+    let last = null;
+    for (const t of this.#translator.turnRecords().keys()) {
+      if (last === null || t > last) last = t;
+    }
+    return last;
+  }
+
+  /** ★ **D 期**：见 `turn`。 */
+  get generation() {
+    return this.#generation;
+  }
+
+  /**
+   * ★ **D 期：这一轮正在写的那条消息**（转交的锚点就是它 —— 客户端那个气泡）。
+   * 认不出 ⇒ `null`（不许猜）。
+   */
+  get liveWriter() {
+    const turn = this.#translator.liveTurn;
+    if (turn === null) return null;
+    const rec = this.#translator.turnRecords().get(turn);
+    const w = rec?.writer ?? rec?.adopted ?? null;
+    return w && !w.ended ? w : null;
   }
 
   /**
@@ -1133,6 +1226,192 @@ class Session {
     this.#recapFedTo = null;
   }
 
+  // ── ★ D 期：转交（§二① · D-1…D-4 · D-8）────────────────────────
+
+  /**
+   * **这条消息转出去了**：只打状态，**不收口**（D-4 前半 · D-8）。
+   *
+   * 🔴 它与"**挪走**"语义相反（决策 D10.4）：
+   *    挪走 = 先收口、后面的话另起一条；转交 = 不收口、**同一条继续写**。
+   *    ⇒ 所以这里**只**发一条 `message/handoff`，绝不 `end()`。
+   */
+  announceHandoff({ messageId, reason = null, to = null, scopeId = null } = {}) {
+    // ⚠️ 哪一轮开的这条消息（新开的口要挂到那一轮上，否则那一轮收口时会
+    //   **另开一条**空消息 —— 那就成了"两条气泡"）。
+    const turn = this.#openTurnOfMessage(messageId);
+    // 🔴 **可见标签**：发起那一间（§6.2）—— 一条消息的 writer 认不出自己是
+    //    哪一间（主线那一间在盘上**没有**这个字段），所以这里**明确传进去**。
+    const tag = scopeId ?? this.#scopeId ?? null;
+    let w = null;
+    try {
+      // 光调工具、一个字都没说 ⇒ 那条消息还不存在 —— 先给它开个口（**不编正文**）
+      w = this.#translator.openMessageForHandoff(messageId, turn);
+    } catch (err) {
+      this.#lastError = `转交那条消息没开成口：${err?.message ?? err}`;
+      return false;
+    }
+    if (!w) return false;
+    try {
+      const ok = w.handoff({ reason, to, scopeId: tag });
+      // ★ **这条消息从此刻起交给别人了**（D-4 / D-8）：
+      //   · 收口**不在本间**做（谁接过去谁收）；
+      //   · 本间的超时 / 失败兜底还认它（`N19`：不许留"永远马上说完"的气泡）。
+      if (ok) this.#translator.noteHandedOff(turn, messageId);
+      return ok;
+    } catch (err) {
+      this.#lastError = `转交的状态没打上：${err?.message ?? err}`;
+      return false;
+    }
+    // ⚠️ **这里不 `end()`**：收口由接活那一轮做（D-4 / D-8）。
+    //    发起者那一轮**照常结束**（它只是不再往那条里写）—— 轮的账该怎么收怎么收。
+  }
+
+  /**
+   * 这条已开口的消息是哪一轮开的。
+   * ⚠️ 认不出 ⇒ `null`：**不猜**。
+   */
+  #openTurnOfMessage(messageId) {
+    for (const [turn, rec] of this.#translator.turnRecords()) {
+      const w = rec?.writer ?? rec?.adopted ?? null;
+      if (w && w.messageId === messageId && !w.ended) return turn;
+    }
+    // ★ 光调了工具、一个字都没说 ⇒ 还没有 writer，但这一轮是**在的**
+    //   （`liveTurn`）—— 开出来的那个口要挂到它上面，否则它收口时会**另开一条**。
+    return this.#translator.liveTurn;
+  }
+
+  /**
+   * ★ **接活**：目标那一轮**接着往同一条消息里写**（D-4 后半）。
+   *
+   * 做四件、顺序不许反：
+   *   ① 告诉翻译层"下一轮来接这条消息"（`expectHandoff`）——
+   *      🔴 **事件的 `scopeId` 不变**（发起那一间 · §6.2）；
+   *   ② 把**发起者那条 writer** 一起交过去（N22 的登记在它身上：另建一个会当场撞上）；
+   *   ③ 投递交接包（**新起一轮**，不是用户那句话）；
+   *   ④ 那件活记到**这一间**头上（审计/用量），`ref` 仍是**那一条消息**。
+   */
+  async handoffDelivery(rec, { openWriterOf = null, brief = '' } = {}) {
+    const packet = this.#packetText(rec, brief);
+    // ★ 发起者那条 writer（**同一个对象**）—— 见 ②
+    let writer = null;
+    try {
+      writer = typeof openWriterOf === 'function' ? openWriterOf(rec.messageId) : null;
+    } catch {
+      writer = null;
+    }
+    // ⚠️ **顺序不许反**：`#ensureAgent()` 会 `reset()` 翻译层（换了进程 ⇒ 轮账、
+    //   排队、`#adoptions` 一起清）—— 所以它必须**在**登记接活那一条**之前**跑，
+    //    否则刚登记的那一条会被它当场清掉（D-4 的续写就丢了）。
+    const agent = this.#ensureAgent();
+    this.#translator.expectHandoff(rec.messageId, this.scopeId, writer);
+    // ★ **留一份交接包原文**（诊断 / 判据用）：它是**这一侧拼的**，不是主人说的那句。
+    this.#lastHandoffPacket = packet;
+    // ★ 换人 ⇒ 背景照样要喂（否则它不知道前面说了什么）
+    let blocks = [{ type: 'text', text: packet }];
+    if (this.#recapFedTo !== agent) {
+      try {
+        const recap = this.#recapText(null);
+        if (recap !== '') blocks = [{ type: 'text', text: recap }, ...blocks];
+      } catch (err) {
+        this.#lastError = `背景没读出来：${err?.message ?? err}`;
+      }
+    }
+    const t = {
+      messageId: rec.messageId,
+      at: Date.now(),
+      text: packet,
+      seq: (this.#deliverSeq += 1),
+      claimed: false,
+    };
+    this.#delivered.push(t);
+    try {
+      // ★ **这一件活记在接活那一间头上**（审计/用量）：`ref` 仍是**那一条消息**
+      //   （所以"他问的那件事怎么样了"照样答得出同一条）。
+      this.#work?.declare({
+        scopeId: this.scopeId,
+        ref: rec.messageId,
+        ticket: `handoff:${rec.id}:${this.scopeId}`,
+      });
+    } catch (err) {
+      this.#lastError = `接下的这件没记上账：${err?.message ?? err}`;
+    }
+    try {
+      await agent.prompt(blocks);
+      this.#recapFedTo = agent;
+      this.#lastError = null;
+    } catch (err) {
+      const i = this.#delivered.indexOf(t);
+      if (i !== -1) this.#delivered.splice(i, 1);
+      this.#lastError = `交接包没送出去：${err?.message ?? err}`;
+      // ⚠️ **不许静默**：这一轮没能接上 ⇒ 那条消息必须收口（N19），
+      //    而且要说清"我这边没接上"（与别处起不来时同一句）。
+      try {
+        this.#translator.forceClose('failed', { line: AGENT_UNAVAILABLE_LINE });
+      } catch {
+        /* 没有未收口的，正常 */
+      }
+    }
+  }
+
+  /**
+   * 这条已开口的消息的 writer（**给接活那一间拿去续写** ·
+   * N22 的登记在它身上，另建一个会当场撞上）。
+   * ⚠️ 认不出 ⇒ `null`（那一轮会自己按 `messageId` 新开一条 —— 至少名字是对的）。
+   */
+  openWriterFor(messageId) {
+    for (const rec of this.#translator.turnRecords().values()) {
+      const w = rec?.writer ?? rec?.adopted ?? null;
+      if (w && w.messageId === messageId && !w.ended) return w;
+    }
+    return null;
+  }
+
+  /**
+   * 交接包那句人话（**不带内部 id**：目标那一间的模型不该看到我们的内部名字）。
+   * @param {object} rec 那条转交记录
+   * @param {string} [brief] **发起那一间**最近说过的话（在**那一侧**读，见调用方）
+   */
+  #packetText(rec, brief = '') {
+    return [
+      '【另一半】有一件事转到我这儿来了，是发起这件事的那一间转过来的。',
+      rec.reason ? `他给的理由：${rec.reason}` : '',
+      '同一件事、同一条回复，接着往下做，做好了照样回他。',
+      brief ? `他刚才说过的话：\n${brief}` : '',
+    ]
+      .filter((s) => s !== '')
+      .join('\n');
+  }
+
+  /**
+   * ★ **D 期：这一间最近说过的话**（交接包里的**上下文摘要** · `100` §7 第 4 条：
+   * "带多少"住代码，文档只说"要带上摘要"）。
+   *
+   * 🔴 **在发起那一间读**（`Dispatcher.#handoffDelivery` 调它）：交接包要让
+   *    目标那一间知道"**他刚才说了什么**"，而那是**发起那一间**视图里的话
+   *    —— 目标那一间自己的视图里没有它。
+   * ⚠️ 读不到 ⇒ **不带那半句**（绝不编），不是"报错"。
+   * ⚠️ 摘的是**主人说过的话**（`user/echo`）：那是"这件事是什么"最靠得住的来源；
+   *    agent 自己说过什么由 DSH 那边的背景接着管。
+   */
+  brief() {
+    let events = [];
+    try {
+      events = this.#timeline?.readAll?.() ?? [];
+    } catch {
+      return '';
+    }
+    const says = events
+      .filter((e) => e?.type === 'user/echo' && typeof e.text === 'string' && e.text.trim() !== '')
+      .slice(-HANDOFF_BRIEF_SAYS);
+    if (says.length === 0) return '';
+    return says.map((e) => `- ${e.text.trim()}`).join('\n');
+  }
+
+  /** 诊断/判据：这一间有没有接下活的轮（`turn` → 记录）。 */
+  get adoptionTurns() {
+    return this.#translator.turnRecords();
+  }
+
   /** 收工：先把话说圆，再放 agent 走。 */
   async shutdown() {
     this.#translator.forceClose('failed');
@@ -1184,6 +1463,22 @@ export class Dispatcher {
   /** ★ P2-8 出网留痕（见 `Session` 的 `onEgress`）——每个用户一份，所有会话共用。 */
   #onEgress;
 
+  /** ★ **D 期：转交那本账**（一个人一本；见 `Session` 的 `handoffs`）。 */
+  #handoffs;
+  /** ★ **D 期：怎么算"这一间存在"**（`(scope) => boolean`；见 `Session` 的 `scopeExists`）。 */
+  #scopeExists;
+  /** ★ **D 期：焦点那本账**（`设备 → 焦点` · 判据 D-9）。 */
+  #focusBook;
+  /** ★ **D 期：未读那本账**（判据 D-6）。 */
+  #unread;
+  /** ★ **D 期：转交的投递排着**（一笔一笔来；见 `handoffTo`）。 */
+  #handoffChain = Promise.resolve();
+  /**
+   * ★ **D 期：目标那一间不存在会话时把它挂上来**（`Worlds.roomFor`；可选）。
+   * ⚠️ 不接 ⇒ 目标必须**已经开着**才送得出去（如实记一句"没有这一间的会话"）。
+   */
+  #loadSession = null;
+
   /**
    * ★ **C 期：他最近一次看着哪一间**（契约 `84-DISPATCHER-FOCUS.md` §三·3）。
    *
@@ -1231,6 +1526,13 @@ export class Dispatcher {
     this.#onUsage = args.onUsage ?? null;
     // ★ P2-8：出网留痕同理（一个人一份，房间里的出网也记到同一个人头上）。
     this.#onEgress = args.onEgress ?? null;
+    // ★ **D 期：转交 / 焦点 / 未读**（一个人各一份；见各字段的说明）。
+    this.#handoffs = args.handoffs ?? null;
+    this.#scopeExists = typeof args.scopeExists === 'function' ? args.scopeExists : () => false;
+    // ★ **D 期**：目标那一间"存在但还没挂上来"时，由宿主把它挂上来（见字段说明）。
+    this.#loadSession = typeof args.loadSession === 'function' ? args.loadSession : null;
+    this.#focusBook = args.focusBook ?? null;
+    this.#unread = args.unread ?? null;
     const main = new Session({ ...args, work: this.#work, promises: this.#promises });
     this.#sessions.set(main.scopeId, main);
   }
@@ -1244,6 +1546,10 @@ export class Dispatcher {
    * ★ **C 期：这个用户最近一次被告知的焦点**（`null` = 从来没告知过）。
    *
    * 判据：`/api/say` 的"归处提示"和它不一致时就**先反问**（第 16 条）。
+   *
+   * ⚠️ **D 期之后它仍然只回答"最后被告知的那一个"**（C 期原样）——
+   *    要按**设备**答准，用 `focusFor(device)`（判据 D-9）。两条并存是刻意的：
+   *    老客户端不带设备标识 ⇒ 走这一条，行为一个字不变。
    */
   get focusScope() {
     return this.#focusScope;
@@ -1255,11 +1561,72 @@ export class Dispatcher {
    * ⚠️ 缺省 / 空 ⇒ 主线（老客户端不带 scope 就是主线）。
    * ⚠️ 这里**不校验**"这个房间存不存在"：那是 `worlds.roomFor()` 的事，
    *    焦点帧那条路已经先过了它（不存在的房间回 `ok:false`、焦点不动）。
+   *
+   * ★ **D 期（§6.1·补）**：多一个**可选**的 `device`。
+   *   · 给了 ⇒ **按设备各记一份**（`FocusBook` 落盘）；
+   *   · 没给 ⇒ 照旧只更新 C 期那一份（**老行为一个字不变**）。
    */
-  setFocus(scope) {
+  setFocus(scope, device = null) {
     const s = scope === null || scope === undefined || scope === '' ? this.#mainScope : String(scope);
-    this.#focusScope = s;
+    const d = typeof device === 'string' ? device.trim() : '';
+    if (d !== '') {
+      try {
+        this.#focusBook?.set?.(d, s);
+      } catch {
+        /* 焦点是旁路：记不下也不许把这条连接/这句话带走 */
+      }
+    } else {
+      // ⚠️ **只有不带设备标识才动 C 期那一份** —— 让"按设备记"与
+      //    "最后被告知的那一个"互不污染（D-9：不许拿最新那台顶替）。
+      this.#focusScope = s;
+    }
     return s;
+  }
+
+  /** ★ **D 期：未读那本账**（判据/诊断用；没有 ⇒ `null`）。 */
+  get unread() {
+    return this.#unread;
+  }
+
+  /**
+   * ★ **D 期：哪些图标该带点**（判据 D-6 的正面 · 服务端答得出"有未读"）。
+   * @returns {Array<{scopeId: string, lastSeq: number, lastReadSeq: number}>}
+   */
+  unreadScopes() {
+    try {
+      return this.#unread?.list?.() ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * ★ **D 期：他打开过那一间** ⇒ 点没了（判据 D-6 的反面）。
+   * @param {string} scope
+   * @returns {boolean}
+   */
+  markRead(scope) {
+    if (!this.#unread) return false;
+    try {
+      this.#unread.markRead(scope);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** ★ **D 期：这一间还有没有没看过的**（单间查询的出口）。 */
+  unreadOf(scope) {
+    try {
+      return this.#unread?.unreadOf?.(scope) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** ★ **D 期：转交那本账**（判据/诊断用；没有 ⇒ `null`）。 */
+  get handoffs() {
+    return this.#handoffs;
   }
 
   /** 已挂上来的那些 scope（诊断 / 判据用）。 */
@@ -1469,6 +1836,232 @@ export class Dispatcher {
       items.push(...s.workItems);
     }
     return { openMessageId, pending, turns, items };
+  }
+
+  // ── ★ D 期：转交（契约 `100` §二① / 判据 D-1…D-4）────────────────
+
+  /**
+   * **发起转交**（只有工具调用会走到这儿 —— 这就是 D-1 的结构性落点）。
+   *
+   * 顺序是死的，别调：
+   *   ① 目标**已存在**（D-3：**不建**）；
+   *   ② 这条消息上**已经有一条转交记录** ⇒ 拒（D-2 前半：一轮最多一次）；
+   *   ③ 目标**已经在链上出现过** ⇒ 拒（D-2 后半：禁回环，手册点名 `A→B→A`）；
+   *   ④ 发起那条消息 **不收口**，只打 `message/handoff`（D-4 前半 · D-8）；
+   *   ⑤ 组装交接包 → 投给目标（D-4 后半：**同一个 `messageId`**）。
+   *
+   * ⚠️ **发起者那条消息由谁收口**：由**接活的那一轮**（`handoffDelivery` 里
+   *    投递之前先 `adoptHandoff()`）。所以这里**绝不** `end()` —— `end()` 就是
+   *    "挪走"那个反例（D-8）。
+   *
+   * @param {object} o
+   * @param {string} o.by        发起那一间（**用户看得见的那一间**）
+   * @param {string} o.target    想转给哪一间
+   * @param {string} [o.messageId] 这次转交挂在哪条消息上（**必须有**）
+   * @param {string} [o.reason]  为什么转（模型给的；可以没有）
+   * @returns {{ok: boolean, error?: string, text?: string, id?: string, target?: string, duplicate?: boolean}}
+   */
+  handoffTo({ by, target, messageId = null, reason = null } = {}) {
+    const from = this.sessionFor(by);
+    if (!from) return { ok: false, error: 'no-such-scope', text: '认不出是哪一间要转。' };
+    if (!this.#handoffs) {
+      return { ok: false, error: 'no-handoff-book', text: '这一台还没接上转交那本账，转不了。' };
+    }
+    const t = typeof target === 'string' ? target.trim() : '';
+    // ★ **哪条消息**（D-4 要的是"同一个 messageId"）：以**服务端手上那条**为准。
+    //   `N22` 保证"同一时刻最多一条未收口" ⇒ 它就是用户正在看的那一个气泡。
+    //   ⚠️ 模型那边**一个字都还没说**时（光调工具）⇒ 现开一个口（**只开口、不编正文**）：
+    //      不这么做就没有"同一条消息"可谈，B 的续写会变成另起一条（D-4 的反例）。
+    //   ⚠️ 调用方给的那个 `messageId` 只当**兜底**（老调用方兼容）；模型**给不出**
+    //      我们的气泡 id，那条工具口传的也是 `null`。
+    //
+    // ★ **锚点优先级**（D-4 要的是"同一条气泡"，所以顺序不许随手动）：
+    //   ① 这一轮**已经在写**的那条（`liveTurn`）—— **就是客户端那个气泡**；
+    //   ② 已经在链上 ⇒ 用链的锚（"我接着写的那条"，第二跳从这里才查得出环）；
+    //   ③ 手上那条开口的（`openMessageId`）；
+    //   ④ 都认不出 ⇒ 现造一个（`announceHandoff` 会给它开口，只开口不编正文）。
+    const chain = this.#activeChainOf(from.scopeId);
+    const live = from.liveWriter;
+    let msgId = live?.messageId ?? chain?.messageId ?? from.openMessageId ?? null;
+    if (msgId === null && typeof messageId === 'string' && messageId !== '') msgId = messageId;
+    if (msgId === null) msgId = newMessageId();
+    // ① 目标存在吗（**不建** —— D-3）
+    let exists = false;
+    try {
+      exists = this.#scopeExists(t) === true;
+    } catch {
+      exists = false;
+    }
+    // ★ **链上到过哪些间**（不只看这条消息上的记录，还要**顺着链走**
+    //   —— 手册点名的 `A→B→A` 就是第二跳）。
+    const records = this.#chainHistory(msgId);
+    // ★ **重复调用先认**（**同一间**把这条链又转一次）：如实回"已经转出去了"——
+    //   与别处的幂等回执同形，不制造第二个副作用。
+    //   ⚠️ 顺序有意：它要排在"一轮最多一次"（`twice`）**前面** —— 同一条链上
+    //      "我又转了一次"和"这条已经转出去过了"是同一件事，前者是**幂等回执**，
+    //      后者是**拒**；先判后一个会把幂等回执变成报错（判据 D-2 抓到了这个）。
+    //   ⚠️ 认的是"**我**转出去的"（`r.scopeId === from.scopeId`），不是"目标一样"：
+    //      同一条链上换个人转给同一间是**另一件事**（它走下面的裁决）。
+    const mine = records.find((r) => r.scopeId === from.scopeId);
+    if (mine) {
+      return { ok: true, duplicate: true, id: mine.id, target: mine.target };
+    }
+    const verdict = decideHandoff({ by: from.scopeId, target: t, targetExists: exists, messageId: msgId, records });
+    if (!verdict.ok) {
+      return { ok: false, error: verdict.reason, text: verdict.text };
+    }
+    const rec = this.#handoffs.record({
+      scopeId: from.scopeId,
+      target: t,
+      messageId: msgId,
+      reason,
+      turn: from.turn,
+      generation: from.generation,
+    });
+    // ④ 那条消息**不收口**，只打一个状态（客户端显示"马上说完"）+ 交给 B
+    from.announceHandoff({ messageId: msgId, reason, to: t, scopeId: from.scopeId });
+    // ⑤ 目标那一轮排上（**排着**：同一个用户同时只能有一笔在飞）
+    this.#handoffChain = this.#handoffChain
+      .then(() => this.#handoffDelivery(rec))
+      .catch(() => {});
+    return { ok: true, duplicate: false, id: rec.id, target: t };
+  }
+
+  /**
+   * ★ **这条转交链上到过哪些间**（判据 D-2 要的那份凭据）。
+   *
+   * 🔴 为什么不能只看"这条消息上的记录"：一条链跨好几间，而**每一跳的发起处
+   *    都可能换人**（甲转给乙、乙又转给丙）—— 从**发起那条消息**出发走一遍，
+   *    才看得见整条链。手册点名的 `A→B→A` 正是"走第二跳时才看得见"的那个环。
+   *
+   * ⚠️ 认不出 ⇒ 空数组（那是**一条新链**：谁都没转过）。
+   */
+  #chainHistory(messageId) {
+    if (!this.#handoffs || typeof messageId !== 'string' || messageId === '') return [];
+    // ① 从这条消息**往上**找到链的锚（它可能是**半路**那条：这一间只记得
+    //    "我接过的那条"，而链的起点在**前面**那一跳手上）。
+    const anchor = this.#handoffAnchorOf(messageId);
+    const out = [];
+    const seen = new Set();
+    let at = anchor;
+    // 链最长有限（每一跳都要求"发起处还没转过"），所以这个循环一定收敛；
+    // 仍加一道保险：认不出的记录一律停住（不许转圈）。
+    for (let i = 0; i < 64; i += 1) {
+      const here = this.#handoffs.byMessage(at);
+      if (here.length === 0) break;
+      const last = here[here.length - 1];
+      if (!last || typeof last.id !== 'string' || seen.has(last.id)) break;
+      seen.add(last.id);
+      for (const r of here) out.push(r);
+      if (typeof last.target !== 'string' || last.target === '') break;
+      at = last.target;
+    }
+    return out;
+  }
+
+  /**
+   * 这条链的**锚**（= 发起那一间那条消息）。
+   *
+   * ⚠️ 为什么它可能不是"手上这条"：**第二跳**的发起者手里是**自己的**一条消息，
+   *    而这条链的锚在**发起处**那条记录上 —— 从"我接过的那条"倒着找回去。
+   * 认不出 ⇒ 这条消息自己就是锚。
+   */
+  #handoffAnchorOf(messageId) {
+    if (typeof messageId !== 'string' || messageId === '') return messageId;
+    const asTarget = this.#handoffs
+      .all()
+      .filter((r) => r.target === messageId && typeof r.messageId === 'string' && r.messageId !== '')
+      .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+    if (asTarget.length === 0) return messageId;
+    const first = asTarget[0];
+    if (first.messageId === messageId) return messageId; // 自指：不许转圈
+    return this.#handoffAnchorOf(first.messageId);
+  }
+
+  /**
+   * ★ **这一间现在挂在哪条转交链上**（它是发起处、还没收口的那一条）。
+   *
+   * 为什么需要：一条转交链跨好几间，而**每一间手里那条消息不是同一条**
+   * （甲那条是"他问的那件事"，乙那边接着写的也是甲那条）——
+   * 第二跳要从**发起处**那条记录去查"这条链上还有谁"
+   * （否则回环与"一轮最多一次"在第二跳上失效）。
+   * ⚠️ 认不出 ⇒ `null`（那就是一条**新**链，锚点用自己手上那条消息）。
+   */
+  /**
+   * ★ **这一间挂在哪条转交链上**（发起处或接活的下一跳 —— 两边都要认）。
+   *
+   * 🔴 为什么**不看状态**：链一旦建立，历史就留在盘上了 —— 第二跳
+   *    （手册点名的 `A→B→A`）来的时候，第一跳那条记录早已 `completed`
+   *    （目标早接过去了）。拿状态过滤 ⇒ **回环与"一轮最多一次"在第二跳上
+   *    当场失效**（判据 D-2 就是这么抓到的）。
+   * ⚠️ 认不出 ⇒ `null`（那就是**一条新链**，锚点用自己手上那条消息）。
+   */
+  #activeChainOf(scope) {
+    if (!this.#handoffs) return null;
+    const all = this.#handoffs.all();
+    // 我发起的 / 我接过的，都算"我在链上"（取**最后**一条：链是往前的）
+    const mine = all.filter((r) => r.scopeId === scope || r.target === scope);
+    return mine.length > 0 ? mine[mine.length - 1] : null;
+  }
+
+  /** 把一次转交**真的投给目标那一间**。 */
+  async #handoffDelivery(rec) {
+    const from = this.sessionFor(rec.scopeId) ?? this.#main;
+    // ★ **目标那一间可能"存在、但还没挂上来"**（他还没点开过那个图标 ⇒
+    //   会话还没建）。那也算已存在（`scopeExists` 已经过了 —— 它在工作区/制品库里）
+    //   ⇒ 叫宿主把它**挂上来**（`Worlds.roomFor`：只认**本来就该在**的那一间；
+    //     **不存在**的那些在上面那一步就被拒了 —— D-3 拒的正是它们）。
+    let to = this.sessionFor(rec.target);
+    if (!to && typeof this.#loadSession === 'function') {
+      try {
+        to = this.#loadSession(rec.target);
+      } catch (err) {
+        from?.noteError(`转交那一间没挂上来：${err?.message ?? err}`);
+      }
+    }
+    if (!to) {
+      // 真认不出（宿主没接这条口 / 那一间就是不在）⇒ **不建**，如实记一笔。
+      if (from) from.noteError(`转交没送出去：没有这一间的会话（${rec.target}）`);
+      return;
+    }
+    // ★ **上下文摘要在发起那一间读**（"他刚说过的话"在**那一间**的视图里 ——
+    //   目标那一间自己的视图里没有它）。读不到 ⇒ 不带那半句（**不编**）。
+    let brief = '';
+    try {
+      brief = from?.brief?.() ?? '';
+    } catch {
+      brief = '';
+    }
+    await to.handoffDelivery(rec, {
+      openWriterOf: (id) => from?.openWriterFor?.(id) ?? null,
+      brief,
+    });
+    // ★ **谁在干活落盘**（审计/用量 · §6.2）：`scopeId` **不动**（可见那一间），
+    //   `byScope` 记的是**真接过这件活的**那一间。
+    this.#handoffs?.adopt({ id: rec.id, byScope: rec.target });
+    this.#handoffs?.complete({ id: rec.id });
+  }
+
+  /**
+   * ★ **D 期：这一间现在是谁在看**（判据 D-9）。
+   *
+   * 与 `focusScope`（C 期那份"最后被告知的那一个"）的区别：
+   *   · 带**设备标识** ⇒ 按那台设备的说法答；那台没说 / 多台矛盾 ⇒ `known:false`；
+   *   · **不带** ⇒ 老行为（`focusScope`，协议只加可选字段）。
+   *
+   * ⚠️ 用到它的地方**必须**在 `known:false` 时按"不知道"处理（该问就问）——
+   *    那正是"拿最新那台的顶替"要修掉的病（`100` §6.1·补 最后一段）。
+   *
+   * @param {string|null} [device]
+   * @returns {{scope: string|null, known: boolean}}
+   */
+  focusFor(device = null) {
+    const r = resolveFocus({
+      device,
+      byDevice: this.#focusBook?.devices?.() ?? {},
+      fallback: this.#focusScope,
+    });
+    return r;
   }
 
   /** 收工：**每一条会话**都要把话说圆（漏一条 = 那条被切断）。 */

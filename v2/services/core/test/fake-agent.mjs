@@ -19,8 +19,15 @@
 //   tool-write 一轮里用了一个**会改东西**的工具（`write`），正常收尾
 //   tool-write-die  用了会改东西的工具、说了半句，然后进程死
 //              （验"动过东西的活不许自动重来"那条 —— 决策 D10.1）
+//   handoff    ★ **D 期**：一轮里**调用转交那条工具**（`handoff_to` ⇒ 服务端
+//              `op:'handoff'`，走**真那条域套接字**），然后正常收尾。
+//              ⚠️ 这是"**只有工具调用能发起转交**"（D-1）那半的落点：
+//              它发的是一帧 `tool/call` ＋ 一次**真的**套接字请求 ——
+//              不是"正文里说一句我转给某一间"。
+//              目标由 `FAKE_HANDOFF_TARGET` 给；套接字由 `FAKE_LEDGER_SOCKET` 给。
 
 import fs from 'node:fs';
+import nodeNet from 'node:net';
 
 const scenario = process.env.FAKE_SCENARIO ?? 'normal';
 /**
@@ -39,7 +46,57 @@ const scenario = process.env.FAKE_SCENARIO ?? 'normal';
  * `FAKE_SESSION_FILE` 给一个路径就开启这个行为（**跨进程共享**，
  * 所以"上一个进程创建过"这件事真的能被下一个进程看见）。
  */
+/**
+ * ★ **D 期**：照 `mcp-ledger-server.mjs` 那一层的样子，**真的**问一次账本那口。
+ *
+ * 🔴 为什么假 agent 也要走这条真路：判据 D-1/D-2/D-3 打的是"**工具调用**能不能
+ *    发起转交、服务端怎么裁决"——拿内存里直接调 `handoffTo()` 当证据，
+ *    就把"这条工具口通不通"排除在判据外面了（`16-STREAM.md` 那条教训）。
+ */
+function askLedger(payload, timeoutMs = 3000) {
+  const sock = process.env.FAKE_LEDGER_SOCKET ?? '';
+  return new Promise((resolve) => {
+    if (!sock) {
+      resolve({ ok: false, error: '假 agent 没拿到套接字路径' });
+      return;
+    }
+    const conn = nodeNet.connect(sock);
+    let buf = '';
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      try { conn.destroy(); } catch { /* 尽力 */ }
+      resolve(v);
+    };
+    const timer = setTimeout(() => finish({ ok: false, error: '那边没回话' }), timeoutMs);
+    conn.setEncoding('utf8');
+    conn.on('connect', () => conn.write(`${JSON.stringify(payload)}\n`));
+    conn.on('data', (chunk) => {
+      buf += chunk;
+      const nl = buf.indexOf('\n');
+      if (nl === -1) return;
+      clearTimeout(timer);
+      try {
+        finish(JSON.parse(buf.slice(0, nl)));
+      } catch {
+        finish({ ok: false, error: '回答读不懂' });
+      }
+    });
+    conn.on('error', (err) => {
+      clearTimeout(timer);
+      finish({ ok: false, error: String(err?.code ?? err?.message ?? err) });
+    });
+  });
+}
+
 const sessionFile = process.env.FAKE_SESSION_FILE ?? null;
+/**
+ * ★ **D 期**：这一轮是在**哪一间**里跑的（服务端按房间给的 `HUPO_SCOPE`）。
+ * 与真那条工具口**同一个来源**（`mcp-ledger-server.mjs` 顶上那个 `SCOPE`）——
+ * 转交要"发起那一间"，而模型那边**不许**自己声称身份。
+ */
+const SCOPE_OF_FAKE = process.env.HUPO_SCOPE ?? 'main';
 function sessionExists(id) {
   if (!sessionFile) return false;
   try {
@@ -276,6 +333,48 @@ function runScenario(t) {
       notifyEvent('step/end', { turn: t, step: 2 });
       timers.push(setTimeout(() => process.exit(9), 30));
       break;
+
+    case 'handoff': {
+      // ★ **D 期**：一轮里**真的调一次转交**（工具口那条路）。
+      //   ① 先发 `tool/call`（服务端据此记"这一轮动过东西"）；
+      //   ② 再**真的**问一次账本那口（`op:'handoff'`）—— 目标与理由是
+      //      `FAKE_HANDOFF_TARGET` / `FAKE_HANDOFF_REASON` 给的；
+      //   ③ 把结果**写到 stderr**（判据要能看见"服务端到底怎么裁决的"，
+      //      而 stdout 是 JSON-RPC，一个字节都不许多）；
+      //   ④ 最后照常收尾（发起者这一轮就到此为止；那条消息**不收口**）。
+      //
+      //   🔴 **只有发起那一侧才调工具**：发起者是**主线那一间**（`HUPO_SCOPE=main`），
+      //      接活那一间（工作区里的房间）**不许**再转一次 —— 否则就成了两个 agent
+      //      互相甩锅（真机上的形状是"目标那一轮做完就完了"）。
+      //      ⚠️ `FAKE_HANDOFF_TARGET` 是**每个 agent 都会拿到**的环境变量
+      //      （spawn 那一层统一给的），所以不能只看它。
+      const target = SCOPE_OF_FAKE === 'main' ? (process.env.FAKE_HANDOFF_TARGET ?? '') : '';
+      const reason = process.env.FAKE_HANDOFF_REASON ?? null;
+      if (target === '') {
+        notifyEvent('step/start', { turn: t, step: 1 });
+        assistantMessage(t, 1, '好，我接着做。', null);
+        notifyEvent('step/end', { turn: t, step: 1 });
+        notifyEvent('turn/end', { turn: t, reason: { kind: 'completed' } });
+        notifyStatus('idle');
+        break;
+      }
+      notifyEvent('step/start', { turn: t, step: 1 });
+      notifyToolCall(t, 1, 'handoff_to');
+      // ⚠️ 顺带把"发起者说了半句"这件事也造出来：这样 A 那条消息**已经开了口**，
+      //   D-4 的"同一条消息"才有东西可指。内容里**不许**出现"我转给某一间"
+      //   那类话（D-1 的反例正身就靠它：正文说了也不算）。
+      assistantMessage(t, 1, '我先起个头。', null);
+      // 🔴 **这一轮要等工具的结果回来再收尾**：真 agent 也是这个形状
+      //   （调工具 → 拿到结果 → 接着说/收尾）。不等的话，服务端收到那一帧时
+      //   这一轮已经收了，转交的锚只能落在一条**空消息**上（判据 D-4 会红）。
+      askLedger({ op: 'handoff', target, reason, scope: SCOPE_OF_FAKE }).then((r) => {
+        process.stderr.write(`[fake-agent] handoff → ${JSON.stringify(r)}\n`);
+        notifyEvent('step/end', { turn: t, step: 1 });
+        notifyEvent('turn/end', { turn: t, reason: { kind: 'completed' } });
+        notifyStatus('idle');
+      });
+      break;
+    }
 
     case 'normal':
     default:

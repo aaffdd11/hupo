@@ -173,6 +173,34 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    // ★ **D 期**（契约 `docs/dev/100-DISPATCHER-D.md` §6.1 · 判据 D-1）：
+    //   **转交**那一件。手册 `02-ARCHITECTURE.md` §3.5 的时序第 ① 步
+    //   ——"A 调用 handoff_to(scope, reason)"——就是它。
+    //
+    //   🔴 **只有这个工具调用能发起转交**：正文里说一句"我把它转给某一间"
+    //      **不算**（服务端那边的转交入口只有这一条口 ⇒ 结构上不可能）。
+    //   🔴 目标**必须已经存在**：没有那一间**不会**被建出来，这边会明确告诉你。
+    //   🔴 **一轮最多一次**：同一件事已经转出去了 ⇒ 再调它会说"已经转过去了"。
+    //   ⚠️ 服务端拿到的是 `target`（人话那一间）与 `reason`（为什么）；
+    //      "发起那一间"由服务端自己认（模型**不许**自称身份）。
+    name: 'handoff_to',
+    description:
+      '把**手上这件事**交给另一间去做（例如这件事本来就是那一间在管的）。'
+      + '⚠️ 只在你**确实**要把这件事交出去的时候调；由你主动提出、服务端裁决，猜的目标不会生效。'
+      + 'target 传那一间的**名字**（桌面上看到的那个名字）；reason 传一句为什么（可以不说）。'
+      + '调完之后这边会告诉你成没成：成了就照常接着说你的（**不用**再跟主人宣告一遍"我转过去了"，服务端已经记下了）；'
+      + '要是说没有那一间，**别自己新建**，照原样接着说你的。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: '要交给哪一间（桌面上那个名字）' },
+        reason: { type: ['string', 'null'], description: '为什么交给它（一句话；可以不说）' },
+      },
+      required: ['target'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 /** 把一次工具调用的结果折成 MCP 的 content。**失败也是一条正常回答**（`isError`）。 */
@@ -234,6 +262,14 @@ async function callTool(name, args) {
     const r = await ask({ op: 'work', ref: args?.ref ?? null, scope: SCOPE });
     if (!r.ok) return textResult(`那几件的实情我这边问不到：${r.error}`, true);
     return textResult(r.text ?? '（那边没给出文字）');
+  }
+
+  if (name === 'handoff_to') {
+    // ★ **D 期**：转交。文字（成/不成）**在服务端拼**（那边才知道有没有那一间）。
+    //   🔴 这里**只转述** —— 在这边自己判一句"应该能转"就是第二个裁判。
+    const r = await ask({ op: 'handoff', target: args?.target ?? null, reason: args?.reason ?? null, scope: SCOPE });
+    if (r.ok) return textResult(r.text ?? '好的，我把它转过去。');
+    return textResult(r.text || `没转成（${r.error}）。我跟你说一声，接着说这件事。`, true);
   }
 
   if (name === 'ledger_delete') {
