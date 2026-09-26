@@ -54,7 +54,7 @@ class StreamClient {
   final String token;
   final Api api;
 
-  /// 过程四档（契约 §三）。**连接级**：服务端按这条连接决定发多少过程
+  /// 过程两档（契约 `docs/dev/122` §三）。**连接级**：服务端按这条连接决定发多少过程
   /// ⇒ 换档只能靠**重连**（`chat_controller.setLevel` 就是这么做的）。
   final ProcessLevel level;
 

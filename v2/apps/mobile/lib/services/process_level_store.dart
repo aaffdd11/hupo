@@ -1,4 +1,4 @@
-// 过程四档存在哪（契约 `docs/dev/26-PROCESS-LEVELS.md` §三 / 手册 D7）。
+// 过程两档存在哪（契约 `docs/dev/122-TWO-PROCESS-LEVELS.md` §三 / 手册 D7）。
 //
 // 三条纪律，照 `token_store.dart` / `timeline_store.dart`：
 //
@@ -7,6 +7,8 @@
 //      **绝不能因此让聊天打不开**（那才是把一件小事变成不能用）。
 //   2. **读不出来不抛**：插件不可用、字符串被改坏、旧版本写的 token——
 //      统统走 `processLevelOf()` 那一层（认不出来 ⇒ 默认）。
+//      ⚠️ **老设备盘上的 `quiet` / `steps` 也走这一条**（那两档已砍，
+//      归一到 `doing`；理由写在 `models/process_levels.dart`）。
 //   3. **它按设备存、不按账号存**：档位不是隐私数据（时间线 / 草稿才是），
 //      换个人登录不需要把它清掉。
 //
@@ -28,7 +30,7 @@ class ProcessLevelStore {
     try {
       final p = await SharedPreferences.getInstance();
       // ⚠️ 翻译在 `processLevelOf` 里：**认不出来就是默认档**，
-      //    所以这里不需要再判一次空 / 坏值。
+      //    砍掉的 `quiet` / `steps` 也在那儿一并归一 —— 所以这里不必再判一次空 / 坏值。
       _cached = processLevelOf(p.getString(_key));
     } catch (_) {
       _cached = defaultProcessLevel;

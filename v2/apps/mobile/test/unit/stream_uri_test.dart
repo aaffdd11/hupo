@@ -87,19 +87,19 @@ void main() {
     });
   });
 
-  // ── 批 3：过程四档（`docs/dev/26-PROCESS-LEVELS.md` §三）──────────
+  // ── 批 3：过程档位（`docs/dev/122-TWO-PROCESS-LEVELS.md` §三）──────────
   //
   // ⚠️ 这一组的意义和上面那条金丝雀一样：**客户端自己算出来的东西，
   //    闸必须打在客户端这一侧**。服务端的验收探针这次也会带 `level`，
   //    但探针带的不是**客户端真正会发**的那串——上面那次事故就是这么来的。
-  group('过程四档：地址上要带 level', () {
+  group('过程两档：地址上要带 level', () {
     test('★ 不给 level ⇒ 默认档 `doing`（契约：不带 = doing）', () {
       final u = streamUri(base: '', page: page('https://w.stalkerai.cn/'), sinceSeq: 0);
       expect(u.queryParameters['level'], 'doing');
       expect(u.queryParameters['level'], defaultProcessLevel.wire);
     });
 
-    test('★ 四档逐档带上：wire 就是服务端要认的那个 token', () {
+    test('★ 两档逐档带上：wire 就是服务端要认的那个 token', () {
       for (final level in ProcessLevel.values) {
         final u = streamUri(
           base: '',
@@ -110,23 +110,25 @@ void main() {
         expect(u.queryParameters['level'], level.wire, reason: '$level 带错了');
         expect(u.queryParameters['sinceSeq'], '9', reason: 'level 不许把游标挤掉');
       }
-      // 四个 token 就是契约里写死的那四个（写错了服务端会当默认档）
-      expect(
-        ProcessLevel.values.map((l) => l.wire).toList(),
-        ['quiet', 'doing', 'steps', 'reasoning'],
-      );
+      // 🔴 **协议里那四个 token 一个都不许改**（老客户端还在发 `quiet`/`steps`）；
+      //    新客户端只发留下那两个 —— 这一条只多不少。
+      expect(processLevelWires, ['quiet', 'doing', 'steps', 'reasoning']);
+      expect(ProcessLevel.values.map((l) => l.wire).toList(), ['doing', 'reasoning']);
     });
 
-    test('安静档：地址上仍然是 `level=quiet`（不是"不带"）', () {
-      // ⚠️ 这一点很重要：**"不带 = doing"** 意味着"不带"根本表达不了安静档。
-      //    所以安静档必须显式带出去。
+    test('🔴 砍掉的两档**发不出去**（它们根本不在枚举里）', () {
+      // 负向对照：`processLevelOf('steps')` 是默认档 ⇒ 从盘上读回来之后
+      // 客户端永远只会发 `doing` / `reasoning` 两个字面量之一。
+      expect(processLevelOf('steps'), ProcessLevel.doing);
+      expect(processLevelOf('quiet'), ProcessLevel.doing);
       final u = streamUri(
         base: '',
         page: page('https://w.stalkerai.cn/'),
         sinceSeq: 0,
-        level: ProcessLevel.quiet,
+        level: processLevelOf('steps'),
       );
-      expect(u.toString(), 'wss://w.stalkerai.cn/api/stream?sinceSeq=0&level=quiet&scope=main');
+      expect(u.queryParameters['level'], 'doing');
+      expect(u.toString(), isNot(contains('level=steps')));
     });
   });
 
@@ -147,15 +149,15 @@ void main() {
         base: '',
         page: page('https://w.stalkerai.cn/'),
         sinceSeq: 42,
-        level: ProcessLevel.steps,
+        level: ProcessLevel.reasoning,
         scope: 'dice',
       );
       expect(u.queryParameters['scope'], 'dice');
-      expect(u.queryParameters['level'], 'steps');
+      expect(u.queryParameters['level'], 'reasoning');
       expect(u.queryParameters['sinceSeq'], '42');
       expect(
         u.toString(),
-        'wss://w.stalkerai.cn/api/stream?sinceSeq=42&level=steps&scope=dice',
+        'wss://w.stalkerai.cn/api/stream?sinceSeq=42&level=reasoning&scope=dice',
       );
     });
 

@@ -106,18 +106,26 @@ const MIME = {
   '.map': 'application/json; charset=utf-8',
 };
 
-// ── 过程四档（决策 D7 / 契约 `docs/dev/26-PROCESS-LEVELS.md`）────────────
+// ── 过程档位（决策 D7 / 契约 `docs/dev/122-TWO-PROCESS-LEVELS.md`）────────
 //
 // ⚠️ **`level` 是连接级的**：每条 WS 连接各自一份（从 query 取），
 //    不是进程级开关，也不是全局设置——一台设备选了"推理原文"**不许**
 //    改变另一台设备看到的东西。
 //
-// 四档是**累加的梯子**（契约 §三那张表）：
+// ⚠️ **协议仍是四个 token，语义一个字不许改**（手册纪律 2：上线即冻结）：
+//    老客户端还在发 `quiet` / `steps`，这一侧照旧按下面那张累加表服务它们。
 //
 //   quiet      只说出口的话（`message/*`）——**连 `message/status` 都不发**
 //   doing ✅    + `message/status`（`process_words.dart` 翻成人话）
-//   steps       + `step/*`
+//   steps      + `step/*`
 //   reasoning   + `reasoning/*`（⚠️ 只有主人；默认关）
+//
+// ★ **2026-09-26**（主人原话「**名不副实的要去掉**。」）：客户端菜单**收成两档**
+//   （`doing` / `reasoning`），新客户端**不再发** `quiet` / `steps`。
+//   ⇒ 🔴 **`step/*` 这条通道今天只为老客户端的 `steps` 档存在**：
+//     新客户端即使收得到它（`reasoning` 那一阶也收，见下面那张表）也不再消费、
+//     界面上一个像素都不画（契约 `docs/dev/122` §四）。
+//   ⇒ **服务端这一侧一个字都不改**：砍掉的是客户端的入口，不是协议上的 token。
 //
 // ⚠️ **过程事件（`step/*` · `reasoning/*`）一律是瞬态的**——
 //    由 `session-translate.js` 走 `emitTransient()` 发出来（不占号、不落盘），
@@ -158,8 +166,13 @@ export const PROCESS_TYPES = Object.freeze([
 /**
  * 各档**额外**放行哪些过程事件（累加的梯子）。
  *
+ * ⚠️ 四个 key **一个都不许删**（协议冻结）：`quiet` / `steps` 这两档
+ *    老客户端还在用。★ 2026-09-26 起新客户端只发 `doing` / `reasoning`，
+ *    所以 `step/start` / `step/end` 这两样**今天只为老客户端的 `steps` 档**
+ *    服务（`reasoning` 那一阶也收，但新客户端收了不画 —— 契约 `docs/dev/122` §四）。
+ *
  * ⚠️ `quiet` 是空集，**包括 `message/status`** —— "安静档要真的安静"，
- *    少挡这一条就等于这一档没做（契约 §四点名要验）。
+ *    少挡这一条就等于这一档没做（契约 `docs/dev/122` §四点名要验）。
  */
 const LEVEL_EXTRA_TYPES = Object.freeze({
   quiet: new Set(),

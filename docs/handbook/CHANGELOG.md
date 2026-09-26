@@ -6,6 +6,41 @@
 > 为什么要有这一页：这套手册的价值全在"**它是唯一说法**"。
 > 一旦同一个问题在两处有不同答案，它就退化成又一份参考文档。
 
+> ## v1.88 · **过程四档 ⇒ 两档：砍掉「安静」与「步骤流水」**（2026-09-26 · 主人原话 *「名不副实的要去掉。」*）
+>
+> **改了什么**：
+> ① `01-PROJECT.md` **§6.3** 与 `03-DEVELOPMENT.md` **§4.4** 的可见性表：**四档 ⇒ 两档**
+>    （留 **在做什么**（默认） / **推理原文**；砍 **安静** / **步骤流水**），并写明各为什么；
+> ② `03-DEVELOPMENT.md` **§3.2** 那三行的「什么意思」列跟着改（`step/detail` 注明它
+>    **今天只为老客户端存在**）；
+> ③ `05-DECISIONS.md` **D7 组**新增 **`D7·补`** 一行（本次收窄的原文与边界）；
+> ④ `04-ROADMAP.md` 提到「过程四档」的地方**保留当年读数**，各加一条**带日期的更正**；
+> ⑤ 契约新增 [`dev/122-TWO-PROCESS-LEVELS.md`](../dev/122-TWO-PROCESS-LEVELS.md)；
+>    旧的 [`dev/26-PROCESS-LEVELS.md`](../dev/26-PROCESS-LEVELS.md) 顶上加了指向它的更正。
+>
+> **为什么**：重做之后的**工具行**（`tool/call`：名字 · 人话标题 · 成败 ·
+> 展开看入参输出，而且**落盘、切回来还在**）已经把「步骤流水」承诺的事说得
+> **更准更全**，那一档只剩一串粗粒度、瞬态的重复行；而「安静」**只掐掉
+> 「它正在做…」那一行**、**工具行不受档位管** ⇒ 它做不到它名字说的事。
+>
+> 🔴 **协议一个字都没改**（手册纪律 2：上线即冻结）：`?level=quiet|doing|steps|reasoning`
+> 四个 wire token 仍然冻结，服务端 `PROCESS_LEVELS` / `LEVEL_EXTRA_TYPES` 与
+> `step/*` 的语义**一个字节没动** —— 砍的只是**客户端菜单上的两个入口**，
+> 新客户端不再发 `quiet` / `steps`；**老客户端照旧**。
+> 🔴 **`D7.4` 一条没松**：推理原文仍然**只有 `reasoning` 档**服务端才发
+> （隐私闸不能挪到客户端判）。
+> 🔴 **老设备迁移**：盘上存着 `steps` / `quiet` ⇒ 读出来**归一到 `doing`**
+> （留着它，菜单上就没有任何一项是选中的 = 页面在说假话）。
+>
+> **判据**：`test/unit/process_levels_test.dart`（两档 · 四个 token 冻结 ·
+> 老档归一 · 坏值不抛）· `test/unit/process_level_store_test.dart`（盘上老档 ⇒ `doing`）·
+> `test/unit/stream_uri_test.dart`（只发两个字面量）·
+> `test/widget/process_levels_test.dart`（菜单恰好两项 · 老档选中「在做什么」·
+> `reasoning` 档下 `step/*` **收了不画**、推理原文照旧画）·
+> `test/widget/accessibility_test.dart`（切换面板只有两行 ＋ 五档不溢出）·
+> `v2/services/core/test/process-level.test.js`（**原样没改**：老客户端 `steps` 仍收 `step/*`）。
+> ⚠️ 改的是 **strict** 文件 ⇒ **要重建开机清单**。
+
 > ## v1.87 · **排队看得见、撤得掉：§2.2 加 `queue/changed` 与客户端帧 `unsay`**（2026-09-26 · 接着「聊天窗口重做」第二批）
 >
 > **改了什么**：

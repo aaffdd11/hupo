@@ -1538,8 +1538,8 @@ class _ChatScreenState extends State<ChatScreen> {
       icon: const Icon(Icons.copy_all_outlined),
       label: const Text(exportTooltip),
     ),
-    // ⚠️ **过程四档的入口**（契约 §五：位置等主人看过再定，
-    //    所以这一批只做"能切"）。换档要重连（`level` 是连接级的）。
+    // ⚠️ **过程两档的入口**（契约 `docs/dev/122`：重做之后只剩两档，
+    //    位置等主人看过再定，所以这一批只做"能切"）。换档要重连（`level` 是连接级的）。
     TextButton.icon(
       style: _actionStyle,
       onPressed: () => _pickLevel(c),
@@ -1768,7 +1768,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// 时间线本体 + 尾巴上那一块**过程**（步骤流水 / 那行「它正在做…」）。
+  /// 时间线本体 + 尾巴上那一行「它正在做…」（步骤流水那一档已砍，不再画）。
   ///
   /// ⚠️ 那一块**算在列表里**（会跟着滚），不是浮在输入框上面——
   ///    它是"这一轮正在发生"，属于对话流，不属于工具栏。
@@ -1832,11 +1832,7 @@ class _ChatScreenState extends State<ChatScreen> {
           if (header == 1 && i == 0) return olderLine!;
           final k = i - header;
           if (k < slots.length) return _renderSlot(slots[k], c);
-          return ProcessTail(
-            level: c.level,
-            busyText: c.agentLine,
-            steps: c.steps,
-          );
+          return ProcessTail(busyText: c.agentLine);
         },
       ),
     );
@@ -2055,7 +2051,7 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {});
   }
 
-  /// 打开四档的切换面板。**选中即生效**（换档会重连，见 `setLevel`）。
+  /// 打开两档的切换面板。**选中即生效**（换档会重连，见 `setLevel`）。
   Future<void> _pickLevel(ChatController c) async {
     await showModalBottomSheet<void>(
       context: context,
@@ -2132,7 +2128,7 @@ class _ChatScreenState extends State<ChatScreen> {
     widget.onLoggedOut();
   }
 
-  /// 一条回答：气泡 + （第 ④ 档时）**它自己那条**的思考原文。
+  /// 一条回答：气泡 + （推理档时）**它自己那条**的思考原文。
   ///
   /// ⚠️ 推理原文摆在**它那条气泡的正下方**，不是对话流尾巴上：
   ///    主人回头看的是"这条回答当时怎么想的"——挂尾巴上会跟着下一轮跑掉。

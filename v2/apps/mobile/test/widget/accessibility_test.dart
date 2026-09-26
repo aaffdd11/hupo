@@ -542,7 +542,7 @@ Future<void> _tapHeaderAction(WidgetTester tester, String label) async {
   await tester.pumpAndSettle();
 }
 
-/// **像用户那样**打开过程四档的切换面板（批 3 新加的入口）。
+/// **像用户那样**打开过程两档的切换面板（批 3 加、2026-09-26 收成两档）。
 ///
 /// ⚠️ 和关于页同一条理由：新加的界面**必须也过五档不溢出那道硬闸**，
 ///    不然"五档不溢出"会随时间失效。
@@ -551,10 +551,10 @@ Future<void> _openProcessMenu(WidgetTester tester, double scale) async {
   await _tapHeaderAction(tester, levelActionWords);
 }
 
-/// 一份"过程那一块拉满"的控制器：步骤流水 + 推理原文都在屏幕上。
+/// 一份"过程那一块拉满"的控制器：**推理原文**（那是今天唯一的"过程行"）。
 ///
-/// ⚠️ 用**最高的那一档**（`reasoning`）：它同时包含步骤流水与推理原文，
-///    也就是这一批新加的两样最多的字。
+/// ⚠️ 用留下的那一档 `reasoning`：服务端也仍然会发 `step/*`（累加的梯子），
+///    所以这里**照样灌步骤** —— 顺带证明"收了也不画"（契约 `docs/dev/122` §三）。
 /// ⚠️ 推理原文**挂在气泡上** ⇒ 得先有 `message/start`，否则它只是"待挂"、
 ///    一个像素都不画（那道闸就白量了）。
 Future<ChatController> _processController() async {
@@ -571,7 +571,7 @@ Future<ChatController> _processController() async {
 
 // ── ★ `116`：工具行 / 系统提示词行 / 每轮用量 / 过程折叠（主人 2026-09-26）────
 //
-// ⚠️ 和关于页 / 过程四档同一条理由：**新加的界面必须也过这两道硬闸**
+// ⚠️ 和关于页 / 过程两档同一条理由：**新加的界面必须也过这两道硬闸**
 //    （五档不溢出 + 命中区 ≥44），不然"五档不溢出"会随时间失效。
 // ⚠️ 四条新事件都走**真入口**（`controller.ingest`）—— 不直接 pump 那几个 widget：
 //    那样它底下没有聊天屏，量的就不是用户真会看到的那棵树。
@@ -826,7 +826,7 @@ void _stuff(Timeline t) {
 
 // ── 批 3「删掉 / 回收站」那一批（`28-DELETE.md`）新加的界面 ──────────
 //
-// ⚠️ 和关于页 / 过程四档同一条理由：**新加的界面必须也过这两道闸**，
+// ⚠️ 和关于页 / 过程两档同一条理由：**新加的界面必须也过这两道闸**，
 //    不然"五档不溢出 + 命中区 ≥44"会随时间失效。
 // ⚠️ 全部**从真入口进**（顶栏那个回收站图标 / 长按气泡），
 //    不直接把页面当 `home` pump 出来 —— 那样没有返回键，
@@ -1193,7 +1193,7 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '主界面在 ${s}x 溢出了');
       });
 
-      testWidgets('主界面 @ ${s}x（步骤流水 + 推理原文拉满 —— 批 3 新加的）', (tester) async {
+      testWidgets('主界面 @ ${s}x（推理原文拉满 —— 批 3 新加、仍发来的 step/* 不画）', (tester) async {
         final c = await _processController();
         await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
         expect(_drain(tester), isEmpty, reason: '过程那一块在 ${s}x 溢出了');
@@ -1392,10 +1392,12 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '关于页在 ${s}x 溢出了');
       });
 
-      testWidgets('过程四档的切换面板（从真入口进）@ ${s}x', (tester) async {
+      testWidgets('过程两档的切换面板（从真入口进）@ ${s}x', (tester) async {
         await _openProcessMenu(tester, s);
         expect(_drain(tester), isEmpty, reason: '切换面板在 ${s}x 溢出了');
-        // 命中区：面板里那四项每一行都得 ≥44（它们是 `ListTile`，
+        // ★ 负向对照：菜单里**真的只有那两行**（砍掉的一个都不许混进来）
+        expect(find.byType(ListTile), findsNWidgets(ProcessLevel.values.length));
+        // 命中区：面板里每一行都得 ≥44（它们是 `ListTile`，
         // 不在下面那份按钮扫描的种类里，所以在这儿单独量）。
         for (final t in find.byType(ListTile).evaluate()) {
           final size = tester.getSize(find.byWidget(t.widget));

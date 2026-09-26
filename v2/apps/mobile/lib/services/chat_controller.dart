@@ -207,7 +207,7 @@ class ChatController extends ChangeNotifier {
   /// 现在存着的那份打字草稿（`null` = 没有）。界面拿它画"上面那条草稿"。
   String? composeDraft;
 
-  /// 过程四档存在哪（契约 §三）。**按设备存、按账号不存**。
+  /// 过程两档存在哪（契约 `docs/dev/122` §三）。**按设备存、按账号不存**。
   final ProcessLevelStore levels;
 
   /// "自动念"那个开关住哪（设备级偏好，见 `speech_store.dart`）。
@@ -412,40 +412,29 @@ class ChatController extends ChangeNotifier {
 
   /// 界面上那行「它正在做…」；`null` = 什么都不显示。
   ///
-  /// ⚠️ **安静档（`quiet`）在这儿被掐掉**：契约 §一 说那一档
-  ///    "连「它正在做…」也没有"。
-  ///    光靠服务端不发 `message/status` 是不够的——`timeline.agentLine`
-  ///    还有一条兜底（"有没收口的气泡" ⇒ 推得出它在做），
-  ///    那条路跟档位无关。所以闸必须打在**拿到档位的这一层**。
-  String? get agentLine =>
-      _level == ProcessLevel.quiet ? null : timeline.agentLine;
+  /// ⚠️ 2026-09-26 起**没有"安静档"了**（契约 `docs/dev/122` §一）：
+  ///    那一档只掐这一行、掐不住工具行 ⇒ 它做不到它名字说的事，已从菜单砍掉。
+  ///    ⇒ 这一层不再按档位掐它：屏幕上什么都没有时，它就是唯一的"它在动"信号。
+  String? get agentLine => timeline.agentLine;
 
-  /// 第 ③ 档要画的步骤流水（其余档位返回空 ⇒ 界面自然不画）。
+  /// 推理档要看的思考原文 —— **挂在它那条气泡上**（`AssistantMessage.reasoning`）。
   ///
-  /// ⚠️ `doing` 档服务端本来就不发步骤，但这一层也要挡：
-  ///    用户从"步骤流水"切回"在做什么"时，屏幕上**立刻**不该再留着那串步骤
-  ///    （它们下一帧就会被清，但那一帧可能很久才来）。
-  List<ProcessStep> get steps =>
-      _level == ProcessLevel.steps || _level == ProcessLevel.reasoning
-      ? timeline.steps
-      : const [];
-
-  /// 第 ④ 档要看的思考原文 —— **挂在它那条气泡上**（`AssistantMessage.reasoning`）。
-  ///
-  /// ⚠️ 只**不显示**，不删：换出第 ④ 档之后它还在内存里，
+  /// ⚠️ 只**不显示**，不删：换出推理档之后它还在内存里，
   ///    换回来还看得见（那是"回头看它当时怎么想的"这条路）。
   ///    真正让它消失的是 `Timeline.reset()`（重放 / 退出登录）。
   ///
-  /// ⚠️ 闸必须打在这一层（和 [agentLine] 同一条理由）：界面是哑的，
-  ///    而"现在是不是第 ④ 档"只有这里有。
+  /// ⚠️ 闸必须打在这一层：界面是哑的，而"现在是不是推理档"只有这里有。
+  ///    服务端那边也有一道闸（**只有 `reasoning` 档才发推理原文**，D7.4）——
+  ///    🔴 那一道**绝不能**挪到客户端来判（那是隐私闸）。
   String reasoningOf(AssistantMessage m) =>
       _level == ProcessLevel.reasoning ? m.reasoning : '';
 
   /// 屏幕上有没有**过程**可画（决定列表尾巴那一条要不要占位置）。
   ///
-  /// ⚠️ **推理原文不算在内**：它挂在气泡上、由 `_render` 那条路画，
-  ///    不在尾巴上（批 3 改过一次，见 `AssistantMessage.reasoning`）。
-  bool get hasProcess => agentLine != null || steps.isNotEmpty;
+  /// ⚠️ **推理原文不算在内**：它挂在气泡上、由 `_render` 那条路画，不在尾巴上。
+  /// ⚠️ **步骤流水也不算**：那一档已从菜单砍掉，`step/*` 只剩"老客户端
+  ///    `steps` 档"那一条通道（契约 `docs/dev/122` §四）—— 收了也不画。
+  bool get hasProcess => agentLine != null;
 
   // ── ★ `116`：工具行 / 系统提示词 / 每轮用量 / 过程折叠（主人 2026-09-26）──
   //
@@ -664,7 +653,7 @@ class ChatController extends ChangeNotifier {
     _needsSetup = false;
     _lastError = null;
     // ★ 过程档位是**本机偏好**，跟"先画本机一屏"一起读出来——
-    //   它决定了那一屏上那行「它正在做…」要不要出现（安静档不许有）。
+    //   它决定那一屏上推理原文要不要画（`doing` 档不画）。
     _level = await levels.read();
     await _restoreLocal();
     notifyListeners();
