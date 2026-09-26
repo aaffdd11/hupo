@@ -87,6 +87,10 @@ const RATCHET = [
   //    （`workspace.js` 的 `write()` ＋ `apps.js` 的 `register()/meta()` 都按它写）。
   'docs/dev/113-APP-SHAPE-LIVE.md',
   'docs/dev/114-APP-USER-SIDE-NO-LIMIT.md',
+  // ⚠️ 2026-09-26：115 **出生就进名单**（同一条纪律）。
+  //    它是"聊天窗口对齐 DSH 的窗口"那一件事的**研究规格**（DSH 有什么 / 我们差在哪 / 三条路与代价）
+  //    —— 下一批动手的人如果读的是一个断链的 115，就会去猜 DSH 的窗口长什么样。
+  'docs/dev/115-DSH-WINDOW-PARITY.md',
 ];
 
 /** ② L0 = 路由层：零事实、零数值、零状态 */
