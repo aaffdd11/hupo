@@ -177,6 +177,9 @@ POST /api/creds  {creds:{voiceAppId,voiceSecretId,voiceSecretKey}}
 🔴 **剩下只差"他自己的真钥匙"**：钥匙只有主人能填（P2-2：部署默认那份只给主人）。
 在 `u2` 那一屏「语音」把三样填上、送出之后，那台盒子就会 `凭据来源 his-own` 地开始听。
 
+📷 **页面上那一屏**（`u2` 的号，线上实拍）：[`125-raw/tenant-voice-screen.png`](125-raw/tenant-voice-screen.png)
+—— 那句边界话已经是实话「先收着。填上这三样，这台就能听你说话。」
+
 ⚠️ **取证时动过又还原的**：往盒子里推过假钥匙（三批），**都还原了** —— 最后 `creds.yaml` 里
 `grep -c 'fake-'` = **0**、只剩 `HUPO_MODEL_KEY` / `HUPO_IMAGE_KEY` 两行（值没动过）、
 10 秒内没有任何写入；中心那份 `data/creds/u2.yaml` 删掉了（`/api/space` 回到 `voice:false`）；
