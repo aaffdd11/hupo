@@ -428,3 +428,28 @@ bash scripts/check-dev-mode-container.sh --layer <指纹> --seq ghost,ghost,ghos
 1. 容器 root **没有 `CAP_SYS_PTRACE`** ⇒ `readlink /proc/<pid>/cwd` 是 EACCES ⇒ 要用**同 uid（1000）的 helper** 去读；
 2. 那个 helper 的**命令行里也有 "profile web" 这串字** ⇒ 第一版探针**把自己认成了目标**（读到 `pid=201 cwd=/app`）——
    这就是 `pgrep -f` 那个老坑的同一形状：**探针要先把自己排除**（`/tmp/cwd.cjs` 里的 `Number(d)===process.pid` 那一行）。
+
+### 八·补4 · 🔴 **D4 的答案（终于验到了）：同一间，两个进程**不能同时**用那份会话**
+
+**做法（真机 · u2 的盒子 · 产品层 `af752e466843`）**：先让开发者入口把 `aoshu-bank` 开着（`dsh web` 活着，pid 145 · cwd 就是那一间），
+再从聊天那条路往**同一间**说一句。
+
+**读数**：
+- 盒里两台并存：`dsh --profile web` 392MB ＋ `dsh --profile sdk` 179MB；内存 562MB/768MB；**`oom_kill = 0`**（不是内存问题）；
+- 那一轮**没答上**，用户看到的是我们 `#155·补` 新加的那句诚实话：
+  **「我现在接不上活。你这句话我记下了，等我缓过来再说。」**（**有气泡了** —— 这条修复本身生效了）；
+- 我拿手动驱动把**原话**打出来了：
+  ```
+  session "owner/aoshu-bank.muh709vsibnh.1" is already owned by an active write handle
+  ```
+  ⇒ DSH 的持久化层对每条会话有一把**写租约**（`session.lock`，flock；源码原话
+  *"a second acquirer's zero-timeout wait times out"* ⇒ `SessionAlreadyOwnedError`）——
+  **第二个进程直接被拒**。
+
+⇒ **"一间一条会话"的必然推论**：**开发者入口把某一间开着的时候，那一间的聊天会被挡住**（反过来也一样）。
+⚠️ 只影响**那一间**：别的房间、以及"入口没开那一间"时，聊天照旧（我前面几次真机都是好的）。
+⚠️ **这是产品要处理的形状**，不是可以忽略的边角：
+- 现在那条话（"我现在接不上活…"）是**诚实的**，但**没说清原因**（主人会以为它坏了）；
+- 该做的（等主人拍）：把"这一间正开着"**单独说一句人话**（например「这一间你正开着看，先把它关掉（或换一间）再说话」），
+  或者入口那边的房间在"有人聊"时**让开**（收掉那台 `dsh web`），或者给聊天那条路一小段**重试**。
+⇒ 记 **B46**。
