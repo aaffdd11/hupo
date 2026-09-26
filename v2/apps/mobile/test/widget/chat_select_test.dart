@@ -1,7 +1,7 @@
 // 长按气泡 ⇒ **复制 / 多选**（契约 `docs/dev/106-CHAT-SELECT.md` §三 判据 S1–S6）。
 //
 // ⚠️ 全部走**真入口**：泵 `ChatScreen` + 真长按 / 真点，
-//    不直接把 `BubbleMenu` / `BubbleSelectBar` 当 `home` 泵出来 ——
+//    不直接把 `BubbleActionsBar` / `BubbleSelectBar` 当 `home` 泵出来 ——
 //    那样量不到"接线到底对不对"（这一批最容易做歪的正是接线）。
 // ⚠️ 剪贴板用**拦 `SystemChannels.platform` 的 `Clipboard.setData`** 来看那串字符
 //    （`test/widget/paste_test.dart` 是同一套法子，只是那边看的是 `getData`）。
@@ -306,7 +306,7 @@ void main() {
     //       ⇒ 这一按只把选中切回去 —— 那正是 S6 要的"**只**切换选中"。
     //       真弹了菜单 / 真发了请求，下面两条就会红。
     await _longPress(tester, '这句没发出去');
-    expect(find.byType(BubbleMenu), findsNothing, reason: '★ 多选态下不许再弹长按菜单');
+    expect(find.byType(BubbleActionsBar), findsNothing, reason: '★ 多选态下不许再弹出长按那一条');
     expect(find.text(bubbleMenuDelete), findsNothing);
     // ⚠️ 这里**不能**用 `find.text(bubbleMenuCopy)` 当证据：工具条上那个【复制】
     //    是同一句字 —— 菜单真弹了也可能"找不到它"，那是误判。

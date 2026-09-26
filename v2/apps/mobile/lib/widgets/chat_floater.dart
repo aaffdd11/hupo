@@ -60,6 +60,9 @@ enum FloaterTier {
 /// **抓手那颗按钮的 key**（判据用它量命中区、也用它点/拖 —— 图形上没有字可找）。
 const Key chatHandleKey = Key('chat-handle');
 
+/// **标题行右边那一串动作那条横滚条**的 key（判据用它量"看得见几个"）。
+const Key chatActionsStripKey = Key('chat-actions-strip');
+
 /// 浮窗自己的几条常量（**不散在代码里**）。
 class FloaterMetrics {
   const FloaterMetrics._();
@@ -435,11 +438,27 @@ class ChatFloaterState extends State<ChatFloater> {
                                 const SizedBox(width: d.gapS),
                                 widget.tabs!,
                               ],
-                              const Spacer(),
+                                                            // 🔴 **这里原来有一个 `Spacer()`** —— 2026-09-26 拿掉。
+                              //    它和右边那一条**都是 flex 1** ⇒ 把剩余宽对半分，
+                              //    而它自己一个像素都不画。390 宽的手机上量到：
+                              //      有它：横滚条 **35.4** 宽（连「过程」都被切掉半个）
+                              //      没它：横滚条 **53** 宽（「过程」整颗在里面）
+                              //    ⇒ 纯粹是浪费。读数在 `docs/dev/124-TOUCH-REGRESSION.md` §三。
+                              //    ⚠️ 那一条**仍然贴右**：`Flexible` 里的横滚条是**贪婪**的，
+                              //      会把分到的宽全占满（`收起` 照旧钉在最右）。
                               // ⚠️ 那一串动作要能**横向滚**：窄屏 + 大字号下它**一定**放不下；
-                              //    折行会让这一行变高 ⇒ 把时间线挤没。一行 + 横滚：高度不变、一个都不藏。
+                              //    折行会让这一行变高 ⇒ 把时间线挤没。一行 + 横滚：高度不变。
+                              // 🔴 **"一个都不藏"是假话**（2026-09-26 如实改口径）：
+                              //    390 宽下横滚条只有 53 像素，而这一串要 250 多
+                              //    ⇒「回收站 / 导出 /（右栏那颗）」都在视口外，只有横滑够得着；
+                              //    **而且视口外那几颗的 a11y 矩形还挂在【聊天/轨迹】的坐标上**
+                              //    （读屏点"回收站"，命中的是 tab —— 真浏览器上量到过）。
+                              //    ⇒ 这条账**没结**：真修法要么加一颗「更多」的出口、
+                              //      要么把它们搬出这一行 —— 那是产品决定，
+                              //      记在 `docs/dev/124-TOUCH-REGRESSION.md` §三·五。
                               Flexible(
                                 child: SingleChildScrollView(
+                                  key: chatActionsStripKey,
                                   scrollDirection: Axis.horizontal,
                                   reverse: true,
                                   child: Row(

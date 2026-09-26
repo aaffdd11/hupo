@@ -576,6 +576,8 @@ class _ChatScreenState extends State<ChatScreen> {
     if (widget.controller.scope != _shownScope) {
       _shownScope = widget.controller.scope;
       _userScrolledAway = false;
+      // ★ 换房间 ⇒ 那条动作横条指的**不是这一屏的那一条**了 ⇒ 收起来
+      _menuItem = null;
       // ★ `116`：轮号在两间里各自从 1 开始 ⇒ 折叠那两份账也跟着换（见 `_unfoldedTurns`）。
       _unfoldedTurns.clear();
       _autoFoldApplied.clear();
@@ -1616,6 +1618,17 @@ class _ChatScreenState extends State<ChatScreen> {
             },
           ),
         ),
+        // ★ **长按气泡之后那一条**（契约 `28-DELETE.md` §二 / `106-CHAT-SELECT.md`）。
+        //   🔴 它**摆在这儿**（输入条上面、时间线的兄弟）而不是弹一层：
+        //      弹一层会带 barrier ⇒ 弹着的时候**整个窗口都点不动、也发不出去**
+        //      （真机复现见 `docs/dev/124-TOUCH-REGRESSION.md`）。
+        //   ⚠️ 它**不会挡住多选态那条**：按下【多选】时这一条先收起来（见 `_pickBubbleAction`）。
+        //   ⚠️ 那条已经不在这一屏了（删了 / 换了房间）⇒ 不画（免得留一条指向空气的横条）。
+        if (_menuItem != null && c.items.any((it) => identical(it, _menuItem)))
+          BubbleActionsBar(
+            onPick: (a) => _pickBubbleAction(c, a),
+            onCancel: () => setState(() => _menuItem = null),
+          ),
         // ★ **多选态**那条底栏工具条（契约 `docs/dev/106-CHAT-SELECT.md` §一）。
         //   ⚠️ 只在多选态出现 ⇒ 平时这一屏**一个像素都不变**
         //      （通知那条 D4.8："高度变化 = 0px" 量的是平时那一屏）。
@@ -2169,7 +2182,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ── 长按气泡 → 复制 / 多选 / 删掉（契约 `28-DELETE.md` + `106-CHAT-SELECT.md`）──
 
-  /// 长按气泡：先弹菜单，选中哪一项就走哪一条（§四：删前必须列清单）。
+  /// 长按气泡：把那条动作横条**摆出来**（不是弹一层 —— 见下面那段）。
   ///
   /// ⚠️ 一次问答 = 一轮 = 两个 `messageId`（§三·补）——那两个 id 由
   ///    `ChatController.turnMessageIds` 从**画得出来的**那几条里算出来。
@@ -2178,26 +2191,44 @@ class _ChatScreenState extends State<ChatScreen> {
   /// ⚠️ 这一条**管着三项**：进不来的那条（不在任何一轮里）三项都不给 ——
   ///    契约 `106` 的【复制】【多选】只说了"长按任意一条"，
   ///    而"还没发出去的那句"在界面上本来就没有长按入口（§四 没要求改它）。
-  Future<void> _onBubbleLongPress(ChatController c, TimelineItem item) async {
+  ///
+  /// 🔴 **2026-09-26：原来这里是 `showModalBottomSheet`，改成摆一条横条。**
+  ///    理由不是好看：那一层带**铺满全屏的 barrier**，手按住 500ms
+  ///    （`kLongPressTimeout`，老人家的慢按 / "按下去准备滑"那一下就够）
+  ///    就会把它弹出来，于是**整个窗口当场死掉**：时间线拖不动、抓手行按钮
+  ///    一个都点不动、输入条被盖住发不出去。真机读数与复现步骤见
+  ///    `docs/dev/124-TOUCH-REGRESSION.md`。
+  ///    ⇒ 现在它只是 `_sheetBody` 里的一个孩子（与 `BubbleSelectBar` 同一条路），
+  ///      **时间线、输入条、抓手行一样都不受影响**。
+  void _onBubbleLongPress(ChatController c, TimelineItem item) {
     final id = item.messageId;
     if (id == null) return;
-    final ids = c.turnMessageIds(id);
-    if (ids == null) return;
+    if (c.turnMessageIds(id) == null) return;
+    // 同一条再长按一次 = 收起来（点着玩不会越堆越高）
+    setState(() => _menuItem = identical(_menuItem, item) ? null : item);
+  }
 
-    final action = await showModalBottomSheet<BubbleAction>(
-      context: context,
-      builder: (_) => const BubbleMenu(),
-    );
-    if (!mounted) return;
+  /// **长按气泡之后选中的那一项**（`null` = 横条不画）。
+  ///
+  /// ⚠️ 它只是**一个界面状态**：真动作全在 [`_pickBubbleAction`] 里，
+  ///    与原来那个 `await showModalBottomSheet(...)` 的返回值**一一对应**。
+  TimelineItem? _menuItem;
+
+  /// 横条上按了哪一项（对应原来那个弹层的返回值）。
+  Future<void> _pickBubbleAction(ChatController c, BubbleAction action) async {
+    final item = _menuItem;
+    setState(() => _menuItem = null); // 先收起横条（与弹层 pop 之后那一下同一个时机）
+    if (item == null) return;
+    final id = item.messageId;
+    final ids = id == null ? null : c.turnMessageIds(id);
     switch (action) {
       case BubbleAction.copy:
         await _copyOne(item);
       case BubbleAction.select:
         _enterSelect();
       case BubbleAction.delete:
+        if (ids == null) return; // 一轮都算不出来 ⇒ 连清单都列不了（原来那条门的另一半）
         await _deleteTurn(c, ids);
-      case null:
-        return; // 划掉 / 点了"算了" ⇒ 什么都不做
     }
   }
 
