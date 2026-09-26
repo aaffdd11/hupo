@@ -554,3 +554,75 @@ const double dshQueueListMaxHeight = 180;
 ///    ⇒ 列表取 `min(180, 屏高 × 这个比例)`：正常档就是 180（与 DSH 同值），
 ///      大字/矮屏下按屏裁 —— 上限的意思本来就是"**不许把别的挤没**"。
 const double dshQueueListMaxHeightFactor = 0.2;
+
+// ── ★ 批 5：右栏（DSH 的 right sidebar；契约 `docs/dev/120-FILE-PANEL.md`）──
+//
+// 数值出处：`docs/dev/115-raw/A-layout.md` §3 —— **右栏（第 5 行）**
+//   `0 或 clamp(300, viewport*0.45 first open)`，上限 `viewport*0.70`；
+//   **28×28 那颗展开按钮**（§3：`ExpandButton … 28×28 button with
+//   aria-label 打开右侧边栏` 与 `Panel icon buttons: 28×28; border-radius:28px`）；
+//   **窄屏**：它的 `computeColumns` 先压右栏、再让占位者自己关掉（`available < 300 ⇒ r = 0`）。
+//
+// ⚠️ **我们与 DSH 的推法刻意不同的一处（如实记）**：DSH 的右栏是**三轨网格**
+//    里的一轨（它一开，中间那一列就变窄）；我们这里是**浮窗里面**一块
+//    **滑进来的盖板**（派活单点名："slides in from the right **inside the floating
+//    window**，不是新的一屏"）。⇒ 这里算出来的是**盖板自己的宽**，
+//    中间那一列**一个像素都不动**（聊天那一屏的滚动位置正是靠这个不动的）。
+const double dshRightPanelWidthMin = 300;
+const double dshRightPanelWidthMax = 420;
+const double dshRightPanelWidthFactor = 0.45;
+const double dshRightPanelMaxRatio = 0.7;
+
+/// 窄屏的那一刀（DSH 的 "available < 300 ⇒ 右栏 0"，我们反过来：**盖满**）。
+///
+/// 🔴 为什么是"盖满"而不是"关掉"：他不是在缩窗口，是在**点那颗按钮**
+///    ——他要看那一栏。窄屏下按不动（关掉 = 点了没反应）比"盖住聊天"坏得多。
+const double dshRightPanelNarrowWidth = 300;
+
+/// 这一块地方**够不够**摆那块盖板。
+bool dshRightPanelFits(double available) =>
+    available >= dshRightPanelNarrowWidth;
+
+/// 盖板该多宽（`available` = 浮窗里那一块的可用宽）。
+///
+/// 三条（与 DSH 的 `computeColumns` 同一个形状，数值换成上面那几个 token）：
+///   · 够宽 ⇒ `clamp(300, 可用宽 × 0.45, 420)`（首次打开取屏幕的 45%）；
+///   · 不够宽但**放得下一整个**（≥300）⇒ 占 `min(420, 可用宽 × 0.70)`
+///     —— 于是左边**总留一条缝**（看得见聊天还在，不是"换了一屏"）；
+///   · 连 300 都没有 ⇒ **盖满**（见 [dshRightPanelNarrowWidth]）。
+double dshRightPanelWidth(double available) {
+  if (available <= 0) return 0;
+  final byFactor = available * dshRightPanelWidthFactor;
+  final wide = byFactor.clamp(dshRightPanelWidthMin, dshRightPanelWidthMax);
+  if (dshRightPanelFits(available) && wide < available) return wide;
+  final byRatio = available * dshRightPanelMaxRatio;
+  final narrow = byRatio > dshRightPanelWidthMax ? dshRightPanelWidthMax : byRatio;
+  return narrow < available ? narrow : available;
+}
+
+/// DSH 那一排小图标按钮的**图形**尺寸（`28×28`，`115-raw/A-layout.md` §3）。
+///
+/// 🔴 **它不是命中区**：D3.6 那条硬闸量的是**命中区**（≥44，
+///    `accessibility_test.dart` 的 `sweep`）—— 图形可以 28，按钮得给到 44。
+///    （DSH 也这么干：`28×28` 是画出来的那个框，点击靠浏览器/系统的命中区。）
+const double dshPanelIconButtonSize = 28;
+
+/// 右栏滑进 / 滑出的时长。
+///
+/// ⚠️ 出处是 DSH 自己的 `--ds-transition-duration-slow`（`A-layout.md` §1.2
+///    那张表里 frame 的 `grid-template-columns` 用的就是它）——
+///    **同一个动作、同一个数**，不是我们顺手挑的。
+/// ⚠️ 曲线（`--ds-ease-in-out`）**不在这里**：`Curve`/`Curves` 住在
+///    `package:flutter/animation.dart`，而 `models/` 是纯逻辑层（楼层闸）
+///    —— 它是 widget 那一层的常量（见 `widgets/dsh_look.dart` 的 `dshPanelSlideCurve`）。
+const Duration dshPanelSlideDuration = Duration(milliseconds: 240);
+
+/// 右栏那个滚动面**多缓存一段**（逻辑像素）。
+///
+/// 它是给"**紧挨着抬头下面**的那几行"用的：抬头把视口占满时（大字号），
+/// 下面那几行本来要等用户滚了才建 —— 而判据要求**一开始就能 `ensureVisible` 到**。
+/// ⚠️ **它治不了"抬头与列表上下分家"那种病**（那要改布局：见
+///    `docs/dev/120-FILE-PANEL.md` §3.2）；这一条只是让"刚出视口"的那几行也建出来。
+/// ⚠️ 它**不影响画在哪**（`sweep` 那道硬闸量的仍是**真的可见**的矩形）——
+///    缓存只管"建不建"。
+const double dshPanelCacheExtent = 400;

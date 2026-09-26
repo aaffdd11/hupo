@@ -37,6 +37,13 @@ TextStyle dshTextStyle(DshType t, Color color, {String? family}) => TextStyle(
 /// DSH 的代码字体栈（真包 `--dsh-font-mono`；平台没有就退回系统等宽）。
 const String dshMonoFamily = 'monospace';
 
+/// 右栏滑进 / 滑出的曲线（DSH 的 `--ds-ease-in-out`，逐字照它）。
+///
+/// ⚠️ 它住**这一层**而不是 `models/dsh_design.dart`：`Curve` 是
+///    `package:flutter/animation.dart` 的东西，而 `models/` 是纯逻辑层
+///    （楼层闸不许碰 UI）—— 时长那个数仍在 token 里（`dshPanelSlideDuration`）。
+const Curve dshPanelSlideCurve = Curves.easeInOut;
+
 /// 一屏的色板 + 用户字号轴（一处算好，往下传）。
 class DshLook {
   const DshLook(this.palette, this.scale);

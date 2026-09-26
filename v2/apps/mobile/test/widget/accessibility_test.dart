@@ -24,6 +24,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:hupo_app/models/export_words.dart';
+import 'package:hupo_app/models/file_panel_words.dart';
 import 'package:hupo_app/models/dev_harness.dart';
 import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/desktop_words.dart';
@@ -48,6 +49,7 @@ import 'package:hupo_app/widgets/bubble_select_bar.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/widgets/chat_tabs.dart';
 import 'package:hupo_app/widgets/desktop_icon_menu.dart';
+import 'package:hupo_app/widgets/file_panel.dart';
 import 'package:hupo_app/widgets/harness_pane.dart';
 import 'package:hupo_app/screens/landing_screen.dart';
 import 'package:hupo_app/screens/login_screen.dart';
@@ -117,6 +119,97 @@ Future<void> _pump(WidgetTester tester, Widget child, double scale) async {
     ),
   );
   await tester.pump();
+}
+
+/// ★ 批 5：右栏那一栏要用的夹具（契约 `docs/dev/120-FILE-PANEL.md`）。
+///
+/// ⚠️ 与 `116`/`117`/`118` 那几格同一条理由：**新加的界面必须也过那两道硬闸**
+///    （五档不溢出 + 命中区 ≥44），不然它们会随时间失效。
+/// ⚠️ **走真入口**：点会话头上那颗按钮（不直接 pump `FilePanel`）——
+///    那样它底下没有浮窗，量的就不是用户真会看到的那棵树。
+/// ⚠️ 两种状态各量一次：**收起**（只有那颗按钮）与**点开、还展开了一条**
+///    （一行行 ＋ 入参那一块 ＋ `SelectableText`）。
+
+/// 一窗里**三轮**、各写一个文件。
+///
+/// 🔴 **被服务端截过的那一次放在最新那一轮**（第 3 轮）：面板是"最新在上" ⇒
+///    它**就是第一行**。为什么非要这样：大字号（1.75x 起）下 `ListView` 是懒加载的，
+///    排在下面那几行**根本不会被建出来** ⇒ 判据连那一条都找不到
+///    （真栽过：`ensureVisible` 抛 `Bad state: No element`）。
+///    ⇒ 夹具这里刻意让"要点的那个"落在**第一屏**里。
+ChatController _filePanelFeed() {
+  SharedPreferences.setMockInitialValues(<String, Object>{});
+  final c = _trashController();
+  c.ingest({
+    'type': 'tool/call',
+    'seq': 1,
+    'turn': 1,
+    'step': 1,
+    'callId': 'c_1',
+    'name': 'write',
+    'title': '写一个新文件',
+    'args': '{"path":"/w/账本.txt","content":"7 小时"}',
+    'bytes': 40,
+    'truncated': false,
+  });
+  c.ingest({
+    'type': 'tool/call',
+    'seq': 2,
+    'turn': 2,
+    'step': 1,
+    'callId': 'c_2',
+    'name': 'edit',
+    'args': '{"file_path":"/w/摘要.md"}',
+  });
+  c.ingest({
+    'type': 'tool/call',
+    'seq': 3,
+    'turn': 3,
+    'step': 1,
+    'callId': 'c_3',
+    'name': 'write',
+    'args': '{"path":"/w/新账本.txt","content":"8 小时"}',
+    'bytes': 2000,
+    'truncated': true,
+  });
+  return c;
+}
+
+/// **像用户那样**点开会话头上那颗按钮，并核"那一栏真的画出来了"。
+Future<void> _openFilePanel(WidgetTester tester) async {
+  await tester.tap(find.byKey(filePanelButtonKey));
+  await tester.pumpAndSettle();
+  // 负向对照：**那一栏真的进树了**才算数（没进的话这道闸扫的是聊天那一屏）
+  expect(find.byKey(filePanelKey), findsOneWidget, reason: '★ 那一栏没进这棵树 ⇒ 闸扫错了地方');
+}
+
+/// **像用户那样**展开**被服务端截过的那一条**（最新那一轮那次写）。
+///
+/// ⚠️ 大字号（3.1x）下那一行**可能还没被建出来**（那一栏的抬头会把视口占满），
+///    而 `ensureVisible` 对"不在树里"的东西会当场抛 `Bad state: No element`
+///    ⇒ 先**像用户那样往下滚那一栏**，再点。
+Future<void> _expandFileRow(WidgetTester tester) async {
+  final f = find.byKey(filePanelRowKey('/w/新账本.txt'));
+  if (f.evaluate().isEmpty) {
+    await tester.drag(
+      find.descendant(
+        of: find.byKey(filePanelKey),
+        matching: find.byType(CustomScrollView),
+      ),
+      const Offset(0, -400),
+    );
+    await tester.pumpAndSettle();
+  }
+  // 负向对照：那一行**真的进树了**（滚了还没有 ⇒ 这道闸扫错了地方）
+  expect(f, findsWidgets, reason: '★ 那一行没进这棵树');
+  // ⚠️ 再 `ensureVisible` **一次**：滚动之前它还不存在，而"滚动之后"它可能
+  //    只是**露出了一半**（大字号下这一行比视口还高）⇒ 直接点会点在视口外面。
+  await tester.ensureVisible(f.first);
+  await tester.pumpAndSettle();
+  await tester.tap(f.first);
+  await tester.pumpAndSettle();
+  // 负向对照：那一块正文真的画出来了
+  expect(find.text(filePanelArgsHead), findsWidgets, reason: '★ 入参那一块没进这棵树');
 }
 
 /// 把 pump 期间攒下来的异常全取出来（**溢出就是这么报的**）。
@@ -683,8 +776,15 @@ Future<void> _openTrajectoryTab(WidgetTester tester) async {
 /// ⚠️ 必须的一步：打开就停在最新那一条（`27-SCROLL.md`），3.1x 下头几格会被
 ///    滚出视口 ⇒ `ListView` 不建它们 ⇒ 这几道闸就成了空转。
 ///    顺手把 `_userScrolledAway` 立起来，免得跟随又把人拽回底部。
+/// ⚠️ **必须指名是聊天那一屏那个 `ListView`**（批 5 起右栏里也有一个 ⇒
+///    `find.byType(ListView)` 会**同时找到两个**，`drag` 当场报"ambiguous"）。
 Future<void> _toTop(WidgetTester tester) async {
-  await tester.drag(find.byType(ListView), const Offset(0, 4000));
+  await tester.drag(
+    find
+        .descendant(of: find.byKey(chatBodyKey), matching: find.byType(ListView))
+        .first,
+    const Offset(0, 4000),
+  );
   await tester.pumpAndSettle();
 }
 
@@ -1672,6 +1772,39 @@ void main() {
         expect(find.text(trajectoryTotalsHead), findsOneWidget, reason: '★ 合计那一行没进这棵树');
         await sweep(tester, '轨迹行 @${s}x');
       });
+
+      // ── ★ 批 5：右栏那一栏（契约 `docs/dev/120-FILE-PANEL.md`）────────
+      //
+      // ⚠️ 两种状态各量一次：**收起**（会话头上那颗按钮）与**点开还展开了一条**
+      //    （一行行 ＋ 入参那一块）—— 它们是不同的树。
+      testWidgets('右栏收着（会话头上那颗按钮）@ ${s}x', (tester) async {
+        final c = _filePanelFeed();
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        // ⚠️ **先拉回最上面**：`116` 的工具行也在这同一屏上，大字号下一格刚滚出
+        //    视口 ⇒ 它的语义矩形是**被裁过的**（实测量出来 `Size(48, 30)`），
+        //    而那个读数**随滚动位置变** —— 老的那几条扫描都用 `_toTop` 挡这件事。
+        await _toTop(tester);
+        expect(find.byKey(filePanelButtonKey), findsOneWidget, reason: '★ 那颗按钮没进这棵树');
+        expect(_drain(tester), isEmpty, reason: '会话头在 ${s}x 溢出了（多了那颗按钮）');
+        await sweep(tester, '右栏那颗按钮 @${s}x');
+      });
+
+      testWidgets('右栏点开、还展开了一条（从真入口进）@ ${s}x', (tester) async {
+        final c = _filePanelFeed();
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        // ⚠️ 同「右栏收着」那条：**先拉回最上面**，不然底下那几格工具行的
+        //    语义矩形会被视口裁过（读数随滚动位置变）。
+        await _toTop(tester);
+        await _openFilePanel(tester);
+        expect(find.text(filePanelTitle), findsOneWidget, reason: '★ 抬头没进这棵树');
+        expect(find.text(filePanelCountLine(3, 3)), findsOneWidget, reason: '★ 合计那一行没进这棵树');
+        expect(_drain(tester), isEmpty, reason: '右栏（收起那条入参）在 ${s}x 溢出了');
+
+        await _expandFileRow(tester);
+        expect(find.text(filePanelArgsTruncatedLine(2000)), findsOneWidget, reason: '★ 截断那句实话没进这棵树');
+        expect(_drain(tester), isEmpty, reason: '右栏（展开入参那一块）在 ${s}x 溢出了');
+        await sweep(tester, '右栏行与两颗按钮 @${s}x');
+      });
     }
 
     testWidgets('"读一遍"（能念时）的命中区 ≥44 —— 五档都量', (tester) async {
@@ -1799,6 +1932,23 @@ void main() {
         await _openTrajectoryTab(tester);
         expect(find.text(trajectoryTotalsHead), findsOneWidget, reason: '★ 合计那一行没进这棵树');
         expect(_drain(tester), isEmpty, reason: '轨迹那一屏在用户字号 $u 溢出了');
+      });
+
+      testWidgets('右栏那一栏 @ 用户字号 $u', (tester) async {
+        // ★ 批 5（契约 `docs/dev/120-FILE-PANEL.md`）：那一栏是**这一批新加的**，
+        //    而它吃**用户那条字号轴**（`119` 的 12–17）：那几行路径是等宽的，
+        //    12 与 17 两档下横向最容易顶出去 ⇒ 三档都量一次。
+        final c = _filePanelFeed();
+        await _pumpFont(
+          tester,
+          ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}),
+          1.75,
+          u,
+        );
+        await _openFilePanel(tester);
+        // 负向对照：那一栏**真的画出来了**才算数
+        expect(find.text(filePanelTitle), findsOneWidget, reason: '★ 那一栏没进这棵树');
+        expect(_drain(tester), isEmpty, reason: '右栏那一栏在用户字号 $u 溢出了');
       });
 
       testWidgets('配置页（「这块窗口」那两行 · 不溢出 ＋ 命中区 ≥44）@ 用户字号 $u', (tester) async {

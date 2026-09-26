@@ -59,6 +59,8 @@ class ToolRow {
     required this.truncated,
     required this.turn,
     required this.step,
+    this.argsBytes = 0,
+    this.argsTruncated = false,
   });
 
   /// 配对用的身份（`tool/call` ↔ `tool/result`）。
@@ -88,6 +90,22 @@ class ToolRow {
   /// 结果有没有被截断。**必须原样保留**：截了不说 = 页面在说假话。
   final bool truncated;
 
+  /// **入参**（[args]）有多大（字节）。`0` = 服务端没报 / 本来就没有入参。
+  ///
+  /// ⚠️ 它与 [bytes] **不是一回事**：那一格是**结果**的字节数，这一格是**入参**的
+  ///    （服务端在 `tool/call` 与 `tool/result` 上各报一套，见
+  ///    `v2/services/core/src/tool-rows.js` 的 `toolArgsSummary`）。
+  ///    原来这一半被丢掉了 ⇒ 界面只能说"结果被截"，说不出"入参被截"
+  ///    （`116` §2.3 缺口 5）。批 5 的右栏要逐字给对方看入参，所以把它存下来。
+  final int argsBytes;
+
+  /// **入参**有没有被截断（`tool/call` 上那一格）。
+  ///
+  /// 🔴 截了不说 = 拿半截 JSON 当"原文"给他看 ⇒ 与 [truncated] 同一条铁律。
+  /// ⚠️ 只有**服务端明确报了 `true`** 才是 `true`：字段缺了 / 类型不对 ⇒ `false`
+  ///    （"没报"不等于"没截"，但编一句话说"截了"更坏 —— 见下面那条注释）。
+  final bool argsTruncated;
+
   final int turn;
   final int step;
 
@@ -114,6 +132,16 @@ class ToolRow {
 
     final title = _stringOrNull(_field(call, 'title'));
     final args = _stringOrNull(_field(call, 'args'));
+    // ★ 批 5（`docs/dev/120-FILE-PANEL.md`）：入参那两格**原样收下**
+    //   （服务端在 `tool/call` 上就报了 `bytes` / `truncated`，原来被丢掉）。
+    //   ⚠️ 坏的/缺的**不算坏行**（同 `title` / `args` 那一条）：只影响那一行
+    //      展开时"说不说截断"这句实话，不影响身份与成败。
+    final argsBytes = _count(_field(call, 'bytes')) ?? 0;
+    // ⚠️ `== true` 在 Dart 里对 `1` 也是真的（`1 == true`）—— 入参那格是从
+    //    JSON 来的，"1" / "yes" 这类坏值**不许**被当成"截了"（那是编了一句实话）。
+    //    ⇒ 必须是**真的 bool**。
+    final rawArgsTruncated = _field(call, 'truncated');
+    final argsTruncated = rawArgsTruncated is bool && rawArgsTruncated;
 
     if (result == null) {
       return ToolRow(
@@ -127,6 +155,8 @@ class ToolRow {
         truncated: false,
         turn: turn,
         step: step,
+        argsBytes: argsBytes,
+        argsTruncated: argsTruncated,
       );
     }
 
@@ -149,6 +179,9 @@ class ToolRow {
       truncated: _field(result, 'truncated') == true,
       turn: turn,
       step: step,
+      // ★ 批 5：入参那一对**是 `tool/call` 上的**，与结果那一对互不干扰。
+      argsBytes: argsBytes,
+      argsTruncated: argsTruncated,
     );
   }
 
@@ -185,6 +218,11 @@ class ToolRow {
       truncated: _field(result, 'truncated') == true,
       turn: turn,
       step: step,
+      // ⚠️ 入参那两格**只有 `tool/call` 上有** ⇒ 这一条（只有结果那一半）
+      //    一律是 `0` / `false`：不是"没截"，是**我们没收到那一半**
+      //    （所以界面那一刻也画不出"入参被截"这句 —— 同 `name` 空着那条）。
+      argsBytes: 0,
+      argsTruncated: false,
     );
   }
 }

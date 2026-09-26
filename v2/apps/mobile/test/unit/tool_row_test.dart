@@ -171,6 +171,65 @@ void main() {
       final r = ToolRow.parse(call(), result(ok: true, error: 'warning'));
       expect(r!.status, ToolStatus.ok);
     });
+
+    // ★ 批 5（契约 `docs/dev/120-FILE-PANEL.md`）：入参那两格原样收下。
+    //   ⚠️ 它们是**另外两格**（服务端在 `tool/call` 与 `tool/result` 上各报一套）——
+    //      原来只存了结果那一半 ⇒ 右栏展开时说不出"入参被截"这句实话。
+    group('入参的 bytes / truncated（服务端在 tool/call 上报的那一对）', () {
+      Map<String, Object?> callWithArgs({Object? bytes = 2000, Object? truncated = true}) => {
+            'type': 'tool/call',
+            'turn': 1,
+            'step': 1,
+            'callId': 'c1',
+            'name': 'write',
+            'args': '{"path":"/w/a.txt"}',
+            'bytes': bytes,
+            'truncated': truncated,
+          };
+
+      test('★ 正例：原样收下（与**结果**那一对互不干扰）', () {
+        final r = ToolRow.parse(callWithArgs(), result(bytes: 12, truncated: false))!;
+        expect(r.argsBytes, 2000);
+        expect(r.argsTruncated, isTrue);
+        expect(r.bytes, 12, reason: '结果那一格还是结果那个数');
+        expect(r.truncated, isFalse, reason: '结果那一格还是结果那一格');
+      });
+
+      test('★ 正例：还在跑的行也有这两格（那一对本来就在 `tool/call` 上）', () {
+        final r = ToolRow.parse(callWithArgs(), null)!;
+        expect(r.status, ToolStatus.running);
+        expect(r.argsBytes, 2000);
+        expect(r.argsTruncated, isTrue);
+        expect(r.bytes, 0, reason: '结果还没报 —— 那是"还没报"，不是"零字节"');
+      });
+
+      test('★ 负例：缺了 / 类型不对 ⇒ `0` / `false`（不算坏行、绝不抛）', () {
+        // ⚠️ 这里面有一个**真的踩过的坑**：`truncated: 1` ——
+        //    Dart 里 `1 == true` 是**真的** ⇒ 用 `== true` 写会把它当成"截了"，
+        //    于是屏幕上会凭空多出一句"已截断"（正是"页面在说假话"）。
+        //    ⇒ `ToolRow.parse` 那边必须是**真的 bool**。
+        for (final (bytes, truncated, wantBytes, wantTruncated) in <(Object?, Object?, int, bool)>[
+          (null, null, 0, false),
+          ('2000', 'yes', 0, false),
+          (-1, 1, 0, false),
+          (1.5, true, 0, true),
+          ([], {}, 0, false),
+          (0, false, 0, false),
+        ]) {
+          final r = ToolRow.parse(callWithArgs(bytes: bytes, truncated: truncated), null);
+          expect(r, isNotNull, reason: '入参那两格坏了**不算坏行**（身份与成败才是）：$bytes/$truncated');
+          expect(r!.argsBytes, wantBytes, reason: 'bytes=$bytes');
+          expect(r.argsTruncated, wantTruncated, reason: 'truncated=$truncated');
+        }
+      });
+
+      test('★ 负例：只有结果那一半的行（配不上调用）⇒ 这两格是 0/false', () {
+        final r = ToolRow.parseResultOnly(result())!;
+        expect(r.args, isNull);
+        expect(r.argsBytes, 0, reason: '不是"没截"，是**我们没收到那一半**');
+        expect(r.argsTruncated, isFalse);
+      });
+    });
   });
 
   group('TurnProcess.fold —— 计数', () {

@@ -13,6 +13,7 @@ import 'package:hupo_app/models/dev_harness.dart';
 import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/desktop_words.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
+import 'package:hupo_app/models/file_panel_words.dart';
 import 'package:hupo_app/models/harness_words.dart';
 import 'package:hupo_app/models/job_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
@@ -324,6 +325,25 @@ void main() {
       settingsFontSizeSmaller,
       settingsFontSizeBigger,
       for (final a in ChatAppearance.values) a.label,
+      // ★ 2026-09-26（契约 `docs/dev/120-FILE-PANEL.md`）：右栏那一栏上的字
+      //    —— **直接引数据源**（手抄会漂）。
+      //    ⚠️ 这里**故意没有** `filePanelToolLine(...)`：那句里的 `工具`
+      //       **就是**禁用词表里的词 —— 主人 2026-09-26 已在聊天窗口内放开
+      //       （`D1.1·补`），而**词表这一批一个字都不许改**
+      //       （与 `toolStatusWord` / `trajectoryKindWord` 同一处境）。
+      //       其余那几句是干净的 ⇒ 它们进这份清单。
+      filePanelTitle,
+      filePanelOpenLabel,
+      filePanelCloseLabel,
+      filePanelOrderLine,
+      filePanelEmptyLine,
+      filePanelArgsHead,
+      filePanelRowExpandLabel,
+      filePanelRowCollapseLabel,
+      filePanelCountLine(3, 5),
+      filePanelTurnHead(3),
+      filePanelTurnFiles(2),
+      filePanelArgsTruncatedLine(2000),
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);
