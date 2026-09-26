@@ -1,6 +1,6 @@
 // 聊天窗口的外观与字号存在哪（契约 `docs/dev/119-APPEARANCE-AND-FONT.md` §二）。
 //
-// 三条纪律，照 `process_level_store.dart` / `chat_view_store.dart` / `token_store.dart`：
+// 三条纪律，照 `process_level_store.dart` / `token_store.dart`：
 //
 //   1. **坏了一律当默认值**（`system` ＋ 14 字）。
 //      它是本机的一个偏好，读不出来最多是"回到默认外观"——

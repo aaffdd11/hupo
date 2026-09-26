@@ -1,5 +1,33 @@
 # 118 · 聊天窗口重做（第三批）：**轨迹**那一屏 —— 同一条会话的第二个视图
 
+> # 🔴 这一屏已经**删掉了**（2026-09-26，主人决定）
+>
+> **主人原话**：*「聊天和轨迹有选项，我决定不要轨迹。」*
+>
+> ⇒ 轨迹那一屏、以及随之没有意义的「聊天 / 轨迹」那对 tab **一起砍了**
+> （只剩一个视图的切换器 = 一颗点不动的死键）。**下面这一整份留作记录，不改历史**
+> —— 它记的是那一版当时的样子与当时的判据。
+>
+> **删掉的是**（逐条）：
+> `lib/widgets/trajectory_view.dart` · `lib/models/trajectory.dart` ·
+> `lib/models/trajectory_words.dart` · `lib/models/chat_view.dart` ·
+> `lib/services/chat_view_store.dart` · `lib/widgets/chat_tabs.dart` ·
+> 会话头上那对 tab（`ChatFloater.tabs`）· 跳转那一套
+> （`_itemKeys` / `_scrollToItem` / `_revealItem` / `_builtItemRange` / `_jumpNote`）·
+> `ChatController.oldestLoadedSeq` · `TimelineItem.at`（它只为这一屏而存）·
+> 盘上那个偏好键 `hupo_chat_view` · 它那三份判据
+> （`test/unit/trajectory_test.dart` / `test/unit/chat_view_test.dart` /
+> `test/widget/trajectory_view_test.dart`）· a11y 那三组实例。
+>
+> **留下来的（一个字节都没动）**：聊天那一屏（含 #172 那条气泡操作横条）·
+> **右栏**（`120`）—— 它那颗按钮是**另一件事**，只是从"两个 tab ＋ 它"变成了"它"·
+> **过程控制**（`122`）。
+>
+> **"再出现就红"的那道闸**：`test/unit/trajectory_removed_test.dart`（源码级：
+> `lib` 里再出现 `轨迹` / `trajectory` / `ChatView` / `ChatTabs` / `hupo_chat_view` ⇒ 红）
+> ＋ `test/widget/chat_header_test.dart`（屏幕级：会话头上再出现那一对 ⇒ 红）。
+> 账在 `docs/dev/00-PROGRESS.md` §〇 `#173`。
+
 > **主人 2026-09-26 原话**：*"首先全部开放，聊天窗口的设计也要重做。"*
 >
 > 这是那一批的**第三刀**（第一刀 [`116`](116-CHAT-OPEN-AND-REDESIGN.md)：工具行 / 系统提示词 /

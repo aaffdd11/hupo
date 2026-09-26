@@ -8,7 +8,6 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/appearance.dart';
-import 'package:hupo_app/models/chat_view.dart';
 import 'package:hupo_app/models/dev_harness.dart';
 import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/desktop_words.dart';
@@ -27,7 +26,6 @@ import 'package:hupo_app/models/source_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/speak_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
-import 'package:hupo_app/models/trajectory_words.dart';
 
 void main() {
   test('★ 永久禁用的那几个，一个都不许漏', () {
@@ -293,25 +291,6 @@ void main() {
       queueCancelLabel,
       queueExpandLabel,
       queueCollapseLabel,
-      // ★ 2026-09-26（契约 `docs/dev/118-TRAJECTORY-VIEW.md`）：轨迹那一屏上的字
-      //    —— **直接引数据源**（手抄会漂）。
-      //    ⚠️ 这里**故意没有** `trajectoryKindWord(...)`：那五个词里的
-      //       `工具` / `系统提示词` **就是**禁用词表里的词 ——
-      //       主人 2026-09-26 已经在聊天窗口内放开（`D1.1·补`），而**词表这一批
-      //       一个字都不许改**（与 `tool_row_words.dart` 顶上那段同一处境）。
-      //       其余那几句是干净的 ⇒ 它们进这份清单。
-      for (final v in ChatView.values) v.tab,
-      trajectoryTotalsHead,
-      trajectoryTurnsCount(0),
-      trajectoryTurnsCount(12),
-      trajectoryTurnHead(3),
-      trajectoryIncompleteLine,
-      trajectoryCompleteLine,
-      trajectoryEmptyLine,
-      trajectoryJumpUnavailableLine,
-      trajectoryJumpFailedLine,
-      trajectoryUsageNotSettled,
-      trajectoryBlankSummary,
       // ★ 2026-09-26（契约 `docs/dev/119-APPEARANCE-AND-FONT.md`）：「这块窗口」
       //    那两行（外观 / 字号）的每一句 ＋ 三档的名字（亮 / 暗 / 跟随系统）
       //    ＋ 2026-09-26 那句"暗色还在做"（那两档暂时收起来了）
@@ -335,7 +314,7 @@ void main() {
       //    ⚠️ 这里**故意没有** `filePanelToolLine(...)`：那句里的 `工具`
       //       **就是**禁用词表里的词 —— 主人 2026-09-26 已在聊天窗口内放开
       //       （`D1.1·补`），而**词表这一批一个字都不许改**
-      //       （与 `toolStatusWord` / `trajectoryKindWord` 同一处境）。
+      //       （与 `toolStatusWord` 同一处境）。
       //       其余那几句是干净的 ⇒ 它们进这份清单。
       filePanelTitle,
       filePanelOpenLabel,

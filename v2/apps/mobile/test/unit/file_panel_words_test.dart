@@ -73,7 +73,7 @@ void main() {
     test('★ 负例：这几句一个禁用词都不许有（`工具` 那句**故意不在此列**）', () {
       // ⚠️ `filePanelToolLine` 里那个「工具」**就是** `forbidden_words.dart` 表里的词
       //    —— 主人 2026-09-26 已在聊天窗口内放开（`D1.1·补`），而词表这一批不许改
-      //    （同 `toolStatusWord` / `trajectoryKindWord` 的处境，见文件头那段）。
+      //    （同 `toolStatusWord` 的处境，见文件头那段）。
       //    ⇒ 这里只扫**其余**那几句。
       for (final s in [
         filePanelTitle,

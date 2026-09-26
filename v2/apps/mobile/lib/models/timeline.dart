@@ -19,22 +19,13 @@ import 'tool_row.dart';
 
 /// 一条时间线条目。`seq` 是服务端发的号；本地乐观发言借用"当前最大号"。
 sealed class TimelineItem {
-  const TimelineItem({required this.seq, this.tie = 0, this.at});
+  const TimelineItem({required this.seq, this.tie = 0});
 
   /// 服务端的排队号。
   final int seq;
 
   /// 同一号内的次序。本地发言用 1（排在已收到事件之后、下一条服务端事件之前）。
   final int tie;
-
-  /// **服务端给的事件时刻**（epoch 毫秒，`Timeline.emit` 统一盖的那个 `at`）。
-  ///
-  /// ⚠️ `null` = **这条没带时刻**（本地乐观发言还没被认领、或者帧坏了）。
-  ///    轨迹那一屏按它显示时刻；`null` 就**空着**，绝不拿设备时钟补一个
-  ///    （那是两个钟，补上去就是编 —— `models/trajectory.dart` 顶上那段）。
-  /// ⚠️ **它不是排序键**（排序永远是 `(seq, tie)`，见 [order]）：服务端钟与本地钟
-  ///    混着排会乱，这一条是协议 R5 那族的老规矩。
-  final int? at;
 
   /// 排序键。**不许用时间戳当排序键**——
   /// 本地发言是客户端钟、服务端事件是服务端钟，混钟排序会乱。
@@ -54,7 +45,6 @@ class UserUtterance extends TimelineItem {
     required this.text,
     required super.seq,
     super.tie,
-    super.at,
     this.state = MessageState.queued,
   });
 
@@ -65,19 +55,18 @@ class UserUtterance extends TimelineItem {
   final String text;
   MessageState state;
 
-  UserUtterance copyWith({int? seq, int? tie, MessageState? state, int? at}) => UserUtterance(
+  UserUtterance copyWith({int? seq, int? tie, MessageState? state}) => UserUtterance(
         messageId: messageId,
         text: text,
         seq: seq ?? this.seq,
         tie: tie ?? this.tie,
-        at: at ?? this.at,
         state: state ?? this.state,
       );
 }
 
 /// 助手说的一条（快答 + 深答**在同一个气泡里**，协议 R2）。
 class AssistantMessage extends TimelineItem {
-  AssistantMessage({required this.messageId, required super.seq, super.at});
+  AssistantMessage({required this.messageId, required super.seq});
 
   /// ⚠️ `@override`：理由同 [UserUtterance.messageId]。
   @override
@@ -126,7 +115,7 @@ class AssistantMessage extends TimelineItem {
   ///
   /// ⚠️ 为什么非记不可（契约 `28-DELETE.md` §三·补 的**那个后果**）：
   ///    "从回收站拿回来"= 服务端把那几条**内容事件按原样重新追加一遍**
-  ///    （**新 `seq`**、`at` 保留 ⇒ 盘上的历史一字不改）。
+  ///    （**新 `seq`** ⇒ 盘上的历史一字不改）。
   ///    而客户端的 `_seenSeq` 是**按 `seq` 去重**的 ⇒ **挡不住这种重发**：
   ///    同一段正文会再 `+=` 一次，屏幕上那句话说两遍。
   ///    ⇒ 判据是 `(messageId, block, seqInBlock)`——`messageId` 不必进键，
@@ -160,7 +149,7 @@ class AssistantMessage extends TimelineItem {
 /// ⚠️ 它**是持久事件**（取号、落盘、有位置），不是瞬态——
 ///    "不占号 = 不上时间线"，而它**要上时间线**（决策 P-g）。
 class TimelineMarker extends TimelineItem {
-  const TimelineMarker({required this.kind, required super.seq, super.at, this.label, this.catchUp = false});
+  const TimelineMarker({required this.kind, required super.seq, this.label, this.catchUp = false});
 
   final String kind; // away / enter / leave
   final String? label;
@@ -182,7 +171,6 @@ class TimelineNotice extends TimelineItem {
   const TimelineNotice({
     required this.notice,
     required super.seq,
-    super.at,
     this.catchUp = false,
   });
 
@@ -219,7 +207,7 @@ class TimelineNotice extends TimelineItem {
 
 /// 时间线上的一次**工具调用**（`tool/call` → 一行；`tool/result` 回来就地补上）。
 class TimelineToolCall extends TimelineItem {
-  TimelineToolCall({required this.row, required super.seq, super.at});
+  TimelineToolCall({required this.row, required super.seq});
 
   /// 那一行的全部内容（`ToolRow.parse` 出来的纯值）。
   ///
@@ -239,7 +227,7 @@ class TimelineToolCall extends TimelineItem {
 /// ⚠️ 它是"**模型看到了什么**"的唯一凭据 ⇒ 逐字存着，一个字都不改
 ///    （`SystemPromptRow` 顶上那条：截断/改写的提示词行比没有更坏）。
 class TimelineSystemPrompt extends TimelineItem {
-  const TimelineSystemPrompt({required this.row, required super.seq, super.at});
+  const TimelineSystemPrompt({required this.row, required super.seq});
 
   final SystemPromptRow row;
 
@@ -251,7 +239,7 @@ class TimelineSystemPrompt extends TimelineItem {
 /// ⚠️ 它自己**不直接画**：账要**折过**才画（`foldTurnUsage`：任何一次没报准 ⇒ 整块不画），
 ///    由界面那一层在"这一轮的页脚"画一行。它进日志是为了**取号、落盘、翻页拿得到**。
 class TimelineTurnUsage extends TimelineItem {
-  const TimelineTurnUsage({required this.attempt, required super.seq, super.at});
+  const TimelineTurnUsage({required this.attempt, required super.seq});
 
   final TurnUsageAttempt attempt;
 
@@ -670,17 +658,14 @@ class Timeline {
 
     final catchUp = event['catchUp'] == true;
     final messageId = event['messageId'] as String?;
-    // ★ `118`：服务端给的那条时刻（`Timeline.emit` 统一盖的 `at`）——
-    //   轨迹那一屏要显示它。读不出来（坏帧 / 老生产者）⇒ `null`，**不补**。
-    final at = _serverAt(event['at']);
 
     switch (type) {
       case 'user/echo':
-        _applyEcho(messageId, event, rawSeq, catchUp, at);
+        _applyEcho(messageId, event, rawSeq, catchUp);
       case 'message/start':
         if (messageId == null) return;
         if (_findMessage(messageId) != null) return;
-        final fresh = AssistantMessage(messageId: messageId, seq: rawSeq, at: at)
+        final fresh = AssistantMessage(messageId: messageId, seq: rawSeq)
           ..catchUp = catchUp;
         // ★ 推理段可能**先于正文**到（服务端先发 reasoning 再发 text）⇒
         //   把先存着的那一段挂到这条气泡上。
@@ -723,7 +708,6 @@ class Timeline {
           kind: event['kind'] as String? ?? 'away',
           label: event['label'] as String?,
           seq: rawSeq,
-          at: at,
           catchUp: catchUp,
         ));
       // ── ★ `116` 那三样（主人 2026-09-26：*"首先全部开放"*）──────────
@@ -733,20 +717,20 @@ class Timeline {
       // ⚠️ 认不出来的 payload 一律**安静丢掉**（`ToolRow.parse` / `…parse` 返回 `null`）：
       //    坏数据的后果只许是"这一行不画"，**绝不能是"打不开聊天"**。
       case 'tool/call':
-        _applyToolCall(event, rawSeq, at);
+        _applyToolCall(event, rawSeq);
       case 'tool/result':
-        _applyToolResult(event, rawSeq, at);
+        _applyToolResult(event, rawSeq);
       case 'system/prompt':
         final p = SystemPromptRow.parse(event);
         // 空的那条**不占一行**（DSH：非空的 `system/message` 才有一行）
         if (p == null || p.text.isEmpty) return;
-        _items.add(TimelineSystemPrompt(row: p, seq: rawSeq, at: at));
+        _items.add(TimelineSystemPrompt(row: p, seq: rawSeq));
       case 'turn/usage':
         final u = TurnUsageAttempt.parse(event);
         // `usage:null, complete:false` 那条是**合法的**（"这一轮没报用量"）——
         // 它照样进日志（取号、落盘），只是折出来是 `null` ⇒ 界面上一行都不画。
         if (u == null) return;
-        _items.add(TimelineTurnUsage(attempt: u, seq: rawSeq, at: at));
+        _items.add(TimelineTurnUsage(attempt: u, seq: rawSeq));
       // ── 系统通知（契约 `29-NOTICE.md` 约束 2：**时间线里必须有那一条**）──
       //
       // ⚠️ `text` **由服务端给、客户端照抄**（§五 🔴）——这里一个字都不重写。
@@ -756,7 +740,7 @@ class Timeline {
       case 'notice':
         final n = Notice.fromEvent(event);
         if (n == null) return;
-        _items.add(TimelineNotice(notice: n, seq: rawSeq, at: at, catchUp: catchUp));
+        _items.add(TimelineNotice(notice: n, seq: rawSeq, catchUp: catchUp));
       // ── 删掉 / 恢复 / 真删（契约 §8.1、§8.3）────────────────────
       //
       // ⚠️ 三条都**取号、落盘**，所以它们走的是这条"带 seq"的路
@@ -776,7 +760,7 @@ class Timeline {
     }
   }
 
-  void _applyEcho(String? messageId, Map<String, dynamic> event, int seq, bool catchUp, int? at) {
+  void _applyEcho(String? messageId, Map<String, dynamic> event, int seq, bool catchUp) {
     if (messageId == null) return;
     // ★ 认领本地那条乐观发言——**不是再插一条**
     for (var i = 0; i < _items.length; i += 1) {
@@ -792,10 +776,10 @@ class Timeline {
         //    ⇒ 只在"本地那条还没被认领"时把号换成服务端的（那一步是必须的：
         //      本地借的是 `_lastSeq`，不换就排错地方）。
         if (it.state == MessageState.confirmed) {
-          if (next != it.state) _items[i] = it.copyWith(state: next, at: at);
+          if (next != it.state) _items[i] = it.copyWith(state: next);
           return;
         }
-        _items[i] = it.copyWith(seq: seq, tie: 0, state: next, at: at);
+        _items[i] = it.copyWith(seq: seq, tie: 0, state: next);
         return;
       }
     }
@@ -804,7 +788,6 @@ class Timeline {
       messageId: messageId,
       text: event['text'] as String? ?? '',
       seq: seq,
-      at: at,
       state: MessageState.confirmed,
     ));
   }
@@ -813,7 +796,7 @@ class Timeline {
   ///
   /// ⚠️ `ToolRow.parse` 认不出来（缺 `callId`/`name`/`turn`/`step`）⇒ **不画**
   ///    （fail-closed：猜一个成败/名字画到屏幕上比少一行更坏）。
-  void _applyToolCall(Map<String, dynamic> event, int seq, int? at) {
+  void _applyToolCall(Map<String, dynamic> event, int seq) {
     final callId = event['callId'];
     final pending = callId is String ? _pendingToolResults.remove(callId) : null;
     final row = ToolRow.parse(event, pending);
@@ -824,10 +807,10 @@ class Timeline {
     for (var i = 0; i < _items.length; i += 1) {
       final it = _items[i];
       if (it is! TimelineToolCall || it.callId != row.callId) continue;
-      if (it.row.name.isEmpty) _items[i] = TimelineToolCall(row: row, seq: seq, at: at);
+      if (it.row.name.isEmpty) _items[i] = TimelineToolCall(row: row, seq: seq);
       return;
     }
-    _items.add(TimelineToolCall(row: row, seq: seq, at: at));
+    _items.add(TimelineToolCall(row: row, seq: seq));
   }
 
   /// `tool/result`：**就地补上结果**（认领身份，不是再插一行 —— 见那三样顶上那段）。
@@ -836,14 +819,13 @@ class Timeline {
   ///    （合同 `116` §一 规矩 4：配不上就只画结果那一行），并把它记进
   ///    [_pendingToolResults]，等调用那条晚一步到了再换成一整行。
   ///    直接丢的后果是那一行**永远看不见**，而屏幕上那句话是**真发生过**的。
-  void _applyToolResult(Map<String, dynamic> event, int seq, int? at) {
+  void _applyToolResult(Map<String, dynamic> event, int seq) {
     final callId = event['callId'];
     if (callId is! String || callId.isEmpty) return;
     for (final it in _items) {
       if (it is! TimelineToolCall || it.callId != callId) continue;
       if (it.row.name.isEmpty) {
         // 已经画着"只有结果那一行" ⇒ 换掉它（同名同 seq，位置不动）
-        // ⚠️ 时刻用**调用那一条**的：那是这一行的位置，结果只是补上内容。
         final only = ToolRow.parseResultOnly(event);
         if (only != null) it.row = only;
       } else {
@@ -857,7 +839,7 @@ class Timeline {
     }
     // 还没有那一行：**先画结果那一行**（名字那一格空着 —— 不猜），并记着等调用那条。
     final only = ToolRow.parseResultOnly(event);
-    if (only != null) _items.add(TimelineToolCall(row: only, seq: seq, at: at));
+    if (only != null) _items.add(TimelineToolCall(row: only, seq: seq));
     // ⚠️ 有界（先来先丢），坏帧不许把内存撑爆。
     _pendingToolResults[callId] = event;
     while (_pendingToolResults.length > maxPendingToolResults) {
@@ -867,7 +849,7 @@ class Timeline {
 
   /// 从已经建好的那一行反推出 `tool/call` 的 payload（结果回来时要重新 parse 一对）。
   ///
-  /// ⚠️ 只 {@link ToolRow.parse} 认那几个字段；`at` 这类**不参与绘制**的字段丢了没关系
+  /// ⚠️ 只 {@link ToolRow.parse} 认那几个字段；不参与绘制的字段丢了没关系
   ///    （它们本来也不进 `ToolRow`）。
   static Map<String, dynamic> _callPayloadOf(TimelineToolCall it) => {
         'type': 'tool/call',
@@ -1100,14 +1082,4 @@ class Timeline {
 
   /// 这一屏是不是"从缓存先画出来的"。
   bool get isStale => _stale;
-}
-
-/// 事件上那个 `at`（服务端时刻，epoch 毫秒）。
-///
-/// ⚠️ **fail-closed**：只认**非负整数**（服务端 `Timeline.emit` 盖的就是它）。
-///    读不出来（坏帧 / 老生产者 / 别的类型）⇒ `null` ⇒ 轨迹那一格**空着**。
-///    **绝不拿设备时钟补一个**：两个钟不一样，补上去就是把编的时刻摆上屏。
-int? _serverAt(Object? value) {
-  if (value is int && value >= 0) return value;
-  return null;
 }

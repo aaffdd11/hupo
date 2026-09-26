@@ -182,7 +182,7 @@ const String settingsLogout = '退出登录';
 // ⇒ 这一组就那两行。
 //
 // ⚠️ 三档的名字（亮 / 暗 / 跟随系统）住在 `models/appearance.dart` 的枚举上
-//    （与 `chat_view.dart` 的 `tab`、`process_levels.dart` 的 `title` 同一条纪律：
+//    （与 `appearance.dart` 的档名、`process_levels.dart` 的 `title` 同一条纪律：
 //    **用户会看到的字要进得了禁用词那道扫描**），所以这里没有第二份。
 // ⚠️ 这里每一句都**没有内部词**：说的是"这块窗口""字"，不是"主题 / 字号档位 / 客户端"。
 

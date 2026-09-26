@@ -101,7 +101,7 @@ class ChatFloater extends StatefulWidget {
     required this.title,
     required this.child,
     required this.composer,
-    this.tabs,
+    this.beforeActions,
     this.trailing = const <Widget>[],
     this.initialTier = FloaterTier.collapsed,
     this.onTier,
@@ -127,14 +127,13 @@ class ChatFloater extends StatefulWidget {
   /// ⚠️ **收起态不画它们** —— 收起条只留"带字的展开入口"（D3.8）。
   final List<Widget> trailing;
 
-  /// **标题行上那两个 tab**（聊天 / 轨迹，契约 `docs/dev/118-TRAJECTORY-VIEW.md` §一）。
+  /// **标题行上、动作那条横滚串前面那一格**。
   ///
-  /// DSH 的会话头就是这个形状（标题 ＋ `role="tablist"`）。`null` = 不画
-  /// （老调用方 / 单看这一块的测试照旧）。
+  /// 今天放的是【这一窗动过哪些文件】那颗按钮（`FilePanelButton`）。
+  /// `null` = 那一格什么都不画（老调用方 / 单看这一块的测试照旧）。
   /// ⚠️ **收起态不画它**（收起条只有一行：抓手 ＋ 输入框）。
-  /// ⚠️ 它是**视图切换**，不是"另开一屏"：换的是 `child` 那块画什么，
-  ///    浮窗自己一个字节都不动（更不重连）。
-  final Widget? tabs;
+  /// ⚠️ 它是**不弹性的**：挤的时候让标题去截字，这一格永远整颗看得见。
+  final Widget? beforeActions;
 
   // ⚠️ 2026-09-24：原来这里有一个 `leading`（标题前面那个"在哪儿说话"的图标）。
   //    聊天窗口收成**一行**之后，它搬到了输入条那一行的最前面
@@ -412,8 +411,8 @@ class ChatFloaterState extends State<ChatFloater> {
                           child: Row(
                             children: [
                               const SizedBox(width: d.gapS),
-                              // ⚠️ `118` 起标题**可以让位**（窄屏 + 大字号下右边还要摆
-                              //    两个 tab）：原来的 Text 是不弹性的 ⇒ 加了 tab 之后
+                              // ★ `118` 起标题**可以让位**（窄屏 + 大字号下右边还要摆
+                              //    那一串动作）：原来的 Text 是不弹性的 ⇒
                               //    这一行会横向溢出。`Flexible` + 省略号把它变成
                               //    "地方不够就截字"，**位置与大小在地方够时一字不变**
                               //    （`notice_overlay_test` 量的就是那个矩形）。
@@ -431,12 +430,13 @@ class ChatFloaterState extends State<ChatFloater> {
                                   ),
                                 ),
                               ),
-                              // ★ `118`：聊天 / 轨迹 两个 tab（DSH 的会话头就是这个形状）。
+                              // ★ 会话头上、动作那条横滚串**前面**那一格
+                              //    （今天放的是【这一窗动过哪些文件】那颗按钮）。
                               //    ⚠️ 它是**不弹性**的：挤的时候让标题去截字，
-                              //       两个 tab 永远整颗看得见（切换器的出口不许被藏）。
-                              if (widget.tabs != null) ...[
+                              //       这一格永远整颗看得见。
+                              if (widget.beforeActions != null) ...[
                                 const SizedBox(width: d.gapS),
-                                widget.tabs!,
+                                widget.beforeActions!,
                               ],
                                                             // 🔴 **这里原来有一个 `Spacer()`** —— 2026-09-26 拿掉。
                               //    它和右边那一条**都是 flex 1** ⇒ 把剩余宽对半分，
@@ -449,10 +449,14 @@ class ChatFloaterState extends State<ChatFloater> {
                               // ⚠️ 那一串动作要能**横向滚**：窄屏 + 大字号下它**一定**放不下；
                               //    折行会让这一行变高 ⇒ 把时间线挤没。一行 + 横滚：高度不变。
                               // 🔴 **"一个都不藏"是假话**（2026-09-26 如实改口径）：
-                              //    390 宽下横滚条只有 53 像素，而这一串要 250 多
-                              //    ⇒「回收站 / 导出 /（右栏那颗）」都在视口外，只有横滑够得着；
-                              //    **而且视口外那几颗的 a11y 矩形还挂在【聊天/轨迹】的坐标上**
-                              //    （读屏点"回收站"，命中的是 tab —— 真浏览器上量到过）。
+                              //    窄屏下这一串**仍然**放不下 ⇒ 靠前那几颗在视口外，
+                              //    只有横滑够得着。
+                              //    ⚠️ 2026-09-26（`#173` 砍掉那两个 tab 之后）真量过：
+                              //      390 宽下这一格只剩【这一窗动过哪些文件】那一颗
+                              //      ⇒ 横滚条 **53 → 101** 像素（读数见 `docs/dev/00-PROGRESS.md` §〇 `#173`）；
+                              //      「过程」整颗在里面、「导出」露一半、「回收站」还在视口外。
+                              //      原来那条"视口外那几颗的 a11y 矩形挂在【聊天/轨迹】坐标上"
+                              //      的实例，随着 tab 一起没了。
                               //    ⇒ 这条账**没结**：真修法要么加一颗「更多」的出口、
                               //      要么把它们搬出这一行 —— 那是产品决定，
                               //      记在 `docs/dev/124-TOUCH-REGRESSION.md` §三·五。

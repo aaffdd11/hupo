@@ -32,7 +32,6 @@ import 'package:hupo_app/models/dsh_design.dart';
 import 'package:hupo_app/models/harness.dart';
 import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/models/message_state.dart';
-import 'package:hupo_app/models/chat_view.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/source_words.dart';
@@ -42,14 +41,12 @@ import 'package:hupo_app/models/timeline.dart';
 import 'package:hupo_app/models/tool_row.dart';
 import 'package:hupo_app/models/tool_row_words.dart';
 import 'package:hupo_app/models/voice_try.dart';
-import 'package:hupo_app/models/trajectory_words.dart';
 import 'package:hupo_app/models/queue_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/widgets/bubbles.dart';
 import 'package:hupo_app/widgets/bubble_select_bar.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
-import 'package:hupo_app/widgets/chat_tabs.dart';
 import 'package:hupo_app/widgets/desktop_icon_menu.dart';
 import 'package:hupo_app/widgets/file_panel.dart';
 import 'package:hupo_app/widgets/harness_pane.dart';
@@ -68,7 +65,6 @@ import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/notice.dart';
 import 'package:hupo_app/widgets/queue_strip.dart';
-import 'package:hupo_app/widgets/trajectory_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// D3.5 点名的五档。
@@ -719,93 +715,6 @@ ChatController _queueOnly(int n) {
   return c;
 }
 
-// ── ★ `118`：轨迹那一屏（契约 `docs/dev/118-TRAJECTORY-VIEW.md`）──────────
-//
-// ⚠️ 同一条理由：**新加的界面必须也过这两道硬闸**
-//    （五档不溢出 + 命中区 ≥44），不然"五档不溢出"会随时间失效。
-// ⚠️ 它走**真入口**（点标题行上那个 tab）—— 不直接 pump `TrajectoryView`：
-//    那样它底下没有聊天屏，量的就不是用户真会看到的那棵树。
-// ⚠️ 两种状态各量一次：**有内容**（一行行 ＋ 分组头 ＋ 合计）与**空会话**（一句实话）。
-
-/// 一窗有内容的记录：两轮（用户 / 工具 / 系统提示词 / 消息 / 用量都在）。
-ChatController _trajectoryFeed() {
-  // ⚠️ 每一份夹具都从**干净的设备偏好**开始：第一次切轨迹那一档会把选择存下来
-  //    （`ChatViewStore`），不清的话**下一份夹具的初始档位**就取决于上一份跑过什么
-  //    —— 那种耦合会让判据时红时绿。
-  SharedPreferences.setMockInitialValues(<String, Object>{});
-  final c = _trashController();
-  c.ingest({
-    'type': 'user/echo',
-    'seq': 1,
-    'messageId': 'u_1',
-    'text': '帮我把这周工时记一下',
-    'at': 1758400000000,
-  });
-  c.ingest({
-    'type': 'tool/call',
-    'seq': 2,
-    'turn': 1,
-    'step': 1,
-    'callId': 'c_1',
-    'name': 'bash',
-    'title': '跑一下测试',
-    'at': 1758400001000,
-  });
-  c.ingest({
-    'type': 'system/prompt',
-    'seq': 3,
-    'turn': 1,
-    'step': 1,
-    'text': '你是琥珀。',
-    'bytes': 12,
-    'at': 1758400002000,
-  });
-  c.ingest({'type': 'message/start', 'seq': 4, 'messageId': 'm_1', 'at': 1758400003000});
-  c.ingest({
-    'type': 'message/text',
-    'seq': 5,
-    'messageId': 'm_1',
-    'block': 'quick',
-    'text': '这周 7 小时。',
-    'at': 1758400004000,
-  });
-  c.ingest({
-    'type': 'turn/usage',
-    'seq': 6,
-    'turn': 1,
-    'usage': {'input': 800, 'output': 434, 'cacheRead': 900, 'cacheWrite': 20, 'reasoning': 5},
-    'complete': true,
-    'at': 1758400005000,
-  });
-  c.ingest({
-    'type': 'tool/call',
-    'seq': 7,
-    'turn': 2,
-    'step': 1,
-    'callId': 'c_2',
-    'name': 'subagent_查一件事',
-    'title': '去查一件事',
-    'at': 1758400006000,
-  });
-  c.ingest({
-    'type': 'turn/usage',
-    'seq': 8,
-    'turn': 2,
-    'usage': {'input': 30, 'output': 9},
-    'complete': true,
-    'at': 1758400007000,
-  });
-  return c;
-}
-
-/// **像用户那样**切到轨迹那一档（点标题行上那个 tab）。
-Future<void> _openTrajectoryTab(WidgetTester tester) async {
-  await tester.tap(find.byKey(chatTabKey(ChatView.trajectory)));
-  await tester.pumpAndSettle();
-  // 负向对照：**那一屏真的画出来了**才算数（没画出来的话这道闸扫的是聊天）
-  expect(find.byType(TrajectoryView), findsOneWidget, reason: '★ 没进轨迹那一屏 ⇒ 这道闸扫错了屏');
-}
-
 /// **像用户那样**把时间线拉回最上面。
 ///
 /// ⚠️ 必须的一步：打开就停在最新那一条（`27-SCROLL.md`），3.1x 下头几格会被
@@ -1295,28 +1204,6 @@ void main() {
         // 负向对照：展开之后每一行那颗撤掉按钮都真的在
         expect(find.byTooltip(queueCancelLabel), findsNWidgets(3), reason: '★ 展开没成');
         expect(_drain(tester), isEmpty, reason: '排队横条（展开）在 ${s}x 溢出了');
-      });
-
-      testWidgets('主界面 @ ${s}x（轨迹那一屏·有内容 —— 118 新加的）', (tester) async {
-        // ⚠️ 2026-09-26（契约 `docs/dev/118-TRAJECTORY-VIEW.md`）：这一屏是**新加的界面**
-        //    ⇒ 必须也过"五档不溢出"那道硬闸（它是 `TextButton` 一行行 ＋ `Wrap` 抬头）。
-        final c = _trajectoryFeed();
-        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
-        await _openTrajectoryTab(tester);
-        expect(find.text(trajectoryTotalsHead), findsOneWidget, reason: '★ 合计那一行没进这棵树');
-        expect(_drain(tester), isEmpty, reason: '轨迹那一屏在 ${s}x 溢出了');
-        // 往上挪一段：让**后面那几行**也被建出来量一次（懒加载的列表只建视口附近）
-        await tester.drag(find.byType(ListView), const Offset(0, -300));
-        await tester.pumpAndSettle();
-        expect(_drain(tester), isEmpty, reason: '轨迹那一屏（翻过之后）在 ${s}x 溢出了');
-      });
-
-      testWidgets('主界面 @ ${s}x（轨迹那一屏·空会话 —— 118 新加的）', (tester) async {
-        final c = _controller();
-        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
-        await _openTrajectoryTab(tester);
-        expect(find.text(trajectoryEmptyLine), findsOneWidget, reason: '★ 空那一句没进这棵树');
-        expect(_drain(tester), isEmpty, reason: '轨迹（空）在 ${s}x 溢出了');
       });
 
       testWidgets('主界面 @ ${s}x（出处那几行拉满 —— 2026-09-23 新加的）', (tester) async {
@@ -1830,29 +1717,6 @@ void main() {
         await sweep(tester, '排队横条（展开）@${s}x');
       });
 
-      testWidgets('轨迹那两个 tab（从真入口进）@ ${s}x', (tester) async {
-        // ⚠️ `118`：标题行上那两颗 `TextButton` 必须进这份扫描 ——
-        //    它们是"要真按下去"的那一下（命中区 ≥44），而且换视图只能靠它们。
-        final c = _trajectoryFeed();
-        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
-        // ⚠️ 先拉回最上面（与「工具行的展开按钮」那条同一条理由：不拉的话
-        //    刚滚出视口的那一格会被量成一个**被裁过的**矩形 —— 那读数随滚动位置变）。
-        await _toTop(tester);
-        expect(find.byKey(chatTabKey(ChatView.trajectory)), findsOneWidget, reason: '★ 两个 tab 没进这棵树');
-        expect(find.byKey(chatTabKey(ChatView.chat)), findsOneWidget);
-        await sweep(tester, '轨迹 tab @${s}x');
-      });
-
-      testWidgets('轨迹里那几行（从真入口进）@ ${s}x', (tester) async {
-        // ⚠️ `118`：一行一整颗 `TextButton`（要真按下去才能跳）——
-        //    不切过去、不单独量一次，它的命中区没有任何东西守着。
-        final c = _trajectoryFeed();
-        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
-        await _openTrajectoryTab(tester);
-        expect(find.text(trajectoryTotalsHead), findsOneWidget, reason: '★ 合计那一行没进这棵树');
-        await sweep(tester, '轨迹行 @${s}x');
-      });
-
       // ── ★ 批 5：右栏那一栏（契约 `docs/dev/120-FILE-PANEL.md`）────────
       //
       // ⚠️ 两种状态各量一次：**收起**（会话头上那颗按钮）与**点开还展开了一条**
@@ -1999,19 +1863,6 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byTooltip(queueCancelLabel), findsNWidgets(3), reason: '★ 展开没成');
         expect(_drain(tester), isEmpty, reason: '排队横条在用户字号 $u 溢出了');
-      });
-
-      testWidgets('轨迹那一屏 @ 用户字号 $u', (tester) async {
-        final c = _trajectoryFeed();
-        await _pumpFont(
-          tester,
-          ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}),
-          1.75,
-          u,
-        );
-        await _openTrajectoryTab(tester);
-        expect(find.text(trajectoryTotalsHead), findsOneWidget, reason: '★ 合计那一行没进这棵树');
-        expect(_drain(tester), isEmpty, reason: '轨迹那一屏在用户字号 $u 溢出了');
       });
 
       testWidgets('右栏那一栏 @ 用户字号 $u', (tester) async {

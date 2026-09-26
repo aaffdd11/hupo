@@ -1,6 +1,6 @@
 // **右栏那个文件面板的全部文字**（契约 `docs/dev/120-FILE-PANEL.md`）。
 //
-// 和 `tool_row_words.dart` / `trajectory_words.dart` 同一条纪律：
+// 和 `tool_row_words.dart` 同一条纪律：
 // **文案集中一处**（不在 widget 里写死），于是它改得动、也数得清 ——
 // 并且能进 `test/unit/forbidden_words_test.dart` 那份扫描。
 //
@@ -11,7 +11,7 @@
 // [filePanelToolLine] 里那个「工具」**就是** `models/forbidden_words.dart` 表里的词。
 // 主人 2026-09-26 已在**聊天窗口内**放开（`D1.1·补`），而词表这一批**不许改**
 // ⇒ 这一个常量**故意没有进** `forbidden_words_test.dart` 的"必须干净"清单
-//   （与 `toolStatusWord` / `trajectoryKindWord` 一样）。其余几句都进了。
+//   （与 `toolStatusWord` 一样）。其余几句都进了。
 
 /// 面板抬头（DSH 那条右栏顶上那一行的位置）。
 ///
