@@ -53,6 +53,7 @@ import '../services/hearing.dart';
 import '../services/speech.dart';
 import '../widgets/app_desktop.dart';
 import '../widgets/appearance_scope.dart';
+import '../widgets/dsh_look.dart';
 import '../widgets/harness_pane.dart';
 import '../widgets/job_ask_sheet.dart';
 import '../widgets/mini_app_icons.dart';
@@ -82,6 +83,22 @@ import 'trash_screen.dart';
 ///    而"变化"必须量在**同一个东西**上 —— 就是这一块。它一直都在
 ///    （通知来之前是空屏、来之后是列表），所以前后比它才是 0px 的判据。
 const Key chatBodyKey = Key('chat-body');
+
+/// **聊天条最前面那颗 home**（主人 2026-09-27：*"点击 home 就是回到桌面"*）。
+const Key chatHomeButtonKey = Key('chat-home');
+
+/// 进小程序之后那条浮窗（同一天：*"点击 home 那个 icon 上面会有一个浮窗"*）。
+const Key chatHomeHintKey = Key('chat-home-hint');
+
+/// 那颗 home 的**图形**多大（原来 18 —— 主人 2026-09-27：*"扩大一些"*）。
+const double homeButtonIcon = 22;
+
+/// 那颗 home 的**命中区**（D3.6：≥44；图形摆在中间，四周透明）。
+const double homeButtonHit = 44;
+
+/// 那条浮窗**自己待多久**（主人：*"大概停留 3~4 秒钟"*）—— 取中间，3.5 秒。
+/// ⚠️ 它是一句"告诉你出口在哪"的话，不是待办：**到点自己走**，不用他点。
+const Duration homeHintFor = Duration(milliseconds: 3500);
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -195,6 +212,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// **它是从哪儿打开的**（图标在屏幕上的矩形）—— 小程序从那儿"扩开"到全屏。
   Rect? _appFrom;
+
+  /// ★ **进小程序之后那条浮窗**（主人 2026-09-27）：现在正画着吗。
+  /// ⚠️ 它与 `_openApp` **不是一回事**：关掉那一屏之后它可能还在（3.5 秒没到），
+  ///    所以他还能看到"点这里回桌面"那句话 —— 但它**在输入条上面浮着**，不挡任何东西。
+  bool _homeHint = false;
+
+  /// 那条浮窗**到点自己走**用的钟（换屏/离开这一屏都要收掉）。
+  Timer? _homeHintTimer;
 
   /// 聊天**展开着**吗（展开 = 桌面小程序被盖住 —— 手册 §6.4 规则 2/3）。
   /// ⚠️ 由浮窗自己报（它换档时调 `onTier`），不是这里猜的。
@@ -452,6 +477,8 @@ class _ChatScreenState extends State<ChatScreen> {
     FocusManager.instance.removeListener(_onFocusChanged);
     // 离开这一屏 ⇒ 把「我自己那台」那一头收干净（对面就不会留一个孤儿进程）
     _closeHarness();
+    // ★ 那条浮窗的钟也要收（不然它到点会去动一棵已经没了的树）
+    _homeHintTimer?.cancel();
     _scroll.dispose();
     super.dispose();
   }
@@ -560,6 +587,8 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {
       _openApp = '$_minePrefix$want';
     });
+    // ★ 和"自己点开图标"同一条：进屏就把那颗 home 的说明浮一下（主人 2026-09-27）
+    _startHomeHint();
   }
 
   /// **钉到最新**（`jumpTo`，不带条件）。
@@ -759,19 +788,8 @@ class _ChatScreenState extends State<ChatScreen> {
               title: _appView(c)?.title ?? _lastAppTitle,
               // ★ 2026-09-24 主人定案：前半程要看到"**图标自己在长大**"
               icon: _appIconFor(),
-              onClose: () {
-                // 离开这个入口 ⇒ 把「我自己那台」那一头收掉（对面就把那一台停掉）
-                _closeHarness();
-                setState(() {
-                  _openApp = null;
-                  _appSettled = false; // 收回动效开始 ⇒ 图标先别回来
-                });
-                // 🔴 **退回桌面 ⇒ 回到主线那条对话**（契约 `83` §五·甲：
-                //    "关掉/退回桌面 ⇒ 回到 `main`"）。⚠️ 主线那一份**一直在**
-                //    （控制器按房间分开留着），所以这一下只是"换回它"，
-                //    不是"重新拉一遍"。
-                unawaited(widget.controller.setScope(mainScope));
-              },
+              // ⚠️ 2026-09-27 起**容器里没有任何按钮**了（顶栏撤掉）⇒ 不再传 `onClose`：
+              //    "关掉这一屏"只有一条路 —— 聊天条最前面那颗 home（`_backToDesktop`）。
               onSettled: () {
                 if (mounted) setState(() => _appSettled = true);
               },
@@ -1058,10 +1076,103 @@ class _ChatScreenState extends State<ChatScreen> {
     return chatScopeElsewhere;
   }
 
-  /// 那个图标本身（带说明）。
-  Widget _scopeBadge(ChatController c) => Tooltip(
+  /// **那颗 home 按钮**（原来它只是一个"在哪儿说话"的指示：只指示、不响应点击）。
+  ///
+  /// 🔴 主人 2026-09-27 定的三件（同一句话里）：
+  ///   · *"让我的聊天窗口那边左侧的那个 home 按钮扩大一些"* ⇒ 图形 18 → 22，
+  ///     命中区撑到 **≥44**（D3.6；图形再大也不许把命中区做成"只有图形那么大"）；
+  ///   · *"点击 home 就是回到桌面"* ⇒ 点它 = [`_backToDesktop`]；
+  ///   · *"点击 home 那个 icon 上面会有一个浮窗"* ⇒ 见 [_startHomeHint] ＋ [_homeHintBubble]。
+  ///
+  /// ⚠️ **图形规则一个字没改**（主人 2026-09-23 定的）：桌面上是**家**，
+  ///    进了某个小程序就是**它自己的图标**（`_scopeIcon`，与桌面上那一个是同一个来源）。
+  ///    他这次说的是**那颗按钮**（位置/作用），不是"把图形换成房子"。
+  Widget _homeButton(ChatController c) => Tooltip(
     message: _scopeWords(c),
-    child: Icon(_scopeIcon(c), size: 18, color: d.ink),
+    child: InkWell(
+      key: chatHomeButtonKey,
+      onTap: () => _backToDesktop(c),
+      customBorder: const CircleBorder(),
+      child: SizedBox(
+        // ⚠️ 命中区 ≥44（D3.6）：图形 22 摆在中间，四周是透明的可点区
+        width: homeButtonHit,
+        height: homeButtonHit,
+        child: Center(child: Icon(_scopeIcon(c), size: homeButtonIcon, color: d.ink)),
+      ),
+    ),
+  );
+
+  /// **点那颗 home**（主人 2026-09-27：*"点击 home 就是回到桌面"*）。
+  ///
+  /// 两件一起做，缺一件都"回不到桌面"：
+  ///   ① 开着某一屏 ⇒ **关掉它**（与原来那个返回箭头同一套：收 harness ＋ 回主线 ＋ 收回动效）；
+  ///   ② 再把聊天**收起来**（桌面才露得出来 —— 展开的聊天是盖满屏的）。
+  /// ⚠️ 在桌面上按它也一样有结果：只有 ②（把聊天收起来）—— 所以它**任何时候都不是一颗空按钮**。
+  void _backToDesktop(ChatController c) {
+    _hideHomeHint();
+    if (_openApp != null) {
+      _closeApp(c);
+      return;
+    }
+    _floaterKey.currentState?.collapse();
+  }
+
+  /// **关掉现在开着那一屏**（原来挂在容器顶栏那个返回箭头上，2026-09-27 起挂在 home 上）。
+  void _closeApp(ChatController c) {
+    // 离开这个入口 ⇒ 把「我自己那台」那一头收掉（对面就把那一台停掉）
+    _closeHarness();
+    setState(() {
+      _openApp = null;
+      _appSettled = false; // 收回动效开始 ⇒ 图标先别回来
+    });
+    // 🔴 **退回桌面 ⇒ 回到主线那条对话**（契约 `83` §五·甲：
+    //    "关掉/退回桌面 ⇒ 回到 `main`"）。⚠️ 主线那一份**一直在**
+    //    （控制器按房间分开留着），所以这一下只是"换回它"，
+    //    不是"重新拉一遍"。
+    unawaited(c.setScope(mainScope));
+    // 顺手把聊天收起来：他要的是"回到桌面"，而展开的聊天是盖满屏的
+    _floaterKey.currentState?.collapse();
+  }
+
+  /// ★ **进屏之后那条浮窗**（主人 2026-09-27）：说清"这颗 home 是干嘛的"。
+  ///
+  /// 三条：
+  ///   · **自己会走**（`homeHintFor` = 3.5 秒）—— 它是一句说明，不是待办；
+  ///   · **再进一次会重新计一遍**（不是"一辈子只看一次"：他这次进的是**另一个**小程序）；
+  ///   · 他真按了 home ⇒ 立刻收（[`_hideHomeHint`]）。
+  void _startHomeHint() {
+    _homeHintTimer?.cancel();
+    if (!_homeHint) setState(() => _homeHint = true);
+    _homeHintTimer = Timer(homeHintFor, () {
+      if (mounted) setState(() => _homeHint = false);
+    });
+  }
+
+  void _hideHomeHint() {
+    _homeHintTimer?.cancel();
+    _homeHintTimer = null;
+    if (_homeHint && mounted) setState(() => _homeHint = false);
+  }
+
+  /// **那条浮窗长什么样**（主人：*"点击 home 那个 icon 上面会有一个浮窗"*）。
+  ///
+  /// ⚠️ **位置不归它管**：它交给 `Composer` 的 `hintAbove`，由那一层挂在**输入条那一行**
+  ///    上面（`Positioned` ＋ `FractionalTranslation` ⇒ 不占排版、不动窗口；
+  ///    `IgnorePointer` 也在那一层包着）。
+  Widget _homeHintBubble(DshLook look) => Container(
+    key: chatHomeHintKey,
+    // ⚠️ 用 token（不写数字）：与输入条那几条 strip（`composer.dart` 的 `_noticeStrip`）
+    //    同一套留白 —— 而且 `design_tokens_test` 那条棘轮只许往下走。
+    padding: const EdgeInsets.symmetric(horizontal: d.radiusField, vertical: d.gapS),
+    decoration: BoxDecoration(
+      color: look.palette.bgLayer2,
+      borderRadius: BorderRadius.circular(d.radiusField),
+      border: Border.all(color: look.palette.borderL2),
+    ),
+    child: Text(
+      homeHintWords,
+      style: TextStyle(fontSize: 13, color: look.palette.labelSecondary),
+    ),
   );
 
   /// 替**现在开着的那一个小程序**问一句（乙-4b）。
@@ -1404,6 +1515,8 @@ class _ChatScreenState extends State<ChatScreen> {
       _appFrom = from;
       _openApp = which;
     });
+    // ★ **进屏那条浮窗**（主人 2026-09-27）：3.5 秒后自己走
+    _startHomeHint();
     // 🔴 **跟着图标走**（契约 `83-APP-WORKSPACE.md` §五·甲）：
     //    打开哪个小程序，**下面那条聊天就是它的对话**。
     //    ⚠️ 判定是**纯函数**（`models/scope.dart`）：内置那几格（设置 / 发现 /
@@ -1613,6 +1726,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// **输入条**（收起态和展开态共用的**同一个**东西）。
   Widget _composer(ChatController c) {
+    // ⚠️ 用 `Builder`：`AppearanceScope` 是在这一屏的 `build()` 里造的 ⇒
+    //    只有**它下面**的 context 才读得到那一档色板（`DshLook.of`）。
+    return Builder(builder: (ctx) => _composerBody(c, DshLook.of(ctx)));
+  }
+
+  Widget _composerBody(ChatController c, DshLook look) {
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 760),
@@ -1627,10 +1746,13 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             QueueStrip(queue: c.queue, onCancel: c.unsay),
             Composer(
+          // ★ **那条浮窗**（主人 2026-09-27）：挂在**这一行**上（锚点 = 那颗 home 的上面），
+          //   一个像素都不占排版；`IgnorePointer` 在 `Composer` 里那一层包着。
+          hintAbove: _homeHint ? _homeHintBubble(look) : null,
           // ★ **这一行最前面那个图标：这句话是在哪儿说的**（桌面 = 家；进了小程序 = 它自己的图标）。
           //   ⚠️ 2026-09-24：聊天窗口收成**一行**之后，它从抓手行搬到了这一行的最前面
           //      （主人：*"homeicon 放在聊天窗口左边"*）。
-          leading: _scopeBadge(c),
+          leading: _homeButton(c),
           // ★ **打字框草稿**（主人 2026-09-22）：*"要有一个空的输入框，但如果用户输入过，
           //   没发送，则显示在上面作为草稿。草稿也是要记住的。"*
           //   ⚠️ 它和"已发未认领那句话"（`draft_store.dart`）**不是同一本账**。

@@ -29,7 +29,6 @@ import 'package:flutter/material.dart';
 import '../models/design.dart' as d;
 import 'motion.dart';
 import '../models/design.dart' show miniAppSurfaceAt;
-import '../models/space_words.dart';
 
 /// **小程序那一层的 key**（给判据用：量"扩开/收回"途中的圆角与阴影）。
 ///
@@ -41,7 +40,6 @@ class MiniAppHost extends StatefulWidget {
     super.key,
     required this.open,
     required this.title,
-    required this.onClose,
     required this.covered,
     required this.onCoveredTap,
     required this.bottomInset,
@@ -57,8 +55,10 @@ class MiniAppHost extends StatefulWidget {
   /// **容器给的**标题（app 自己不许画那一条）。
   final String title;
 
-  /// 顶栏那个返回：app 内部还能退就退，退到底就**关掉这个 app**。
-  final VoidCallback onClose;
+  /// ⚠️ **2026-09-27 起没有 `onClose` 了**（主人：*"那个我的小程序不需要 header 和
+  ///    箭头返回，把那一个东西去掉"*）—— 容器里**没有任何按钮**，所以"关掉这一屏"
+  ///    这件事不再挂在这一层上：出口是**聊天条最前面那颗 home**
+  ///    （`screens/chat_screen.dart` 的 `_backToDesktop`）。
 
   /// 聊天展开了吗（展开 = 这一层**被盖住**）。
   final bool covered;
@@ -93,6 +93,18 @@ class _MiniAppHostState extends State<MiniAppHost>
     with SingleTickerProviderStateMixin {
   final _nav = GlobalKey<NavigatorState>();
 
+  /// **排版真正用的那个"底部内缩"**（= 上一次**落定**的那一档的浮窗高度）。
+  ///
+  /// 🔴 为什么不直接用 `widget.bottomInset`（2026-09-27 修一个真缺陷）：
+  ///    它是**动画/换档中间那一帧**的量 —— 收起聊天的那一帧 `_floaterH` 还是
+  ///    **展开时**的高度（~540）⇒ 内缩 ~554 ⇒ 页面只剩几十像素，
+  ///    设置页那条 `TabBar`（50）当场 `RenderFlex overflowed by 20`。
+  ///    ⚠️ 以前看不出来：那时候顶上还有一条抬头（~51）先把那点高度吃掉了，
+  ///      内容分到 0（被裁没），所以"看不出来"≠"没问题"。
+  ///    ⇒ 规矩：**档位刚变 / 正在收放动画 ⇒ 先沿用上一次落定的值**，
+  ///      等它量好了（下一次 `didUpdateWidget`）再认。
+  double _inset = 0;
+
   /// **"扩开/收回"那一下**。0 = 还只有图标那么大；1 = 全屏。
   late final AnimationController _c = AnimationController(
     vsync: this,
@@ -102,6 +114,8 @@ class _MiniAppHostState extends State<MiniAppHost>
 
   @override
   void initState() {
+    _inset = widget.bottomInset;
+
     super.initState();
     if (widget.open) _c.value = 1;
     _c.addStatusListener((st) {
@@ -126,6 +140,8 @@ class _MiniAppHostState extends State<MiniAppHost>
     // 开 ⇒ 从图标那儿**扩开**；关 ⇒ **收回**到图标那儿
     if (widget.open && !old.open) _c.forward(from: 0);
     if (!widget.open && old.open) _c.reverse();
+    // ★ 内缩：**档位刚变的那一下不认**（那是上一档的量），也不在收放动画中间认
+    if (widget.covered == old.covered && !_c.isAnimating) _inset = widget.bottomInset;
   }
 
   @override
@@ -139,7 +155,6 @@ class _MiniAppHostState extends State<MiniAppHost>
     // 没开、而且已经收回去了 ⇒ 什么都不画
     // （**不是**"一关就消失"：关的时候要能看见它收回图标那一下）
     if (!widget.open && _c.isDismissed) return const SizedBox.shrink();
-    final t = Theme.of(context);
     final covered = widget.covered;
     final screen = Offset.zero & MediaQuery.sizeOf(context);
     // 没给起点就从屏幕中心长出来（半个屏幕大的一块）
@@ -151,62 +166,61 @@ class _MiniAppHostState extends State<MiniAppHost>
           height: screen.height * 0.3,
         );
 
-    Widget content() => Material(
-      color: d.paper,
-      // ⚠️ 只有**被聊天盖住**时才有圆角（§6.4 规则 2："要看得出来被盖住"）
-      borderRadius: BorderRadius.circular(covered ? 16 : 0),
-      clipBehavior: Clip.antiAlias,
-      child: DecoratedBox(
+    Widget content() => Semantics(
+      // 🔴 看得见的那条抬头的没了（主人 2026-09-27）⇒ **听得见的那条留着**：
+      //    读屏进这一屏时仍然听得到"这是哪个小程序"。
+      label: widget.title,
+      container: true,
+      child: Material(
+        color: d.paper,
+        // ⚠️ 只有**被聊天盖住**时才有圆角（§6.4 规则 2："要看得出来被盖住"）
+        borderRadius: BorderRadius.circular(covered ? 16 : 0),
+        clipBehavior: Clip.antiAlias,
+        child: DecoratedBox(
         decoration: const BoxDecoration(),
         child: Column(
           children: [
-            // ── **容器给的**顶栏（app 自己不许画）──
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: d.gapS,
-                vertical: 2,
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    tooltip: miniAppBack,
-                    onPressed: () {
-                      final nav = _nav.currentState;
-                      if (nav != null && nav.canPop()) {
-                        nav.pop();
-                      } else {
-                        widget.onClose();
-                      }
-                    },
-                    icon: const Icon(Icons.arrow_back),
-                  ),
-                  Expanded(
-                    child: Text(
-                      widget.title,
-                      style: t.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Divider(height: 1, color: d.line),
+            // ── 🔴 这里原来有一条**容器给的顶栏**（返回箭头 ＋ 标题 ＋ 分隔线）──
+            //   主人 2026-09-27 原话：*"那个我的小程序不需要 header 和箭头返回，
+            //   把那一个东西去掉"* ⇒ **整条撤掉**（不是藏起来：它一个像素都不占）。
+            //   ⇒ 出口改在**聊天条最前面那颗 home**（`screens/chat_screen.dart` 的
+            //     `_homeButton`）：点它 = 回桌面（关掉这一屏 ＋ 把聊天收起来）。
+            //   ⚠️ **那一屏的名字不许跟着一起没**：下面那层 `Semantics` 把 `widget.title`
+            //     说给读屏（看得见的那条没了，听得见的那条还在）。
+            //   ⚠️ `onClose` 容器内部不再用了（这里没有任何按钮了）——它仍是
+            //     `MiniAppHost` 的一个入参：**出口在聊天那一条上**，那一头才拿得到它。
             // ── app 自己的内容：跑在**容器自己的 Navigator** 里 ──
             //   ⚠️ **底部内缩挂在内容上**：全屏之后聊天那条仍压在底下，
             //      不缩的话**最后一行永远点不到**（§6.4 规则 1）。
+            //   🔴 **里面这一层 `OverflowBox` 是刻意的**（2026-09-27 修一个真缺陷）：
+            //      顶上那条抬头撤掉之后，收起动画的**某一帧**里这块只剩十几像素
+            //      （以前那点高度被抬头吃掉了 ⇒ 内容分到 0，看不出问题）。
+            //      而"翻页动画"本来就是**外面那个框在长大/缩小、页面按全屏排版被露出来**
+            //      （`miniAppOpen` 那段注释）⇒ 页面**不该**跟着那一帧缩。
+            //      ⇒ 钉死成"屏幕那么大"：页面高度在整个动画里**恒定**
+            //      （= 全屏 − 底部内缩），外面那个框只负责露多少。
+            //      ⚠️ 不钉的话：收起的那一帧里设置页会被压成 30 像素高、
+            //         `TabBar`（50）当场溢出 20 —— `RenderFlex overflowed`。
             Expanded(
-              child: Padding(
-                padding: EdgeInsets.only(bottom: widget.bottomInset),
-                child: Navigator(
-                  key: _nav,
-                  onGenerateRoute: (_) =>
-                      MaterialPageRoute<void>(builder: (_) => widget.child),
+              child: OverflowBox(
+                alignment: Alignment.topCenter,
+                minWidth: screen.width,
+                maxWidth: screen.width,
+                minHeight: screen.height,
+                maxHeight: screen.height,
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: _inset),
+                  child: Navigator(
+                    key: _nav,
+                    onGenerateRoute: (_) =>
+                        MaterialPageRoute<void>(builder: (_) => widget.child),
+                  ),
                 ),
               ),
             ),
           ],
         ),
+      ),
       ),
     );
 

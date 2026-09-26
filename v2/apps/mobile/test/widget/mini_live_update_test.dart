@@ -25,7 +25,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hupo_app/models/app_words.dart';
 import 'package:hupo_app/models/mini_frame.dart';
 import 'package:hupo_app/models/space.dart';
-import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -229,8 +228,8 @@ void main() {
     final id = _frame(tester).viewId;
     expect(miniViewLedger.isHosted(id), true);
 
-    // 关掉小程序（容器顶栏那个返回 ⇒ 退回桌面）
-    await tester.tap(find.byTooltip(miniAppBack));
+    // 关掉小程序（**聊天条最前面那颗 home** ⇒ 退回桌面；2026-09-27 起顶栏那条撤了）
+    await tester.tap(find.byKey(chatHomeButtonKey));
     await tester.pumpAndSettle();
     expect(miniViewLedger.isHosted(id), false, reason: '★ 关掉了就该销号');
   });

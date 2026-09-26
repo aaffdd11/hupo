@@ -19,7 +19,6 @@ import 'package:hupo_app/models/dev_harness.dart';
 import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/harness.dart';
 import 'package:hupo_app/models/harness_words.dart';
-import 'package:hupo_app/models/space_words.dart' show miniAppBack;
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -316,7 +315,7 @@ void main() {
     await tester.tap(find.text(harnessAppLabel));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip(miniAppBack));
+    await tester.tap(find.byKey(chatHomeButtonKey));
     await tester.pumpAndSettle();
 
     expect(feed.closes, greaterThanOrEqualTo(1), reason: '★ 走了就要把这一头收掉');

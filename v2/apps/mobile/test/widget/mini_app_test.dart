@@ -154,10 +154,11 @@ void main() {
     await _openSettings(tester);
     expect(find.byType(SettingsScreen), findsOneWidget);
 
-    await tester.tap(find.byTooltip(miniAppBack));
+    await tester.tap(find.byKey(chatHomeButtonKey));
     await tester.pumpAndSettle();
     expect(find.byType(SettingsScreen), findsNothing, reason: '★ 退出了就该真的不在树里（不许留残影）');
-    expect(find.byTooltip(miniAppBack), findsNothing, reason: '★ 连容器那条顶栏也不许留');
+    expect(find.byTooltip(miniAppBack), findsNothing, reason: '★ 容器那条顶栏 2026-09-27 起整个撤了（连「返回」这个字都不该在）');
+    expect(find.byIcon(Icons.arrow_back), findsNothing, reason: '★ 箭头也不许留');
 
     // ★ 再点一次图标：必须还能开（残影挡住图标的话，这一下就没反应）
     await tester.tap(find.text(settingsAppLabel));
@@ -211,7 +212,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(surfaceShadow(tester), isNull, reason: '全屏时没有阴影');
 
-    await tester.tap(find.byTooltip(miniAppBack));
+    await tester.tap(find.byKey(chatHomeButtonKey));
     // ⚠️ 先空 pump 一次（让 `didUpdateWidget` 起跑），**再**推进 250ms。
     //    为什么不是 60ms：形状那条曲线是 `easeOutCubic` —— 刚起步时它**几乎还是全屏**，
     //    阴影那一项被压到 0.001 以下（正是"贴边时不该有阴影"那条规矩），量出来是 null。
@@ -234,7 +235,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(DiscoverScreen), findsOneWidget);
 
-    await tester.tap(find.byTooltip(miniAppBack));
+    await tester.tap(find.byKey(chatHomeButtonKey));
     // ⚠️ **只推进一小段**（正好落在收回动画里）——`pumpAndSettle` 会一口气跑完，看不出这一帧
     await tester.pump(const Duration(milliseconds: 60));
     expect(
@@ -257,7 +258,7 @@ void main() {
     await _pump(tester);
     await _openSettings(tester);
     expect(find.byType(SettingsScreen), findsOneWidget);
-    await tester.tap(find.byTooltip(miniAppBack));
+    await tester.tap(find.byKey(chatHomeButtonKey));
     await tester.pump(const Duration(milliseconds: 60));
     expect(find.byType(SettingsScreen), findsOneWidget, reason: '关它自己的时候，缩回去的当然还是它');
   });

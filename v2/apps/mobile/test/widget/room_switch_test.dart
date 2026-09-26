@@ -135,11 +135,11 @@ void main() {
     expect(find.text('骰子那一间那句话'), findsOneWidget);
     expect(find.text('主线那句话'), findsNothing);
 
-    // 收起聊天（把屏幕还给小程序），然后从容器顶上那个返回关掉它
+    // 收起聊天（把屏幕还给小程序），然后按聊天条最前面那颗 home 关掉它
     await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
     expect(find.byType(DiscoverScreen), findsNothing, reason: '（负向对照：这一屏不是发现那一屏）');
-    await tester.tap(find.byTooltip(miniAppBack));
+    await tester.tap(find.byKey(chatHomeButtonKey));
     await tester.pumpAndSettle();
     expect(c.scope, mainScope, reason: '★ 关掉它 ⇒ 回到桌面那一间');
 
@@ -175,7 +175,7 @@ void main() {
     // 而"看得出来现在在哪儿"照旧（容器顶上那行字说得出这一间是谁）
     expect(find.byTooltip(chatScopeInApp(discoverTitle)), findsOneWidget);
     // 退回桌面 ⇒ 回主线那一间（房间是"现在开着哪个图标"的影子）
-    await tester.tap(find.byTooltip(miniAppBack));
+    await tester.tap(find.byKey(chatHomeButtonKey));
     await tester.pumpAndSettle();
     expect(c.scope, mainScope);
   });

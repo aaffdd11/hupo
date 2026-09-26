@@ -80,8 +80,8 @@ void main() {
     );
     expect(inApp, onDesktop.icon, reason: '★ 聊天条前面那个图标必须与桌面上那个是同一个小程序的图标');
 
-    // 退出小程序 ⇒ 回到"在桌面上"
-    await tester.tap(find.byTooltip(miniAppBack));
+    // 退出小程序 ⇒ 回到"在桌面上"（按最前面那颗 home）
+    await tester.tap(find.byKey(chatHomeButtonKey));
     await tester.pumpAndSettle();
     expect(
       _badgeIcon(tester, chatScopeDesktop),

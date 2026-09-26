@@ -48,6 +48,7 @@ class Composer extends StatefulWidget {
     this.onToggleAutoSpeak,
     this.canSpeak = false,
     this.canHear = false,
+    this.hintAbove,
     this.hearing = const Hearing(),
     this.onMicToggle,
     this.leading,
@@ -100,6 +101,14 @@ class Composer extends StatefulWidget {
   /// 现在聊天窗口是**一行**，所以它跟着搬到这一行的最前面。
   /// ⚠️ 它**只指示、不响应点击**（所以不参与 D3.6 的 ≥44 那条）。
   final Widget? leading;
+
+  /// ★ **浮在这一行上面的一句说明**（主人 2026-09-27：*"点击 home 那个 icon 上面会有一个浮窗"*）。
+  ///
+  /// 🔴 为什么要挂在**这一行**上、而不是整个输入条上：锚点是**那颗 home 图标的上面**。
+  ///    挂在整个输入条上的话，提示会矮掉"输入条高 − 这一行高"那么多（压在图标上）。
+  /// ⚠️ 它**不参与排版**（`Positioned` ＋ `FractionalTranslation`）⇒ 出现/消失**不会**
+  ///    让浮窗长高再缩回去（D4.8）；外面还包一层 `IgnorePointer`（它是"说一句话"，不挡点击）。
+  final Widget? hintAbove;
 
   @override
   State<Composer> createState() => _ComposerState();
@@ -262,7 +271,11 @@ class _ComposerState extends State<Composer> {
             _hearingStrip(theme, look),
           // ★ 2026-09-24：**这一条现在只有一行**（主人：*"我们做成一行"*）——
           //   `[在哪儿说话] [框（右边里头是话筒）] [发送]`
-          Row(
+          // ★ 2026-09-27：外面包一层 `Stack` —— 只为让 `hintAbove`（那条说明）
+          //   浮在**这一行**上面（锚点是那颗 home 的上面），一个像素都不占排版。
+          Stack(
+            children: [
+              Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               // ★ **最前面那个"在哪儿说话"的图标**（主人 2026-09-24："homeicon 放在聊天窗口左边"）。
@@ -282,6 +295,21 @@ class _ComposerState extends State<Composer> {
               //   ⚠️ 这一条**推翻了 2026-09-23 那个"有字才画"**（那也是主人拍的板）：
               //      现在它**一直在**，没字时是灰的、按不动 —— 位置固定，界面不跳（D4.8）。
               _sendButton(theme, p),
+            ],
+          ),
+              if (widget.hintAbove != null)
+                Positioned(
+                  // 🔴 `top: 0` 配 `FractionalTranslation(0,-1)`：提示的**下沿**正好
+                  //    贴在这一行的**上沿**（不用知道这一行多高 —— 写死一个数就错了）。
+                  //    ⚠️ 用 `Positioned` 而不是 `Align`：后者会参与 `Stack` 的尺寸计算，
+                  //       提示一出现就把这一行撑高（那就不是"浮着"了）。
+                  left: 0,
+                  top: 0,
+                  child: FractionalTranslation(
+                    translation: const Offset(0, -1),
+                    child: IgnorePointer(child: widget.hintAbove!),
+                  ),
+                ),
             ],
           ),
         ],
