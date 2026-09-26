@@ -6,19 +6,26 @@
 //   填了那三样之后，他得**当场知道这把钥匙到底能不能听** —— 不然就是
 //   "填了一个不知道有没有用的东西"（与图片那一屏的「试一张」同一条理由）。
 //
-// ── 五条规矩 ──────────────────────────────────────────────
+// ── 六条规矩 ──────────────────────────────────────────────
 //   1. 🔴 **只有一条录音路**：开麦/收手就是 `services/hearing.dart` 那两个函数
 //      （由上层注入成 [VoiceTryHandlers]）—— 这里**不自己碰麦克风**，
 //      也不自己拼地址（地址归 `stream_uri.dart`）。
 //   2. 🔴 **实话实说、一次一个原因**：没配 / 没权限 / 连不上 / 没额度 /
 //      没听到 / 读不懂 —— 每一档都有自己那句话，**绝不静默**（`voice_try.dart`）。
-//   3. 🔴 **字只落在一个框里**：听的时候半句实时往框里长，停下之后定稿落进去；
+//   3. 🔴 **一次按下去＝一场录音**（主人 2026-09-26：*"点一下进入录音，
+//      再点一下结束录音。"*）：引擎在停顿处把一段说完（`asr/end`）**不许**把这一场
+//      结束掉 —— 这一块**自己开下一轮**接着听，字**接在后面长**；
+//      只有**他再按一下**才收场。⇒ 见 `_openRound` 与 [VoiceTryStep.openNextRound]。
+//      ⚠️ 开不起来（下一轮没接上）⇒ **说明白并收场**，绝不假装还在录。
+//   4. 🔴 **字只落在一个框里**：听的时候半句实时往框里长，停下之后定稿落进去；
 //      框里的字**可以选、可以复制**（他自己决定拿去干什么）。
-//   4. **他不许被覆盖**：他自己动过那个框（而且已经不在听了）⇒ 迟到的定稿**不再覆盖**。
-//   5. **尺寸跟字算**：按钮命中区 ≥44；字放到最大也不许溢出（那是硬闸 D3.5/D3.6）。
+//   5. **他不许被覆盖**：他自己动过那个框（而且已经不在听了）⇒ 迟到的定稿**不再覆盖**。
+//   6. **尺寸跟字算**：按钮命中区 ≥44；字放到最大也不许溢出（那是硬闸 D3.5/D3.6）。
 //
 // ⚠️ 界面上**没有**内部词（`AGENTS.md` §六 第 4 条；词表硬闸会拦）。
 //    "在听"那三个字只在**真的在听**时画，而且只有一个合法出处（`hearListening`，D5.13）。
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 
@@ -62,6 +69,14 @@ class _VoiceTryState extends State<VoiceTry> {
   /// ⚠️ 有了它才敢在"他自己动过手"之后不再覆盖（收尾那句回来得比他的手慢）。
   String _mirror = '';
 
+  /// **正在开某一轮**（第一次按下去、或者引擎说完一段之后自己接着开的那一轮）。
+  /// ⚠️ 防两条同时开：真那一侧 `startHearing` 自己会 `_closeAll`，但这里先拦住更干净。
+  bool _opening = false;
+
+  /// **用户按了停**（这一场到此为止）：这之后**不许再自动开下一轮**。
+  /// ⚠️ 它与 `_opening` 一起处理那个竞态：按停的那一下刚好有一轮在路上。
+  bool _closing = false;
+
   @override
   void dispose() {
     // ⚠️ **走开的时候如果还在听 ⇒ 把麦关掉**（切到别的 tab / 关掉这一屏）。
@@ -73,9 +88,14 @@ class _VoiceTryState extends State<VoiceTry> {
   }
 
   /// 收下一帧 ⇒ 更新状态、并把字写进框里。
+  ///
+  /// 🔴 引擎把这一轮说完了（`openNextRound`）⇒ **自己把下一轮开起来**：
+  ///    这一场录音还没完，框里的字接在后面长（见 `voiceTry.dart` 的 [voiceTryStep]）。
   void _frame(Map<String, dynamic> e) {
     if (!mounted) return;
-    _apply(voiceTryFrame(_h, e));
+    final step = voiceTryStep(_h, e);
+    _apply(step.heard);
+    if (step.openNextRound) unawaited(_openRound());
   }
 
   void _apply(Hearing next) {
@@ -101,10 +121,31 @@ class _VoiceTryState extends State<VoiceTry> {
     );
   }
 
+  /// **开一轮**（第一次按下去是它；引擎说完一段之后接着开的也是它）。
+  ///
+  /// 🔴 开不起来（返回一句机器原因）⇒ **说明白、收场** —— 绝不假装还在录；
+  ///    已经听到的字**一个都不丢**（`Hearing.broke` 那条纪律）。
+  Future<void> _openRound() async {
+    if (_opening) return;
+    _opening = true;
+    final why = await widget.handlers.start(_frame);
+    _opening = false;
+    if (!mounted) return;
+    if (why != null) {
+      setState(() => _h = _h.broke(why));
+      return;
+    }
+    // ⚠️ 开这一轮的过程中用户按了停 ⇒ 把刚开起来的这一轮**立刻交回去**
+    //    （不然麦克风会留在手里，而他以为已经停了）。
+    if (_closing) widget.handlers.stop();
+  }
+
   /// **按了一下**（开始 / 结束都由当前状态决定）。
   Future<void> _toggle() async {
     if (_h.busy) {
-      // 在听 ⇒ 说"这边完了"；字留着等最后一句（`Hearing.tapped` 进 finishing）。
+      // 在听 ⇒ **这一场到此为止**：关麦、等最后一句（`Hearing.tapped` 进 finishing）。
+      // ⚠️ 从这一下起**不再自动开下一轮**（`_closing`）。
+      _closing = true;
       widget.handlers.stop();
       setState(() => _h = _h.tapped());
       return;
@@ -114,19 +155,14 @@ class _VoiceTryState extends State<VoiceTry> {
       _apply(const Hearing(phase: HearingPhase.denied, why: hearCantHere));
       return;
     }
-    // 新的一次是新的内容：上一次那些字清掉（与聊天那颗话筒同一条）
+    // 新的一场是新的内容：上一次那些字清掉（与聊天那颗话筒同一条）
+    _closing = false;
     _mirror = '';
     setState(() {
       _h = _h.tapped();
       _box.clear();
     });
-    final why = await widget.handlers.start(_frame);
-    if (!mounted) return;
-    setState(() {
-      // ⚠️ 失败 ⇒ 如实停在那句话上；成功时**什么都不改**（事件已经在路上，
-      //    它们各自会 `setState` —— 这里再覆盖一次就是把刚听到的字擦掉）。
-      if (why != null) _h = _h.broke(why);
-    });
+    await _openRound();
   }
 
   @override

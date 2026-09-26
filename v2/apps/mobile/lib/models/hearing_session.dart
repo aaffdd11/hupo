@@ -40,6 +40,7 @@ class Hearing {
   const Hearing({
     this.phase = HearingPhase.idle,
     this.segments = const <int, String>{},
+    this.settled = '',
     this.why = '',
   });
 
@@ -58,6 +59,16 @@ class Hearing {
   ///    ⇒ 这几条**必须按 `index` 替换**；接起来就是"嗯今天今天天气今天天气怎么…"那种重复。
   final Map<int, String> segments;
 
+  /// ★ 2026-09-26：**同一场录音里、前面几轮已经说定的字**。
+  ///
+  /// 🔴 为什么要有它：一次识别连接只担**一轮**（上游说完一段/断一次就收），
+  ///    而主人那颗「试一下」要的是"按一下开始、再按一下才结束" ——
+  ///    中间那些停顿不能让字没了。引擎收一轮 ⇒ 把这一轮的字搬进 `settled`，
+  ///    `segments` 清零；下一轮**段号又从 0 开始**，接在 `settled` 后面。
+  ///    ⚠️ 不搬的话，下一轮的 `index: 0` 会**替换**掉上一轮的 `index: 0`
+  ///       —— 那正是"说了两句只剩后一句"。
+  final String settled;
+
   /// 出错/没配好时那一句人话（空 = 没什么要说的）。**直接显示，不再翻译。**
   final String why;
 
@@ -69,11 +80,12 @@ class Hearing {
   bool get busy =>
       phase == HearingPhase.listening || phase == HearingPhase.finishing;
 
-  /// 输入框里该显示的字（按段号从小到大接起来）。
+  /// 输入框里该显示的字（**前面几轮定下来的** ＋ 这一轮正在长的）。
   String get text {
-    if (segments.isEmpty) return '';
-    final keys = segments.keys.toList()..sort();
-    return keys.map((k) => segments[k] ?? '').join();
+    final live = segments.isEmpty
+        ? ''
+        : (segments.keys.toList()..sort()).map((k) => segments[k] ?? '').join();
+    return settled + live;
   }
 
   /// 有没有字可以发。
@@ -82,10 +94,12 @@ class Hearing {
   Hearing _copy({
     HearingPhase? phase,
     Map<int, String>? segments,
+    String? settled,
     String? why,
   }) => Hearing(
     phase: phase ?? this.phase,
     segments: segments ?? this.segments,
+    settled: settled ?? this.settled,
     why: why ?? this.why,
   );
 
@@ -112,6 +126,22 @@ class Hearing {
     if (phase == HearingPhase.finishing) return this;
     return const Hearing(phase: HearingPhase.listening);
   }
+
+  /// ★ 2026-09-26：**引擎把这一段说完了，但用户还没按停** ⇒ 这一场继续。
+  ///
+  /// 一次识别连接只担**一轮**（上游说完一段/断了就收），而主人那颗「试一下」
+  /// 要的是"按一下开始、再按一下才结束" —— 中间的停顿不许把这一场结束掉。
+  /// 这里把这一轮的字**落进 `settled`**、段号清零；下一轮从 `0` 重新开始、
+  /// 接在后面（不落的话下一轮的 `index: 0` 会把上一轮的字**替换**掉）。
+  ///
+  /// ⚠️ 只有"这一场还开着"（`listening`）时才有意义：收尾中/失败/闲的时候
+  ///    调它会把一场已经结束的录音又画成"在听"。
+  Hearing roundEnded() => _copy(
+    phase: HearingPhase.listening,
+    segments: const <int, String>{},
+    settled: text,
+    why: '',
+  );
 
   /// 麦克风真的开起来了（服务端说 `asr/ready`）。
   Hearing ready() => busy ? _copy(why: '') : this;
@@ -142,43 +172,62 @@ class Hearing {
   /// ⚠️ **一个字都没听到的时候要说出来**（2026-09-23：主人手机上"按一下就没声了"，
   ///    而屏幕上**什么都不说** —— 那正是"页面在说假话"那一族：
   ///    它明明听到了一次会话结束，却不告诉人"我什么都没听到"）。
+  /// ⚠️ 但**已经有一句话的时候不许拿"什么都没听到"盖掉它**：`asr/capped`
+  ///    先说了"一分钟到点"，紧接着那条迟到的 `asr/end` 会走到这里 ——
+  ///    把"到点"换成"什么都没听到"就等于把原因擦掉了。
   Hearing done() => text.trim().isEmpty
-      ? _copy(phase: HearingPhase.idle, why: hearNothing)
+      ? _copy(phase: HearingPhase.idle, why: why.isEmpty ? hearNothing : why)
       : _copy(phase: HearingPhase.idle);
 
   /// 到点了（服务端说 `asr/capped`）：字留着，并说一句为什么。
   Hearing capped() => _copy(phase: HearingPhase.idle, why: hearCapped);
 
+  /// ★ 2026-09-26：收到一帧**形状都不对**的东西（不是一个表）。
+  /// 字一个都不许丢，说一句实话 —— 而且**绝不抛**。
+  Hearing badFrame(String why) =>
+      _copy(phase: HearingPhase.failed, why: why);
+
   /// 这台部署没配钥匙。
-  Hearing unavailable() => const Hearing(
-    phase: HearingPhase.unavailable,
-    why: hearUnavailable,
-  );
+  /// ⚠️ 走 `_copy`（不是 `const Hearing`）：**已经听到的字要留着**
+  ///    —— 一场录音开在中间才发现没配好时，他刚说的话不能没。
+  Hearing unavailable() =>
+      _copy(phase: HearingPhase.unavailable, why: hearUnavailable);
 
   /// 没拿到麦克风权限。
   Hearing noPermission() =>
-      const Hearing(phase: HearingPhase.denied, why: hearDenied);
+      _copy(phase: HearingPhase.denied, why: hearDenied);
 
   /// 开麦/识别出错。[reason] 是**机器原因**（`denied` / `failed` / `engine` / …）。
   /// [code] 是上游那个错误码（腾讯的 `4004` = 资源包耗尽 ⇒ 说成"没额度"）。
+  ///
+  /// 🔴 这一版**每一条分支都留住已经听到的字**（契约 §三："任意失败 ⇒
+  ///    已经听到的字留着"）。开麦失败发生在**中途**（自动开下一轮的那一刻）
+  ///    时尤其要紧：那会儿框里已经有他说的话了。
   Hearing broke(String reason, {int? code}) {
     if (reason == 'denied') return noPermission();
-    if (reason == 'unsupported') return const Hearing(phase: HearingPhase.denied, why: hearFailed);
+    if (reason == 'unsupported') {
+      return _copy(phase: HearingPhase.denied, why: hearFailed);
+    }
     if (reason == 'not-configured') return unavailable();
     if (reason == 'cut') {
       // ⚠️ **留住字**（判据当场抓到的：原来这里 new 了一个空 Hearing ⇒ 他刚说的话没了）
       return _copy(phase: HearingPhase.failed, why: hearCutOff);
     }
     if (reason == 'no-entry') {
-      return const Hearing(phase: HearingPhase.failed, why: hearNoEntry);
+      return _copy(phase: HearingPhase.failed, why: hearNoEntry);
+    }
+    // ★ 2026-09-26：上游那一头出错（服务端 `asr/error{reason:'upstream'}`）
+    //     **不是**"麦克风开不了" —— 说成"识别那一头出错了"，他才知道该再试一次。
+    if (reason == 'upstream') {
+      return _copy(phase: HearingPhase.failed, why: hearEngineFailed);
     }
     // 🔴 腾讯的 `4004`（资源包耗尽）**不是**"识别出错"，是"这条路没额度" ——
     //    两句混成一句，用户就不知道该干什么（去开通 vs 再试一次）。
     if (reason == 'engine' && code == 4004) {
-      return const Hearing(phase: HearingPhase.failed, why: hearNoQuota);
+      return _copy(phase: HearingPhase.failed, why: hearNoQuota);
     }
     final why = reason == 'engine' ? hearEngineFailed : hearFailed;
-    return Hearing(phase: HearingPhase.failed, why: why);
+    return _copy(phase: HearingPhase.failed, why: why);
   }
 
   /// **服务端/引擎来的一个事件**（线上协议见契约 §二）。

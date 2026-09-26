@@ -848,8 +848,16 @@ class ChatController extends ChangeNotifier {
   //    （那条"客户端自己算地址、闸却打在另一侧"的事故，见 `stream_uri.dart` 顶上）。
   //    唯一分别：这一屏**自带一个 `Hearing`**（存不在这儿），所以这里不接受
   //    "当前状态"、只把事件转出去。
+  //
+  // ★ 2026-09-26（主人：「语音按钮，点一下进入录音，再点一下结束录音。」）：
+  //   **这两函数一次管一轮**。一次识别连接只担一轮（上游说完一段就收，
+  //   服务端发 `asr/end` 并把连接关掉），而「试一下」那一场要横跨很多轮
+  //   ⇒ 引擎收一轮时，那一块会**再调一次 `hearOnce`** 开下一轮。
+  //   这一层**不需要改**：`hearing_web.dart` 的 `startHearing` 自己先 `_closeAll()`
+  //   （一次只开一条），`stopHearingNow` 也认所有开着的。
 
-  /// **开一次麦**（配置页那颗「试一下」按第一下）。
+  /// **开一轮麦**（配置页那颗「试一下」按第一下；引擎说完一段之后
+  /// 那一块**自己接着开的也是它**）。
   ///
   /// @returns `null` = 真开起来了；否则一句**机器原因**（与原 `startHearing` 同一套）。
   /// ⚠️ 令牌用**手里这一份**（`_token`），**不重新去盘上读**：开麦要发生在
@@ -862,7 +870,7 @@ class ChatController extends ChangeNotifier {
     return _startHear(url: asrUri(base: '', page: Uri.base), token: t, onEvent: onEvent);
   }
 
-  /// **收手**（配置页那颗「试一下」按第二下）。
+  /// **收手**（配置页那颗「试一下」按第二下）：这一场到此为止。
   /// ⚠️ 与聊天那颗话筒**共用同一个服务状态**：语音那一头一次只开一条
   ///    （`hearing_web.dart` 的 `_closeAll()`），所以两处同时按不会开出两条流。
   void stopHearingNow() => _stopHear();

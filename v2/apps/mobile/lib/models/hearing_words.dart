@@ -94,7 +94,9 @@ const String voiceTryStop = '停下';
 const String voiceTryWorking = '收尾中…';
 
 /// 一句怎么用（**说清字会落在哪儿**，别让人猜）。
-const String voiceTryHint = '按一下开始，说完再按一下；认出来的字会落在下面那个框里。';
+/// ★ 2026-09-26：加上"中间停一下也接着听" —— 主人要的是"再点一下才结束录音"，
+///    引擎自己在停顿处收尾**不算**他说完了（见 `123-VOICE-TEST-BUTTON.md` §八）。
+const String voiceTryHint = '按一下开始，再按一下才结束；中间停一下也接着听 —— 认出来的字会落在下面那个框里。';
 
 /// 下面那个框的标签（**空着的时候也要挂在那儿**）。
 const String voiceTryBoxLabel = '认出来的字（可以选、可以复制）';

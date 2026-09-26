@@ -6,8 +6,11 @@
 // 于是钉住的是屏幕上到底有没有说真话：
 //   ① 那颗按钮**只在「语音」那一屏**、而且**接线了才画**（不给假按钮）；
 //   ② 按一下 ⇒ **真的把动作交出去**（在听 ＋ 那三个字）；再按一下 ⇒ 收手；
-//   ③ 说完了 ⇒ **字落进那个文本框**（真的 `TextField`，能选能复制）；
-//   ④ 每一种失败都有自己的那句话（而且**留着字**）；
+//   ③ ★ **引擎在停顿处收尾不算"他说完了"**：这一场继续，**自己开下一轮**，
+//      框里的字**接在后面长**；只有**他再按一下**才收场、字留在框里；
+//      过一会儿再按第一下 ⇒ 新的一场（清空）；
+//   ④ 每一种失败都有自己的那句话（而且**留着字**）；开下一轮开不起来 ⇒
+//      **说明白并收场**（不装还在录）；
 //   ⑤ 开不了麦 ⇒ 只说明白话，**不装开麦**（与聊天那颗话筒同一条）；
 //   ⑥ 命中区 ≥44（D3.6）· 字放到最大不溢出（D3.5 那一族，硬闸在 a11y 那份）。
 //
@@ -15,6 +18,8 @@
 //    （`services/hearing_web.dart`）。这里注进去的那个假 `start` 只是**把回调收下**，
 //    再由判据按**真实时序**喂帧（先 ready、再半句/定稿、最后 end）——
 //    不这么走测的就不是那条路。
+//    ⚠️ 一次连接只担一轮 ⇒ 引擎收尾之后界面会**再交一次 `start`**：判据据此
+//       断言"它真的去开下一轮了"（`f.started.length`）。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -29,13 +34,18 @@ import 'package:hupo_app/widgets/voice_try.dart' as vt;
 /// 那个假的"开麦/收手"：把回调收下、把机器原因回出去（**不碰真麦克风**）。
 class FakeHear {
   /// 被交出去的那几个回调（真实现里它们就是 `/api/asr` 那条流上的事件口）。
+  /// ⚠️ **一场录音里会有很多个**（引擎每收一轮就自己开下一轮）。
   final List<void Function(Map<String, dynamic>)> started = [];
 
   /// 按了几次"停下"。
   int stops = 0;
 
-  /// 下一次开麦要回的**机器原因**（`null` = 真开起来了）。
+  /// 每一次开麦要回的**机器原因**（`null` = 真开起来了）。
   String? reason;
+
+  /// 第 n 次开麦分别回什么（给了它就按它走，`reason` 只当兜底）——
+  /// 用来演"第一轮成了、下一轮连不上"。
+  List<String?>? reasonSeq;
 
   void Function(Map<String, dynamic>)? get last => started.isEmpty ? null : started.last;
 }
@@ -61,7 +71,9 @@ Future<FakeHear> pumpVoice(
               ? VoiceTryHandlers(
                   start: (onEvent) async {
                     f.started.add(onEvent);
-                    return f.reason;
+                    final i = f.started.length - 1;
+                    final seq = f.reasonSeq;
+                    return seq != null && i < seq.length ? seq[i] : f.reason;
                   },
                   stop: () => f.stops += 1,
                 )
@@ -129,6 +141,62 @@ void main() {
     await tester.pumpAndSettle();
     expect(f.stops, 1);
     expect(find.text(voiceTryWorking), findsOneWidget, reason: '收尾中那一下也要说出来');
+  });
+
+  // ── ★ 这一批的核心：一场录音横跨很多轮 ────────────────────────────────
+  testWidgets('★ 引擎在停顿处收尾 ⇒ **这一场还在录**：字接在后面长、按钮还是"停下"', (tester) async {
+    final f = await pumpVoice(tester);
+    await tester.tap(find.text(voiceTryStart));
+    await tester.pumpAndSettle();
+    expect(f.started.length, 1);
+
+    // 第一轮：说到一半
+    await frame(tester, f, {'type': 'asr/partial', 'text': '今天天气', 'index': 0});
+    expect(boxText(tester), '今天天气');
+
+    // 🔴 引擎把这一段收掉（主人**没按停**）⇒ 这一场继续，界面**自己开下一轮**
+    await frame(tester, f, {'type': 'asr/end', 'text': '今天天气', 'index': 0});
+    expect(f.started.length, 2, reason: '★ 引擎收完一段 ⇒ 自己开下一轮（不是停下）');
+    expect(find.text(hearListening), findsOneWidget, reason: '★ 还在录（那三个字还在）');
+    expect(find.text(voiceTryStop), findsOneWidget, reason: '★ 按钮还是"停下"');
+    expect(find.text(voiceTryStart), findsNothing, reason: '负向对照：**不是**停在框里那半句');
+    expect(boxText(tester), '今天天气', reason: '★ 字不许被清掉');
+
+    // 下一轮：段号又从 0 开始 ⇒ 字**接在后面长**
+    await frame(tester, f, {'type': 'asr/partial', 'text': '怎么样', 'index': 0});
+    expect(boxText(tester), '今天天气怎么样', reason: '★ 接在后面长，不是重来');
+    expect(boxText(tester) == '怎么样', false, reason: '负向对照：不是只剩下新的那一轮');
+
+    // 第二下 ⇒ **他按停**：收场、字留着
+    await tester.tap(find.text(voiceTryStop));
+    await tester.pumpAndSettle();
+    expect(find.text(voiceTryWorking), findsOneWidget);
+    await frame(tester, f, {'type': 'asr/end', 'text': '怎么样', 'index': 0});
+    expect(find.text(voiceTryStart), findsOneWidget, reason: '停了 ⇒ 按钮回到"试一下"');
+    expect(boxText(tester), '今天天气怎么样', reason: '★ 第二下之后字还在（能选、能复制）');
+    expect(f.started.length, 2, reason: '★ 他按了停 ⇒ 绝不许再开下一轮');
+
+    // 第三下 ⇒ **新的一场**：清空、重新在听
+    await tester.tap(find.text(voiceTryStart));
+    await tester.pumpAndSettle();
+    expect(boxText(tester), '', reason: '★ 新的一场清空');
+    expect(find.text(hearListening), findsOneWidget, reason: '★ 又重新在听了');
+    expect(f.started.length, 3, reason: '第三下真的又交了一次开麦');
+  });
+
+  testWidgets('★ 开下一轮开不起来 ⇒ 说明白、收场（**不装还在录**），字留着', (tester) async {
+    final f = await pumpVoice(tester);
+    await tester.tap(find.text(voiceTryStart));
+    await tester.pumpAndSettle();
+    await frame(tester, f, {'type': 'asr/partial', 'text': '今天天气', 'index': 0});
+    // 第一轮成；下一轮连不上
+    f.reasonSeq = <String?>[null, 'no-entry'];
+    await frame(tester, f, {'type': 'asr/end', 'text': '今天天气', 'index': 0});
+    expect(f.started.length, 2, reason: '它真的去开下一轮了');
+    expect(find.text(hearNoEntry), findsOneWidget, reason: '★ 说明白');
+    expect(find.text(hearListening), findsNothing, reason: '★ 不许假装还在录');
+    expect(find.text(voiceTryStart), findsOneWidget, reason: '收场 ⇒ 按钮回到"试一下"');
+    expect(boxText(tester), '今天天气', reason: '★ 已经听到的字一个都不丢');
   });
 
   testWidgets('★ 说完了 ⇒ **字落进那个文本框**（真的 `TextField`，能选能复制）', (tester) async {
@@ -226,19 +294,30 @@ void main() {
       expect(find.text(hearNoQuota), findsOneWidget);
     });
 
-    testWidgets('到点了（`asr/capped`）⇒ 它自己那句，字留着', (tester) async {
+    testWidgets('★ 到点了（`asr/capped`）⇒ 它自己那句 ＋ **收场**（不接着开下一轮），字留着', (tester) async {
       final f = await pumpVoice(tester);
       await tester.tap(find.text(voiceTryStart));
       await tester.pumpAndSettle();
       await frame(tester, f, {'type': 'asr/final', 'text': '说了很久', 'index': 0});
       await frame(tester, f, {'type': 'asr/capped'});
       expect(find.text(hearCapped), findsOneWidget);
+      expect(find.text(hearListening), findsNothing, reason: '★ 到点就收场（不许假装还在录）');
+      expect(find.text(voiceTryStart), findsOneWidget);
+      expect(f.started.length, 1, reason: '★ 到点不许再开下一轮（不要循环）');
       expect(boxText(tester), '说了很久', reason: '到点了也要把已经听到的留着');
     });
 
     testWidgets('一个字都没听到 ⇒ 说出来（不是静默的空白框）', (tester) async {
       final f = await pumpVoice(tester);
       await tester.tap(find.text(voiceTryStart));
+      await tester.pumpAndSettle();
+      // 负向对照：引擎自己收掉一个**空**段 ⇒ 这一场还在听，不许说"什么都没听到"
+      await frame(tester, f, {'type': 'asr/end', 'index': 0});
+      expect(find.text(hearNothing), findsNothing, reason: '引擎收尾不结束这一场');
+      expect(find.text(hearListening), findsOneWidget);
+      expect(f.started.length, 2, reason: '空段也要自己开下一轮');
+      // 他按停 ⇒ 收场；一个字都没有 ⇒ 说出来
+      await tester.tap(find.text(voiceTryStop));
       await tester.pumpAndSettle();
       await frame(tester, f, {'type': 'asr/end', 'index': 0});
       expect(find.text(hearNothing), findsOneWidget);

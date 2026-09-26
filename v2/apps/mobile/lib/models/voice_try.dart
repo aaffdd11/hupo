@@ -16,6 +16,11 @@
 //      或由 `Hearing` 那张表给）。
 //   ③ 🔴 **认不出来的帧不许抛**（对面以后加字段，老客户端不能崩），
 //      也**不许装作什么都没发生**（形状都不对时要说一句实话）。
+//   ④ ★ 2026-09-26（主人：「语音按钮，点一下进入录音，再点一下结束录音。」）：
+//      **一次按下去＝一场录音**。引擎在停顿处把一段说完（`asr/end`）**不许**
+//      把这一场结束掉 —— 落字、让界面自己开下一轮（[VoiceTryStep.openNextRound]），
+//      框里的字**接在后面长**；只有**他再按一下**才收场。
+//      ⇒ 一次连接只担一轮，两轮之间段号会从 0 重来，所以字要落进 `Hearing.settled`。
 //
 // ⚠️ 纯逻辑 ⇒ 进 `test/unit/voice_try_test.dart`，不靠界面断言。
 
@@ -30,7 +35,8 @@ import 'hearing_words.dart';
 class VoiceTryHandlers {
   const VoiceTryHandlers({required this.start, required this.stop});
 
-  /// **开麦**。`null` = 真开起来了；否则一句**机器原因**
+  /// **开一轮**（第一次按下去是它；引擎说完一段之后自己接着开的**也是它**）。
+  /// `null` = 真开起来了；否则一句**机器原因**
   /// （`denied` / `unsupported` / `no-entry` / `not-configured` / `engine` / …）。
   /// 识别那一头的字从那一个回调里进来（就是 `startHearing` 的 `onEvent`）。
   final Future<String?> Function(void Function(Map<String, dynamic>) onEvent) start;
@@ -61,7 +67,26 @@ String voiceTryNotice(Hearing h, {required bool hasOwn}) {
   return h.why;
 }
 
-/// **收下识别那一头发来的一帧**。
+/// **收下识别那一头发来的一帧**之后，这一屏该是什么状态。
+///
+/// 🔴 为什么要多出 `openNextRound` 这一位（2026-09-26 修）：
+///    **一次识别连接只担一轮** —— 上游在停顿处把这一段收掉，服务端就发
+///    `asr/end` 并把那条连接关掉。而主人要的是"按一下开始、再按一下才结束"
+///    ⇒ 引擎自己收尾（用户没按停）**不许**把这一场结束掉：
+///    落字、**自己开下一轮**，接着听。这一位就是"该去开下一轮了"。
+class VoiceTryStep {
+  const VoiceTryStep(this.heard, {this.openNextRound = false});
+
+  /// 收完这一帧之后的状态（界面照它画）。
+  final Hearing heard;
+
+  /// 🔴 **该自己开下一轮了**（引擎把这一段说完了，而用户还没按停）。
+  ///    ⚠️ 开不起来时由界面**说明白并收场**（见 `widgets/voice_try.dart`）——
+  ///       绝不假装还在录。
+  final bool openNextRound;
+}
+
+/// **收下识别那一头发来的一帧**（这一场录音的规矩）。
 ///
 /// 🔴 认不出来的分两种，**分开办**：
 ///   · **形状都不对**（不是一个表）⇒ 说一句实话（[voiceTryBadFrame]），
@@ -70,13 +95,35 @@ String voiceTryNotice(Hearing h, {required bool hasOwn}) {
 ///   · **类型不认识**（对面以后加的新事件）⇒ **什么都不做**（不猜、不假装）——
 ///     这条纪律在 `Hearing.event` 里，与聊天那颗话筒完全同一条。
 ///
+/// 🔴 `asr/end` 在这一屏**分两种意思**（这是这一批的核心）：
+///   · 用户**还没按停**（`listening`）⇒ 那是**引擎把这一段说完了**：
+///     把这一轮的字落定（`Hearing.roundEnded`）、`openNextRound: true`，
+///     这一场继续 —— 框里的字**接在后面长**，不是重来；
+///   · 用户**已经按停**（`finishing`）⇒ 这一场到此为止：定稿收场
+///     （`Hearing.done`），字留着。⚠️ 这里**不认服务端那个 reason**
+///     （正常按停时它也给 `upstream`）：是不是"这一场的结束"由**用户的手**
+///     决定，不由引擎那句话决定。
+///
 /// ⚠️ 它**绝不抛**：一个坏帧不该把这一屏打掉。
-Hearing voiceTryFrame(Hearing h, Object? raw) {
-  if (raw is Map<String, dynamic>) return h.event(raw);
-  if (!h.busy) return h;
-  return Hearing(
-    phase: HearingPhase.failed,
-    segments: h.segments,
-    why: voiceTryBadFrame,
-  );
+VoiceTryStep voiceTryStep(Hearing h, Object? raw) {
+  if (raw is! Map<String, dynamic>) {
+    // 形状都不对：没在试的时候一律不管；在试 ⇒ 说明白，而且字一个都不许丢。
+    if (!h.busy) return VoiceTryStep(h);
+    return VoiceTryStep(h.badFrame(voiceTryBadFrame));
+  }
+  if (raw['type'] == 'asr/end' && h.busy) {
+    final text = (raw['text'] as String?) ?? '';
+    final rawIndex = raw['index'];
+    final withTail = h.finalText(text, index: rawIndex is int ? rawIndex : 0);
+    if (h.phase == HearingPhase.listening) {
+      // 引擎自己收尾（用户没按停）⇒ 落字 ＋ 开下一轮，**这一场没完**
+      return VoiceTryStep(withTail.roundEnded(), openNextRound: true);
+    }
+    // 用户按了停 ⇒ 正常收场，字留着
+    return VoiceTryStep(withTail.done());
+  }
+  return VoiceTryStep(h.event(raw));
 }
+
+/// 只要状态（旧名字，判据与界面都还能用）。
+Hearing voiceTryFrame(Hearing h, Object? raw) => voiceTryStep(h, raw).heard;
