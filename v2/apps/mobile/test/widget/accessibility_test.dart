@@ -37,6 +37,7 @@ import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/timeline.dart';
 import 'package:hupo_app/models/tool_row.dart';
 import 'package:hupo_app/models/tool_row_words.dart';
+import 'package:hupo_app/models/queue_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/widgets/bubbles.dart';
@@ -58,6 +59,7 @@ import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/notice.dart';
+import 'package:hupo_app/widgets/queue_strip.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// D3.5 点名的五档。
@@ -537,6 +539,29 @@ String _foldLabel() => dshTurnProcessLabel(
   turnProcessChatWords,
 );
 
+// ── ★ `117`：排队那条横条（契约 `docs/dev/117-QUEUE-VISIBLE.md`）──────────
+//
+// ⚠️ 和 `116` 那几格同一条理由：**新加的界面必须也过这两道硬闸**
+//    （五档不溢出 + 命中区 ≥44），不然"五档不溢出"会随时间失效。
+// ⚠️ 它走**真入口**（`controller.ingest` 喂那一帧）—— 不直接 pump `QueueStrip`：
+//    那样它底下没有聊天屏，量的就不是用户真会看到的那棵树。
+// ⚠️ 三种状态各量一次：**一条**（内联那一行）· **三条折着**（只有抬头）·
+//    **三条展开**（抬头 ＋ 每一行那颗撤掉按钮）—— 它们是不同的树。
+
+/// **只有排队那一格**（`n` 条）。
+ChatController _queueOnly(int n) {
+  final c = _trashController();
+  c.ingest({
+    'type': 'queue/changed',
+    'items': [
+      for (var i = 0; i < n; i += 1)
+        {'messageId': 'm_$i', 'text': '这一件还排着：第 $i 件', 'at': 1790 + i, 'truncated': false},
+    ],
+    'count': n,
+  });
+  return c;
+}
+
 /// **像用户那样**把时间线拉回最上面。
 ///
 /// ⚠️ 必须的一步：打开就停在最新那一条（`27-SCROLL.md`），3.1x 下头几格会被
@@ -905,6 +930,33 @@ void main() {
         // 负向对照：折起来就必须**真的少画**（不然量的是"没折"的样子）
         expect(find.text('bash'), findsNothing, reason: '★ 折起来之后那一行不该还在树里');
         expect(_drain(tester), isEmpty, reason: '折叠控件在 ${s}x 溢出了');
+      });
+
+      testWidgets('主界面 @ ${s}x（排队横条·一条 —— 117 新加的）', (tester) async {
+        final c = _queueOnly(1);
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        // 负向对照：**那一格真的画出来了**才算数
+        expect(find.byKey(queueStripKey), findsOneWidget, reason: '★ 排队横条没进这棵树');
+        expect(find.byTooltip(queueCancelLabel), findsOneWidget);
+        expect(_drain(tester), isEmpty, reason: '排队横条（一条）在 ${s}x 溢出了');
+      });
+
+      testWidgets('主界面 @ ${s}x（排队横条·三条折着 —— 117 新加的）', (tester) async {
+        final c = _queueOnly(3);
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        expect(find.byKey(queueHeaderKey), findsOneWidget, reason: '★ 那条计数抬头没进这棵树');
+        expect(find.text(queueCountHeader(3)), findsOneWidget);
+        expect(_drain(tester), isEmpty, reason: '排队抬头在 ${s}x 溢出了');
+      });
+
+      testWidgets('主界面 @ ${s}x（排队横条·三条展开 —— 117 新加的）', (tester) async {
+        final c = _queueOnly(3);
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        await tester.tap(find.byKey(queueHeaderKey));
+        await tester.pumpAndSettle();
+        // 负向对照：展开之后每一行那颗撤掉按钮都真的在
+        expect(find.byTooltip(queueCancelLabel), findsNWidgets(3), reason: '★ 展开没成');
+        expect(_drain(tester), isEmpty, reason: '排队横条（展开）在 ${s}x 溢出了');
       });
 
       testWidgets('主界面 @ ${s}x（出处那几行拉满 —— 2026-09-23 新加的）', (tester) async {
@@ -1435,6 +1487,26 @@ void main() {
         await _toTop(tester);
         expect(find.text(_foldLabel()), findsOneWidget, reason: '★ 折叠控件没进这棵树');
         await sweep(tester, '折叠控件 @${s}x');
+      });
+
+      testWidgets('排队横条的撤掉按钮（从真入口进·一条）@ ${s}x', (tester) async {
+        // ⚠️ `117`：那一行上那颗撤销按钮必须进这份扫描 ——
+        //    它正是"要真按下去"的那一下（D3.6 就是"命中区 ≥44"）。
+        final c = _queueOnly(1);
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        expect(find.byKey(queueStripKey), findsOneWidget, reason: '★ 排队横条没进这棵树');
+        await sweep(tester, '排队横条（一条）@${s}x');
+      });
+
+      testWidgets('排队横条的抬头 ＋ 每行撤销（从真入口进·三条展开）@ ${s}x', (tester) async {
+        // ⚠️ `117`：抬头（`TextButton`）与**每一行**那颗撤销（`IconButton`）
+        //    是两套控件 —— 不单独泵一次、不展开，它们的命中区没人量。
+        final c = _queueOnly(3);
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        await tester.tap(find.byKey(queueHeaderKey));
+        await tester.pumpAndSettle();
+        expect(find.byTooltip(queueCancelLabel), findsNWidgets(3), reason: '★ 展开没成');
+        await sweep(tester, '排队横条（展开）@${s}x');
       });
     }
 

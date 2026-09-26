@@ -10,6 +10,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../models/conn_state.dart';
+import '../models/chat_queue.dart';
 import '../models/export.dart';
 import '../models/hearing_session.dart';
 import '../models/job_ask.dart';
@@ -489,6 +490,34 @@ class ChatController extends ChangeNotifier {
     for (final it in items)
       if (it is TimelineTurnUsage && it.turn == turn) it.attempt,
   ]);
+
+  // ── ★ `117`：排队看得见、撤得掉（主人 2026-09-26）────────────────
+  //
+  // 他在琥珀还在做上一件事的时候又发了一句 —— 服务端**早就**把那一句排队了
+  // （`dispatcher.js` 的 `#delivered` 票），可屏幕上**一个字都没有**：
+  // 他既看不见自己还排着什么，也撤不掉。
+  // 这一节把那本账接到界面上：一条**读**（[queue]）＋ 一条**写**（[unsay]）。
+
+  /// **这一间现在排着什么**（`queue/changed` 那一帧）。
+  ///
+  /// ⚠️ 它取的是**现在这一间**的那份（一间一份，住在 [`Timeline`] 里）——
+  ///    与 `items` / 那条流 / 那句 say **同一个 scope**，不会串到别间去。
+  /// ⚠️ **瞬态**：刷新之后靠服务端在 `client/hello` 那一刻现发的那份快照重建
+  ///    （队列本身是**进程内**的：进程重启就没了 —— 那是如实的，不是缺陷）。
+  ChatQueue get queue => timeline.queue;
+
+  /// ★ **撤掉排队里那一句**（契约 §二 · 客户端→服务端 `{"t":"unsay","messageId":"m_…"}`）。
+  ///
+  /// 🔴 **不做乐观删除**：这里只发那一帧，屏幕上那一行**等新快照回来**才消失
+  ///    —— 因为"到底撤没撤掉"只有服务端知道（那一句可能**已经在跑了**，
+  ///    那时服务端什么都不做，而屏幕上把它抹掉就是**说假话**）。
+  /// ⚠️ 没连着（流断了）⇒ 发不出去 ⇒ 那一行**留着**（他再按一次就行）；
+  ///    这里**不新造一句话**（"没撤掉"这件事由那一行还在屏幕上如实说）。
+  /// @returns 那一帧发出去了没有（界面对它**不做**任何乐观处理，只做诊断/判据）。
+  bool unsay(String messageId) {
+    final s = _stream;
+    return s != null && s.unsay(messageId);
+  }
 
   /// **现在这一份计划**（harness 自己的目标 / 任务清单）—— 没有就 `null`。
   ///
@@ -1478,6 +1507,13 @@ class ChatController extends ChangeNotifier {
         // 服务端**明说这一句没收下**（它满了，不是网的事、也不是令牌的事）
         // ⇒ 落 `failed`：屏幕上就是「没发出去」+「重发」，
         //   **用户可以就地重来**——那正是 N11 要的"可重试"。
+        //
+        // 🔴 **`117`：它和"排队"是两件事，别混。**
+        //    · 这一档是**内存准入闸**（`admission.js` / `08-SPEC.md` §9.1）：
+        //      这一句**根本没被收下**（`say.say()` 都没调）⇒ 屏幕上「没发出去」；
+        //    · "排队"是这一句**已经收下了、落盘了**，只是还没轮到它变成一轮
+        //      （`dispatcher.js` 的 `#delivered` 票）⇒ 屏幕上那条 `QueueStrip`。
+        //    ⇒ 这一档**进不了队列**，也**不该**被画成"排队中"（那是两句不同的话）。
         room.timeline.setLocalState(messageId, MessageState.failed);
         // 顶部状态条要说出**为什么**（N11：拒绝必须给人话，不是静默）。
         // ⚠️ 用词两条线：① 不许有内部词（`forbidden_words.dart` 那道闸守着）；

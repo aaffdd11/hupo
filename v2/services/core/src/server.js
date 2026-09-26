@@ -35,6 +35,10 @@ import { MAIN_SCOPE, parseScope } from './worlds.js';
 //   判断那几件（收帧 / 该不该反问）住在 `focus.js`（纯函数，能反着验）。
 import { focusAskText, parseFocusFrame, routeTarget, FOCUS_UNKNOWN } from './focus.js';
 import { jobAnswerAckEvent, parseJobAnswerFrame } from './job.js';
+// ★ `117`：排队那一帧（契约 `docs/dev/117-QUEUE-VISIBLE.md`）——
+//   形状只从 `queue.js` 来；这里只做两件事：认那一帧"撤一句"，以及在
+//   `client/hello` 那一刻现发一份**快照**（瞬态帧不重放，重连/刷新只能靠它重建）。
+import { parseUnsayFrame, queueChangedEvent } from './queue.js';
 // 事件属不属于这一间 —— **只有这一处**（`ScopeView` 与这里共用它）。
 import { eventInScope } from './timeline.js';
 // ⚠️ 只借它**校验手机号形状**（`/api/send-code` 用）；模块本身不碰用户表
@@ -2225,6 +2229,24 @@ const TENANT_ROUTES = [
       focus,
     });
 
+    // ★ **`117`：这一刻那间还排着什么 —— 现发一份快照**（契约 §一）。
+    //
+    //   🔴 **为什么必须有它**：`queue/changed` 是**瞬态**的（不占号、不落盘、
+    //      重连不重放）⇒ 刷新 / 断线重连之后，客户端手上那份队列就没了。
+    //      这一份快照是它**唯一**能把那条"还在排着"的横条重建起来的东西。
+    //   🔴 **如实说**：队列是**进程内、按房间**的 —— 进程 / host 一重启就没了。
+    //      DSH 自己的文档也写着它那个控制面基线**不能跨宿主重启重建**；
+    //      我们这一份同理，这里能给的只是"我现在手上有什么"，不是"你关机时留着什么"。
+    //   ⚠️ 顺序：紧跟在 `client/hello` 之后、**订阅实时之前**（这一段是同步的 ⇒
+    //      Node 单线程，中间插不进一条队列变化 —— 与上面补发那一段同一条保证）。
+    //   ⚠️ 直发（不走 `ScopeView`）⇒ **`scopeId` 自己带上**（主线也带 `'main'`，
+    //      客户端的 `eventInScope` 认 `main`）。
+    {
+      const q =
+        typeof world?.dispatcher?.queueItemsOf === 'function' ? world.dispatcher.queueItemsOf(focus) : null;
+      send({ ...queueChangedEvent({ items: q?.items ?? [] }), scopeId: focus });
+    }
+
     // ── 实时：**订阅那条日志，按焦点筛**（判据 F3）──────────────────
     //
     // 🔴 这就是 84 §四① 落在代码上的那一行：
@@ -2263,6 +2285,28 @@ const TENANT_ROUTES = [
             text: r?.ok === true ? null : (r?.text ?? null),
           }),
         );
+        return;
+      }
+      const unsay = parseUnsayFrame(raw);
+      if (unsay) {
+        // ★ **`117`：他撤掉了排队里那一句**（契约 `docs/dev/117-QUEUE-VISIBLE.md` §二）。
+        //   🔴 **走同一条流**（不新开 HTTP 路由 —— 与 `job-answer` 同一条纪律）：
+        //      排队那一帧本来就是这条流上的，撤它也从同一条回去。
+        //   🔴 **没有错误面**：那一句要是**已经被认领**（那一轮正用着）或者根本不认识，
+        //      就**什么都不做** —— 不报错、不回一句我们编的话。
+        //   那两档都要让客户端**收敛**：认领/不认识 ⇒ 这里现发一份**当前焦点**的快照
+        //   （摘掉那一档由那一间自己报，见 `worlds.js` 的 `onQueueChanged`）。
+        const d = world?.dispatcher;
+        let removed = false;
+        try {
+          removed = d?.unsay?.(unsay.messageId)?.removed === true;
+        } catch {
+          /* 撤不掉不许把这条连接带走（下一帧还会来） */
+        }
+        if (!removed) {
+          const q = typeof d?.queueItemsOf === 'function' ? d.queueItemsOf(focus) : null;
+          send({ ...queueChangedEvent({ items: q?.items ?? [] }), scopeId: focus });
+        }
         return;
       }
       const frame = parseFocusFrame(raw);

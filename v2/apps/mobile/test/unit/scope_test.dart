@@ -125,6 +125,17 @@ class _FakeStream implements StreamClient {
   /// 判据要读的账：每次答话（号, 是/否）。
   final List<(String, bool)> answers = [];
 
+  /// ★ **契约 117**：撤掉排队里那一句（走同一条流）。
+  @override
+  bool unsay(String messageId) {
+    if (messageId.trim().isEmpty) return false;
+    unsays.add(messageId.trim());
+    return !closed;
+  }
+
+  /// 判据要读的账：每次撤一句（号）。
+  final List<String> unsays = [];
+
   /// 判据用：从"服务端"推一帧进来（走和真那条一样的入口）。
   void push(Map<String, dynamic> e) => _events.add(e);
 

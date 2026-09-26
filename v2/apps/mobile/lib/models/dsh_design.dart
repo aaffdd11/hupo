@@ -534,3 +534,23 @@ const double dshOpaqueBodyMaxHeight = 141;
 /// ⚠️ 同 [dshOpaqueBodyMaxHeight]：**有界 ≠ 截断** —— 超了在框里滚。
 ///    真被服务端截过的那一段另有话要说（`tool_row_words.dart` 的截断那句）。
 const double dshToolBodyMaxHeight = 260;
+
+/// **排队那一块列表的最高高度**（DSH QueueDock 的 `list{max-height:180px}`）。
+///
+/// 出处：`docs/dev/115-raw/B-render.md` §3.3（*"CSS: panel `border-radius: 12px 12px 0 0`;
+/// list `max-height: 180px`; row `height: 36px`"*）。
+///
+/// ⚠️ **只搬了这一条**：DSH 那个 `row height: 36px` **故意没搬** ——
+///    我们的行里有一个**命中区 ≥44** 的撤掉按钮（D3.6），把行写死 36 就会
+///    在大字号下夹住字（D3.5："容器跟字算，不是字跟容器"）。
+/// ⇒ 行高**跟字算**，列表**有界**（超了在框里滚，与工具行那条同一条纪律）。
+const double dshQueueListMaxHeight = 180;
+
+/// **排队那一块列表相对屏高的上限比例**（超过 180 像素那一档时按屏裁）。
+///
+/// 🔴 **为什么不能只用那个 180 像素的上限**：字号调到最大那一档时，一行文字本身
+///    就有几十像素，几条排下来会把聊天区挤成一条缝 —— `accessibility_test.dart`
+///    那道硬闸（D3.5 五档不溢出）当场红（真栽过：3.1 倍下溢出 23 像素）。
+///    ⇒ 列表取 `min(180, 屏高 × 这个比例)`：正常档就是 180（与 DSH 同值），
+///      大字/矮屏下按屏裁 —— 上限的意思本来就是"**不许把别的挤没**"。
+const double dshQueueListMaxHeightFactor = 0.2;

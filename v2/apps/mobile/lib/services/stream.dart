@@ -125,6 +125,29 @@ class StreamClient {
   /// 见构造函数里的说明：只为判据而存在的注入口。
   final Future<TokenProbe> Function(String token)? probe;
 
+  /// ★ **撤掉排队里那一句**（契约 `docs/dev/117-QUEUE-VISIBLE.md` §二）。
+  ///
+  /// 🔴 **走同一条流**（不新开 HTTP 路 —— 与 `job-answer` 同一条纪律）：
+  ///    排队那一帧本来就是这条流上的，撤它也从同一条回去。
+  /// 🔴 **没有错误面**：那一句要是**已经被认领**（那一轮正用着）或者根本不认识，
+  ///    服务端**什么都不做**，只回一份新快照 ⇒ 这边也不需要任何"失败"分支。
+  ///
+  /// @returns 发出去了没有。`false` = 没连着 / 号是空的 ⇒ 调用方**如实留着那一行**
+  ///          （他再按一次就行），绝不假装撤掉了。
+  bool unsay(String messageId) {
+    final want = messageId.trim();
+    if (want.isEmpty) return false;
+    if (_state != ConnState.connected || _ch == null) return false;
+    try {
+      _ch?.sink.add(jsonEncode({'t': 'unsay', 'messageId': want}));
+      return true;
+    } catch (_) {
+      // 发不出去 = 这条连接已经不行了（重连那条路会把它接上；
+      // 而队列的真相在服务端，重连那一刻会现发一份快照）。
+      return false;
+    }
+  }
+
   final _events = StreamController<Map<String, dynamic>>.broadcast();
   final _states = StreamController<ConnState>.broadcast();
 

@@ -29,6 +29,8 @@ import { Apps, APPS_REL, REFUSED_APP_IDS, REMOVED_DIRNAME } from './apps.js';
 import { appUpdateAvailableEvent } from './app-events.js';
 import { appWorkspaceChangedEvent } from './app-live.js';
 import { appFailText } from './app-fail-words.js';
+// ★ `117`：排队那一帧的**形状**只从 `queue.js` 来（别在这儿再拼一遍字段）。
+import { queueChangedEvent } from './queue.js';
 import { RoomReclaimError, readReclaimedSeqs, reclaimScope } from './reclaim.js';
 import { AppWorkspaces, checkScope, scopeDirFor, safeScope, workspacesRoot } from './workspace.js';
 import { AppsSocket, appsSocketPath } from './apps-socket.js';
@@ -881,6 +883,26 @@ export class Worlds {
       //   🔴 只记域名与量（不记正文）；回调失败不挡轮（`EgressLog.note` 自己吞）。
       onEgress: ({ entries }) => {
         egress.noteAll(entries);
+      },
+      /**
+       * ★ **`117`：排队那一帧从这里接上**（契约 `docs/dev/117-QUEUE-VISIBLE.md` §一）。
+       *
+       * 🔴 **接到"那一间的视图"上**（`#viewFor`，与 `emitLiveChange` / `onInstalled` 同一处）：
+       *    帧自动带上 `scopeId = 那一间` ⇒ 实时那一侧按焦点路由（`server.js` 的
+       *    `eventInScope`）——**只有正开着这一间的那条连接收得到**。别的房间、没开着的
+       *    一个字节都收不到（判据 Q2 的反例）。
+       * 🔴 **瞬态**（`emitTransient`）：不占号、不落盘、重连**不重放**。
+       *    队列本身是**进程内**的 ⇒ 进程 / host 一重启就没了 —— 这是**如实的行为**
+       *    （DSH 自己的文档也写着：控制面那个基线**不能跨宿主重启重建**），
+       *    不是缺陷；重连 / 刷新之后那份快照由 `server.js` 在 `client/hello` 那一刻现发。
+       * ⚠️ 报不出去**不许**把那一轮弄坏（与 `onUsage`/`onEgress` 同一条纪律）。
+       */
+      onQueueChanged: ({ scopeId, items }) => {
+        try {
+          this.#viewFor(t.userId, scopeId ?? MAIN_SCOPE).emitTransient(queueChangedEvent({ items }));
+        } catch (err) {
+          this.#warn(`  ⚠️ ${t.userId} 的排队没说出去：${err?.message ?? err}`);
+        }
       },
       // ★ **D 期**（契约 `100`）：转交那本账 ＋ "这一间存在吗"那个判据。
       //   🔴 `scopeExists` **只查、不建**（D-3：转交给一间不存在的房 ⇒ 拒，

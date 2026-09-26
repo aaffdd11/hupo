@@ -11,6 +11,7 @@
 //
 // ⚠️ 纯逻辑，**不许 import flutter/material**（禁令 1）。要进 `test/unit` 硬闸。
 
+import 'chat_queue.dart';
 import 'message_state.dart';
 import 'notice.dart';
 import 'process_words.dart';
@@ -417,6 +418,21 @@ class Timeline {
   ///
   /// ⚠️ 它同样是"只在内存里"（不占号、不进存储）。
   String _pendingReasoning = '';
+
+  /// ★ **`117`：这一间现在排着什么**（`queue/changed`，契约 `docs/dev/117-QUEUE-VISIBLE.md`）。
+  ///
+  /// 🔴 **它是一条"跨帧的快照"，不是时间线条目**：
+  ///    · 那一帧是**瞬态**的（服务端 `emitTransient`：不占号、不落盘、重连**不重放**）
+  ///      ⇒ 它**进不了** `_items`（进去就是"屏幕上多出一条谁也看不见的东西"）。
+  ///    · 所以它住在这儿：**一间一份**（`Timeline` 本来就是一间一份），
+  ///      由 `_applyTransient` 整份换掉。
+  /// ⚠️ **`reset()` 故意不清它**：它不是从那条日志重放出来的（是服务端现推的快照），
+  ///    `reset()` 清的是"上一个世界重放出来的东西"。清掉它反而会让那条横条
+  ///    在没有新帧的时候凭空消失 —— 那是屏幕上说假话。
+  ChatQueue _queue = ChatQueue.empty;
+
+  /// 这一间现在排着什么（一条都没有 ⇒ [ChatQueue.empty]，界面**一个像素都不画**）。
+  ChatQueue get queue => _queue;
 
   /// **结果先到、调用还没到**的那几条 `tool/result`（键 = `callId`）。
   ///
@@ -863,6 +879,13 @@ class Timeline {
         //    所以它只在浮窗里喊一声（`ChatController` 那条路接住它）。
         //    这一句是**故意什么都不做**，不是漏了——写在这儿免得下一个人
         //    以为"应该在这儿加一条"。
+        return;
+      case 'queue/changed':
+        // ★ **`117`：这一间现在排着什么**（契约 `docs/dev/117-QUEUE-VISIBLE.md`）。
+        //   整份换掉（服务端每次报的都是**现在是这样**，不是增量）。
+        //   ⚠️ 认不出 ⇒ `null` ⇒ **不动**（留着手上那份，宁可旧一点也不编一份空的）。
+        final q = ChatQueue.of(event);
+        if (q != null) _queue = q;
         return;
       default:
         return;

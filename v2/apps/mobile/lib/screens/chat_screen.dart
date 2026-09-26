@@ -58,6 +58,7 @@ import '../widgets/mini_app_frame.dart';
 import '../widgets/composer.dart';
 import '../widgets/notice.dart';
 import '../widgets/process_level_menu.dart';
+import '../widgets/queue_strip.dart';
 import '../widgets/process_view.dart';
 import '../widgets/tool_row_view.dart';
 import '../widgets/trash_plan_sheet.dart';
@@ -1331,7 +1332,17 @@ class _ChatScreenState extends State<ChatScreen> {
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 760),
-        child: Composer(
+        // ★ **`117`：排队那条横条画在输入条**上面**、浮窗里面**（契约
+        //   `docs/dev/117-QUEUE-VISIBLE.md` §四）。空队时它一个像素都不占
+        //   （`QueueStrip` 自己画 `SizedBox.shrink()`）。
+        //   ⚠️ 它与 `SayBusy` **不是一回事**：那一档是**内存准入闸**（这一句根本
+        //      没被收下），而这里排着的每一句**都已经收下、都落盘了**，只是还没轮到
+        //      它变成一轮 —— 所以一个画在气泡上（"没发出去"），一个画在这儿（"排着"）。
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            QueueStrip(queue: c.queue, onCancel: c.unsay),
+            Composer(
           // ★ **这一行最前面那个图标：这句话是在哪儿说的**（桌面 = 家；进了小程序 = 它自己的图标）。
           //   ⚠️ 2026-09-24：聊天窗口收成**一行**之后，它从抓手行搬到了这一行的最前面
           //      （主人：*"homeicon 放在聊天窗口左边"*）。
@@ -1364,6 +1375,8 @@ class _ChatScreenState extends State<ChatScreen> {
             c.clearComposeDraft(); // 发出去了 ⇒ 上面那条草稿该消失
             c.send(text);
           },
+            ),
+          ],
         ),
       ),
     );
@@ -1873,7 +1886,13 @@ class _EmptyState extends StatelessWidget {
         padding: const EdgeInsets.all(32),
         child: ConstrainedBox(
           // 有地方 ⇒ 撑满并居中；没地方 ⇒ 内容说了算，滚
-          constraints: BoxConstraints(minHeight: cons.maxHeight - 64),
+          //
+          // 🔴 `117`：**必须夹到 ≥0**。原来直接写 `cons.maxHeight - 64` ——
+          //    分到的高度不足 64 时它就是个**负数**，而 `BoxConstraints` 一收到
+          //    负的 `minHeight` 当场抛（`negative minimum height`）。
+          //    真栽过：排队那条横条展开着 + 3.1 倍字号 ⇒ 这一块只分到 37.5 像素
+          //    ⇒ 负数约束 ⇒ 五档那道硬闸红。夹到 0 之后"地方不够就滚"照旧成立。
+          constraints: BoxConstraints(minHeight: (cons.maxHeight - 64).clamp(0.0, double.infinity)),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [

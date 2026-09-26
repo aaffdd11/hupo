@@ -27,6 +27,10 @@ import { JOB_ASK_TIMEOUT_MS, JOB_LINES, JOB_NUDGE_LINE, JOB_NUDGE_MAX, JOB_REPOR
 // ★ P1 时间分级（契约 `docs/dev/88-P1-TIME-WAIT.md`）：
 //   **逐件落盘**的活账（T2）、后台四句（T4）、承诺行与再报（T5）。
 import { WORK_STATES, isOpen, pairKey } from './worklog.js';
+// ★ **排队那一帧**（契约 `docs/dev/117-QUEUE-VISIBLE.md`）：队列**只报不改** ——
+//   FIFO、票/认领、`pendingDeliveries`、N19 收口**一个都没动**；这里只把
+//   `#delivered` 里**还没被认领**的那些话如实报出去（并把"撤一句"那颗按钮接上）。
+import { queueItemOf } from './queue.js';
 // ⚠️ 这四句是**我们自己说的话** ⇒ 一律走 `message/*`（不新造通道、不动冻结的 notice kind），
 //    并且出门之前过**时间词闸**（`assertBackedText`）。
 import {
@@ -150,6 +154,15 @@ class Session {
   #onUsage = null;
   /** ★ P2-8 出网留痕（见构造参数 `onEgress`）。不接 ⇒ 老行为。 */
   #onEgress = null;
+  /**
+   * ★ **排队那一帧的出口**（契约 `docs/dev/117-QUEUE-VISIBLE.md`）。
+   *
+   * 每一处**队列真的变了**的地方（投递进队 / 轮开始认领 / 投递失败被摘掉 /
+   * 超时收掉排队 / 撤掉一句）都从这里报一次**当前快照**。
+   * ⚠️ 与 `onUsage` / `onEgress` 同一条路：**旁路** —— 报不出去不许把那一轮弄坏。
+   * 不接 ⇒ 老行为（与改前逐字一致）。
+   */
+  #onQueueChanged = null;
   /**
    * 🔴 **B46 ①：说话之前让开发者入口让开这一间**（`(scopeId) => Promise|null`）。
    * 不接 ⇒ 老行为（宿主侧没有那个中继，一次都不问 —— L3）。
@@ -409,6 +422,14 @@ class Session {
      */
     onEgress = null,
     /**
+     * ★ **排队那一帧的出口**（契约 `docs/dev/117-QUEUE-VISIBLE.md`）：
+     *   每一处队列真的变了的地方 `({scopeId, items, count}) => void`。
+     *   `worlds.js` 把它接到**那一间的视图**上（`emitTransient` ⇒ 只推给正开着
+     *   这一间的那条连接）。⚠️ 与 `onUsage`/`onEgress` 同一条纪律：**旁路**，
+     *   回调失败不许挡这一轮。不接 ⇒ 老行为。
+     */
+    onQueueChanged = null,
+    /**
      * ★ **B46 ①：说话之前让开发者入口让开这一间**（`(scopeId) => Promise|null`）。
      *
      * 那个中继只活在**盒子**里（`serve.js` 只在容器那一支建它）—— 宿主上不接，
@@ -451,6 +472,7 @@ class Session {
     this.#onAuthFailure = onAuthFailure;
     this.#onUsage = onUsage;
     this.#onEgress = onEgress;
+    this.#onQueueChanged = onQueueChanged;
     // ★ B46 ①：那个"让开这一间"的动作（不接 ⇒ `null` ⇒ 一次都不问）
     this.#yieldRoom = typeof yieldRoom === 'function' ? yieldRoom : null;
     // ★ D 期：转交（一个人一本账 ＋ "这一间存不存在"那个判据）
@@ -623,6 +645,72 @@ class Session {
   /** 现在还没变成轮的那些话（诊断 / 验收用）。 */
   get pendingDeliveries() {
     return this.#delivered.filter((t) => !t.claimed).length;
+  }
+
+  /**
+   * ★ **排队那一帧的内容**（契约 `docs/dev/117-QUEUE-VISIBLE.md`）。
+   *
+   * 就是 `#delivered` 里**还没被认领**、**带 `messageId`** 的那些票，按 **FIFO**
+   * （最早投的那条在前）—— 与 `#claimDelivery()` 认领的次序**同一条**：
+   * 认领按 `seq` 取最早，这里也按 `seq` 排。**一处口径，不许另推一份**。
+   * ⚠️ `text` 截到 `QUEUE_TEXT_MAX` 个字符、截了如实标 `truncated`
+   *    （原话的前缀，不发明/不摘要）。⚠️ 它**只读**：不认领、不摘票、不改任何账。
+   */
+  get queueItems() {
+    const out = [];
+    for (const t of this.#delivered) {
+      const item = queueItemOf(t);
+      if (item) out.push({ item, seq: t.seq });
+    }
+    out.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+    return out.map((r) => r.item);
+  }
+
+  /**
+   * ★ **报一次"队列现在是这样"**（契约 §一）。
+   *
+   * 只在队列**真的变了**的地方调（投递进队 / 认领 / 摘票 / 收掉排队 / 撤一句）。
+   * ⚠️ 与 `#noteUsage()` 同一条纪律：**回调失败不许挡这一轮**（报告是旁路）。
+   */
+  #noteQueueChanged() {
+    if (!this.#onQueueChanged) return;
+    try {
+      const items = this.queueItems;
+      this.#onQueueChanged({ scopeId: this.#scopeId ?? 'main', items, count: items.length });
+    } catch {
+      /* 报告是旁路：它出事不许把用户那一轮弄失败 */
+    }
+  }
+
+  /**
+   * ★ **撤掉一句还没轮到它跑的**（契约 §二 · 客户端→服务端 `{"t":"unsay",…}`）。
+   *
+   * 🔴 **只在"还没被认领"时才摘**：一张票被 `#claimDelivery()` 认领之后
+   *    就已经从 `#delivered` 里拿走了（那一轮正在用它）⇒ 这里**结构上找不到它**，
+   *    于是"撤一句已经在跑的"什么都不做 —— 没有错误、没有回话（协议纪律：
+   *    这件事没有错误面）。认不出 / 空 id 同样什么都不做。
+   * ⚠️ 不管摘没摘到，都报一次**当前快照** ⇒ 客户端收敛（它手上那份可能是旧的）。
+   * @returns {boolean} 真摘掉了一张票没有（调用方据此判断要不要补一份收敛帧）
+   */
+  unsay(messageId) {
+    const want = typeof messageId === 'string' ? messageId.trim() : '';
+    let removed = false;
+    if (want !== '') {
+      const i = this.#delivered.findIndex((t) => !t.claimed && t.messageId === want);
+      if (i !== -1) {
+        this.#delivered.splice(i, 1); // 用掉了就拿走（与 `#claimDelivery` 同一条纪律）
+        removed = true;
+      }
+    }
+    this.#noteQueueChanged();
+    return removed;
+  }
+
+  /** 这一间里有没有"还没认领的某一句"（`Dispatcher.unsay` 找是哪一间时用）。 */
+  hasQueued(messageId) {
+    const want = typeof messageId === 'string' ? messageId.trim() : '';
+    if (want === '') return false;
+    return this.#delivered.some((t) => !t.claimed && t.messageId === want);
   }
 
   /** ★ P1：这一代 agent 的代号（配对键那一半 · 契约 §二.1）。 */
@@ -830,6 +918,8 @@ class Session {
     if (pick) {
       this.#delivered.splice(at, 1); // 用掉了就拿走（不然这个数组会一直长）
       pick.claimed = true;
+      // ★ `117`：一轮开始 = 队里少一条 ⇒ 如实报一次（他屏幕上那条排队就少一行）。
+      this.#noteQueueChanged();
     }
     return pick;
   }
@@ -1078,6 +1168,9 @@ class Session {
     this.#turnInput = '';
     const tickets = this.#delivered.filter((t) => !t.claimed);
     this.#delivered.length = 0;
+    // ★ `117`：排队的那些**一起没了**（它们不会再有下一轮）⇒ 如实报一次空队。
+    //   ⚠️ 只在**真的有过**时才报：本来就没有排队 ⇒ 队列没变，没什么可说的。
+    if (tickets.length > 0) this.#noteQueueChanged();
     for (const t of tickets) {
       try {
         this.#translator.turnUndelivered({ reason });
@@ -1306,6 +1399,8 @@ class Session {
       job: job === true,
     };
     this.#delivered.push(ticket);
+    // ★ `117`：投出去了、还没轮到跑 ⇒ 它就是"排队"里那一条，如实报一次。
+    this.#noteQueueChanged();
     // ★ P1：**票先落盘**（T1/T2）。票就是欠条：这张票一定有个配对终态。
     //   写不进去不许把回答带走（那句话已经落盘了）——但**必须报出来**。
     try {
@@ -1323,6 +1418,8 @@ class Session {
       // 没进去的就从队列里摘掉（摘不掉也只是多收一条，不会漏收）
       const i = this.#delivered.findIndex((t) => t === ticket);
       if (i !== -1) this.#delivered.splice(i, 1);
+      // ★ `117`：投递失败 ⇒ 它**不再排队**了，如实报一次（队里少一条）。
+      this.#noteQueueChanged();
       // ★ P1：投不出去 ⇒ 这张票也有终态（不许留一张永远不配对的欠条）。
       try {
         this.#work?.closeByRef({
@@ -1574,6 +1671,10 @@ class Session {
       claimed: false,
     };
     this.#delivered.push(t);
+    // ★ `117`：接下的这件也是"投出去了、还没轮到跑" ⇒ 与 `deliver` 同一条，
+    //   如实报一次（`text` 那一格是**这一侧拼的交接包**，不是主人那句原话 ——
+    //   队列报的是"排着的是什么"，这里排的就是它）。
+    this.#noteQueueChanged();
     try {
       // ★ **这一件活记在接活那一间头上**（审计/用量）：`ref` 仍是**那一条消息**
       //   （所以"他问的那件事怎么样了"照样答得出同一条）。
@@ -1592,6 +1693,8 @@ class Session {
     } catch (err) {
       const i = this.#delivered.indexOf(t);
       if (i !== -1) this.#delivered.splice(i, 1);
+      // ★ `117`：交接包没送出去 ⇒ 它不在队里了，如实报一次。
+      this.#noteQueueChanged();
       this.#lastError = `交接包没送出去：${err?.message ?? err}`;
       // ⚠️ **不许静默**：这一轮没能接上 ⇒ 那条消息必须收口（N19），
       //    而且要说清"我这边没接上"（与别处起不来时同一句）。
@@ -1720,6 +1823,12 @@ export class Dispatcher {
   #onEgress;
 
   /**
+   * ★ **排队那一帧的出口**（见 `Session` 的 `onQueueChanged`）——每个用户一份，
+   * 所有会话共用；`worlds.js` 把它接到**那一间的视图**上（`emitTransient`）。
+   */
+  #onQueueChanged;
+
+  /**
    * 🔴 **B46 ①：让开发者入口让开这一间**（见 `Session` 的 `yieldRoom`）——
    * 每个用户一份（盒里只有那台中继），所有会话共用。
    */
@@ -1824,6 +1933,7 @@ export class Dispatcher {
     this.#onUsage = args.onUsage ?? null;
     // ★ P2-8：出网留痕同理（一个人一份，房间里的出网也记到同一个人头上）。
     this.#onEgress = args.onEgress ?? null;
+    this.#onQueueChanged = args.onQueueChanged ?? null;
     // ★ B46 ①："让开发者入口让开这一间"那个动作（宿主上不接 ⇒ `null`）。
     this.#yieldRoom = typeof args.yieldRoom === 'function' ? args.yieldRoom : null;
     // ★ **D 期：转交 / 焦点 / 未读**（一个人各一份；见各字段的说明）。
@@ -1990,6 +2100,9 @@ export class Dispatcher {
       onUsage: this.#onUsage,
       // ★ P2-8：**每一个房间**的出网痕迹都记到同一个人头上（留痕只分人，不分房间）。
       onEgress: this.#onEgress,
+      // ★ `117`：**每一个房间**的排队都报到**它自己那条视图**上（`worlds.js` 接线）——
+      //   只推给正开着这一间的那条连接，别的房间 / 没开着的收不到。
+      onQueueChanged: this.#onQueueChanged,
       // ★ B46 ①：**每一间**说话之前都要先让开发者入口让开那一间
       //   （⚠️ 这一段特别容易漏 —— `worlds.js` 顶上就记着"接线的一段断了而闸全绿"的教训）。
       yieldRoom: this.#yieldRoom,
@@ -2080,6 +2193,39 @@ export class Dispatcher {
 
   get pendingDeliveries() {
     return this.#main.pendingDeliveries;
+  }
+
+  /**
+   * ★ **某一间现在排着什么**（契约 `docs/dev/117-QUEUE-VISIBLE.md` §一）。
+   *
+   * 给"连上 / 重连那一刻的**快照**"用（瞬态帧不会重放 ⇒ 那一条只能现取）。
+   * 认不出那一间 ⇒ `null`（**不许悄悄落到主线** —— 与 `deliver` 同一条纪律）。
+   * @returns {{items: Array<object>, count: number}|null}
+   */
+  queueItemsOf(scope = null) {
+    const s = this.sessionFor(scope);
+    if (!s) return null;
+    const items = s.queueItems;
+    return { items, count: items.length };
+  }
+
+  /**
+   * ★ **撤掉一句还没轮到它跑的**（契约 §二）。
+   *
+   * 走**已有的**那条流回去（`server.js` 认 `{"t":"unsay",…}`），这里只做两件事：
+   *   · 从**持有那张票的那一间**摘掉它（一张票只属于一间 ⇒ 找到就停）；
+   *   · 那一间自己报一次快照（见 `Session.unsay` / `#noteQueueChanged`）。
+   * 🔴 **找不到 / 已经被认领 ⇒ `removed:false`，什么都不做**（没有错误面）。
+   * @returns {{scope: string|null, removed: boolean}}
+   */
+  unsay(messageId) {
+    const want = typeof messageId === 'string' ? messageId.trim() : '';
+    if (want === '') return { scope: null, removed: false };
+    for (const s of this.#sessions.values()) {
+      if (!s.hasQueued(want)) continue;
+      return { scope: s.scopeId ?? null, removed: s.unsay(want) };
+    }
+    return { scope: null, removed: false };
   }
 
   get armedDeadlines() {

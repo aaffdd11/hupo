@@ -75,6 +75,16 @@ class _FakeStream implements StreamClient {
     return true;
   }
 
+  /// ★ **契约 117**：撤掉排队里那一句（走同一条流）。
+  @override
+  bool unsay(String messageId) {
+    unsays.add(messageId);
+    return true;
+  }
+
+  /// 判据要读的账：每次撤一句。
+  final List<String> unsays = [];
+
   @override
   void close() {}
   @override

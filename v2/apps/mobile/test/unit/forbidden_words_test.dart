@@ -18,6 +18,7 @@ import 'package:hupo_app/models/login_words.dart';
 import 'package:hupo_app/models/notice_words.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/process_words.dart';
+import 'package:hupo_app/models/queue_words.dart';
 import 'package:hupo_app/models/source_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/speak_words.dart';
@@ -278,6 +279,15 @@ void main() {
       desktopRemoveCancel,
       desktopRemoveDone,
       desktopRemoveFailed,
+      // ★ 2026-09-26（契约 `docs/dev/117-QUEUE-VISIBLE.md`）：排队那条横条上的字
+      //    —— **直接引数据源**（手抄会漂）。
+      //    ⚠️ 这一批最容易混进来的是"队列 / 等待 / 还没发"那类说法；
+      //       允许的是他自己的话："排队 / 不发了"。
+      queueCountHeader(0),
+      queueCountHeader(2),
+      queueCancelLabel,
+      queueExpandLabel,
+      queueCollapseLabel,
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

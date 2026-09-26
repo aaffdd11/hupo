@@ -6,6 +6,35 @@
 > 为什么要有这一页：这套手册的价值全在"**它是唯一说法**"。
 > 一旦同一个问题在两处有不同答案，它就退化成又一份参考文档。
 
+> ## v1.87 · **排队看得见、撤得掉：§2.2 加 `queue/changed` 与客户端帧 `unsay`**（2026-09-26 · 接着「聊天窗口重做」第二批）
+>
+> **改了什么**：
+> ① `08-SPEC.md` **§2.2** 新增一行：下行**瞬态**事件 `queue/changed`
+>    （`{type, items:[{messageId,text,at,truncated}], count}` ＋ `scopeId = 那一间`）
+>    ＋ 上行客户端帧 `{"t":"unsay","messageId":"m_…"}`（**走 `/api/stream`，不新开 HTTP 路由**）；
+> ② 服务端新 `src/queue.js`（那一帧的**形状与认法**唯一出处）＋ `src/dispatcher.js` 的
+>    `queueItems` / `onQueueChanged` 出口 / `unsay()` ＋ `src/worlds.js` 把它接到**那一间的视图**上
+>    ＋ `src/server.js`（认那一帧、并在 `client/hello` 那一刻现发一份**快照**）；
+> ③ 客户端 `lib/models/chat_queue.dart` · `lib/models/queue_words.dart` · `lib/widgets/queue_strip.dart`
+>    ＋ `timeline.dart` / `chat_controller.dart` / `stream.dart` / `chat_screen.dart` 接线。
+>
+> **为什么**：主人在琥珀还在做上一件事的时候又发一句时，服务端**早就**把它排队了
+> （`dispatcher.js` 的 `#delivered` 票；DSH 实测 `agent/inbox/spliced {target:"next-turn"}`），
+> 可屏幕上**一个字都没有** —— 他既看不见自己还排着什么，也撤不掉。
+> 研究（`docs/dev/115-DSH-WINDOW-PARITY.md` §一.5 · `115-raw/B-render.md` §3.3）里 DSH 的形状是
+> **QueueDock**：一条内联、两条以上折在计数抬头后面、每行可撤 —— 这一版把它补上。
+>
+> 🔴 **瞬态 ＋ 进程内**：队列是**按房间、住在进程里**的 ⇒ 进程/host 一重启就没了。
+> 这是**如实的行为**（DSH 自己的文档也写着：控制面那个基线**不能跨宿主重启重建**），
+> 不是缺陷；⇒ 刷新/重连之后靠 `client/hello` 那一刻的**快照**重建。
+> 🔴 **撤一句只在"还没被认领"时有效**：已经在跑的那一句**没有错误面**（什么都不做、回一份新快照）。
+> 🔴 **这一批只报不改**：FIFO、票/认领、`pendingDeliveries`、N19 收口**一个字都没动**。
+>
+> **判据**：`v2/services/core/test/queue.test.js`（Q1–Q7，每条带反例）·
+> 客户端 `test/unit/chat_queue_test.dart` · `test/widget/queue_strip_test.dart` ·
+> `test/widget/accessibility_test.dart`（五档不溢出 ＋ 命中区 ≥44）· `docs/dev/117-QUEUE-VISIBLE.md`（契约）。
+> ⚠️ 改的是 **strict** 文件 ⇒ **要重建开机清单**。
+
 > ## v1.86 · **「首先全部开放，聊天窗口的设计也要重做」：§2.2 加四条事件（工具行 / 结果 / 每轮用量 / 系统提示词）＋ D1.1 在聊天窗口上放开**（2026-09-26 · 主人亲口定的产品形状）
 >
 > **改了什么**：
