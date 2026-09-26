@@ -22,6 +22,7 @@ import 'package:flutter/material.dart';
 
 import '../models/process_levels.dart';
 import '../models/process_words.dart';
+import 'dsh_look.dart';
 import '../models/timeline.dart';
 import 'bubbles.dart';
 
@@ -88,8 +89,11 @@ class _StepLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final word = processWord(step.state)!;
-    // 图标跟着字号走（不写死尺寸）
-    final iconSize = theme.textTheme.bodySmall!.fontSize! + 4;
+    // ★ **`119`：字号跟着用户在设置里选的那一档走**（改前走的是 Material 的
+    //    `bodySmall` ⇒ 颜色跟着外观变了、字号不跟 —— 这是那一批留下的最后一道口子）。
+    //    档位用 DSH 的**二级台阶**（"比正文低一档"），图标跟着字号走（不写死尺寸）。
+    final type = DshLook.of(context).caption;
+    final iconSize = type.size + 4;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
       child: Row(
@@ -104,7 +108,12 @@ class _StepLine extends StatelessWidget {
           Expanded(
             child: Text(
               word,
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+              style: TextStyle(
+                fontSize: type.size,
+                height: type.lineHeight / type.size,
+                fontWeight: FontWeight.w400,
+                color: theme.hintColor,
+              ),
             ),
           ),
         ],
@@ -149,12 +158,20 @@ class ReasoningBlock extends StatelessWidget {
             children: [
               Text(
                 reasoningLabel,
-                style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+                // ★ `119`：抬头与小字都跟着用户字号轴（同上）
+                style: TextStyle(
+                  fontSize: DshLook.of(context).caption.size,
+                  height: DshLook.of(context).caption.lineHeight / DshLook.of(context).caption.size,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               const SizedBox(height: 4),
               Text(
                 text,
-                style: theme.textTheme.bodyMedium?.copyWith(
+                style: TextStyle(
+                  fontSize: DshLook.of(context).content.size,
+                  height: DshLook.of(context).content.lineHeight / DshLook.of(context).content.size,
+                ).copyWith(
                   color: theme.hintColor,
                   fontStyle: FontStyle.italic,
                 ),
