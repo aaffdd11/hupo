@@ -296,13 +296,19 @@ const String imageTempLink = '图是那边临时给的，想要就存下来。';
 /// ⚠️ 为什么不能再写死一句：
 ///   · 主人这一份（本机）**填了就真的用它**（识别路优先读他自己那三样）
 ///     ⇒ 那时候还说"现在用的是这台机器上配好的那一份"就是**假话**；
-///   · 租户那台**还没接上**（他的 `/api/asr` 在盒子里，读的是盒子里那份）
-///     ⇒ 那时候说"填了就真用它"也是**假话**。
+///   · 租户那台**当心**：他那条识别路在盒子里、读的是盒子里那份 —— 而"填了到底送不送得进去"
+///     是**会变的**（2026-09-27 之前**送不进去也读不到**，那时候说"填了就真用它"是假话；
+///     修好之后**送得进也读得到**，再那么说才是假话）。
 /// ⇒ 四种组合四句话，**一个字都不许省**（说错哪一句都是"页面在说假话"）。
 const String credVoiceBoundaryMine = '填好了。以后听你说话就用这三样，不再用这台机器上那份。';
 const String credVoiceBoundaryDefault = '先收着。现在听你说话用的是这台机器上已经配好的那一份。';
-const String credVoiceBoundaryTenantHas = '先收着。你这台还没接上，接上就用这三样。';
-const String credVoiceBoundaryTenantNone = '先收着。你这台还没接上。';
+/// ⚠️ **2026-09-27 改**（`#175`）：这两句原来是「先收着。你这台还没接上……」——
+///    那句在**修好之前**是真的（租户账号里填的那三样，中心收下了却**从来没送进盒子**，
+///    而且盒子那份单文件识别路也读不到，见 `docs/dev/125-TENANT-VOICE-CREDS.md`）；
+///    **两处都修好之后它就是假话** ⇒ 改成实话（活系统上验过：盒子日志
+///    `会话开始 · 引擎 16k_zh · 凭据来源 his-own`）。
+const String credVoiceBoundaryTenantHas = '填好了。以后听你说话就用这三样。';
+const String credVoiceBoundaryTenantNone = '先收着。填上这三样，这台就能听你说话。';
 
 /// 语音那一屏此刻该说的那句话（**纯函数**，判据钉四种组合）。
 String credVoiceBoundary({required bool isTenant, required bool hasOwn}) {

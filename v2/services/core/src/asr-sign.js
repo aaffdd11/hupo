@@ -23,10 +23,20 @@
 import nodeCrypto from 'node:crypto';
 
 /**
- * 混元 ASR（内测版）那个引擎名。**唯一一处** —— 自测脚本、转发、文档都从这儿取。
+ * 默认引擎名。**唯一一处** —— 自测脚本、转发、文档都从这儿取。
  * ⚠️ 名字对不上服务端会直接拒（`code` 非 0），自测脚本会把原话打出来。
+ *
+ * 🔴 **2026-09-27 改成 `16k_zh`**（`#175`）：原来的默认是混元内测
+ *    `Hy-ASR-3.0-preview`，而**它对主人那个账号回 `4004 资源包耗尽`**
+ *    （逐档实测见 `docs/dev/69-ASR-ROUTES.md` §四·补3：同一对密钥下
+ *    混元 / `16k_zh_large` / `16k_zh_en` 全是 `4004`，**只有 `16k_zh` 回 `code=0`**）。
+ *    ⇒ 那一批的结论本来就是"**线上先用 `16k_zh`**"，只是当时靠宿主那份
+ *      `data/asr.env` 里一行 `TENCENT_ASR_ENGINE=16k_zh` 实现的 —— 而**租户的盒子里
+ *      没有那份 env** ⇒ 盒子一直拿默认（混元）去打 ⇒ 永远"没额度"。
+ *    ⇒ 默认值跟着那条结论走；**要切回混元**就设
+ *      `TENCENT_ASR_ENGINE=Hy-ASR-3.0-preview`（宿主 / 盒子都认，**不用改代码**）。
  */
-export const DEFAULT_ASR_ENGINE = 'Hy-ASR-3.0-preview';
+export const DEFAULT_ASR_ENGINE = '16k_zh';
 
 /**
  * 算签名原文与签名。

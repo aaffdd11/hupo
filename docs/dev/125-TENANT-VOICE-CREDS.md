@@ -78,7 +78,21 @@ const mine = who ? credsFor({ dataDir, sub: who }).values : {};   // ← 没传 
 盒子里"在聊天里让它画"也一直说"没有钥匙"（⇒ 页面那句边界话**是对的**，见 §五）。
 
 **修**：两处都把 `env`（和 `fs`）传下去 ＋ 判据打在**产品那一侧**（`voiceCredsFor` / `makeDrawImage`，
-反做一下就红 —— 见 §四）。
+反做一下就红 —— 见 §四）。**已随产品层发布**（`01874aa6a6b5`）。
+
+### ③ 就算前两处都通了，盒子还会"没额度"：**默认引擎是混元那版**（已修 · 已发布）
+
+修完 ①② 之后在活系统上探了一次，盒子日志确实变成了
+`会话开始 · 引擎 Hy-ASR-3.0-preview · 凭据来源 his-own` —— 钥匙用上了，可**引擎是混元内测那版**，
+而它对主人那个账号回 **`4004 资源包耗尽`**（逐档实测见 [`69-ASR-ROUTES.md`](69-ASR-ROUTES.md) §四·补3：
+同一对密钥下混元 / `16k_zh_large` / `16k_zh_en` 全是 `4004`，**只有 `16k_zh` 回 `code=0`**）。
+
+- 宿主为什么没事：那份 `data/asr.env` 里有一行 `TENCENT_ASR_ENGINE=16k_zh`；
+- **盒子里没有那份 env** ⇒ 拿的是代码默认 `DEFAULT_ASR_ENGINE = 'Hy-ASR-3.0-preview'`。
+
+**修**：`asr-sign.js` 的默认值改成 **`16k_zh`**（跟 69 那一批"线上先用 `16k_zh`"的结论走；
+要切回混元设 `TENCENT_ASR_ENGINE=Hy-ASR-3.0-preview`，**不用改代码**）。
+⇒ 活系统复验：盒子日志 `会话开始 · 引擎 16k_zh · 凭据来源 his-own` ✅。
 
 ---
 
@@ -90,8 +104,10 @@ const mine = who ? credsFor({ dataDir, sub: who }).values : {};   // ← 没传 
 | `v2/services/core/src/serve.js` | `setCreds()` 末尾：租户 ⇒ **任何一次改动都推那一整包** | ✅ 已部署 |
 | `v2/services/core/src/serve.js` | 通道加 `credsFor(tenant)`：盒子一连上来就给它那一包 | ✅ 已部署 |
 | `v2/services/core/src/tenant-channel.mjs` | `#readyPayload()` / `readyFrameOf()`：`ready` 帧可以**只有 `creds` 没有 `key`**；一样都没有 ⇒ `waiting`；`credsFor` 抛了也不许把通道带倒 | ✅ 已部署 |
-| `v2/services/core/src/asr-creds.js` | `credsFor({ dataDir, sub: who, env, fs })` —— **把 `env` 传下去** | 🚧 **要发布产品层**（盒子里那台跑的是旧的一版） |
-| `v2/services/core/src/image-use.js` | `credsFor({ dataDir, sub: userId, env })` | 🚧 **同上** |
+| `v2/services/core/src/asr-creds.js` | `credsFor({ dataDir, sub: who, env, fs })` —— **把 `env` 传下去** | ✅ 随产品层发布（`ca9f86161b02`） |
+| `v2/services/core/src/image-use.js` | `credsFor({ dataDir, sub: userId, env })` | ✅ 同上 |
+| `v2/services/core/src/asr-sign.js` | `DEFAULT_ASR_ENGINE`：`Hy-ASR-3.0-preview` → **`16k_zh`**（见 §二·③） | ✅ 随产品层发布（`01874aa6a6b5`） |
+| `v2/apps/mobile/lib/models/space_words.dart` | 租户那两句边界话**改成实话**（「填好了。以后听你说话就用这三样。」/「先收着。填上这三样，这台就能听你说话。」） | ✅ 客户端那一侧（`deploy-web-v2.sh`） |
 
 **协议一个字节没改**：还是那条通道、还是 `{state, key?, creds?}` 三档 ——
 老盒子（不认 `creds`）照旧走 `key` 那条路，新盒子合并写。
@@ -136,27 +152,35 @@ POST /api/creds  {creds:{voiceAppId,voiceSecretId,voiceSecretKey}}
 |---|---|---|
 | `test/asr-creds.test.js` 新那条 | 盒子里那份**单文件** ＋ `HUPO_ROLE=tenant` ⇒ **识别路必须读得到**（`configured:true` · `source:'his-own'`）；负向对照：没有那个角色 ⇒ 宿主上**不认**它（宁可说"没配"） | 把 `env` 去掉 ⇒ **红 1**（10 过 / 1 挂） |
 | `test/image.test.js` 新那条 | 画图那条路同理：盒子里读得到、宿主上不认 | 同上 ⇒ **红 1**（9 过 / 1 挂） |
+| `test/asr.test.js` 那条"换了引擎 ⇒ 签名就变" | 原来写死 `engine: '16k_zh'` 当"另一个引擎"，而默认值改成 `16k_zh` 之后它**自己红了**（正好证明这条金丝雀是活的）⇒ 改成"取一个与默认不同的名字" | —— |
 | `test/creds-box.test.js` ＋4 | `tenantCredsPack` 三档 · 盒子里**只推语音三样**⇒ 模型与图片还在 · **`creds` 包真推得进**（真起一条通道、真读那一帧）· **盒子一连上来就带着那一包**（含 `need-key` 那一拍）＋ `credsFor` 抛了不许把通道带倒 | —— |
 | `cd v2/services/core && npm test`（**硬闸**） | 全量 | **1283 过 / 0 挂**（这一批之前 1277 ⇒ **＋6**：`creds-box` ＋4 · `asr-creds` ＋1 · `image` ＋1） |
+| 客户端 | `flutter analyze` ＋ `test/unit` ＋ `test/widget` ＋ a11y 硬闸 | **`bash scripts/check-client.sh`：硬闸全过** |
 
 ---
 
-## 五、还卡在哪（**要主人签字的那一步**）
+## 五、主人签字之后：现在到哪了
 
-**② 的修复在仓库里，但盒子那台跑的是 2026-09-26 发布的产品层** ⇒
-要真正在主人手机上生效，得**重新发布产品层**（`scripts/build-tenant-code.sh` ＋ `--publish`）
-—— 那会**动到两台活着的租户盒子**，按 `77-BLOCKERS.md` **B10** 与 §8.1：**部署期的事要主人签字**，
-而且做的时候他要在场看着。
+**他 2026-09-27 选了"现在发布"** ⇒ 走完了产品层那一步（`build → --verify → --publish`，
+两次：先 `ca9f86161b02` 修 ②，再 `01874aa6a6b5` 修 ③；每次都是**真跑一个一次性容器**验过它自己报的指纹）。
+两台盒子自己在空闲时重开了，`/app/code` 已经是新版（`grep` 验过两个文件里那两行改动都在）。
 
-**在他签字之前，页面上的话保持原样**（「先收着。你这台还没接上……」）—— 那句**现在是实话**：
-填了也确实进不了盒子里的识别路。⇒ 客户端那两句**没有改**（改了就是"页面提前说好消息"）。
+**活系统读数**（假钥匙，验完就还原）：
 
-**今天就能录的两条路**（都用不着发布产品层）：
+```
+盒子日志  ▶ asr：会话开始 · 引擎 16k_zh · 凭据来源 his-own · 来自 未知设备
+探针回话  asr/error reason=engine        ← 钥匙是假的，引擎（腾讯）拒了它
+```
 
-1. **用主人那个号**（`186…`）：语音那条路已经在真浏览器上验过（[`123`](123-VOICE-TEST-BUTTON.md) §九：
-   点一下录、再点一下停、字落进框里）；
-2. **让主人自己在 `u2` 那一屏把那三样填上**：填完**产品层一发布就生效**（钥匙是他的，别人不能替他填 ——
-   P2-2：部署默认那份只给主人）。
+⇒ **整条链子通了**：填 → 中心存 → 推进盒子 → 盒子读得到 → 拿这个人的钥匙去打腾讯。
+
+🔴 **剩下只差"他自己的真钥匙"**：钥匙只有主人能填（P2-2：部署默认那份只给主人）。
+在 `u2` 那一屏「语音」把三样填上、送出之后，那台盒子就会 `凭据来源 his-own` 地开始听。
+
+⚠️ **取证时动过又还原的**：往盒子里推过假钥匙（三批），**都还原了** —— 最后 `creds.yaml` 里
+`grep -c 'fake-'` = **0**、只剩 `HUPO_MODEL_KEY` / `HUPO_IMAGE_KEY` 两行（值没动过）、
+10 秒内没有任何写入；中心那份 `data/creds/u2.yaml` 删掉了（`/api/space` 回到 `voice:false`）；
+容器里那份临时备份也删了。
 
 ---
 
@@ -164,10 +188,12 @@ POST /api/creds  {creds:{voiceAppId,voiceSecretId,voiceSecretKey}}
 
 | # | 事 |
 |---|---|
-| 1 | **修 ② 之后"手机上真能录"**：要等产品层发布，再在真机上按一次（这次只能证到"文件里有了、读法通了"这一层，`asr-creds`/`image-use` 的判据是单元级的） |
-| 2 | **图片那条"在聊天里让它画"**：修 ② 之后**应该**也通了（同一处 `env` 坑），但**没有真跑过一次"聊天里画图"** ⇒ 那句边界话这次**一个字没动**（宁可少承诺） |
+| 1 | **主人拿真钥匙在手机上按一次**：链子（填 → 推 → 读 → 打上游）逐段都验过，但"他的真钥匙 ＋ 他的真嗓子"这一下要他自己走 |
+| 2 | **图片那条"在聊天里让它画"**：修 ② 之后盒子那条路**应该**也通了（同一处 `env` 坑，判据在），但**没有真跑过一次"聊天里画图"**（那要花他的额度）⇒ 那句边界话这次**一个字没动**（宁可少承诺）。他试过一次之后，说一声就能改成实话 |
 | 3 | **手机壳（安卓包）里的原生录音仍然没做**：`76-PLAN.md` P1-23 / `77-BLOCKERS.md` B9 |
 | 4 | **iOS Safari** 那道 `AudioContext` 手势规矩（`71` §五） |
+| 5 | **老形状 `key` 的"整份重写"**：新代码总把整包一起带上（盒子优先认 `creds` ⇒ 走合并），
+所以这条风险只剩"只有 `key` 可给"那一种（新盒子/新用户的第一次）；没做"把盒子那份读回来再比一遍" |
 
 **明确没做**（不是"以后再说"）：把主人号那三样复制到租户那台（那是**钥匙**，只有主人能决定）·
 给租户做"没有钥匙也能先录下来"（那是产品行为，要主人先说要不要）。

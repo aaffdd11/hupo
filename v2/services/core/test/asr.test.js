@@ -247,7 +247,10 @@ test('换了密钥 / 换了引擎 ⇒ 签名就变（金丝雀：参数真的进
   };
   const a = signAsrUrl(base);
   assert.notEqual(a.signature, signAsrUrl({ ...base, secretKey: 'sk-other' }).signature);
-  assert.notEqual(a.signature, signAsrUrl({ ...base, engine: '16k_zh' }).signature);
+  // ⚠️ 换的那个引擎**必须与默认值不同**（默认是 `DEFAULT_ASR_ENGINE`；`#175` 之后它是
+  //    `16k_zh`）—— 写死一个"另一个"引擎名，这条才不会因为默认值变了就悄悄失效。
+  const other = DEFAULT_ASR_ENGINE === '16k_zh_large' ? '16k_zh' : '16k_zh_large';
+  assert.notEqual(a.signature, signAsrUrl({ ...base, engine: other }).signature);
   assert.notEqual(a.signature, signAsrUrl({ ...base, params: { voice_id: 'v-2' } }).signature);
 });
 

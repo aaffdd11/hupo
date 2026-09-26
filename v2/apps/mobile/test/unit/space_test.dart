@@ -226,9 +226,16 @@ void main() {
     expect(credVoiceBoundary(isTenant: false, hasOwn: false), credVoiceBoundaryDefault);
     // 本机 + 填了 ⇒ **真的就用它**（识别路优先读他自己的三样）
     expect(credVoiceBoundary(isTenant: false, hasOwn: true), credVoiceBoundaryMine);
-    // 租户 + 填了 ⇒ 只许说"先收着、你这台还没接上"（盒子那份 serve.js 读的是盒子里）
+    // 租户 + 填了 ⇒ **填了就真进他那台、那台也真读得到**（`#175` 两处都修好之后）
+    //   ⇒ 说"就用这三样"；🔴 而且**不许**再出现"还没接上"那句旧话（修好之前它是真的，
+    //   修好之后就是假话）。
     expect(credVoiceBoundary(isTenant: true, hasOwn: true), credVoiceBoundaryTenantHas);
+    expect(credVoiceBoundaryTenantHas.contains('就用这三样'), true);
+    expect(credVoiceBoundaryTenantHas.contains('还没接上'), false, reason: '★ 那句现在是假话');
+    // 租户 + 没填 ⇒ 要**说得出"填了就能用"**（这台没有"机器上配好的那份"兜底）
     expect(credVoiceBoundary(isTenant: true, hasOwn: false), credVoiceBoundaryTenantNone);
+    expect(credVoiceBoundaryTenantNone.contains('填上这三样'), true);
+    expect(credVoiceBoundaryTenantNone.contains('还没接上'), false);
     // 🔴 四句**互不相同**（两两相同就是把两种情况说成一件事）
     final all = {
       credVoiceBoundaryMine,

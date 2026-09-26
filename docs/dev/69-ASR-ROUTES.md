@@ -209,6 +209,11 @@ CAM 有个 `GetUserAppId`（`cam.tencentcloudapi.com`，TC3 签名，`x-tc-times
 ⇒ **线上先用 `16k_zh`**（有额度、当天能用）；`data/asr.env` 里加一行
 `TENCENT_ASR_ENGINE=Hy-ASR-3.0-preview` 就能切回混元，**不用改代码**。
 
+⚠️ **2026-09-27 补**（`#175`）：这条结论当时只落在**宿主**那份 `data/asr.env` 上，
+而**代码默认值**还是混元那版 ⇒ **租户的盒子里没有那份 env**，拿默认去打 ⇒ 永远"没额度"。
+⇒ `asr-sign.js` 的 `DEFAULT_ASR_ENGINE` 已经**跟着这条结论改成 `16k_zh`**
+（要切回混元仍然是那一行环境变量）。见 `docs/dev/125-TENANT-VOICE-CREDS.md` §二·③。
+
 🔴 **抓真帧抓出来的一件事**（写客户端的人必须知道）：`16k_zh` 会**在同一段里连着发好几条**，
 `voice_text_str` 是**这一段逐次累积**的字，而 **`index` 全程是同一个**：
 
