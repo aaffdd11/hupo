@@ -26,6 +26,9 @@ import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
 import { Apps, APPS_REL, REFUSED_APP_IDS, REMOVED_DIRNAME } from './apps.js';
+import { appUpdateAvailableEvent } from './app-events.js';
+import { appWorkspaceChangedEvent } from './app-live.js';
+import { appFailText } from './app-fail-words.js';
 import { RoomReclaimError, readReclaimedSeqs, reclaimScope } from './reclaim.js';
 import { AppWorkspaces, checkScope, scopeDirFor, safeScope, workspacesRoot } from './workspace.js';
 import { AppsSocket, appsSocketPath } from './apps-socket.js';
@@ -601,6 +604,27 @@ export class Worlds {
       dir: t.dir,
       sub: t.userId,
       reclaim: reclaimCtx,
+      // ★ **一版真的写下去了 ⇒ 正开着它的那个界面自己换上**（契约
+      //   `docs/dev/111-APP-LIVE-UPDATE.md` · 主人 2026-09-26：*"不需要刷新"*）。
+      //
+      // 🔴 **落在那条可见日志上的一帧持久事件**（`emit`：有号、落盘、补得上）
+      //    —— 走通知那条路不行：`Notice` 是"替你做的决定 / 出事了"那种**要人看的话**
+      //    （会在浮窗里弹一下），而这一帧是**界面自己的同步信号**，没有一句话要说。
+      // 🔴 **盖上 `scopeId = 那个 app`**（`#viewFor` 的 `ScopeView`）⇒
+      //    实时那一侧按焦点路由（`server.js` 那行 `eventInScope(event, focus)`）：
+      //    **只有正开着这一间的那条连接**收得到（打开一个小程序 = 房间切到它的 id）。
+      //    ⚠️ 它落在**所有人共用的那条日志**上 ⇒ 谁都读得到 —— 那没关系：
+      //       帧里**只有一个 id 和一个版本号**，没有任何签名（见 `app-events.js`）。
+      onVersion: (info) => {
+        try {
+          this.#viewFor(t.userId, info.id).emit(
+            appUpdateAvailableEvent({ id: info.id, version: info.version }),
+          );
+        } catch (err) {
+          // ⚠️ 喊不出去不许让"这一版写成了"这件事失败（产品那一步已经落盘）。
+          this.#warn(`  ⚠️ ${t.userId} 的"${info.id} 有新版本"没喊出去：${err?.message ?? err}`);
+        }
+      },
     });
     // ★ **子工作区**（契约 `83-APP-WORKSPACE.md` §三·1）：**按人一份**，
     //   落在 `<dir>/workspaces/`（**与主目录平行** —— 手册 §2.2 第二条）。
@@ -717,6 +741,30 @@ export class Worlds {
             timeline.emitTransient({ type: 'app/installed', appId: info.id, title: info.title });
           } catch (err) {
             this.#warn(`  ⚠️ ${t.userId} 的"装上了"没喊出去：${err?.message ?? err}`);
+          }
+        },
+        // ★ **这一次没做成 ⇒ 主动说一句**（主人 2026-09-26 真机现场 ·
+        //   契约 `docs/dev/111-APP-LIVE-UPDATE.md` §六）。
+        //
+        // 🔴 **为什么非有它**：工具那句 `error` 是**写给模型看的**，模型不转述，
+        //    主人那边**一点提示都没有** —— 真机现场就是
+        //    「…超了单页 256KB 的上限。我试几种压法。」然后**没有然后了**。
+        // 🔴 **走现成那条通知通道**（`Notice` · kind 用既有的 `failed`）：
+        //    与 `#tellMainLeak`（"文件落错地方"那一句）**同一条路** ——
+        //    那一条也是"工具那侧没做成、他要看得见"。
+        //    ⚠️ 落在那条可见日志上（主线那一间）＋ 浮窗弹一下 ⇒ 他在哪一屏都看得见。
+        //    ⚠️ 文案**只从 `app-fail-words.js` 那张表里来**（工具原文里有内部短名与
+        //       禁用词，一个字都不许上屏）；名字取**制品里那一版**的，
+        //       他这儿还没有它时（"装别人发的那一条、没装成"）**问共享库要**那个名字，
+        //       再取不到才用请求里那个（只有"新造一个但没成"才用得上）。
+        onAppFailed: (info) => {
+          try {
+            // 名字三个来源，按"他知道哪个"排队（都没有 ⇒ 那一句就不点名）
+            const shared = this.#published?.index?.(info.id)?.title ?? null;
+            const title = titleOfApp(apps, info.id) ?? shared ?? info.title ?? null;
+            notice?.notice({ kind: 'failed', text: appFailText({ ...info, title }) });
+          } catch (err) {
+            this.#warn(`  ⚠️ ${t.userId} 的"没做成"没说出来：${err?.message ?? err}`);
           }
         },
       },
@@ -994,6 +1042,42 @@ export class Worlds {
     this.#byAgentKey.set(world.agentKey, world);
     if (t.fresh) this.#log(`  ✚ 新的人来了：${t.userId}（他自己的那一格是空的）`);
     return world;
+  }
+
+  /**
+   * ★ **"这一间的内容变了" ⇒ 只推给正开着它的那条连接**（契约
+   * `docs/dev/112-OWN-APP-IS-LIVE.md` §四）。
+   *
+   * 落点刻意选在**这里**：
+   *   · 它走**现有那条可见日志的 scope 视图**（`#viewFor`）⇒ 那一帧自动带上
+   *     `scopeId = 那一间`，实时那一侧按焦点路由（`server.js` 的 `eventInScope`）——
+   *     **别的 app / 没开着它的连接一个字节都收不到**（判据 V4 的反例）。
+   *   · **瞬态**（`emitTransient`）：不占号、不落盘 ⇒ 它不是"盘上的事实"
+   *     （他离线时改的那一下，回来不该收到一条"刚才变了"的假话）。
+   *
+   * 🔴 **世界没热过 ⇒ 不发**（不为了一个文件事件去 provision 一个人：
+   *    那会有建目录/起调度器那一串副作用，而"没人正开着"时这一帧本来就没用）。
+   * 🔴 **那一间不在 ⇒ 不发**（别让一个随手的字符串在日志上拉出一条事件）。
+   *
+   * @returns {boolean} 真推出去了没有（调用方据此如实记一笔）
+   */
+  emitLiveChange(userId, scope) {
+    let id = null;
+    try {
+      id = checkScope(scope); // 不合法 / 保留名 ⇒ 抛（这里当"不发"）
+    } catch {
+      return false;
+    }
+    const w = this.#worlds.get(userId);
+    if (!w) return false;
+    if (!w.workspaces.has(id)) return false;
+    try {
+      this.#viewFor(userId, id).emitTransient(appWorkspaceChangedEvent({ id }));
+    } catch (err) {
+      this.#warn(`  ⚠️ "${id} 的内容变了"没喊出去：${err?.message ?? err}`);
+      return false;
+    }
+    return true;
   }
 
   /**

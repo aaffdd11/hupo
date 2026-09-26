@@ -27,6 +27,8 @@
 | **想给界面加动效 / 加动态背景** | [`handbook/08-SPEC.md`](handbook/08-SPEC.md)（`Z5` + `M1`–`M7`：永不结束的动画要有总开关；**结构判据全绿也会整层看不见**）+ [`dev/60-WATER-BG.md`](dev/60-WATER-BG.md)（那次的形状与两次事故） | **动手加之前**（手册里点名"将来加任何动效都得先读"）|
 | **小程序怎么造、怎么发、怎么装、"用谁的钥匙"** | [`dev/59-USER-APPS.md`](dev/59-USER-APPS.md)（契约）+ [`handbook/08-SPEC.md`](handbook/08-SPEC.md) §7.3 / §十四 | 动小程序那一块之前 |
 | **用户创造小程序这件事当初为什么这么做** | [`dev/58-CREATE-APP.md`](dev/58-CREATE-APP.md) | 想改小程序的形状之前 |
+| **小程序（制品）更新了 —— 为什么正开着它的那一屏会自己换上、为什么那一帧里不带签名** | [`dev/111-APP-LIVE-UPDATE.md`](dev/111-APP-LIVE-UPDATE.md)（契约 ＋ 判据 ＋ 真机读数；"没做成要有一条人话"也在那一份里）| 动"小程序更新 / 制品版本 / 那个 iframe"之前 |
+| **桌面那一格打开的是"他正在改的那一份"（用户端没有版本快照）** | [`dev/112-OWN-APP-IS-LIVE.md`](dev/112-OWN-APP-IS-LIVE.md)（活地址 `/w/` ＋ 白名单 ＋ "内容变了"那条通知 ＋ 判据 V1–V6 ＋ 真机读数）＋ [`dev/113-APP-SHAPE-LIVE.md`](dev/113-APP-SHAPE-LIVE.md)（主人原话与形状）| 动"桌面点开哪个文件 / 活地址 / 小程序变了的通知"之前 |
 | **手册改过什么 · 现在是什么版本** | [`handbook/CHANGELOG.md`](handbook/CHANGELOG.md) | 要改手册之前 |
 | **还有哪些账没还 · 哪几条卡在主人身上** | [`dev/00-PROGRESS.md`](dev/00-PROGRESS.md) §六（还开着的都在那一节；§6.1 是**不是待办**的两条）+ [`dev/63-OWNER-DECISIONS.md`](dev/63-OWNER-DECISIONS.md)（**要主人拍板的那几条**，一句话版） | 想接手 / 想知道"还欠什么"时 |
 | **麦克风（真接）走哪条路 · 为什么还没做** | [`dev/69-ASR-ROUTES.md`](dev/69-ASR-ROUTES.md)（那两分钟怎么验 · 判据 · 三条路各自要动什么 · `D5.10` 的语料硬闸）| 动语音输入之前 |

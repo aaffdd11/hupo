@@ -9,29 +9,42 @@
 //      别的消息**一律不理会**；壳**永远不会**把"能指挥 agent"的东西交给它（N2）。
 
 // ignore: avoid_web_libraries_in_flutter, deprecated_member_use
+import 'dart:async';
+// ignore: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'dart:html' as html;
 import 'dart:ui_web' as ui_web;
 
 import 'package:flutter/widgets.dart';
 
-/// 已经注册过的 viewId（`registerViewFactory` **同一个 id 只许注册一次**，重复注册会抛）。
-final Set<String> _registered = <String>{};
+import '../models/mini_frame.dart';
 
-/// 已经挂上监听的那些 iframe（按 viewId 记；避免重复挂）。
-final Set<String> _listening = <String>{};
+/// 已经挂上监听的那些 iframe（按 viewId 记）—— **换掉那一帧时要退订**。
+///
+/// 🔴 为什么非退订不可（契约 `docs/dev/111-APP-LIVE-UPDATE.md` 判据 U5）：
+///    `html.window.onMessage.listen` 是**整页一条**的常驻监听。换一版就多挂一条的话，
+///    老那条虽然对着一个已经摘下来的 iframe，**照样会把新页面的"问一句"再送去问一次**
+///    —— 那是**多花一次他的额度**，而且他看不到第二次。
+/// ⚠️ 退订由 `MiniAppFrame` 在换帧/关掉时叫（`releaseMiniAppView`）。
+final Map<String, StreamSubscription<html.MessageEvent>> _subs =
+    <String, StreamSubscription<html.MessageEvent>>{};
 
 /// 起一个沙箱 iframe。
 ///
 /// ⚠️ `entryUrl` 是**带签名**的（绑人 + 绑版本 + 短时效）—— 制品口只认签名，不认登录态。
 /// ⚠️ `onAsk` 是那条**唯一**的回话通道：页面说"我要问一句"，壳去替他问（**用看的人的钥匙**）。
 ///    拿回来的话，壳用 `postMessage` 回给**这一个** iframe。
+/// 🔴 **换版本 ⇒ 换 URL ⇒ 换 `viewId` ⇒ 换一个 iframe**（`MiniAppFrame` 负责换）：
+///    这一份只管"照 URL 建那一帧"，**不认识版本**。
 Widget buildMiniAppView({
   required String entryUrl,
   required String title,
   Future<String> Function(String prompt)? onAsk,
 }) {
-  final viewId = 'hupo-mini-${entryUrl.hashCode}';
-  if (_registered.add(viewId)) {
+  // 🔴 **viewId 的算法只有一处**（`models/mini_frame.dart`）——
+  //    `MiniAppFrame` 记账用的是同一个函数。
+  final viewId = miniViewIdOf(entryUrl);
+  // ⚠️ **同一个 viewType 只许注册一次**（重复注册当场抛）⇒ 这本账只增不减。
+  if (miniViewLedger.register(viewId)) {
     ui_web.platformViewRegistry.registerViewFactory(viewId, (int _) {
       final f = html.IFrameElement()
         ..src = entryUrl
@@ -46,10 +59,13 @@ Widget buildMiniAppView({
       f.style.height = '100%';
       f.style.background = 'transparent';
 
-      if (onAsk != null && _listening.add(viewId)) {
+      if (onAsk != null && !_subs.containsKey(viewId)) {
         // ⚠️ **按 `source` 认人**，不是按 origin：沙箱页面是**不透明原点**（origin 是 "null"），
         //    拿 origin 判等于谁都放进来。只有"这一条 iframe 自己"发来的才算。
-        html.window.onMessage.listen((e) async {
+        final sub = html.window.onMessage.listen((e) async {
+          // 🔴 **这一帧已经换掉了/关掉了 ⇒ 一个字都不理**（`MiniAppFrame` 销的号）。
+          //    少了这一句，摘下来的那一帧还会替新页面把话再问一遍。
+          if (!miniViewLedger.isHosted(viewId)) return;
           final win = f.contentWindow;
           if (win == null) return;
           // 🔴 **认"不透明原点"**，不是认 `source`：
@@ -76,8 +92,10 @@ Widget buildMiniAppView({
           }
           win.postMessage(reply, '*');
         });
+        _subs[viewId] = sub;
         // 页面加载完 ⇒ 告诉它"壳在、这一条路开着"（页面自己决定要不要用）
         f.onLoad.listen((_) {
+          if (!miniViewLedger.isHosted(viewId)) return;
           f.contentWindow?.postMessage({'kind': 'hupo-ready'}, '*');
         });
       }
@@ -85,4 +103,15 @@ Widget buildMiniAppView({
     });
   }
   return HtmlElementView(viewType: viewId);
+}
+
+/// **这一帧换掉了 / 关掉了 ⇒ 收干净**（由 `MiniAppFrame` 在换帧与 `dispose` 时叫）。
+///
+/// 🔴 退的是**消息监听**；平台那边注册过的那个 viewType **不退** ——
+///    `registerViewFactory` 同一个 id 只许注册一次，销了号再注册会当场抛
+///    （见 `models/mini_frame.dart` 的 `MiniViewLedger`）。
+/// ⚠️ 非 Web 那一侧是**空操作**（`mini_runtime_stub.dart`）。
+void releaseMiniAppView(String viewId) {
+  final sub = _subs.remove(viewId);
+  if (sub != null) sub.cancel();
 }

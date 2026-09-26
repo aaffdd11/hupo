@@ -43,13 +43,24 @@ import { ADMIT_RATIO, readAdmission } from './admission.js';
 import { CATCHUP_RENDER, markCatchUp, planBackfill, planResume } from './resume.js';
 import { buildExport } from './export.js';
 import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
-import { SIGNED_TTL_MS, entryUrl } from './app-serve.js';
-// ★ **盒子那三条内部口**（B15 · `docs/dev/77-BLOCKERS.md`）：小程序库以**盒子为准**。
+import { liveEntryOf } from './app-live.js';
+import { SIGNED_TTL_MS, liveEntryUrl } from './app-serve.js';
+// ★ **盒子那几条内部口**（B15 · `docs/dev/77-BLOCKERS.md`）：小程序库以**盒子为准**。
 //   ⚠️ 它们**只在 `trusted === true`**（容器里那条 `0600` UDS）上接 —— 公网口一律 404。
-import { BoxError, INTERNAL_PREFIX, parseArtifactQuery, parseInternalPath } from './apps-box.js';
+import {
+  BoxError,
+  INTERNAL_PREFIX,
+  parseArtifactQuery,
+  parseInternalPath,
+  parseLiveQuery,
+} from './apps-box.js';
 // ⚠️ 只用它的**错误类型**（内部写入那条路要把"校验不过"如实回给宿主，而不是 500）
 //    与那个总量上限（内部口的身体上限由它推出来，**不另写一个数**）。
 import { AppsError, MAX_TOTAL_BYTES } from './apps.js';
+// ★ **"活的工作区"那一刀**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）：
+//   `/internal/workspace-live`（盒里那条口）读的就是它 —— **以盒子为准**。
+import { readLiveApp } from './workspace.js';
+
 import { RoomReclaimError } from './reclaim.js';
 import { USAGE_KINDS } from './usage.js';
 import { ASR_PATH } from './asr.js';
@@ -1102,18 +1113,26 @@ export function createServer({
           }
           return sendJson(res, 500, { error: '清单读不出来' });
         }
-        // ⚠️ **入口 URL 现签**（绑人 + 绑版本 + 短时效），清单里存的不是它 ——
+        // ⚠️ **入口 URL 现签**（绑人 + 绑短时效），清单里存的不是它 ——
         //    存下来的 URL 一定会过期，而过期了还摆在界面上就是"点了没反应"。
+        //
+        // ★ **`112`：签的是"活地址"（`/w/<id>/<entry>`），不是某版快照**
+        //   （契约 `docs/dev/112-OWN-APP-IS-LIVE.md` · 主人 2026-09-26：
+        //    *"他自己开发过程原则上就是对当前这个版本进行内容修改……"*）。
+        //   🔴 **字段语义一个字没改**：`entryUrl` 仍然是"打开这个 app 的那条签名 URL"，
+        //      只是它现在指**他正在改的那一份**（他自己那一份 ≠ 市场/发布那一侧）。
+        //   ⚠️ **入口只有一个**（`liveEntryOf`）：那一间清单里那个（默认 `index.html`）。
+        //   ⚠️ **绑的仍然是"人"**（`sub`）＋ 哨兵 `live`（不是版本号）⇒ 版本一动
+        //      这条 URL 不作废（他改了就该看到新的），而**别人拿到它也没用**。
         return sendJson(res, 200, {
           apps: items.map((a) => ({
             ...a,
-            entryUrl: entryUrl({
+            entryUrl: liveEntryUrl({
               base: apps.base,
               key: apps.key,
               sub: claim.sub,
               id: a.id,
-              version: a.version,
-              entry: a.entry,
+              entry: liveEntryOf(a.entry),
               // ⚠️ **必须吃这个进程的时钟**（`now`），不许用墙上时间：`entryUrl` 里那个
               //    默认值会让"签名里的到期"和"报出去的到期"差一截（判据当场抓到过）。
               now: now(),
@@ -2597,6 +2616,36 @@ const TENANT_ROUTES = [
       } catch (err) {
         // ⚠️ 签名这一层在宿主已经过了 ⇒ 这儿读不出来就是**真没有**（404）
         log(`[internal] 取字节读不出来（${q.id}）：${err?.message ?? err}`);
+        return sendJson(res, 404, { error: 'not-found' });
+      }
+      const buf = Buffer.from(got.content ?? '');
+      res.writeHead(200, {
+        'content-type': got.contentType ?? 'application/octet-stream',
+        'content-length': buf.length,
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+      });
+      return res.end(buf);
+    }
+
+    // ── ★ **`112`：那一间工作区里一个"活文件"的字节**（契约 112）────────────
+    // 🔴 **以盒子为准**（B15 同一条规矩）：租户的 `workspaces/` 在**他盒子里**
+    //    ⇒ 桌面那一格要显示的字节**只能在盒里读**。宿主那份是空的。
+    // 🔴 顺序（与 `artifact` 那条**逐字相同**）：签名在宿主那关已经过了 ⇒
+    //    这里读不出来就是**真没有**（404），**绝不**退回某一版快照。
+    // ⚠️ 白名单（`.` 开头 / `build/`）在宿主那关也过了一道（`checkLiveRel`），
+    //    这里**再走一遍**（`readLiveApp` → `readLive`）—— 两道都要（纵深）。
+    if (hit.kind === 'workspace-live') {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: 'method' });
+      const q = parseLiveQuery(url.search);
+      if (!q) return sendJson(res, 400, { error: 'bad-request' });
+      const w = worldFor(trustedSub);
+      if (!w?.workspaces) return sendJson(res, 404, { error: 'not-found' });
+      let got;
+      try {
+        got = await readLiveApp({ apps: w.apps, workspaces: w.workspaces, id: q.id, rel: q.rel });
+      } catch (err) {
+        log(`[internal] 取活文件读不出来（${q.id}）：${err?.message ?? err}`);
         return sendJson(res, 404, { error: 'not-found' });
       }
       const buf = Buffer.from(got.content ?? '');

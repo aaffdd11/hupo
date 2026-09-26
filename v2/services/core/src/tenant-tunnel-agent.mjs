@@ -77,16 +77,53 @@ let liveSend = null;
 let liveDrop = null;
 
 /**
+ * ★ **没送出去的那几句话**（2026-09-26 加 · 契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）。
+ *
+ * 🔴 为什么非要有它：`notifyHost` 原来是**一次性**的 —— 连接恰好在重连时
+ *    **静默写进空气**（那句话就永远没了）。"钥匙不灵了"还有一条一定会送到的路
+ *    （`tunnel-ready.hasKey` 自报），但"**那一间的内容变了**"**没有**：
+ *    它是一次性的现在时 ⇒ 丢了就是"他改完屏幕上没变"（最不该静默的那种）。
+ * ⇒ 发不出去先**记着**，连上之后**补发**。
+ *
+ * ⚠️ **同一件事只留最后一条**（`type` + `scope`）：它说的是"现在这样"，
+ *    不是"发生过几次" —— 攒一队过期的通知没有意义。
+ * ⚠️ 有上限（`PENDING_NOTICE_MAX`）：盒子一直连不上也不许把内存吃光。
+ */
+const pendingNotices = [];
+/** 最多记几条（同一条会被后来的覆盖，所以这只是一个防呆上限）。 */
+export const PENDING_NOTICE_MAX = 32;
+
+function rememberNotice(obj) {
+  if (!obj || typeof obj !== 'object') return;
+  const key = `${obj.type ?? ''}\u0000${obj.scope ?? ''}`;
+  const at = pendingNotices.findIndex((m) => `${m.type ?? ''}\u0000${m.scope ?? ''}` === key);
+  if (at >= 0) pendingNotices.splice(at, 1);
+  pendingNotices.push(obj);
+  if (pendingNotices.length > PENDING_NOTICE_MAX) pendingNotices.shift();
+}
+
+/**
  * 往宿主那条通道上说一句（不在隧道里、或对面断了 ⇒ 返回 `false`，**不抛**）。
+ *
+ * ⚠️ 返回 `false` 时那句话**不会被丢掉**：它进了 `pendingNotices`，下一条隧道
+ *    连上时补发（见上面那段）。⇒ 调用方**仍然**该按 `false` 如实记一笔
+ *    （"这一刻没送出去"是事实），但不必再自己想办法重发。
  * @param {object} obj
- * @returns {boolean} 说出去了没有
+ * @returns {boolean} **当场**说出去了没有
  */
 export function notifyHost(obj) {
-  if (!liveSend) return false;
+  if (!liveSend) {
+    rememberNotice(obj);
+    return false;
+  }
   try {
-    liveSend(obj);
+    if (liveSend(obj) === false) {
+      rememberNotice(obj);
+      return false;
+    }
     return true;
   } catch {
+    rememberNotice(obj);
     return false;
   }
 }
@@ -94,10 +131,9 @@ export function notifyHost(obj) {
 /**
  * **把隧道掐一下让它重连**（2026-09-21 加）。
  *
- * 为什么要它：`notifyHost` 是**一次性**的（连接恰好在重连就**丢了** ——
- * 实测栽过一次：容器日志说"我告诉宿主了"，而宿主**什么都没收到**）。
- * 而"这一台现在到底有没有钥匙"这件事**每次重连都会自报一遍**
- * （`tunnel-ready.hasKey`）—— 那是一条**一定会送到**的路。
+ * 为什么要它：`notifyHost` 送不出去时**现在会排队补发**（见 `pendingNotices`），
+ * 但"钥匙不灵了"还想要**更快**那条一定会到的路 —— 而"这一台现在到底有没有钥匙"
+ * 这件事**每次重连都会自报一遍**（`tunnel-ready.hasKey`）。
  * ⇒ 钥匙不灵了就掐一下：三秒后它自己连回来，宿主就听见了真话。
  * ⚠️ 它**不抛**（不在隧道里就什么都不做）。
  */
@@ -272,6 +308,15 @@ export function runTunnelAgent({
       //   ⚠️ 兜底那份（镜像里的）没有 `manifest.json` ⇒ 版本就是 `dev`，**如实报**。
       const hasKey = announce();
       log(`  隧道通了（→ ${localTarget}）· 版本 ${process.env.HUPO_BUILD_ID ?? 'dev'} · 钥匙：${hasKey ? '有' : '还没有'}`);
+      // ★ **把没送出去的那几句话补发**（见 `pendingNotices` 那段）：
+      //   "那一间的内容变了"是一次性的现在时 —— 重连正好撞上就不能丢。
+      for (const note of pendingNotices.splice(0, pendingNotices.length)) {
+        try {
+          if (liveSend(note) === false) rememberNotice(note);
+        } catch {
+          rememberNotice(note);
+        }
+      }
       try {
         onReady?.(); // 报到过了 ⇒ 从现在起认"重开"那句话
       } catch {

@@ -15,6 +15,7 @@ import '../models/hearing_session.dart';
 import '../models/job_ask.dart';
 import '../models/job_words.dart';
 import '../models/message_state.dart';
+import '../models/mini_update.dart';
 import '../models/notice.dart';
 import '../models/plan.dart';
 import '../models/process_levels.dart';
@@ -164,6 +165,38 @@ class ChatController extends ChangeNotifier {
   /// **"我的小程序"变了多少次**（乙-3）：`app/installed` 到了就 +1，
   /// 界面看到它变了就重拉一次 `/api/apps`（**桌面自己长出来**）。
   int appsRevision = 0;
+
+  /// ★ **"这个小程序有新版了"**（契约 `docs/dev/111-APP-LIVE-UPDATE.md`）。
+  ///
+  /// 🔴 它和 [`appsRevision`] **是两件事**，不许并成一个：
+  ///    · `app/installed` = 桌上**多了一格**（谁都可以重拉清单）；
+  ///    · 这一条 = **某一格换了一版** ⇒ 界面要判"**我正开着它吗**"，
+  ///      开着才换那一帧（别人的更新不许把这一屏搞乱 —— 判据 U3）。
+  ///
+  /// ⚠️ 收到的那一帧是**持久**事件（有号、会补发）⇒ 这里的去重按 `(id, 版本)`：
+  ///    补发/重连必然重复（协议 R5）。
+  int appUpdateRevision = 0;
+
+  /// **最后一条"有新版"**（界面靠 `appUpdateRevision` 认"是不是新的一条"）。
+  AppUpdate? lastAppUpdate;
+
+  /// **收到过哪些"有新版"**（app id → 版本号）。
+  ///
+  /// 🔴 **没开着它的时候只记在这儿**（什么都不动）：下次点开它之前先重拉一次清单，
+  ///    免得点开还是旧那一版（判据 U4：不许白屏、不许报错，**如实记一笔**）。
+  final Map<String, int> appUpdates = <String, int>{};
+
+  /// ★ **"那一间的内容变了"**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）。
+  ///
+  /// 🔴 与 [`appUpdateRevision`] **是两件事**，不许并成一个：
+  ///    · `app/update-available` = "**有某一版新的**"（**持久**、带版本号）；
+  ///    · 这一条 = "**他正在改的那一份刚被写过**"（**瞬态**、**没有版本号** ——
+  ///      用户端没有"版本"这回事：他自己那一份就是源代码部署）。
+  ///    ⇒ 界面**不判版本**，收到就**直接重取一次清单**（新 exp ⇒ 新签 URL ⇒ 换一帧）。
+  int appWorkspaceRevision = 0;
+
+  /// **最后一条"那一间的内容变了"**（界面靠 [`appWorkspaceRevision`] 认"是不是新的一条"）。
+  AppWorkspaceChange? lastAppWorkspaceChange;
 
   /// **打字框里那串还没发出去的字**（第三本账 —— 见 `compose_store.dart` 顶上那张表）。
   /// ⚠️ 它**不属于时间线**：一个字都没发出去，所以它不进 `items`、不带四态、没有"重发"。
@@ -974,6 +1007,41 @@ class ChatController extends ChangeNotifier {
       appsRevision += 1;
       notifyListeners();
       return;
+    }
+
+    // ★ **那一间的内容变了**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）：
+    //   他（或者助手在**那个目录里**干活）刚改过那一间 ⇒ 正开着它的那个界面
+    //   **自己重取一次**（新 exp ⇒ 新签 URL ⇒ 换一帧）。
+    //
+    //   ⚠️ **瞬态**（服务端 `emitTransient`：不占号、不写盘、重连**不重放**）
+    //      ⇒ 与上面 `app/installed` 同族：这里 `return`，**不许喂给 `timeline`**
+    //      （喂了会在历史里留下一条谁也看不见的东西，重放时还会再换一次帧）。
+    //   ⚠️ 它**不带版本号**（用户端没有"版本"这回事）⇒ 界面**不判版本**，收到就重取。
+    //      它只推给"正开着这一间"的那条连接（服务端按焦点路由）。
+    if (event['type'] == 'app/workspace-changed') {
+      final change = AppWorkspaceChange.of(event);
+      if (change != null) {
+        lastAppWorkspaceChange = change;
+        appWorkspaceRevision += 1;
+        notifyListeners();
+      }
+      return;
+    }
+
+    // ★ **这个小程序有新版了**（契约 `docs/dev/111-APP-LIVE-UPDATE.md`）：
+    //   正开着它的那个界面要**自己换上**（主人 2026-09-26：*"不需要刷新"*）。
+    //
+    //   ⚠️ 与上面那条相反，这一帧是**持久**的（服务端 `Timeline.emit`：有号、落盘）⇒
+    //      **这里不许 `return`** —— 它必须继续走到 `timeline.apply`，
+    //      否则游标停在这一号上，每次重连都从这一号重放一遍。
+    //      （它本身画不出任何东西：`models/timeline.dart` 对认不出的类型安静忽略。）
+    //   ⚠️ **去重按 `(id, 版本)`**：补发那条路会把它再送一遍（协议 R5），
+    //      不挡的话界面会白重拉一次清单。
+    final update = AppUpdate.of(event);
+    if (update != null && appUpdates[update.id] != update.version) {
+      appUpdates[update.id] = update.version;
+      lastAppUpdate = update;
+      appUpdateRevision += 1;
     }
 
     // ★ **"这件事搬到新的一处去了"**（契约 `docs/dev/102` 追加的 ⑤，主人定案"甲·变"）：

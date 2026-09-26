@@ -28,7 +28,9 @@ import { Apps, sha256hex } from '../src/apps.js';
 import { Auth } from '../src/auth.js';
 import { createServer } from '../src/server.js';
 import { createAppServer, verifyEntry } from '../src/app-serve.js';
+import { LIVE_VERSION } from '../src/app-live.js';
 import { createBoxApps } from '../src/apps-box.js';
+import { AppWorkspaces, readLiveApp } from '../src/workspace.js';
 import {
   PRUNE_WHAT,
   createAppsMigrateServer,
@@ -69,13 +71,35 @@ function tmp(tag = 'hupo-b15-') {
   return nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), tag));
 }
 
-/** 一个"按人取世界"的假壳：只给那几个人的那一格。 */
+/** 一个"按人取世界"的假壳：只给那几个人的那一格。
+ *  ★ `112`：每人那一格也带**真的 `AppWorkspaces`**（活地址 `/w/` 的落点）——
+ *     假的空壳会让"活文件"那条路测不到（而它正是这一批的主角）。 */
 function makeWorlds(dirs) {
   const map = new Map();
   for (const [sub, dir] of Object.entries(dirs)) {
-    map.set(sub, { userId: sub, dir, apps: new Apps({ dir, sub }) });
+    map.set(sub, {
+      userId: sub,
+      dir,
+      apps: new Apps({ dir, sub }),
+      workspaces: new AppWorkspaces({ dir }),
+    });
   }
   return { worldFor: (sub) => map.get(sub) ?? null };
+}
+
+/**
+ * ★ **`112`：活地址（`/w/`）的取值来源** —— 形状与 `serve.js` 的 `liveForSub` 逐条对齐。
+ * 租户 ⇒ 经真隧道去他盒子（`createBoxApps().readLive()`）；本机 ⇒ 那一间自己的工作区
+ * （必要时先从当前那一版落成一次）。
+ */
+function liveOfFor({ worlds, tenantOf, dialFor }) {
+  return (sub) => {
+    const tenant = tenantOf ? tenantOf(sub) : null;
+    if (tenant) return createBoxApps({ sub, dial: () => dialFor(tenant) });
+    const w = worlds.worldFor(sub);
+    if (!w?.workspaces) return null;
+    return { readLive: (id, rel) => readLiveApp({ apps: w.apps, workspaces: w.workspaces, id, rel }) };
+  };
 }
 
 const OK = (id, title, body) => ({
@@ -166,6 +190,8 @@ async function bootHost(t, { hostDirs, boxUds, tenants = { u1: 'hupo-a', u2: 'hu
   {
     const origin = createAppServer({
       resolveApps: (sub) => appsOf(sub),
+      // ★ `112`：活地址那条路的取值来源（形状与 `serve.js` 逐条对齐）
+      resolveLive: liveOfFor({ worlds, tenantOf, dialFor }),
       key: KEY,
       frameAncestors: "'self'",
       now: () => NOW,
@@ -207,12 +233,12 @@ test('B15-1 租户的 /api/apps 列的是盒子里那份；宿主那份的**不�
   const j = await (await listApps(host.origin, host.tokenFor('u2'))).json();
   assert.deepEqual(j.apps.map((a) => a.id), ['city-weather'], '★ 清单必须是**盒子里**那份');
   assert.equal(j.apps.some((a) => a.id === 'tianqi-probe'), false, '★ 宿主那份**不许**出现');
-  // ★ 入口 URL 仍然由**宿主**签（绑人 + 绑版本 + 用宿主那个公开基址）
+  // ★ 入口 URL 仍然由**宿主**签（绑人 + 用宿主那个公开基址）；★ `112` 起签的是**活地址**
   const one = j.apps[0];
-  assert.match(one.entryUrl, /^http:\/\/127\.0\.0\.1:9999\/a\/city-weather\/1\/index\.html\?/);
+  assert.match(one.entryUrl, /^http:\/\/127\.0\.0\.1:9999\/w\/city-weather\/index\.html\?/);
   const u = new URL(one.entryUrl);
   assert.equal(
-    verifyEntry({ key: KEY, sig: u.searchParams.get('s'), sub: 'u2', id: 'city-weather', version: 1, exp: u.searchParams.get('e'), now: NOW }),
+    verifyEntry({ key: KEY, sig: u.searchParams.get('s'), sub: 'u2', id: 'city-weather', version: LIVE_VERSION, exp: u.searchParams.get('e'), now: NOW }),
     true,
     '宿主用自己的签名键现签',
   );

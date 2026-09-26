@@ -21,7 +21,11 @@ import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 import nodeUrl from 'node:url';
 
+import { LIVE_PREFIX, LIVE_VERSION, checkLiveRel, parseLivePath } from './app-live.js';
 import { AppsError } from './apps.js';
+// ⚠️ 只为了**认出"盒子不通"那一档**（它要回 503，不是"没这个文件"）——
+//    `apps-box.js` 不 import 这一份，所以没有环。
+import { BoxError } from './apps-box.js';
 
 /** 制品 URL 的前缀：`/a/<id>/<version>/<path>`。 */
 export const ARTIFACT_PREFIX = '/a/';
@@ -105,6 +109,26 @@ export function entryUrl({ base, key, sub, id, version, entry, now = Date.now(),
 }
 
 /**
+ * ★ **一条"活地址"**：`/w/<id>/<rel>` —— 打开的是**那一间工作区里现在那一份**
+ * （契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）。
+ *
+ * 🔴 **签名照旧**：同一把键、同一个 TTL、同一个 `signEntry`、同样四道验。
+ *    变的只有 payload 里"取的是哪一份"那一格 —— 活地址用哨兵 `live`
+ *    （见 `app-live.js` 的 `LIVE_VERSION`：那一格顺带做**域分离**，
+ *    一份签名只对"它当初签的那条路"有用）。
+ *
+ * ⚠️ **它和 `entryUrl()` 是两条路，不是一个函数的两个分支**：产物不同
+ *    （`/w/` vs `/a/<version>/`）、失效方式也不同（一个是"他改了就是新的"，
+ *    一个是"那一版永远不变"）。混成一个函数，下一次改就分不清哪条是哪条。
+ */
+export function liveEntryUrl({ base, key, sub, id, entry, now = Date.now(), ttlMs = SIGNED_TTL_MS }) {
+  const exp = now + ttlMs;
+  const sig = signEntry({ key, sub, id, version: LIVE_VERSION, exp });
+  const q = new URLSearchParams({ u: sub, e: String(exp), s: sig });
+  return `${base}${LIVE_PREFIX}${id}/${entry}?${q}`;
+}
+
+/**
  * 解析 `/a/<id>/<version>/<path>`。**解析不出来一律 `null`**（不猜）。
  * ⚠️ 这里只做"形状"，路径安全由 `apps.js` 的 `checkRelPath` 再验一道（两道都要）。
  */
@@ -153,17 +177,44 @@ function deny(res, status = 403) {
 }
 
 /**
+ * ★ **`112`：他那台盒子不通 ⇒ 503 ＋ 一句人话**。
+ *
+ * 🔴 为什么非要与 404 分开：租户那一份的字**在他盒子里** —— 盒子不通时
+ *    回 404 就是**页面在说假话**（"这里没有这个文件"，而他明明有，只是那台没应）。
+ *    `apps-box.js` 的契约写的就是"盒子不通 ⇒ 如实回 503/403"。
+ * ⚠️ 文案**不带任何内部细节**（不出 HTTP 码、不出盒子名）：它是给那个沙箱页面看的。
+ */
+function denyBox(res) {
+  res.writeHead(503, {
+    'content-type': 'text/plain; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  });
+  res.end('这个现在打不开，等会儿再试试。\n');
+}
+
+/**
  * 起那个口。
  *
  * @param {object} o
  * @param {(sub:string)=>{read:(id:string,version:any,rel:string)=>{content:Buffer,contentType:string}}|null} o.resolveApps
- *        按人去取制品库。**取不到就 `null`**（`null` ⇒ 一律拒 —— fail-closed）
+ *        按人去取制品库（`/a/` 那条路）。**取不到就 `null`**（`null` ⇒ 一律拒 —— fail-closed）
+ * @param {(sub:string)=>{readLive:(id:string,rel:string)=>{content:Buffer,contentType:string}}|null} [o.resolveLive]
+ *        ★ **按人去取"活的工作区"**（`/w/` 那条路 · 契约 112）。**不给 / 取不到 ⇒ 一律拒**
+ *        （fail-closed：宁可他点开说取不到，也不许把"某一版快照"顶上活地址）。
  * @param {Buffer|string} o.key      签名密钥（**不进日志**）
  * @param {string} o.frameAncestors  壳的 origin（CSP `frame-ancestors`）
  * @param {(m:string)=>void} [o.log]
  * @param {()=>number} [o.now]
  */
-export function createAppServer({ resolveApps, key, frameAncestors, log = () => {}, now = Date.now }) {
+export function createAppServer({
+  resolveApps,
+  resolveLive = null,
+  key,
+  frameAncestors,
+  log = () => {},
+  now = Date.now,
+}) {
   if (!key) throw new AppsError('签名密钥必填');
   if (!frameAncestors) throw new AppsError('frameAncestors 必填（CSP 要它）');
   const csp = cspFor(frameAncestors);
@@ -181,28 +232,49 @@ export function createAppServer({ resolveApps, key, frameAncestors, log = () => 
       res.end('只支持 GET。\n');
       return;
     }
-    const hit = parseArtifactPath(parsed.pathname ?? '');
-    if (!hit) {
+    /**
+     * ★ **两条路，只有一处不同**（契约 112）：
+     *   · `/a/<id>/<version>/<rel>` —— 某一版**不可变快照**（发布/血缘那一侧照旧）；
+     *   · `/w/<id>/<rel>`           —— 那一间工作区里**现在那一份**（他自己那一份）。
+     * 🔴 验签、CSP、响应头、"先验签再碰盘"的顺序，两条**逐字相同**。
+     */
+    const live = parseLivePath(parsed.pathname ?? '');
+    const hit = live ? null : parseArtifactPath(parsed.pathname ?? '');
+    if (!live && !hit) {
       deny(res, 404);
       return;
     }
+    const id = live ? live.id : hit.id;
     const q = new URLSearchParams(parsed.query ?? '');
     const sub = q.get('u') ?? '';
     const exp = q.get('e') ?? '';
     const sig = q.get('s') ?? '';
     // 🔴 **先验签，再碰盘**（顺序刻意：没签名的请求连目录都不看）
-    if (!sub || !verifyEntry({ key, sig, sub, id: hit.id, version: hit.version, exp, now: now() })) {
-      log(`制品口：签名不过（${hit.id}）`);
+    //    · 活地址那一格签的是哨兵 `live`（域分离：制品签名拿到这儿过不了）
+    const version = live ? LIVE_VERSION : hit.version;
+    if (!sub || !verifyEntry({ key, sig, sub, id, version, exp, now: now() })) {
+      log(`${live ? '活地址' : '制品口'}：签名不过（${id}）`);
       deny(res, 403);
       return;
     }
+    // ★ **白名单在"碰工作区之前"**（V2 的反例钉的就是这一条）：
+    //   `..` / `.hupo.json` / `build/` 这一类**连库都不碰**（更别说去 dial 盒子）。
+    if (live) {
+      try {
+        checkLiveRel(live.rel);
+      } catch (e) {
+        log(`活地址：这个路径不对外（${e instanceof AppsError ? e.message : '未知错'}）`);
+        deny(res, 404);
+        return;
+      }
+    }
     let apps = null;
     try {
-      apps = resolveApps(sub);
+      apps = live ? (typeof resolveLive === 'function' ? resolveLive(sub) : null) : resolveApps(sub);
     } catch (e) {
       // ⚠️ **取库那一步不许把进程带走**（`worldFor` / `tenantOf` 都可能对一个怪身份抛）：
       //    这里拒掉这一条请求就够了 —— 一个未捕获异常会让整个服务下去。
-      log(`制品口：取库那一步出错（${sub}）${e?.message ?? e}`);
+      log(`${live ? '活地址' : '制品口'}：取库那一步出错（${sub}）${e?.message ?? e}`);
       deny(res, 403);
       return;
     }
@@ -213,9 +285,16 @@ export function createAppServer({ resolveApps, key, frameAncestors, log = () => 
     }
     let pending;
     try {
-      pending = apps.read(hit.id, hit.version, hit.rel);
+      // 🔴 **两个方法名是分开的**（`readLive` vs `read`）：活地址走前者。
+      //    写成一个的话，"取哪儿"又会悄悄退回某一版快照 —— 而那正是这一条要修的。
+      pending = live ? apps.readLive(live.id, live.rel) : apps.read(hit.id, hit.version, hit.rel);
     } catch (e) {
-      log(`制品口：读不出来（${hit.id}）${e instanceof AppsError ? e.message : '未知错'}`);
+      log(`${live ? '活地址' : '制品口'}：读不出来（${id}）${e instanceof AppsError ? e.message : '未知错'}`);
+      // ★ **盒子不通 ⇒ 503**（只在活地址这条路上分；制品那条一个字没动）
+      if (live && e instanceof BoxError) {
+        denyBox(res);
+        return;
+      }
       deny(res, 404);
       return;
     }
@@ -241,9 +320,13 @@ export function createAppServer({ resolveApps, key, frameAncestors, log = () => 
         res.end(req.method === 'HEAD' ? undefined : got.content);
       },
       (e) => {
-        log(`制品口：读不出来（${hit.id}）${e instanceof AppsError ? e.message : (e?.message ?? '未知错')}`);
-        if (!res.headersSent) deny(res, 404);
-        else res.destroy();
+        log(`${live ? '活地址' : '制品口'}：读不出来（${id}）${e instanceof AppsError ? e.message : (e?.message ?? '未知错')}`);
+        if (!res.headersSent) {
+          if (live && e instanceof BoxError) denyBox(res);
+          else deny(res, 404);
+        } else {
+          res.destroy();
+        }
       },
     );
   });

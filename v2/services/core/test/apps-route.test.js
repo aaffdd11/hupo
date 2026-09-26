@@ -3,7 +3,8 @@
 // ── 这一份钉什么 ──────────────────────────────────────────
 //   ① 🔴 **只有当前用户可见**：拿甲的令牌，清单里**绝不会有乙的制品**（负向对照）
 //   ② 🔴 **身份只从令牌来**：URL / body / 头里报谁都不算数
-//   ③ **入口 URL 是现签的**：绑人、绑版本、**有到期**；拿着它为别人取 ⇒ 取不到
+//   ③ **入口 URL 是现签的**：绑人、**有到期**；拿着它为别人取 ⇒ 取不到。
+//      ★ `112` 起签的是**活地址**（`/w/<id>/<entry>`）——"活的工作区"那一份，不是某版快照。
 //   ④ 没开这条路（没给 `apps`）⇒ 404，而不是"返回一个空清单"（**不说假话**）
 //   ⑤ 坏制品不炸清单（跳过那一条，别的还在）
 
@@ -16,6 +17,7 @@ import test, { after } from 'node:test';
 import { Apps } from '../src/apps.js';
 import { Auth } from '../src/auth.js';
 import { createServer } from '../src/server.js';
+import { LIVE_VERSION } from '../src/app-live.js';
 import { verifyEntry } from '../src/app-serve.js';
 
 const open = new Set();
@@ -90,25 +92,27 @@ test('🔴 只有当前用户可见：甲的清单里绝不会有乙的制品（
   assert.equal(ja.apps.some((x) => x.id === 'bob'), false, '★ 甲不许看见乙的制品');
 });
 
-test('🔴 入口 URL 是现签的：绑人 + 绑版本 + 有到期；拿去给别人取也过不了签名', async (t) => {
+test('🔴 入口 URL 是现签的：绑人 + 有到期；拿去给别人取也过不了签名', async (t) => {
   const dirA = tmp();
   new Apps({ dir: dirA, sub: 'u1' }).create({ ...OK });
   const s = await boot(t, { dirs: { u1: dirA } });
   const token = s.auth.issue({ sub: 'u1' }).token;
   const j = await (await list(s.origin, token)).json();
   const one = j.apps[0];
-  assert.match(one.entryUrl, /^http:\/\/127\.0\.0\.1:9999\/a\/dice\/1\/index\.html\?/);
+  // ★ **`112`：签的是"活地址"**（`/w/`），不是某版快照（`/a/<version>/`）——
+  //   绑的仍然只有两样：**这个人** ＋ 哨兵 `live`（不是版本号）。
+  assert.match(one.entryUrl, /^http:\/\/127\.0\.0\.1:9999\/w\/dice\/index\.html\?/);
   assert.equal(one.expiresAt > NOW, true, '要有一个到期时间');
 
   const url = new URL(one.entryUrl);
   const exp = url.searchParams.get('e');
   const sig = url.searchParams.get('s');
-  // 这条签名是给甲的
-  assert.equal(verifyEntry({ key: KEY, sig, sub: 'u1', id: 'dice', version: 1, exp, now: NOW }), true);
+  // 这条签名是给甲的（活地址那一格签的是哨兵 `live`）
+  assert.equal(verifyEntry({ key: KEY, sig, sub: 'u1', id: 'dice', version: LIVE_VERSION, exp, now: NOW }), true);
   // 换成乙 ⇒ 同一串签名过不了（绑人）
-  assert.equal(verifyEntry({ key: KEY, sig, sub: 'u2', id: 'dice', version: 1, exp, now: NOW }), false);
-  // 换个版本 ⇒ 也过不了（绑版本）
-  assert.equal(verifyEntry({ key: KEY, sig, sub: 'u1', id: 'dice', version: 2, exp, now: NOW }), false);
+  assert.equal(verifyEntry({ key: KEY, sig, sub: 'u2', id: 'dice', version: LIVE_VERSION, exp, now: NOW }), false);
+  // 🔴 **域分离**：拿它去当**制品**签名（某一版）也过不了 —— 活地址与制品是两条路
+  assert.equal(verifyEntry({ key: KEY, sig, sub: 'u1', id: 'dice', version: 1, exp, now: NOW }), false);
 });
 
 test('没开这条路 ⇒ 404（不是"返回一个空清单"）', async (t) => {

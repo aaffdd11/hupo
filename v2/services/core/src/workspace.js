@@ -24,6 +24,7 @@
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
+import { checkLiveRel, liveRelOk } from './app-live.js';
 import {
   AppsError,
   MAX_FILES,
@@ -33,6 +34,7 @@ import {
   MAX_VERSIONS,
   checkAppId,
   checkRelPath,
+  contentTypeOf,
   refuseReservedAppId,
   rootHashOf,
   sha256hex,
@@ -418,6 +420,125 @@ export class AppWorkspaces {
     }
     return { id, dir, files, entry, manifest: man };
   }
+
+  /**
+   * ★ **按工作区读一个"活文件"**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）。
+   *
+   * ── 它和 `read()` 的分工 ──────────────────────────────────
+   *   · `read()` —— 把**整间**读回来给制品快照（发布/血缘那一条路用）；
+   *   · 这一个 —— 给"桌面那一格现在要显示什么"读**一个**文件，**现读现给**。
+   *     ⇒ "他改了没发布，屏幕上也是新的"在结构上成立：**读的就是那一份**。
+   *
+   * 🔴 **两道路径安全**：`checkLiveRel`（白名单：`.` 开头与 `build/` 一律拒）＋
+   *    下面那次 **resolve 之后的"还在不在这间里"**（防符号链接/`..` 那种绕过）。
+   * 🔴 **只读、不建目录、不写**：读不到 ⇒ 抛（人话），绝不替它编一个页面出来。
+   *
+   * @returns {{content:Buffer, contentType:string, rel:string}}
+   */
+  readLive(scope, rel) {
+    const id = checkScope(scope);
+    if (!this.has(id)) throw new AppsError(`没有这个工作区：${id}`);
+    const r = checkLiveRel(rel);
+    const dir = nodePath.resolve(this.dirFor(id));
+    const abs = nodePath.resolve(dir, r);
+    // 🔴 第二道：解析之后必须**还在这一间里面**（`checkLiveRel` 只判字符串）
+    if (abs !== dir && !abs.startsWith(`${dir}${nodePath.sep}`)) {
+      throw new AppsError(`工作区里没有这个文件：${r}`);
+    }
+    let st;
+    try {
+      st = this.fs.statSync(abs);
+    } catch {
+      throw new AppsError(`工作区里没有这个文件：${r}`);
+    }
+    if (!st.isFile()) throw new AppsError(`工作区里没有这个文件：${r}`);
+    return { content: this.fs.readFileSync(abs), contentType: contentTypeOf(r), rel: r };
+  }
+}
+
+/**
+ * ★ **"他那一份现在长什么样" —— 读一个活文件，必要时先把它落成**（契约 112 §三）。
+ *
+ * ── 为什么要"必要时先落成"（真机读数逼出来的）────────────────
+ * 真机上主人那三个 app（`dice` / `wenda` / `coin`）**早于"一个图标 = 一个工作区"**
+ * （契约 83）就存在 ⇒ `data/workspaces/` **根本不存在**。而 `roomFor()` 又会在
+ * "制品库里有、工作区还没建"时建一个**空目录**（那是给它当 cwd 的）。
+ * ⇒ 只认"目录在不在"的话，那三个 app 一点开就是"取不到这个文件"。
+ *
+ * 🔴 **判据不是"目录在不在"，是"那一间自己的清单在不在"**（`.hupo.json`）：
+ *    `AppWorkspaces.ensure()` 一定会写它 ⇒ 有清单 = 这间真的落成过。
+ *    没有清单（老 app / 刚装上的 / `roomFor` 建的空壳）⇒ 从**当前那一版**镜像一次。
+ *    ⚠️ **镜像之后再没有**（清单在了）⇒ **绝不再拿旧版顶替**：他删掉的文件就是删掉了，
+ *       "悄悄退回某一版"正是这一条要修的那种假话。
+ *
+ * ⚠️ 它**只写一次**（幂等：镜像完清单就在了）；写的是**这个人自己盒子里**那一份。
+ */
+export function readLiveApp({ apps, workspaces, id, rel }) {
+  if (!workspaces) throw new AppsError('没有这一间工作区');
+  try {
+    return workspaces.readLive(id, rel);
+  } catch (err) {
+    if (!(err instanceof AppsError)) throw err;
+    // 已经落成过（有清单）⇒ 这就是"真没有这个文件"，不许拿旧版顶替
+    if (workspaces.manifestOf(id) !== null) throw err;
+    if (!apps || typeof apps.current !== 'function' || apps.current(id) === null) throw err;
+    mirrorArtifactIntoWorkspace({ apps, workspaces, id });
+    return workspaces.readLive(id, rel);
+  }
+}
+
+/**
+ * ★ **`fs.watch` 报来的那条相对路径，算哪一间**（契约 112 §四）。
+ *
+ * 逐条拒（**认不出就 `null`**，不许猜）：
+ *   · 空 / 只有一层（改的是某间目录自己）⇒ 不算；
+ *   · 第一段不是合法 scope（`..` / 大写 / 太长）⇒ 不算；
+ *   · `main`（主线那个房间，不是小程序）⇒ 不算；
+ *   · 白名单不过（`.` 开头 / `build/` / 临时文件）⇒ 不算。
+ *
+ * ⚠️ 它住在**这一份**（而不是 `app-live.js`）是因为"scope 名字合法吗"那条规则
+ *    只有这一处（`safeScope` / `RESERVED_SCOPES`）；两边各写一遍迟早会漂。
+ */
+export function liveScopeOfChange(root, filename) {
+  if (typeof filename !== 'string' || filename === '') return null;
+  const parts = filename.split(nodePath.sep).filter((p) => p !== '');
+  if (parts.length < 2) return null;
+  const scope = safeScope(parts[0]);
+  if (!scope || RESERVED_SCOPES.includes(scope)) return null;
+  const rel = parts.slice(1).join('/');
+  return liveRelOk(rel) ? scope : null;
+}
+
+/**
+ * ★ **"活地址"那一侧的取值来源**（契约 112 §三 · 唯一一处）。
+ *
+ * 形状与 `serve.js` 的 `appsForSub` **逐条对齐**（同一个道理，别读成两套）：
+ *   · **租户** ⇒ `boxLive(sub, tenant)`（宿主给的是"经现有隧道读他盒子里那份"）；
+ *   · **主人 / 单租户** ⇒ 本机那一间（`readLiveApp`）。
+ *
+ * 🔴 **为什么抽成一个函数而不是写在 `serve.js` 里**：写在 `serve.js` 里的接线
+ *    **判据够不着**（那是个一跑就起监听的模块）—— 2026-09-26 真机当场栽了一次：
+ *    那里少 import 一个名字，请求进来才 `ReferenceError`，而**单测全绿**
+ *    （它们各自搭了一根自己的接线）。⇒ 把接线搬到一个能在 VM 上驱动的函数里，
+ *    判据直接打它（V13 那族：**闸要打在被测的那一侧**）。
+ *
+ * @param {object} o
+ * @param {(sub:string)=>object|null} o.worldFor
+ * @param {(sub:string)=>string|null} [o.tenantOf]  `null` = 本机那一份
+ * @param {(sub:string, tenant:string)=>object|null} [o.boxLive]  租户那一条（宿主给）
+ * @returns {(sub:string)=>{readLive:(id:string,rel:string)=>{content:Buffer,contentType:string}}|null}
+ */
+export function makeLiveForSub({ worldFor, tenantOf = () => null, boxLive = null } = {}) {
+  if (typeof worldFor !== 'function') throw new AppsError('worldFor 必填');
+  return (sub) => {
+    const tenant = tenantOf(sub);
+    if (tenant) return typeof boxLive === 'function' ? boxLive(sub, tenant) : null;
+    const w = worldFor(sub);
+    if (!w?.workspaces) return null;
+    return {
+      readLive: (id, rel) => readLiveApp({ apps: w.apps, workspaces: w.workspaces, id, rel }),
+    };
+  };
 }
 
 /**

@@ -18,6 +18,7 @@ import nodeNet from 'node:net';
 import nodePath from 'node:path';
 
 import { AppsError } from './apps.js';
+import { shouldTellAppFail } from './app-fail-words.js';
 import { NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
 import { NEEDS_ASK_IMAGE, asksToDrawImage } from './image.js';
 import { OutboundError, assertOutboundAllowed } from './outbound.js';
@@ -61,9 +62,44 @@ const MAX_LINE_BYTES = 512 * 1024;
  *   · `operatorAgent` **运营方那一侧的复评**（宿主的 agent，96 第 1 条）：
  *     接了就独立再读一遍源码，与预审**对不上 ⇒ escalate**（`reviewForPublish`）。
  *   · `usage` **用量账**（`UsageLedger`）：预审消耗记进 `<id>/usage.jsonl`。
+ *   · `onAppFailed(info)` ★ **这一次没做成 ⇒ 要有一条主人看得见的话**
+ *     （主人 2026-09-26 真机现场 · 契约 `docs/dev/111-APP-LIVE-UPDATE.md` §六）：
+ *     收到 `{op, id, title, error, verdict, refused}`。
+ *     ⚠️ 只在 `shouldTellAppFail()` 说该说的时候叫 —— 那两档"要回头问他一句"
+ *        的拒绝（`needs-ask` / `needs-choice`）**不算失败**，叫了就是假话。
  * @returns {object} 永远 `{ok:true,…}` 或 `{ok:false,error,…}`（**绝不抛**）
  */
 export async function handleAppsOp(apps, req, ctx = {}) {
+  const r = await runAppsOp(apps, req, ctx);
+  // ★ **没做成 / 被拒 ⇒ 主动说一句**（见上面 `onAppFailed` 那段）。
+  //   ⚠️ 它**不改判决**：说话失败不许把这次失败变成别的东西（原样把 `r` 还回去）。
+  try {
+    if (r?.ok !== true && shouldTellAppFail({ op: req?.op, refused: r?.refused })) {
+      ctx.onAppFailed?.({
+        op: req?.op,
+        id: req?.id,
+        // ⚠️ 名字优先取**制品里那一版**的（由调用方解析）；这里给的是请求里那个，
+        //    它只有"新造一个但没成"时才用得上（那时候制品库里还没有它）。
+        title: req?.app?.title ?? null,
+        error: r?.error,
+        verdict: r?.verdict,
+        refused: r?.refused,
+      });
+    }
+  } catch {
+    /* 说一句人话失败，不许动判决 */
+  }
+  return r;
+}
+
+/**
+ * 真正的那些动作（**一个 switch**）。
+ *
+ * ⚠️ 它**不导出**：外面看到的那条口是上面那个 `handleAppsOp` ——
+ *     "没做成要说话"那一刀挂在那一个入口上，**任何调用方都漏不掉**
+ *     （直接调这一份就会绕过它）。
+ */
+async function runAppsOp(apps, req, ctx = {}) {
   const op = req?.op;
   if (typeof op !== 'string') return { ok: false, error: '没说要做什么' };
   try {

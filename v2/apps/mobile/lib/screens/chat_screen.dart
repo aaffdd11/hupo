@@ -32,6 +32,7 @@ import '../models/app_spec.dart';
 import '../models/app_words.dart';
 import '../models/harness.dart';
 import '../models/harness_words.dart';
+import '../models/mini_update.dart';
 import '../models/scope.dart';
 import '../models/space_words.dart';
 import '../models/timeline.dart';
@@ -47,13 +48,13 @@ import '../widgets/app_desktop.dart';
 import '../widgets/harness_pane.dart';
 import '../widgets/job_ask_sheet.dart';
 import '../widgets/mini_app_icons.dart';
-import '../widgets/mini_runtime.dart';
 import '../widgets/plan_strip.dart';
 import '../widgets/bubble_select_bar.dart';
 import '../widgets/bubble_menu.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/chat_floater.dart';
 import '../widgets/mini_app_host.dart';
+import '../widgets/mini_app_frame.dart';
 import '../widgets/composer.dart';
 import '../widgets/notice.dart';
 import '../widgets/process_level_menu.dart';
@@ -246,6 +247,22 @@ class _ChatScreenState extends State<ChatScreen> {
     if (rev != _appsRevision) {
       _appsRevision = rev;
       unawaited(_loadMyApps());
+    }
+    // ★ **服务端说"这个小程序有新版了"**（契约 `docs/dev/111-APP-LIVE-UPDATE.md`）：
+    //   正开着它 ⇒ **现取一次清单，把那一帧换掉**（不要求他刷新）；
+    //   没开着 ⇒ 只记一笔（判据 U2/U3/U4）。
+    final upd = widget.controller.appUpdateRevision;
+    if (upd != _appUpdateRevision) {
+      _appUpdateRevision = upd;
+      unawaited(_onAppUpdate(widget.controller.lastAppUpdate));
+    }
+    // ★ **那一间的内容变了**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）：
+    //   他正在改的那一份刚被写过 ⇒ 正开着它 ⇒ **直接重取一次清单、换一帧**
+    //   （那一条**不带版本号** ⇒ 不判版本，收到就重取）；没开着 / 别人的 ⇒ 一个像素都不动。
+    final live = widget.controller.appWorkspaceRevision;
+    if (live != _appWorkspaceRevision) {
+      _appWorkspaceRevision = live;
+      unawaited(_onAppWorkspaceChanged(widget.controller.lastAppWorkspaceChange));
     }
     // ★ **派活那一步**（契约 `docs/dev/108-JOB-ASK-FLOW.md`）：
     //   ① 他接下一件新东西 ⇒ 服务端先问一句 ⇒ 出那层确认（两个按钮）；
@@ -613,7 +630,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final mine = _openMine();
     if (mine != null) {
       return (
-        view: buildMiniAppView(
+        // ★ **一帧 = 一条 `entryUrl`**（契约 `docs/dev/111-APP-LIVE-UPDATE.md`）：
+        //   版本换了 ⇒ 服务端现签一条新的 ⇒ 这里换一帧 ⇒ Web 那一侧换 iframe。
+        //   旧那一帧的收尾（退订 + 销号）在 `MiniAppFrame` 里（判据 U5）。
+        view: MiniAppFrame(
           entryUrl: mine.entryUrl,
           title: mine.title,
           // ★ **那条唯一的回话通道**（乙-4b）：页面说"我要问一句"，
@@ -760,6 +780,55 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// **上一次看到的"我的小程序"版本号**（乙-3：服务端说"装上了"就重拉）。
   int _appsRevision = 0;
+
+  /// **上一次处理过的"有新版"那一条**（契约 `docs/dev/111-APP-LIVE-UPDATE.md`）。
+  int _appUpdateRevision = 0;
+
+  /// **上一次处理过的"那一间的内容变了"**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）。
+  int _appWorkspaceRevision = 0;
+
+  /// **没开着、但已经听说"有新版"的那些**（app id）。
+  ///
+  /// 🔴 **没开着它的时候什么都不动**（判据 U3/U4：别人的更新、或者本来就没开着的那个，
+  ///    一个像素都不许跟着变）；只记一笔 —— 下次点开它之前先重拉一次清单，
+  ///    否则点开的还是旧那一版（那正是这一条要修的东西）。
+  final Set<String> _staleMine = <String>{};
+
+  /// **这个小程序有新版了**（服务端那一帧 · 判据 U2/U3/U4）。
+  ///
+  /// * **正开着它** ⇒ 现取一次清单（`/api/apps` 会给新那一版**现签**的 `entryUrl`）
+  ///   ⇒ 下面 `build` 出来的就是新的一帧（新 URL ⇒ 新 `viewId` ⇒ **新 iframe**）。
+  ///   🔴 **不要求他刷新、也不动聊天浮窗/桌面**：只换容器里那一个孩子。
+  /// * **不是它** ⇒ 什么都不动（只记一笔）—— 见 [_staleMine]。
+  Future<void> _onAppUpdate(AppUpdate? update) async {
+    if (update == null) return;
+    final mine = _openMine();
+    if (mine == null || mine.id != update.id) {
+      _staleMine.add(update.id);
+      return;
+    }
+    // 已经在这一版上了（补发/重复）⇒ 没有必要重拉一次（那会白换一帧）
+    if (update.version <= mine.version) return;
+    await _loadMyApps();
+    if (!mounted) return;
+    _staleMine.remove(update.id);
+  }
+
+  /// **那一间的内容变了**（服务端那一帧 · 契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）。
+  ///
+  /// 🔴 **与 [`_onAppUpdate`] 的差别只有一处**：那一条带版本号（要判"是不是比我新"，
+  ///    而且补发会重复）；这一条**不带**（用户端没有"版本"这回事，而且它是**瞬态**、
+  ///    不会补发）⇒ 收到就**直接重取一次清单**。
+  /// 🔴 **只重取"正开着的那一个"**：不是它 ⇒ **一个请求都不发**
+  ///    （别人的改动不许把这一屏搞乱 —— 判据 V5 的反例）。
+  /// ⚠️ 重取之后下面 `build` 出来的就是新的一帧（新 exp ⇒ 新签 URL ⇒ 新 `viewId`
+  ///    ⇒ 换 iframe，旧那一帧由 `MiniAppFrame` 收干净）—— **不要求他刷新**。
+  Future<void> _onAppWorkspaceChanged(AppWorkspaceChange? change) async {
+    if (change == null) return;
+    final mine = _openMine();
+    if (mine == null || mine.id != change.id) return;
+    await _loadMyApps();
+  }
 
   /// 拉一次"我的小程序"（乙-1）。**失败了不当成"他没有"**（不弹错 —— 它不是用户主动要的东西）。
   ///
@@ -1018,8 +1087,12 @@ class _ChatScreenState extends State<ChatScreen> {
     } else {
       _closeHarness();
     }
-    if (which.startsWith(_minePrefix) && _mineStale(which)) {
-      await _loadMyApps(); // 拿新的签名 URL（失败就当没拿到：下面照样开，至多是那句空）
+    if (which.startsWith(_minePrefix) &&
+        (_mineStale(which) || _staleMine.contains(which.substring(_minePrefix.length)))) {
+      // ★ 拿新的签名 URL；**或者**拿新那一版（听说"有新版"时 —— 契约 111 判据 U4：
+      //   他当时没开，这里补上那次重拉，免得点开还是旧那一版）。
+      await _loadMyApps();
+      if (mounted) _staleMine.remove(which.substring(_minePrefix.length));
     }
     if (!mounted) return;
     setState(() {

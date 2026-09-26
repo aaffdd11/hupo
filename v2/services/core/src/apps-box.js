@@ -39,6 +39,15 @@ export const INTERNAL_PREFIX = '/internal/';
 export const BOX_APPS_PATH = '/internal/apps';
 /** 取一个制品的字节。 */
 export const BOX_ARTIFACT_PATH = '/internal/artifact';
+/**
+ * ★ **`112`：取那一间工作区里一个"活文件"的字节**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）。
+ *
+ * ⚠️ 与 `/internal/artifact` 同一个道理（B15）：租户那一份的字节在**他盒子里**
+ *    ⇒ "按工作区取文件"这件事也必须**在盒里落**（宿主那份 `workspaces/` 是空的）。
+ * ⚠️ 它**不验签**（验签在宿主的 `app-serve.js`，而且**在碰这条口之前**）：
+ *    身份就是"你从哪条可信 UDS 进来的"。
+ */
+export const BOX_WORKSPACE_LIVE_PATH = '/internal/workspace-live';
 /** 收一次创建（**迁移用**：走盒子自己那条写入路，版本/清单/权限语义一致）。 */
 export const BOX_APP_PATH = '/internal/app';
 /**
@@ -117,6 +126,7 @@ export function parseInternalPath(pathname) {
   if (pathname === BOX_APPS_PATH) return { kind: 'list' };
   if (pathname === BOX_APP_PATH) return { kind: 'create' };
   if (pathname === BOX_ARTIFACT_PATH) return { kind: 'artifact' };
+  if (pathname === BOX_WORKSPACE_LIVE_PATH) return { kind: 'workspace-live' };
   if (pathname === BOX_APP_ASK_CHECK_PATH) return { kind: 'app-ask-check' };
   if (pathname === BOX_APP_REMOVE_PATH) return { kind: 'app-remove' };
   if (pathname === BOX_APP_RENAME_PATH) return { kind: 'app-rename' };
@@ -135,6 +145,22 @@ export function parseArtifactQuery(search) {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return null;
   if (!/^[1-9][0-9]*$/.test(version)) return null;
   return { id, version, rel };
+}
+
+/**
+ * ★ **`112`：把 `/internal/workspace-live?...` 的查询解出来**。
+ *
+ * 与 `parseArtifactQuery` 的差别只有一处：**没有 `version`**（活文件不属于哪一版）。
+ * ⚠️ `rel` 的白名单**不在这里**（那只有一处：`app-live.js` 的 `checkLiveRel`，
+ *    两侧共用）—— 这里只做形状，认不出就 `null`（不猜）。
+ */
+export function parseLiveQuery(search) {
+  const q = new URLSearchParams(typeof search === 'string' ? search : '');
+  const id = q.get('id') ?? '';
+  const rel = q.get('rel') ?? '';
+  if (!id || !rel) return null;
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return null;
+  return { id, rel };
 }
 
 /**
@@ -269,6 +295,30 @@ export function createBoxApps({ sub = 'owner', dial, log = () => {} } = {}) {
       if (r.status === 404) throw new AppsError('制品里没有这个文件');
       if (r.status !== 200) {
         log(`盒子取字节不过（${id}）：HTTP ${r.status}`);
+        throw new BoxError(`盒子那边取不到这个文件（HTTP ${r.status}）`, 'bad-status');
+      }
+      return {
+        content: r.body,
+        contentType: String(r.headers['content-type'] ?? 'application/octet-stream'),
+      };
+    },
+    /**
+     * ★ **`112`：盒子里那一间工作区里一个"活文件"的字节**（契约
+     * `docs/dev/112-OWN-APP-IS-LIVE.md`）。
+     *
+     * 🔴 **以盒子为准**：租户的 `workspaces/` 在**他盒子里** ⇒ 桌面那一格要显示的
+     *    字节必须从这儿取（宿主那份是空的 —— 拿它顶替就是 B15 那种假话）。
+     * 🔴 **失败就说失败**：盒子不通 ⇒ 抛 `BoxError`（调用方如实 403/503），
+     *    **绝不**退回"某一版快照"（那会让"他改的没上屏"变成一句更难查的话）。
+     *
+     * @returns {Promise<{content:Buffer, contentType:string}>}
+     */
+    async readLive(id, rel) {
+      const q = new URLSearchParams({ id: String(id), rel: String(rel) });
+      const r = await requestOverSocket(dialOnce(dial), { path: `${BOX_WORKSPACE_LIVE_PATH}?${q}` });
+      if (r.status === 404) throw new AppsError('工作区里没有这个文件');
+      if (r.status !== 200) {
+        log(`盒子取活文件不过（${id}）：HTTP ${r.status}`);
         throw new BoxError(`盒子那边取不到这个文件（HTTP ${r.status}）`, 'bad-status');
       }
       return {

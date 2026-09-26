@@ -73,6 +73,14 @@ const RATCHET = [
   //    它定的是"一个房间一条会话 ＋ 那份 mapping"这个**正在承重**的形状
   //    （`agent-runtime.js` / `dsh-sessions.mjs` / `sdk-server-hupo.mjs` 三处都按它写）。
   'docs/dev/110-ONE-SESSION-PER-ROOM.md',
+  // ⚠️ 2026-09-26：111 **出生就进名单**（同一条纪律）。
+  //    它定的是"制品换了一版 ⇒ 正开着它的那一屏自己换上"那个**正在承重**的形状
+  //    （新事件 `app/update-available` 的两半 ＋ 那本 viewId 账 ＋ "没做成要说话"）。
+  'docs/dev/111-APP-LIVE-UPDATE.md',
+  // ⚠️ 2026-09-26：112 **出生就进名单**（同一条纪律）。
+  //    它定的是"桌面那一格打开的是他正在改的那一份（活的工作区）"这个**正在承重**的形状
+  //    （活地址 `/w/` 的签名与白名单 ＋ `app/workspace-changed` 那条瞬态通知 ＋ 看着盘的那个人）。
+  'docs/dev/112-OWN-APP-IS-LIVE.md',
 ];
 
 /** ② L0 = 路由层：零事实、零数值、零状态 */

@@ -27,3 +27,13 @@ Widget buildMiniAppView({
     ),
   );
 }
+
+/// **这一帧换掉了 / 关掉了 ⇒ 收干净**（Web 那一侧退订消息监听见
+/// `mini_runtime_web.dart`）。
+///
+/// ⚠️ 这一侧**没有运行时** ⇒ 空操作。它必须在，因为 `MiniAppFrame`
+/// （`widgets/mini_app_frame.dart`）对**两个平台**说同一句话 —— 少了它，
+/// 这一侧就编不过（那正是"判据只在 Web 上跑得到"的老毛病）。
+void releaseMiniAppView(String viewId) {
+  /* 这一侧没有 iframe，也没有监听可退 */
+}

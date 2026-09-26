@@ -246,6 +246,17 @@ export class Apps {
    * @param {object} [o.fs]       注入文件系统（测试用）
    * @param {()=>number} [o.now]  注入时钟
    * @param {(e:object)=>void} [o.onAudit]  额外审计落点（全局 `audit.log`）；**它出错不许挡住主流程**
+   * @param {(e:{id:string,version:number,title:string})=>void} [o.onVersion]
+   *        ★ **一版真的写下去了**（契约 `docs/dev/111-APP-LIVE-UPDATE.md`）：
+   *        "制品换了版本 ⇒ 正开着它的那个界面自己换上"那一帧的**唯一触发点**。
+   *        🔴 为什么挂在**这里**：`create()` 是**所有写路都经过的那个漏斗**
+   *        （工具那条新路 `snapshotWorkspace`、旧路、从共享库"装上"、
+   *        `/api/app-copy` 复制一份都走它）⇒ 挂在漏斗上，"多写了一条路却没喊"
+   *        在结构上不可能；挂在某一个调用点上的话，下一条写路就会漏。
+   *        ⚠️ **第一版不喊**（`version === 1`）：那不是"更新"，而且那一刻
+   *        还没有任何界面开着它（新东西走 `app/installed` 那条）。
+   *        ⚠️ **它出错不许让"写成了"这件事失败** —— 版本已经在盘上了，
+   *        这时候回报一个失败就是让工具说假话（见 `create()` 末尾的 try/catch）。
    * @param {object|(()=>object)} [o.reclaim]
    *        ★ **`103` §七：真回收的上下文**（一个人一份）。给了 ⇒ `remove()` 除了软删
    *        制品那一格，还会把**那一间的工作区 / 对话 / 助手那边的会话记录**一起搬进
@@ -255,13 +266,14 @@ export class Apps {
    *        ⚠️ 传**函数**（惰性取）是有意的：`worlds.js` 里那几本账（`unread`/`work`）
    *        在 `new Apps()` 之后才建 —— 但 `remove()` 一定发生在它们建好之后。
    */
-  constructor({ dir, sub = null, fs = nodeFs, now = Date.now, onAudit = () => {}, reclaim = null }) {
+  constructor({ dir, sub = null, fs = nodeFs, now = Date.now, onAudit = () => {}, onVersion = () => {}, reclaim = null }) {
     if (!dir) throw new AppsError('dir 必填');
     this.dir = dir;
     this.sub = sub;
     this.fs = fs;
     this.now = now;
     this.onAudit = onAudit;
+    this.onVersion = onVersion;
     this.reclaim = reclaim;
   }
 
@@ -480,6 +492,19 @@ export class Apps {
     writeAtomic(this.fs, nodePath.join(this.appDir(id), 'current.json'), `${JSON.stringify({ version })}\n`, 0o644);
 
     this.#audit({ what: 'create', id, version, rootHash: manifest.rootHash, by: createdBy, turn: createdTurn });
+    // ★ **一版真的写下去了**（契约 `docs/dev/111-APP-LIVE-UPDATE.md`）：
+    //   走到这里 = 文件、`manifest.json`、`current.json`（指针）**都写成了**。
+    //   🔴 顺序刻意：它在**指针移完之后** —— 早一步喊，客户端去 `/api/apps`
+    //      可能拿到**上一版**（那就成了一句假话：屏幕上什么都不会换）。
+    //   ⚠️ **第一版不喊**（见构造函数那段）。
+    //   ⚠️ 喊不出去**不许**让"写成了"这件事失败：盘上已经有这一版了。
+    if (version > 1) {
+      try {
+        this.onVersion({ id, version, title: manifest.title });
+      } catch {
+        /* 喊不出去不影响制品；下一次 `/api/apps` 照样拿得到新的 */
+      }
+    }
     return manifest;
   }
 

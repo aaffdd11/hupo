@@ -25,6 +25,10 @@ import { dropTunnel, notifyHost } from './tenant-tunnel-agent.mjs';
 import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
 import { appsBaseOf, createAppServer, loadSignKey } from './app-serve.js';
+// ★ **`112`：桌面那一格打开的是"他正在改的那一份"**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）：
+//   `createLiveWatcher` 看着工作区、`liveScopeOfChange` 判"哪个文件算哪一间"。
+import { createLiveWatcher } from './app-live.js';
+import { liveScopeOfChange, makeLiveForSub } from './workspace.js';
 // ★ **B15 · 小程序库以盒子为准**：宿主这一侧只借它"把盒子那份当成一个 Apps 来用"。
 import { createBoxApps } from './apps-box.js';
 // ★ **B15 存量迁移**：宿主那份旧库经**现有隧道**推进他自己的盒子（维护口 + 核心逻辑）。
@@ -457,6 +461,23 @@ const channel = new TenantChannel({
     // ★ 投递那条路：**它自己说拿到了**，才把主人投的那个文件删掉（契约 §三.2）
     keyDrop?.confirmed(uid);
   },
+  /**
+   * ★ **`112`：盒里说"那一间工作区的内容变了"**（契约 112 §四）。
+   *
+   * 🔴 用户那一屏连的是**宿主**，而工作区在**盒里** ⇒ 这一帧是"他改了"
+   *    唯一能到用户眼前的路。宿主收到之后只做一件事：**在那个人那条可见日志上
+   *    推一条瞬态事件**（带上 `scopeId = 那一间`）⇒ 实时那一侧按焦点路由，
+   *    **只有正开着这一间的那条连接收得到**（判据 V4）。
+   * ⚠️ 世界没热过 / 那一间不在 ⇒ `emitLiveChange` 回 `false`（如实记一笔，
+   *    **不为了一个文件事件去 provision 一个人**）。
+   */
+  onWorkspaceChanged: (tenant, scope) => {
+    const uid = userOfTenant(tenant);
+    if (!uid) return;
+    if (!worlds.emitLiveChange(uid, scope)) {
+      console.log(`  · ${uid} 那边说"${scope} 的内容变了"——没有人在看，先不推`);
+    }
+  },
   onKeyBad: (tenant, why) => {
     const uid = userOfTenant(tenant);
     if (!uid) return;
@@ -749,6 +770,30 @@ function appsForSub(sub) {
   });
 }
 
+/**
+ * ★ **`112`：这个人那一份"活的工作区"从哪儿取**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）。
+ *
+ * 形状与 `appsForSub` **逐条对齐**（同一个道理，别读成两套）：
+ *   · **租户** ⇒ 经现有隧道读**他盒子里**那份（`createBoxApps().readLive()`）；
+ *     隧道不通 ⇒ 抛 `BoxError`，`app-serve.js` 那侧**如实 503** ——
+ *     **绝不**退回"某一版快照"（那正是"他改的没上屏"最难查的形状）。
+ *   · **主人 / 单租户** ⇒ 本机那一间（`readLiveApp`：必要时先从当前那一版落成一次）。
+ *
+ * ⚠️ **接线本身住在 `workspace.js` 的 `makeLiveForSub()`**（不是这一行）：
+ *    这一份一跑就起监听，判据够不着它 —— 2026-09-26 真机就栽在这儿
+ *    （少 import 一个名字 ⇒ 请求进来才 `ReferenceError`，而单测全绿）。
+ */
+const liveForSub = makeLiveForSub({
+  worldFor: (sub) => worlds.worldFor(sub),
+  tenantOf: (sub) => (isHostSide ? tenantOf(sub) : null),
+  boxLive: (sub, tenant) =>
+    createBoxApps({
+      sub,
+      dial: () => channel.openSocket(tenant),
+      log: (m) => console.warn(`  ⚠️ ${m}`),
+    }),
+});
+
 // ★ **制品那第二个原点**（乙-1 · 契约 `docs/dev/59-USER-APPS.md` §五）。
 //   🔴 手册 N1：执行第三方代码的东西**绝不与持有令牌的原点同源** ⇒ 它听**另一个端口**。
 //   ⚠️ 分成两个进程更干净（共享不到任何东西），但那要再维护一条常驻进程
@@ -764,10 +809,61 @@ const appsOrigin = createAppServer({
   // ★ **B15**：租户的制品字节在**他的盒子里** ⇒ 这一句让"验完签之后去哪儿读"跟着人走
   //   （签名那一关一个字没动，顺序仍是"先验签、再碰库"）。
   resolveApps: (sub) => appsForSub(sub),
+  // ★ **`112`：`/w/` 那条活地址的取值来源**（契约 112）。形状同 `resolveApps`。
+  resolveLive: (sub) => liveForSub(sub),
   key: appsSignKey,
   frameAncestors: cfg.appsFrameAncestors,
   log: (m) => console.warn(`  ⚠️ ${m}`),
 });
+
+/**
+ * ★ **`112`：看着工作区 —— 他改完，正开着它的那一屏自己换**（契约 112 §四）。
+ *
+ * 🔴 **为什么不挂在某个写入函数上**：他改那一份的主要方式是让助手在**那个目录里
+ *    干活**（工作区就是 agent 的 cwd）—— 那是直接的 `write` 系统调用，**不经过我们
+ *    任何函数**。挂在 `AppWorkspaces.write()` 上的话，这件事只对 `app_create`
+ *    那条路成立（真机一改就露）。
+ *
+ * 🔴 **谁看哪儿**（两条路，别读成一条）：
+ *   · **宿主**：只看**数据真在本机**的那些人（主人 / 单租户）——租户那份在他盒子里，
+ *     宿主 `data/users/<id>/workspaces` 是**空的**，看它等于看着一个假地方；
+ *   · **盒里**：看自己那一份（`owner` 就是这一台的那个用户）＋**经既有那条
+ *     `notifyHost` 通道**告诉宿主（用户那一屏连的是宿主）。
+ *
+ * ⚠️ **看不住只影响"自动换"**（`log` 如实报）—— 他手动重开/刷新照样是新的
+ *    （因为读的就是工作区那一份）。所以它失败**不许**把服务带走。
+ */
+const liveWatchers = [];
+function startLiveWatchers() {
+  for (const w of worlds.all()) {
+    // 宿主上：租户那一份不在本机 ⇒ 不看（盒里那一份由它自己看）
+    if (isHostSide && tenantOf(w.userId)) continue;
+    const root = w.workspaces?.root;
+    if (!root) continue;
+    const watcher = createLiveWatcher({
+      root,
+      scopeOf: (filename) => liveScopeOfChange(root, filename),
+      onChange: (scope) => {
+        // ① 本机这一侧：瞬态事件 ⇒ 只有正开着这一间的那条连接收得到
+        const told = worlds.emitLiveChange(w.userId, scope);
+        // ② 盒里：用户那一屏连的是**宿主** ⇒ 还得说一声（宿主上这一句是空操作）
+        if (!isHostSide) notifyHost({ v: 1, type: 'workspace-changed', scope });
+        // 宿主上推不出去只有两种可能：没人在看，或者那一间是刚被删的空壳。
+        // 都不算错，但**要看得见**（静默是本仓库最忌的形状）。
+        else if (!told) console.warn(`  ⚠️ ${w.userId} 的"${scope} 的内容变了"没推给谁（没人在看）`);
+      },
+      log: (m) => console.warn(`  ⚠️ ${m}`),
+    });
+    // ⚠️ 它**不抛**（看不住就如实记一句）：不让"看不住"把开机带走。
+    watcher.start();
+    liveWatchers.push(watcher);
+  }
+  if (liveWatchers.length > 0) {
+    console.log(`  看着     ${liveWatchers.length} 份工作区（他改完，正开着那一屏自己换）`);
+  }
+}
+startLiveWatchers();
+
 
 /**
  * 🔴 **开发者入口那台中继**（B46 ① · 2026-09-26 起）：**只在盒里建**

@@ -597,8 +597,12 @@ test('X1 复制**不许**顺手带走对话 / 工作区 / 用量（复制的是�
     assert.equal(nodeFs.existsSync(nodePath.join(appDirOf(h.dataDir, newId), f)), false, `🔴 ${f} 不许跟着复制`);
   }
   // 正身：原来那一间的"经历"一样都没少（不然上面那些断言可能只是"本来就没有"）
+  // ⚠️ **按"对话"数**（`user/echo`）—— 不是"这一间里所有事件都数"：
+  //    `#159`（契约 `docs/dev/111-APP-LIVE-UPDATE.md`）起，**制品换一版**会往
+  //    那一间落一条 `app/update-available`（`seedApp` 就造了 v1/v2 两版）⇒
+  //    按"全部事件"数会把它也算进来（3 ≠ 2）。这一条判据要守的是**对话**没被带走。
   assert.equal(
-    w.store.readAll('main').filter((e) => String(e.scopeId ?? '') === id).length,
+    w.store.readAll('main').filter((e) => String(e.scopeId ?? '') === id && e.type === 'user/echo').length,
     2,
     '原来那一间的对话要原样在',
   );

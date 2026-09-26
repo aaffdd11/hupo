@@ -95,6 +95,14 @@ export class TenantChannel {
    *    不然用户明明换了一把好的，界面上还挂着"刷新一下重新填"。
    */
   #onKeyUp = null;
+  /**
+   * ★ **容器说"那一间工作区的内容变了"**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md` §四）。
+   *
+   * 🔴 为什么非要容器来说：租户的 `workspaces/` 在**他的盒子里**（宿主那份是空的），
+   *    "他改了"这件事只有盒里看得见 —— 而**用户那一屏连的是宿主**。
+   * ⇒ 盒里看着盘，变了就经这条既有的通道说一声；宿主收到后**只推给正开着那一间的那条连接**。
+   */
+  #onWorkspaceChanged = null;
 
   /**
    * @param {object} o
@@ -102,7 +110,15 @@ export class TenantChannel {
    * @param {(userId:string)=>(string|null)} o.keyFor  **这个人的 key**；`null` = 还没有
    * @param {(m:string)=>void} [o.log]
    */
-  constructor({ dir, keyFor, log = () => {}, onKeyBad = null, onBuild = null, onKeyUp = null }) {
+  constructor({
+    dir,
+    keyFor,
+    log = () => {},
+    onKeyBad = null,
+    onBuild = null,
+    onKeyUp = null,
+    onWorkspaceChanged = null,
+  }) {
     if (!dir) throw new Error('TenantChannel 需要 dir');
     if (typeof keyFor !== 'function') throw new Error('TenantChannel 需要 keyFor(userId)');
     this.#dir = dir;
@@ -111,6 +127,7 @@ export class TenantChannel {
     this.#onKeyBad = onKeyBad;
     this.#onBuild = onBuild;
     this.#onKeyUp = onKeyUp;
+    this.#onWorkspaceChanged = onWorkspaceChanged;
   }
 
   /** 每台自报的版本（`userId → 指纹`）。**算出来的，不是记出来的**。 */
@@ -266,6 +283,26 @@ export class TenantChannel {
         this.#record(userId, 'up');
         this.#log(`  ✓ ${userId} 的容器起来了`);
         return;
+      /**
+       * ★ **"那一间工作区的内容变了"**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md` §四）。
+       *
+       * ⚠️ 这一帧**不带内容、不带签名**（只有那一间的名字）：它只是"你那边
+       *    正开着的那一页该重取一次"这个信号 —— 宿主据此**现签一条新的活地址**。
+       * ⚠️ 名字在这里**只做形状检查**（`scope` 是个字符串就够了）；
+       *    "这个名字合法吗 / 有没有这一间"由宿主的 `worlds.emitLiveChange()` 判
+       *    （规则只有那一处，别在这儿抄一遍）。
+       */
+      case 'workspace-changed': {
+        const scope = typeof msg?.scope === 'string' ? msg.scope : '';
+        this.#record(userId, 'workspace-changed', { scope });
+        if (!scope) return;
+        try {
+          this.#onWorkspaceChanged?.(userId, scope);
+        } catch (err) {
+          this.#log(`  ⚠️ workspace-changed 回调出错：${err?.message ?? err}`);
+        }
+        return;
+      }
       case 'key-bad': {
         // 🔴 **容器说"那一把钥匙上游不认"**（2026-09-21 加）。
         //    为什么必须由它来说：`turn/end` 那句 `code:'AUTH'` 只有
