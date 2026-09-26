@@ -6,8 +6,9 @@
 //    **用户字号 12/14/17 下不溢出 + 命中区 ≥44** 在 `accessibility_test.dart`（硬闸）。
 //
 // 这一份钉五件：
-//   ① 🔴 切到暗色 ⇒ 聊天窗口那块底**真的换了 token**（不是只有枚举变了）；
-//   ② 🔴 "跟随系统" ⇒ 设备暗则窗口暗（`system` 的解析真的发生了）；
+//   ① 🔴 **默认 = 亮**（没存过 ⇒ 亮色板）＋ **设置里只摆「亮」**（暗 / 跟随系统不出现，
+//      而明说砍了那句在）—— 2026-09-26 主人暗色手机上的截图报的就是这一屏；
+//   ② 🔴 **设备是暗的，窗口也还是亮的**（"跟随系统"暂时一律解成亮 —— 这一条钉那个"暂时"）；
 //   ③ 🔴 改字号 ⇒ 聊天里那一行字的**渲染度量**真的变了（量字号与高度，不量"看起来像"）；
 //   ④ 🔴 **改一下马上生效、不重连**（那条流一个字节都不动：连接只建过一次）；
 //   ⑤ 🔴 **存得住**（换一份 store = 重开页面，读到的还是他选的那一档）。
@@ -198,34 +199,59 @@ double _rowFontSize(WidgetTester tester) {
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues(<String, Object>{}));
 
-  testWidgets('🔴 切到暗色 ⇒ 聊天窗口那块底**真的换了 token**', (tester) async {
+  testWidgets('🔴 没存过 ⇒ 窗口是**亮**色板；设置里只摆「亮」（暗 / 跟随系统不出现）', (tester) async {
     final (screen, _, _) = await _screen();
     await tester.pumpWidget(MaterialApp(home: screen));
     await tester.pumpAndSettle();
 
-    // 负向对照：默认（跟随系统 ＋ 测试环境是亮色）⇒ **亮色那一档**
+    // ① 默认那一档 = 亮（暗色那一套没做完；没做完的样子不许当默认推给人）
+    expect((await AppearanceStore().read()).appearance, ChatAppearance.light,
+        reason: '★ 没存过时的默认不是亮 ⇒ 暗色手机上又会是"黑底 ＋ 淡粉条"');
     expect(_floaterMaterial(tester).color, DshPalette.light.bgLayer1,
-        reason: '★ 默认那一档就不对 ⇒ 下面的正例没有意义');
+        reason: '★ 默认那一档的底不是亮色板');
+
+    // ② 设置那一屏：只有「亮」可选，另外两档**不在屏幕上**，但"明说砍了"那句在
+    await _openSettings(tester);
+    await _scrollTo(tester, settingsAppearanceLabel);
+    expect(find.text(ChatAppearance.light.label), findsWidgets, reason: '★「亮」那一颗没画出来');
+    expect(find.text(ChatAppearance.dark.label), findsNothing,
+        reason: '★「暗」还在设置里摆着 —— 暗色那一套没做完，不许摆出来给人按');
+    expect(find.text(ChatAppearance.system.label), findsNothing,
+        reason: '★「跟随系统」还在设置里摆着（同上）');
+    expect(find.text(settingsAppearanceDarkNotReady), findsOneWidget,
+        reason: '★ 砍了却不说 = 主人不知道那两档去哪了（手册纪律 4）');
+
+    // ③ 暗色那套 token **还在**（只是暂时没人能选到）：色板没被删
+    expect(DshPalette.dark.bgLayer1, isNot(DshPalette.light.bgLayer1),
+        reason: '★ 暗色 token 被删了 —— 以后要放出来就得重做一份');
+  });
+
+  testWidgets('🔴 盘上存着老值 `system` ⇒ 设置里**不在「跟随系统」上打勾**（窗口是亮的）', (tester) async {
+    // 主人那台手机最可能的形状：老版本写过 `system|<字号>`（他改过字号就会写这一条）。
+    // 现在 `system` **一律解成亮** ⇒ 设置里那一栏必须是「亮」被选中、
+    // 「跟随系统」**不出现**（在它上面打勾 = 页面在说假话：窗口明明是亮的）。
+    SharedPreferences.setMockInitialValues(<String, Object>{kKey: 'system|15'});
+    final (screen, _, _) = await _screen();
+    await tester.pumpWidget(MaterialApp(home: screen));
+    await tester.pumpAndSettle();
+    expect(_floaterMaterial(tester).color, DshPalette.light.bgLayer1,
+        reason: '★ 存着 system 时窗口不是亮的');
 
     await _openSettings(tester);
     await _scrollTo(tester, settingsAppearanceLabel);
-    await tester.tap(find.text(ChatAppearance.dark.label));
-    await tester.pumpAndSettle();
-
-    // 正例：**同一块 Material 的颜色换成了暗色那一档**
-    expect(_floaterMaterial(tester).color, DshPalette.dark.bgLayer1,
-        reason: '★ 选了"暗"而窗口的底还是亮色 ⇒ 设置没接上去');
-    expect((await AppearanceStore().read()).appearance, ChatAppearance.dark,
-        reason: '★ 没存下来 ⇒ 重开页面就丢');
-
-    // 切回"亮"：窗口跟着回去（不是单行道）
-    await tester.tap(find.text(ChatAppearance.light.label));
-    await tester.pumpAndSettle();
-    expect(_floaterMaterial(tester).color, DshPalette.light.bgLayer1);
-    expect((await AppearanceStore().read()).appearance, ChatAppearance.light);
+    expect(find.text(ChatAppearance.light.label), findsWidgets, reason: '★「亮」不在屏幕上');
+    expect(find.text(ChatAppearance.system.label), findsNothing,
+        reason: '★「跟随系统」又摆出来了（而且在它上面打了勾）—— 窗口明明是亮的');
+    expect(find.text(ChatAppearance.dark.label), findsNothing);
+    // ⚠️ 盘上那份偏好**没被他点过就不动**（这一条是"只改显示、不改他的盘"）
+    expect((await AppearanceStore().read()).appearance, ChatAppearance.system);
+    expect((await AppearanceStore().read()).fontSize, 15, reason: '★ 字号那一半被外观这一半带坏了');
   });
 
-  testWidgets('🔴 跟随系统：设备是暗的 ⇒ 窗口是暗的（`system` 真的解析了）', (tester) async {
+  testWidgets('🔴 设备是暗的 ⇒ 窗口**还是亮的**（"跟随系统"暂时一律亮）', (tester) async {
+    // 这一条就是主人 2026-09-26 那张截图的回归网：暗色手机 + 默认档 ⇒ 以前是近黑底
+    // （里面的气泡/通知条还是暖白纸那套 ⇒ 黑底压淡粉、字读不出来）。
+    SharedPreferences.setMockInitialValues(<String, Object>{kKey: 'system|14'});
     final (screen, _, _) = await _screen(tier: FloaterTier.full);
     await tester.pumpWidget(
       MaterialApp(
@@ -241,10 +267,10 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    // 默认就是"跟随系统"（这一条本身也要成立，不然量的是别的东西）
+    // 盘上真存着 `system`（老版本写的 / 他以前选过）—— 照收，但**暂时解成亮**
     expect((await AppearanceStore().read()).appearance, ChatAppearance.system);
-    expect(_floaterMaterial(tester).color, DshPalette.dark.bgLayer1,
-        reason: '★ 设备是暗的、设置是"跟随系统"，窗口却是亮的 ⇒ 解析没做');
+    expect(_floaterMaterial(tester).color, DshPalette.light.bgLayer1,
+        reason: '★ 暗色手机上又跟着系统变暗了 —— 那正是主人报的那一屏（暗色还没做完）');
   });
 
   testWidgets('🔴 改字号 ⇒ 聊天里那一行字的**渲染度量**真的变了', (tester) async {

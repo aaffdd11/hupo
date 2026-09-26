@@ -192,11 +192,18 @@ const String settingsLogout = '退出登录';
 ///    首页 / 登录 / 设置页自己**一个像素都不变**（`119` §五 那条边界）。
 const String settingsAppearanceSection = '这块窗口';
 
-/// 那一行：三选一（亮 / 暗 / 跟随系统）。
+/// 那一行：外观（**2026-09-26 起只摆「亮」** —— 暗色那一套只做了一半）。
 const String settingsAppearanceLabel = '外观';
 
 /// 「外观」下面那句说明（**如实说边界**：只改这一扇窗）。
 const String settingsAppearanceHint = '只改聊天这扇窗口，别的页面不变。';
+
+/// 🔴 **2026-09-26：「暗」和「跟随系统」两档暂时收起来了**（手册纪律 4：要砍就明说砍了）。
+///
+/// 理由（主人当天在暗色手机上的截图：黑底 ＋ 淡粉条 ＋ 字读不出来）：暗色那一套
+/// 只换了聊天窗口那块底，里面的气泡 / 通知条 / 计划条还是暖白纸那套
+/// ⇒ **没做完的样子不许摆出来给人按**。这一句就是那句"明说"（逐条缺口见 `119` §九）。
+const String settingsAppearanceDarkNotReady = '暗色还在做，先只给亮色。';
 
 /// 那一行：字号（12–17，步进器）。
 const String settingsFontSizeLabel = '字号';

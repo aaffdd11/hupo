@@ -322,7 +322,7 @@ class SettingsScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // ── ① 外观（三选一）──────────────────────────────
+                // ── ① 外观（**2026-09-26 起只摆「亮」**）────────────
                 Text(
                   settingsAppearanceLabel,
                   style: t.textTheme.titleSmall?.copyWith(
@@ -331,18 +331,42 @@ class SettingsScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: d.gapS),
-                // ⚠️ `Wrap`：3.1 倍字号下三个选项一定放不下 ⇒ 折行，**绝不横向溢出**
+                // ⚠️ `Wrap`：3.1 倍字号下几个选项一定放不下 ⇒ 折行，**绝不横向溢出**
                 //    （D3.5 那道硬闸）。
+                //
+                // 🔴 **为什么只摆「亮」**（`models/appearance.dart` 顶上那段是根因）：
+                //    暗色那一套只做了一半（暗底换上了、里面的气泡/通知条/计划条还是
+                //    暖白纸那套 ⇒ 暗色手机上就是"黑底 ＋ 淡粉条 ＋ 字读不出来"，
+                //    主人 2026-09-26 的截图）。**没做完的样子不许摆出来给人按**
+                //    —— 手册纪律 4：要砍就明说砍了（下面那句
+                //    `settingsAppearanceDarkNotReady` 就是那句"明说"）。
+                //    ⚠️ 三档的 token 与暗色 token 一个字节都没删（以后做完再放出来）。
+                //
+                // ⚠️ **摆出来的那一档 = 屏幕上真的在用的那一档**（`shown`）：
+                //    盘上可能还存着老版本写的 `system`（它现在**一律解成亮**），
+                //    那就在「亮」上打勾 —— 不能在「跟随系统」上打勾（窗口明明是亮的，
+                //    那样是"页面在说假话"）。
+                // ⚠️ 反过来：盘上真存着 `dark`（他以前点过）时，那一档也照实摆出来
+                //    （`∪ 当前档`）—— 不然会出现"窗口是暗的、而设置里一个选中的都没有"。
+                //    两种情形都留着一键点回「亮」的出口。
                 Wrap(
                   spacing: d.gapS,
                   runSpacing: d.gapS,
                   children: [
-                    for (final a in ChatAppearance.values) _appearanceChoice(a),
+                    for (final a in <ChatAppearance>{
+                      ChatAppearance.light,
+                      _shownAppearance,
+                    })
+                      _appearanceChoice(a, shown: _shownAppearance),
                   ],
                 ),
                 const SizedBox(height: d.gapXs),
                 Text(
                   settingsAppearanceHint,
+                  style: t.textTheme.bodySmall?.copyWith(color: d.muted),
+                ),
+                Text(
+                  settingsAppearanceDarkNotReady,
                   style: t.textTheme.bodySmall?.copyWith(color: d.muted),
                 ),
                 Divider(height: d.gapL, color: d.line),
@@ -416,9 +440,22 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
+  /// **现在这一屏真的在用哪一档**（摆出来、打勾都用它 —— 不是盘上那个偏好）。
+  ///
+  /// 🔴 2026-09-26：`system` 现在**一律解成亮**（暗色那一套没做完，见
+  /// `models/appearance.dart` 顶上那段）⇒ 设置里就**不该**在「跟随系统」上打勾
+  /// （窗口明明是亮的）。盘上那份偏好**一个字都不动**（他没点过就不改他的盘）。
+  ChatAppearance get _shownAppearance =>
+      appearance.appearance == ChatAppearance.system
+      ? ChatAppearance.light
+      : appearance.appearance;
+
   /// 外观三档里的一颗（**选中带勾 ＋ 字更实**：不许只靠颜色）。
-  Widget _appearanceChoice(ChatAppearance a) {
-    final on = a == appearance.appearance;
+  ///
+  /// ⚠️ [shown] 是"屏幕上真的在用的那一档"（见 [_shownAppearance]）——
+  ///    打勾打的是它，不是盘上那个偏好。
+  Widget _appearanceChoice(ChatAppearance a, {required ChatAppearance shown}) {
+    final on = a == shown;
     return TextButton(
       // D3.6：命中区下限 44（视觉可以小，命中区不许小）
       style: TextButton.styleFrom(

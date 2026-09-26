@@ -1,9 +1,13 @@
 // **聊天窗口的外观与字号**（契约 `docs/dev/119-APPEARANCE-AND-FONT.md` §一）。
 //
-// ⚠️ 这一份钉两句话：
-//   ① **token 与默认值与 DSH 逐字一致**（`light`/`dark`/`system`；12–17，默认 14）；
+// ⚠️ 这一份钉三句话：
+//   ① **token 与 DSH 逐字一致**（`light`/`dark`/`system`；12–17，默认 14）——
+//      ⚠️ 但**默认那一档 2026-09-26 起不是 DSH 的 `system` 了**，是 `light`
+//      （暗色那一套没做完，见 `models/appearance.dart` 顶上那段）；
 //   ② 🔴 **坏值一律退回默认，绝不抛**（它是本机盘上那个字符串，旧版本 / 别人改坏
-//      都可能造成怪值 —— 坏掉的后果只许是"回到默认"，绝不能是打不开聊天）。
+//      都可能造成怪值 —— 坏掉的后果只许是"回到默认"，绝不能是打不开聊天）；
+//   ③ 🔴 **"跟随系统"暂时一律解成亮**（同一条账；这一条钉的就是那个"暂时"，
+//      暗色做完时它要和 `resolve` 那一行一起改回去）。
 //
 // 依据（逐字，不是猜的）：`docs/dev/115-raw/E-visual.md` §1.2
 // （`THEME_PREFERENCES = ["light","dark","system"]` · `DEFAULT_PREFERENCE = "system"` ·
@@ -27,9 +31,12 @@ void main() {
       expect(ChatAppearance.system.label, '跟随系统');
     });
 
-    test('★ 默认 = **跟随系统**（DSH `DEFAULT_PREFERENCE = "system"`，逐字）', () {
-      expect(defaultChatAppearance, ChatAppearance.system);
-      expect(const ChatAppearanceSettings().appearance, ChatAppearance.system);
+    test('★ 默认 = **亮**（2026-09-26 改：暗色那一套没做完，不许当默认推给人）', () {
+      // 逐字的理由在 `appearance.dart` 那个常量上：暗色只换了聊天窗口那块底，
+      // 里面还是暖白纸那套 ⇒ 暗色手机上默认就是"黑底 ＋ 淡粉条 ＋ 字读不出来"
+      // （主人 2026-09-26 的截图）。DSH 那个 `system` 默认等做完再拿回来。
+      expect(defaultChatAppearance, ChatAppearance.light);
+      expect(const ChatAppearanceSettings().appearance, ChatAppearance.light);
     });
 
     test('认得出就照它来', () {
@@ -38,9 +45,9 @@ void main() {
       expect(chatAppearanceOf('system'), ChatAppearance.system);
     });
 
-    test('🔴 认不出来的 token ⇒ **跟随系统**（不抛、也不猜）', () {
-      // 全部退回 `system` 的理由写在 `appearance.dart` 那个函数上：
-      // `system` 是 DSH 的默认档，也是**唯一一个不会替用户拿主意**的档。
+    test('🔴 认不出来的 token ⇒ **亮**（不抛、也不猜）', () {
+      // 全部退回 `light` 的理由写在 `appearance.dart` 那个函数上：
+      // 坏值只许退回"一定看得清、也一定不会把没做完的样子推给人"的那一档。
       for (final bad in <Object?>[
         null,
         '',
@@ -56,7 +63,7 @@ void main() {
       ]) {
         expect(
           chatAppearanceOf(bad),
-          ChatAppearance.system,
+          ChatAppearance.light,
           reason: '「$bad」被当成了一个外观档',
         );
       }
@@ -119,7 +126,7 @@ void main() {
     });
   });
 
-  group('把偏好解成具体色板（`system` 对着设备亮度解）', () {
+  group('把偏好解成具体色板（`dark` 照用户选的、`system` 暂时一律亮）', () {
     test('亮 / 暗：**不管设备是什么亮度**都照用户选的来', () {
       const light = ChatAppearanceSettings(appearance: ChatAppearance.light);
       const dark = ChatAppearanceSettings(appearance: ChatAppearance.dark);
@@ -129,16 +136,24 @@ void main() {
       expect(dark.resolve(platformDark: true), DshVariant.dark);
     });
 
-    test('跟随系统：设备暗就暗、设备亮就亮（DSH 那三行逐字）', () {
-      const sys = ChatAppearanceSettings();
+    test('🔴 跟随系统**暂时一律亮**（暗色那一套没做完 —— 这一条钉的就是那个"暂时"）', () {
+      // ⚠️ 暗色做完之后：删掉这一条、换成"设备暗就暗"（`appearance.dart` 的
+      //    `resolve` 那一行会一起改回去）。**不许**只改代码不改判据。
+      const sys = ChatAppearanceSettings(appearance: ChatAppearance.system);
       expect(sys.resolve(platformDark: false), DshVariant.light);
-      expect(sys.resolve(platformDark: true), DshVariant.dark);
+      expect(sys.resolve(platformDark: true), DshVariant.light,
+          reason: '★ 暗色手机上又跟着系统变暗了 —— 那正是主人 2026-09-26 截图报的那一屏');
     });
 
     test('解出来的色板**真的换了一份**（不是只有枚举变了）', () {
+      // 默认那一档（亮）**任何设备亮度下都是亮** —— 暗色只可能来自用户真选过 `dark`。
       const s = ChatAppearanceSettings();
       expect(s.resolve(platformDark: false).palette, DshPalette.light);
-      expect(s.resolve(platformDark: true).palette, DshPalette.dark);
+      expect(s.resolve(platformDark: true).palette, DshPalette.light);
+      const d = ChatAppearanceSettings(appearance: ChatAppearance.dark);
+      expect(d.resolve(platformDark: true).palette, DshPalette.dark);
+      // 暗色那一套 token **还在**（只是暂时没人能选到 —— 设置那一屏只摆「亮」）
+      expect(DshPalette.dark.bgLayer1, isNot(DshPalette.light.bgLayer1));
     });
   });
 
@@ -203,7 +218,7 @@ void main() {
         ),
         'dark|16',
       );
-      expect(chatAppearanceSettingsWire(const ChatAppearanceSettings()), 'system|14');
+      expect(chatAppearanceSettingsWire(const ChatAppearanceSettings()), 'light|14');
     });
 
     test('🔴 两个轴**各退各的**：一半坏了不许把另一半也丢掉', () {

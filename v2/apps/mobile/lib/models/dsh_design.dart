@@ -579,9 +579,30 @@ const double dshRightPanelMaxRatio = 0.7;
 ///    ——他要看那一栏。窄屏下按不动（关掉 = 点了没反应）比"盖住聊天"坏得多。
 const double dshRightPanelNarrowWidth = 300;
 
+/// **"挤"的那条路给聊天留下的最小宽度**（不够宽就改走"盖"）。
+///
+/// 🔴 为什么必须有这一条（2026-09-26 修）：光判"这一栏放得下"是不够的 ——
+///    手机上（浮窗里那一块 ≈ 屏宽 − 60 ⇒ 330 上下）`dshRightPanelFits` 为真、
+///    算出来的栏宽正好是 300 ⇒ `Row` 里聊天只剩 **30 像素**，
+///    气泡那一行当场 `RenderFlex overflowed by 41 pixels`（`bubbles.dart:141`）。
+///    "挤"的本意是"**还看得见一条边**"（与 DSH 的三轨同一个形状），
+///    只剩 30 像素不是"看得见"，是把聊天**弄坏**了。
+/// ⇒ 取 [dshRightPanelNarrowWidth] 同一个数：两根柱子**各自都要有一块能用的宽度**
+///    （这一栏是 300，聊天也是 300）—— 两个数同源，不是各写一份。
+const double dshRightPanelChatMinWidth = dshRightPanelNarrowWidth;
+
 /// 这一块地方**够不够**摆那块盖板。
+///
+/// ⚠️ "放得下这一栏" ≠ "可以挤"：能不能走 `Row` 那条路还要问
+///    [_dshRightPanelLeavesRoomForChat]（见那个函数的说明）。
 bool dshRightPanelFits(double available) =>
     available >= dshRightPanelNarrowWidth;
+
+/// **走"挤"（`Row`）那条路之后，聊天还剩不剩得下一块能用的宽度**。
+///
+/// 假 ⇒ 改走"盖"（`Stack` ＋ `Align`）：栏照旧滑进来，聊天一个像素都不动。
+bool dshRightPanelLeavesRoomForChat(double available) =>
+    available - dshRightPanelWidth(available) >= dshRightPanelChatMinWidth;
 
 /// 盖板该多宽（`available` = 浮窗里那一块的可用宽）。
 ///

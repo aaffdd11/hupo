@@ -17,6 +17,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/services.dart';
 
 import '../models/appearance.dart';
@@ -383,8 +385,16 @@ class _ChatScreenState extends State<ChatScreen> {
   ///    **负的**（真栽过：`Size(-281, 48)`，命中区那道硬闸当场红）。
   /// ⇒ 够宽就**挤**（聊天还看得见一条边，与 DSH 的三轨同一个形状）；
   ///    不够宽就**盖满**（派活单点名的那一档：窄屏下按不动 = 点了没反应，比盖住更坏）。
+  ///
+  /// 🔴 **2026-09-26 补上第三个条件**（真机缺陷）："这一栏放得下"**不等于**
+  ///    "聊天还剩得下" —— 手机那一档（浮窗里约 330）算出来的栏宽正好 300 ⇒
+  ///    聊天只剩 30 像素，气泡那一行 `RenderFlex overflowed by 41 pixels`。
+  ///    ⇒ 只有 **两根柱子各自都有一块能用的宽度**（[dshRightPanelLeavesRoomForChat]）
+  ///      才走 `Row`；否则走"盖"（聊天一个像素都不动、栏照旧滑进来）。
   bool _panelDocked(double available) =>
-      _panelOpen && dshRightPanelFits(available) &&
+      _panelOpen &&
+      dshRightPanelFits(available) &&
+      dshRightPanelLeavesRoomForChat(available) &&
       dshRightPanelWidth(available) < available;
 
   /// 标出"这一栏是挤着的"（给判据用；不在屏幕上画任何东西）。
@@ -648,7 +658,43 @@ class _ChatScreenState extends State<ChatScreen> {
     //       `maxScrollExtent` **又长了一截** ⇒ 只跳一次会**差一条**
     //       （实测：最后那条用户的话被输入条切掉，它的回答还在下面）。
     //    ⇒ 连补几帧（每帧再钉一次当前的最大值），直到稳定。4 帧 ≈ 66ms，看不出来。
-    if (left > 0) WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToLatest(left: left - 1));
+    // 🔴 **补帧要自己叫帧**（2026-09-26 修）：`addPostFrameCallback` **不排帧**
+    //    （`SchedulerBinding.addPostFrameCallback` 只往队列里放一格）。
+    //    没人排帧 ⇒ 这一串补帧会**停在那儿**，等到下一次"因为别的原因"来的一帧
+    //    才接着跑 —— 那可能是几秒以后、也可能正是用户**刚用滚轮翻上去**的那一帧，
+    //    于是"展开时钉到最新"变成"随时把用户拽回底部"（真机上就是"滚不动"）。
+    //    ⇒ 补帧是**这次展开**的事，就让它在这几帧里跑完。
+    if (left > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToLatest(left: left - 1));
+      SchedulerBinding.instance.scheduleFrame();
+    }
+  }
+
+  /// **这一次滚动是不是"用户自己动的"**（时间线那一块的"跟不跟到底"靠它）。
+  ///
+  /// 🔴 三种都要认，缺一种就是"用户滚不动"：
+  ///   · **拖**（手指/鼠标按着拖）：`ScrollStart/UpdateNotification.dragDetails != null`；
+  ///   · **滚轮 / 触控板**：没有 `dragDetails`，但 `ScrollPosition.pointerScroll()` 会把
+  ///     `userScrollDirection` 拨到非 idle ⇒ 来一条非 idle 的 `UserScrollNotification`；
+  ///   · **滚动条 / 键盘翻页**：同样走非 idle 的那条路。
+  ///
+  /// ⚠️ **为什么不能只看 `dragDetails`**（真机踩到的形状）：桌面浏览器上滚轮是
+  ///    **唯一**能把时间线滚起来的手段（Flutter 默认不给鼠标拖拽当滚动设备，
+  ///    `ScrollBehavior.dragDevices` 里没有 mouse），而它**不带 `dragDetails`**
+  ///    ⇒ 那个标志恒为假 ⇒ 之后**任何**一帧控制器变化（流式回答、工具行、排队）
+  ///    都会走 `scrollFollowAction(userScrolledAway: false)` 的"永远跟到底"那一支，
+  ///    把用户刚翻上去的那一屏**硬跳回底部**。屏幕上就是"聊天历史无法滑动"。
+  ///
+  /// ⚠️ **我们自己 `jumpTo` / `animateTo` 的那几次不算**：`jumpTo` 会把方向拨回
+  ///    `idle`（`ScrollPositionWithSingleContext.jumpTo → goIdle()`），
+  ///    `animateTo` 走的是 `DrivenScrollActivity`、**不动**方向 ⇒ 两者都不会
+  ///    产生一条非 idle 的 `UserScrollNotification`（判据：`expand_input_test.dart`
+  ///    的"展开补帧不许把用户拽走"那一条）。
+  bool _isUserScroll(ScrollNotification n) {
+    if (n is ScrollStartNotification && n.dragDetails != null) return true;
+    if (n is ScrollUpdateNotification && n.dragDetails != null) return true;
+    if (n is UserScrollNotification && n.direction != ScrollDirection.idle) return true;
+    return false;
   }
 
   /// 按纯函数的判定跟到底部（判据与理由见 `models/scroll_follow.dart`）。
@@ -697,7 +743,21 @@ class _ChatScreenState extends State<ChatScreen> {
     //       `Incorrect use of ParentDataWidget`）；所以浮窗能用的高度从 `MediaQuery` 算，
     //       不在 `Positioned` 里套 `LayoutBuilder`。
     final mq = MediaQuery.of(context);
-    final maxH = mq.size.height - mq.padding.top - FloaterMetrics.margin * 2;
+    // 🔴 **浮窗的高度上限要按"看得见的那块地方"算**（2026-09-26 修）：
+    //    `Positioned(left/right/bottom)` **不给 top** ⇒ 它给孩子的约束里
+    //    **高度是无界的**（`RenderStack.layoutPositionedChild`：没给 `height`/`top`
+    //    就不 tighten 高度）⇒ 浮窗的高度**只由这里这个 `maxH` 决定**，
+    //    父层不会替它收进来。
+    //    键盘弹起来时 `Scaffold`（`resizeToAvoidBottomInset`）把**身子的高**缩小了，
+    //    而 `mq.size` 仍是**整屏**（`viewInsets` 记着键盘占掉的那一段）
+    //    ⇒ 照整屏算出来的 `maxH` 会让浮窗**顶到屏幕外面去**
+    //    （真机读数：390×844 + 键盘 300 ⇒ 浮窗顶在 **-270**，抓手/标题行/两个 tab
+    //      全在屏幕上方，一个都点不到）。⇒ 减掉 `viewInsets.bottom`。
+    final maxH =
+        mq.size.height -
+        mq.padding.top -
+        mq.viewInsets.bottom -
+        FloaterMetrics.margin * 2;
     final sheet = Scaffold(
       backgroundColor: d.paper,
       body: Stack(
@@ -1557,7 +1617,17 @@ class _ChatScreenState extends State<ChatScreen> {
             onCopy: () => _copySelected(c),
             onCancel: _exitSelect,
           ),
-        SizedBox(height: MediaQuery.viewInsetsOf(context).bottom),
+        // 🔴 **这里原来有一格 `SizedBox(height: viewInsets.bottom)` —— 2026-09-26 删了。**
+        //    它是 `a43ec38`（第一版真界面）留下的：那会儿**输入条就住在这个 Column 里**
+        //    （见那一版：`… Center(Composer…) , SizedBox(viewInsets.bottom)`），
+        //    所以要用它把输入条顶到键盘上面。2026-09-24 起输入条搬去了浮窗
+        //    （`ChatFloater.composer`，是这个 Column 的**兄弟**），这一格就成了
+        //    **多算一遍键盘**：`Scaffold` 已经把身子缩过一次，这里再占一段
+        //    ⇒ 时间线（`Expanded`）被挤到 **0 高**。
+        //    真机读数（390×844 + 键盘 300 + 6 行字）：时间线矩形 `(30, -71.5, 360, -71.5)`
+        //    = 高 0、整块在屏幕上方；`Column-[<'chat-body'>]` 当场
+        //    `RenderFlex overflowed`。屏幕上就是**"聊天历史滚不动"**（没有东西可滚）。
+        //    ⇒ 键盘那一段由浮窗自己负责（`maxH` 减 `viewInsets.bottom`，见 `build`）。
       ],
     );
   }
@@ -1740,18 +1810,12 @@ class _ChatScreenState extends State<ChatScreen> {
     // ★ `116`：先把"这一屏到底画哪几格"算出来（折叠就是把某些工具行换成那一个控件）。
     final slots = _planSlots(c);
     return NotificationListener<ScrollNotification>(
-      // ⚠️ **只有手指拖出来的滚动**才算"用户自己翻走了"。
-      //    我们自己 `animateTo` 产生的那一次不算 —— 否则第一次跟随
-      //    就等于把自己关掉（那正是"打开停在最老"的另一种写法）。
+      // ⚠️ **用户自己翻走了**要认四种手指/设备：拖、滚轮、触控板、滚动条/键盘。
+      //    🔴 判据是 [_isUserScroll]（`dragDetails` 只管得住"拖"那一种）。
       onNotification: (n) {
-        // ⚠️ 两类分开判：`dragDetails` 不在基类 `ScrollNotification` 上，
-        //    合在一个条件里 Dart 提升不出类型来（会报 undefined_getter）。
         // ⚠️ **要 setState**：那颗「回到最新」是按这个标志画的 ——
         //    只改字段不重建的话，用户翻上去了而按钮**不出现**（判据当场抓到过）。
-        if (n is ScrollStartNotification && n.dragDetails != null && !_userScrolledAway) {
-          setState(() => _userScrolledAway = true);
-        }
-        if (n is ScrollUpdateNotification && n.dragDetails != null && !_userScrolledAway) {
+        if (!_userScrolledAway && _isUserScroll(n)) {
           setState(() => _userScrolledAway = true);
         }
         // ★ **滚到顶 ⇒ 往前取一页**（批 C：老消息往上翻着加载）

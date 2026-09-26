@@ -1070,6 +1070,10 @@ const noticeUndoLabel2 = '拿回来';
 ///    （12/14/17 是**另一条轴**，命中区一样不许小）。搬动**没改一个字节的行为**。
 Future<void> sweep(WidgetTester tester, String where) async {
   var checked = 0;
+  /// 被列表回收而**这一次量不到**的格子（它不在屏幕上）。
+  /// ⚠️ **要 == 0**：不为 0 就说明"扫描时列表在回收"，那这道闸量的就不是整屏了
+  ///    —— 与其悄悄弱下去，不如当场红（这条是 2026-09-26 加快照时一起加的）。
+  var recycled = 0;
   // ⚠️ **用 `is ButtonStyleButton`，不要用 `find.byType(TextButton)`**
   //    （2026-09-23 修）：`TextButton.icon(...)` / `FilledButton.tonalIcon(...)`
   //    造出来的是**子类**（`_TextButtonWithIcon`…），而 `find.byType` 只认
@@ -1081,9 +1085,28 @@ Future<void> sweep(WidgetTester tester, String where) async {
     ('ButtonStyleButton', find.byWidgetPredicate((w) => w is ButtonStyleButton)),
   ];
   for (final (label, finder) in targets) {
-    for (final e in finder.evaluate()) {
-      final type = label;
-      final w = find.byWidget(e.widget);
+    // 🔴 **先拍一份快照再遍历**（2026-09-26 修）：`Finder.evaluate()` 是**惰性**的
+    //    （`CachingIterable`），而下面每一格都要 `ensureVisible` ＋ `pumpAndSettle`
+    //    —— 这一滚，懒加载的列表（设置页那一列 `ListView`）就会把视口外的格子
+    //    **卸掉** ⇒ 惰性迭代走到那一格时取 `e.widget` 会**抛异常**
+    //    （不是报红，是崩：`Null check operator used on a null value`）。
+    //    ⚠️ 触发条件只是"设置页那张卡多了一行"（2026-09-26 加"暗色还在做"那一句时撞上）
+    //    ⇒ 这是**判据助手自己的脆**，不是被测代码的问题。
+    //    ⚠️ **快照必须在任何滚动之前拍**：`Element.widget` 对**已经卸掉**的 element
+    //      会**抛**（里面是 `_widget!`），不是返回 null —— 一边滚一边取就当场崩。
+    //    ⚠️ 快照**不改这道闸的覆盖面**：`evaluate()` 本来就只看得到**已经建出来**的格子
+    //      （视口外、还没建的格子从来就没进过这份扫描）。
+    final snapshot = <(String, Widget)>[
+      for (final e in finder.evaluate()) (label, e.widget),
+    ];
+    for (final (type, widget) in snapshot) {
+      final w = find.byWidget(widget);
+      // 这一格已经被列表回收（滚走了）⇒ 它**不在屏幕上**，这一次量不到它。
+      // ⚠️ 如实记数（下面那条 `checked > 0` 的负向对照照旧）。
+      if (w.evaluate().isEmpty) {
+        recycled += 1;
+        continue;
+      }
       // ⚠️ **先 `ensureVisible`，再量语义矩形。**
       //    为什么非这样不可（2026-09-21 实测）：时间线**会滚**之后，
       //    一个滚到一半的按钮，它的语义矩形是**被视口裁过的**——
@@ -1112,6 +1135,12 @@ Future<void> sweep(WidgetTester tester, String where) async {
   //      **禁止 lib 里出现裸 GestureDetector**（真加了，就必须把它加进这份扫描）。
   // 负向对照：一个都没扫到 ⇒ 这条闸是空转的
   expect(checked, greaterThan(0), reason: '$where：一个能点的都没扫到');
+  // ⚠️ 被回收的格子数如实报出来（0 = 整屏都量到了）。见 `recycled` 那段说明。
+  expect(
+    recycled,
+    0,
+    reason: '$where：有 $recycled 个按钮因为列表回收没量到 —— 这一趟量的不是整屏',
+  );
 }
 
 void main() {

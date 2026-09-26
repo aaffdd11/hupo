@@ -18,7 +18,7 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   group('存在哪（按设备）', () {
-    test('★ 没存过 ⇒ 默认档（跟随系统 ＋ 14 字）', () async {
+    test('★ 没存过 ⇒ 默认档（**亮** ＋ 14 字；2026-09-26 起默认不再是"跟随系统"）', () async {
       expect(await AppearanceStore().read(), const ChatAppearanceSettings());
       expect((await AppearanceStore().read()).appearance, defaultChatAppearance);
       expect((await AppearanceStore().read()).fontSize, dshContentFontSizeDefault);

@@ -21,6 +21,24 @@
 // * `FONT_SIZE_MIN = 12` · `FONT_SIZE_MAX = 17` · `DEFAULT_FONT_SIZE = 14` · `step(1)`
 //   —— 它是 DSH 里**唯一**一个用户能调的视觉维度（`E-visual.md` §1.2 末句）。
 //
+// ── 🔴 2026-09-26 当天回滚的一处：**默认不再是"跟随系统"** ─────────
+//
+// 主人当天在**暗色手机**上截了一张图：黑底 ＋ 一条淡粉的圆角条 ＋ 字几乎看不清
+// （原话：*"页面风格有问题哈。"*）。根因不是"跟随系统"这个功能本身，而是
+// **暗色那一套只做了一半**：批 4 把**聊天窗口那块底**换成了 DSH 的暗色 token，
+// 而里面那几样 —— **用户气泡（`bubbles.dart` 的暖色 / 多选罩色）· 通知条
+// （`notice.dart` 的 `accentTint`）· 计划条（`plan_strip.dart`）· 图片那一条
+// （`image_try.dart`）· 输入条里那几处遗留暖色** —— 还是暖白纸那套
+// ⇒ 黑底上压着淡粉、字也读不出来（逐条缺口见 `docs/dev/119` §九）。
+//
+// ⇒ 在暗色那一套**做完之前**：
+//   · **默认 = 亮**（[defaultChatAppearance]）——"没存过 / 认不出"都退回它；
+//   · **"跟随系统"暂时一律解成亮**（[ChatAppearanceSettings.resolve] 里那一行；
+//     设备亮度那个入参留着，暗色做完之后改回一行就恢复）；
+//   · 设置那一屏**只摆「亮」**（`screens/settings_screen.dart`），并明说暗色还没做好
+//     —— 手册纪律 4：**要砍就明说砍了**；
+//   · 三档的 token 与暗色那套 token **一个字节都没删**（以后做完再放出来）。
+//
 // ⚠️ **纯逻辑，不许 import `material`**（楼层闸 `test/unit/import_rules_test.dart`）。
 //    这里只用 `dart:ui` 之外的东西一个都不用 —— `DshVariant` / `DshContentScale`
 //    来自 `dsh_design.dart`（同层，那份也只用 `dart:ui` 的 `Color`）。
@@ -59,19 +77,24 @@ enum ChatAppearance {
   final String label;
 }
 
-/// 默认外观 = **跟随系统**（DSH `DEFAULT_PREFERENCE = "system"`，逐字如此）。
-const ChatAppearance defaultChatAppearance = ChatAppearance.system;
-
-/// 认一个 token ⇒ 外观档；**认不出来一律当默认（跟随系统）**。
+/// 默认外观 = **亮**。
 ///
-/// 🔴 **为什么坏值退回 `system` 而不是 `light`**（派活单点名要一个说法）：
-///   1. `system` 是 DSH 的 `DEFAULT_PREFERENCE`（`E-visual.md` §1.2 逐字），
-///      也就是这条轴**本来的默认**——坏值退回默认，不额外发明第二个默认；
-///   2. `system` 是**唯一一个不会替用户拿主意**的档：它跟着设备走，而设备那一档
-///      是用户自己在系统里设的。退回 `light` 的后果是"用户在暗色设备上打开，
-///      我们**悄悄把他按回亮色**"——那是页面在违背他刚做过的选择；
-///   3. 反过来，退回 `system` 最坏只是"跟着设备"——**没有任何一种设备状态下它是错的**。
-///   ⇒ fail-closed 在这里的意思是"**退回一个绝不会说谎的档**"，不是"关掉功能"。
+/// 🔴 **2026-09-26 改的**（原来是 DSH 那个 `DEFAULT_PREFERENCE = "system"`）：
+///    暗色那一套只做了一半 —— 暗底换上了、里面的气泡 / 通知条 / 计划条还是暖白纸那套
+///    ⇒ 暗色手机上默认就是"黑底 ＋ 淡粉条 ＋ 字读不出来"（主人当天截图报的就是它）。
+///    **没做完的样子不许当默认推给人**：默认退回**那个一定看得清**的档。
+///    DSH 那份默认等暗色那一套做完再拿回来（`119` §九 记着还差哪几块）。
+const ChatAppearance defaultChatAppearance = ChatAppearance.light;
+
+/// 认一个 token ⇒ 外观档；**认不出来一律当默认（亮）**。
+///
+/// 🔴 **为什么坏值退回 `light`**（2026-09-26 改；原来退回 `system`）：
+///   坏值只许退回**那个一定看得清、也一定不会把没做完的样子推给人**的档。
+///   `system` 曾经满足这个要求**只因为当时三档一样亮**；暗色那一套做了一半之后，
+///   退回 `system` 的后果是"**暗色手机打开就是黑底压淡粉**"——那是把一个
+///   我们自己没做完的状态当成用户的结论。⇒ 退回 `light`。
+///   ⚠️ 这**不是**"不尊重用户的选择"：用户**真选过**的那一档照旧原样收下
+///   （`dark` 仍然是 `dark`，见 [chatAppearanceOf] 上面那段与 [resolve]）。
 ChatAppearance chatAppearanceOf(Object? wire) {
   for (final a in ChatAppearance.values) {
     if (a.wire == wire) return a;
@@ -117,12 +140,22 @@ class ChatAppearanceSettings {
   /// 那条字号轴（聊天里每一行的字号都必须从这里来）。
   DshContentScale get scale => dshContentScale(fontSize);
 
-  /// 把 [appearance] 对着**设备的亮度**解析成一份具体色板（DSH 的 `bootThemeScript`
-  /// 那三行逐字：`dark = preference === 'dark' || (preference === 'system' && systemDark)`）。
+  /// 把 [appearance] 对着**设备的亮度**解析成一份具体色板。
+  ///
+  /// ⚠️ DSH 的 `bootThemeScript` 那三行是
+  ///    `dark = preference === 'dark' || (preference === 'system' && systemDark)`。
+  ///    **2026-09-26 起我们不照抄第三行**：`system` **暂时一律解成亮** ——
+  ///    暗色那一套没做完（见文件头那段），跟着设备走等于把没做完的样子推给暗色手机。
+  ///    `platformDark` 这个入参**留着**（`screens/chat_screen.dart` 照旧从
+  ///    `MediaQuery.platformBrightnessOf` 读它传进来）：暗色那一套做完之后，
+  ///    把下面那一行改回 `platformDark ? DshVariant.dark : DshVariant.light` 就恢复了
+  ///    （判据：`test/unit/appearance_test.dart` 的"跟随系统暂时一律亮"那一条，
+  ///      改回来时那一条也要一起改 —— 它钉的就是这个"暂时"）。
   DshVariant resolve({required bool platformDark}) => switch (appearance) {
     ChatAppearance.light => DshVariant.light,
     ChatAppearance.dark => DshVariant.dark,
-    ChatAppearance.system => platformDark ? DshVariant.dark : DshVariant.light,
+    // 🔴 暂时 = 亮（不改这一行就别指望"跟随系统"跟得上设备）
+    ChatAppearance.system => DshVariant.light,
   };
 
   ChatAppearanceSettings copyWith({ChatAppearance? appearance, int? fontSize}) =>

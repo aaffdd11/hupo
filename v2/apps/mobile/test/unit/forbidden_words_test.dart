@@ -313,12 +313,16 @@ void main() {
       trajectoryBlankSummary,
       // ★ 2026-09-26（契约 `docs/dev/119-APPEARANCE-AND-FONT.md`）：「这块窗口」
       //    那两行（外观 / 字号）的每一句 ＋ 三档的名字（亮 / 暗 / 跟随系统）
+      //    ＋ 2026-09-26 那句"暗色还在做"（那两档暂时收起来了）
       //    —— **直接引数据源**（手抄会漂）。
       //    ⚠️ 这一批最容易混进来的是"主题 / 档位 / 客户端 / 工作区"那类内部词；
       //       允许的是他说得懂的话："这块窗口"、"字"、"亮 / 暗 / 跟随系统"。
       settingsAppearanceSection,
       settingsAppearanceLabel,
       settingsAppearanceHint,
+      // 🔴 2026-09-26：「暗 / 跟随系统」两档暂时收起来时那句"明说砍了"的话
+      //    （`119` §九）—— 它也要过禁用词扫描。
+      settingsAppearanceDarkNotReady,
       settingsFontSizeLabel,
       settingsFontSizeHint,
       settingsFontSizePreview,
