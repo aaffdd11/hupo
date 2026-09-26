@@ -245,13 +245,14 @@ test('🔴 U1d：那一帧里**不许有签名**（`entryUrl` 是短时效的，
 
 // ══ ② 没做成要有一条主人看得见的话 ══════════════════════════
 
-test('🔴 没做成 ⇒ **有一条人话**（点名那个小程序 ＋ 为什么，一个内部词都没有）', async (t) => {
+test('🔴 用户端**没有"包"那三道上限**：>256KB 的一版照样存得下 ＋ 不喊失败（主人 2026-09-26）', async (t) => {
   const { world } = await bootWorlds(t);
   // ⚠️ 造东西那条闸（P1-22）要看"**他这一轮说了什么**"；这一条判据验的是
-  //    **尺寸那道闸之后**的事 ⇒ 把"他明说了"这一格喂上（真跑起来是调度器记的）。
+  //    **尺寸这一侧**的事 ⇒ 把"他明说了"这一格喂上（真跑起来是调度器记的）。
   world.dispatcher.turnInputOf = () => '帮我做一个小程序，把题库放进去';
 
   const before = noticesOf(world).length;
+  const big = 'x'.repeat(MAX_FILE_BYTES + 1);
   const r = await sendOp(world.appsSocket.path, {
     op: 'create',
     app: {
@@ -260,22 +261,60 @@ test('🔴 没做成 ⇒ **有一条人话**（点名那个小程序 ＋ 为什�
       icon: 'book',
       entry: 'index.html',
       // 🔴 真机现场那一下：**单文件上限**（压完再转文本，反而涨 33%）
+      //    ⇒ 今天这是**用户端**，它**不该**再被挡住（那三道只属于"包"。
+      files: { 'index.html': big },
+    },
+  });
+  assert.equal(r.ok, true, `用户端不该再有"单文件太大"：${JSON.stringify(r)}`);
+  assert.equal(noticesOf(world).length, before, '这是**成了** ⇒ 一个字都不许喊');
+
+  // 内容真在工作区里（活的这一份），而且**没有**版本目录 / 指针（用户端不落包）
+  const ws = world.workspaces.read('tiku');
+  assert.equal(ws.files['index.html'].length, big.length, '工作区里要是那一整份');
+  const dir = nodePath.join(world.dir, 'hupo', 'apps', 'tiku');
+  assert.ok(nodeFs.existsSync(nodePath.join(dir, 'app.json')), '★ 登记要在（桌面认人就靠它）');
+  assert.equal(nodeFs.existsSync(nodePath.join(dir, 'versions')), false,
+    '🔴 用户端**不许**落"包"（主人：版本快照只在市场中存在）');
+  assert.equal(nodeFs.existsSync(nodePath.join(dir, 'current.json')), false, '同上：指针也不该有');
+  // 而"我的清单"里看得见它（桌面那一格）
+  assert.ok(world.apps.list().some((a) => a.id === 'tiku' && a.version >= 1));
+});
+
+test('🔴 发不出去（"包"太大）⇒ 有一条人话（点名那个小程序 ＋ 为什么，一个内部词都没有）', async (t) => {
+  const { world } = await bootWorlds(t);
+  world.dispatcher.turnInputOf = () => '帮我做一个小程序，把题库放进去';
+  // 用户端先存一份大的（这一刀**不查上限**）
+  const made = await sendOp(world.appsSocket.path, {
+    op: 'create',
+    app: {
+      id: 'tiku',
+      title: '题库小站',
+      icon: 'book',
+      entry: 'index.html',
       files: { 'index.html': 'x'.repeat(MAX_FILE_BYTES + 1) },
     },
   });
-  assert.equal(r.ok, false, '这么大的一份就该被拒');
+  assert.equal(made.ok, true, JSON.stringify(made));
+
+  const before = noticesOf(world).length;
+  // 发到市场那一侧才打包、才查上限 ⇒ 这里该被拒（而且拒绝的理由要说得出来）
+  const r = await sendOp(world.appsSocket.path, { op: 'publish', id: 'tiku' });
+  assert.equal(r.ok, false, '这一份打不成"包"，就不该发出去');
 
   const after_ = noticesOf(world);
-  assert.equal(after_.length, before + 1, '★ 没做成必须有一条他看得见的话');
+  assert.equal(after_.length, before + 1, '★ 没发成必须有一条他看得见的话');
   const line = after_[after_.length - 1].text;
   assert.match(line, /题库小站/, `要点名是哪一个：${line}`);
   assert.match(line, /大/, `要说清"为什么没成"（这一条是尺寸）：${line}`);
+  assert.match(line, /你自己那份照旧能用/, `不许让他以为"自己那份也没了"：${line}`);
   for (const w of ['工作区', '客户端', '云端', '服务器', '调度器', '时间线', '作用域',
     '会话', '工具', '模型', '连接', 'web_search', 'bash']) {
     assert.ok(!line.includes(w), `内部词不许上屏（${w}）：${line}`);
   }
   // 而且**工具那句原文**（有内部短名）没被端上去
   assert.ok(!line.includes('index.html'), `不要把工具那句原文端上屏：${line}`);
+  // 反例的正身：他那一份**一个字节都没动**（发不出去 ≠ 自己那份没了）
+  assert.equal(world.workspaces.read('tiku').files['index.html'].length, MAX_FILE_BYTES + 1);
 });
 
 test('🔴 反例：**要回头问他一句**的那种拒绝 ⇒ 一个字都不喊（喊了就是假话）', async (t) => {

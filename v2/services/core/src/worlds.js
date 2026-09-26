@@ -220,6 +220,9 @@ export function parseScope(params) {
  */
 export function titleOfApp(apps, id) {
   try {
+    // ★ `114`：先问**那一张脸**（`meta()`：活的那一份也有名字，而且改过名以它为准）
+    const live = apps?.meta?.(id)?.title;
+    if (typeof live === 'string' && live.trim() !== '') return live;
     const v = apps?.current?.(id);
     if (!Number.isInteger(v) || v < 1) return null;
     const t = apps?.manifest?.(id, v)?.title;
@@ -604,6 +607,10 @@ export class Worlds {
       dir: t.dir,
       sub: t.userId,
       reclaim: reclaimCtx,
+      // ★ **`114`：活的那一份复制时要读/写工作区**（内容在工作区里，不在制品库里）。
+      //   ⚠️ 与 `reclaim` 同一条理由传**函数**（惰性取）：`workspaces` 在下面才建，
+      //      而 `copy()` 一定发生在 `worldFor()` 返回之后 ⇒ 读得到。
+      live: () => ({ workspaces }),
       // ★ **一版真的写下去了 ⇒ 正开着它的那个界面自己换上**（契约
       //   `docs/dev/111-APP-LIVE-UPDATE.md` · 主人 2026-09-26：*"不需要刷新"*）。
       //
@@ -892,7 +899,8 @@ export class Worlds {
         const id = String(scope);
         if (id === MAIN_SCOPE || isBuiltinScope(id)) return true;
         try {
-          return workspaces.has(id) || apps.current(id) !== null;
+          // ★ `114`：**有登记也算**（活的那一份没有包，但它就是他桌面上的一格）
+          return workspaces.has(id) || apps.has(id);
         } catch {
           return false;
         }
@@ -988,7 +996,7 @@ export class Worlds {
         if (isBuiltinScope(id)) throw new RoomReclaimError('内置的那几间不许回收（桌面上就有它们）。', 409);
         let hasApp = false;
         try {
-          hasApp = apps.current(id) !== null;
+          hasApp = apps.has(id);
         } catch {
           hasApp = false;
         }
@@ -1113,7 +1121,7 @@ export class Worlds {
     //      不然一个随手的字符串就能在盘上拉出一条日志来。
     //   ⚠️ 它们**不是"没有工作区"的特例**：下面照样 mkdir ＋ `hand()`（B16-2）。
     const builtin = isBuiltinScope(id);
-    if (!builtin && !world.workspaces.has(id) && world.apps.current(id) === null) {
+    if (!builtin && !world.workspaces.has(id) && !world.apps.has(id)) {
       throw new Error(`没有这个工作区：${id}`);
     }
     const paths = this.pathsFor(userId, id);

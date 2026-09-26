@@ -26,15 +26,21 @@ import { PublishedError, authorHashOf } from './published.js';
 import { reviewForPublish } from './review.js';
 import { handSocketToAgent } from './socket-owner.mjs';
 import { USAGE_KINDS } from './usage.js';
-import { mirrorArtifactIntoWorkspace, snapshotBeforeInstall, snapshotWorkspace } from './workspace.js';
+import { mirrorArtifactIntoWorkspace, snapshotBeforeInstall, snapshotWorkspace, workspaceStat } from './workspace.js';
 
 /** 小程序那条口放哪。**跟着那个人的目录走**（`<他那一格>/apps.sock`）。 */
 export function appsSocketPath(dir) {
   return nodePath.join(dir, 'apps.sock');
 }
 
-/** 一行最长多少（防呆，不是容量规划）：正常请求几 KB。 */
-const MAX_LINE_BYTES = 512 * 1024;
+/**
+ * 一行最长多少。**它是内存防呆，不是"包"的上限**（那三道住 `apps.js` 的 `create()`）。
+ *
+ * ★ `114`：用户端**没有**尺寸上限（主人：*"所以不需要什么压缩"*）⇒ 这一条跟着抬起来
+ *    （与 `apps-migrate.js` 那条同量级）。⚠️ 真正大的一份**不必走这一行**：
+ *    助手写在那一间目录里的文件就是它（`files` 可以不给，见 `mcp-apps-server.mjs`）。
+ */
+const MAX_LINE_BYTES = 8 * 1024 * 1024;
 
 /**
  * 把一条请求变成一条回答。**纯同步**（制品那套操作全是同步的）。
@@ -121,27 +127,44 @@ async function runAppsOp(apps, req, ctx = {}) {
           return { ok: false, error: NEEDS_ASK, refused: 'needs-ask' };
         }
         const a = req.app ?? {};
-        // ★★ **服务端那一刀**（契约 `83-APP-WORKSPACE.md` §三·4）：
-        //   造 app 的第一步是**服务端**把这个 scope 的工作区建出来 ＋ 把产物落进去，
-        //   然后制品库那一份是**从工作区拷过去的快照**（§三·5）。
-        //   ⚠️ 这一刀**不靠模型记得** —— 它只要把内容交给工具就够了。
-        //      （"模型自己记得建目录"正是今天文件躺回主目录的原因。）
+        // ★★ **服务端那一刀**（契约 `83-APP-WORKSPACE.md` §三·4）：**服务端**把这一间
+        //   建出来 ＋（给了内容就）落进去 —— 不靠模型记得建目录。
+        //
+        // 🔴 **`114`：用户端到这里就结束了 —— 只登记，不打成包。**
+        //    主人 2026-09-26：*"所谓的版本快照，只在市场中存在。不在用户端。"*
+        //    ⇒ 桌面点开的是**这一间工作区**（`/w/`，`112`），内容改了它自己就是新的；
+        //      "压到 266KB > 单页 256KB"那堵墙**从这一刀起不存在**（那一套只属于"包"）。
+        //    ⚠️ 老路（没接工作区那一刀：单测 / 旧部署）照旧走 `apps.create()`，一个字没变。
         let created;
         if (ctx.workspace) {
+          const given = a.files && typeof a.files === 'object' && !Array.isArray(a.files)
+            ? Object.keys(a.files).length
+            : 0;
           ctx.workspace.ensure(a.id, { title: a.title, entry: a.entry });
-          ctx.workspace.write(a.id, a.files);
-          created = snapshotWorkspace({
-            apps,
-            workspaces: ctx.workspace,
+          // ⚠️ **内容可以不在这儿给**：他（或者助手）在那一间目录里直接写文件就是**部署**
+          //    （cwd 就是那一间）⇒ `files` 缺省 = "已经在里面了"。
+          if (given > 0) ctx.workspace.write(a.id, a.files);
+          const stat = workspaceStat(ctx.workspace, a.id);
+          created = apps.register({
             id: a.id,
             title: a.title,
             icon: a.icon,
             // ⚠️ 入口以**工作区里真实存在的那个**为准（工作区可能不是模型刚交的那份）
-            entry: null,
+            entry: a.entry ?? stat.entry ?? 'index.html',
             permissions: a.permissions ?? [],
             createdBy: 'agent',
             createdTurn: Number.isInteger(req.turn) ? req.turn : null,
-          }).manifest;
+            rootHash: stat.rootHash,
+            bytes: stat.bytes,
+          });
+          // ★ **桌面自己长出来**（`app/installed` 是瞬态事件：客户端收到就重拉清单）。
+          //   ⚠️ 它是瞬态的、不占号：所以顺手也把"这一间的内容变了"那条路留着
+          //      （改了文件 ⇒ `app/workspace-changed`）—— 两条各管各的。
+          try {
+            ctx.onInstalled?.({ id: created.id, title: created.title });
+          } catch {
+            /* 喊不出去不许让"登记成了"这件事失败 */
+          }
         } else {
           // ⚠️ **老路照旧**：没接工作区那一刀时（单测/旧部署）行为一个字不变。
           created = apps.create({
@@ -203,6 +226,38 @@ async function runAppsOp(apps, req, ctx = {}) {
       // ── 发布 / 下架 / 装上 / 看共享库（乙-3）────────────────
       case 'publish': {
         if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
+        // ★★ **`114`：发布 = 把"他正在改的那一间"打成一个包**（主人原话：
+        //    *"a 推到市场，就是一个包"*）。
+        //    🔴 **"包"的那三道上限（单文件 / 整版 / 文件数）从这一刀起才生效** ——
+        //      用户端（他自己那一份）一个都不查。打不成 ⇒ 如实拒，
+        //      而且**他那一份照旧能用**（与从前那种"存不下就等于没有"完全不同）。
+        if (ctx.workspace && typeof ctx.workspace.has === 'function' && ctx.workspace.has(req.id)) {
+          try {
+            const stat = workspaceStat(ctx.workspace, req.id);
+            const cur = apps.current(req.id);
+            const curMan = cur === null ? null : apps.manifest(req.id, cur);
+            // ⚠️ 工作区**一个文件都没有**（占位页被删了 / 还没写）⇒ **不重打**
+            //    （那会把一个空目录打成一版；有包的那一份照旧发它自己）
+            if (stat.files.length > 0 && (!curMan || curMan.rootHash !== stat.rootHash)) {
+              // 与"装/升级前留底"同一个做法：从工作区读一份快照落进制品库（**查上限**）
+              snapshotWorkspace({
+                apps,
+                workspaces: ctx.workspace,
+                id: req.id,
+                title: apps.meta(req.id)?.title ?? null,
+                icon: apps.meta(req.id)?.icon,
+                createdBy: 'user',
+                createdTurn: Number.isInteger(req.turn) ? req.turn : null,
+              });
+            }
+          } catch (err) {
+            return {
+              ok: false,
+              refused: 'package-too-big',
+              error: `要发给大家的那一份打不出来（${err?.message ?? err}）`,
+            };
+          }
+        }
         // 🔴 **申报那条出界闸先跑**（92 §③ 阶段 2／98 §② 阶段 3 的硬规矩）：说不清来路的东西
         //    一份都不许出去。预审是**上架流程的第一步**，但它跑在这条**前置校验**之后
         //    —— 顺序是"先说清来路 → 再申报与评审"。

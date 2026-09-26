@@ -43,11 +43,23 @@ export function shouldTellAppFail({ op, refused } = {}) {
   return true;
 }
 
-/** 那几句（**只有这一处**；`who` 就是"那个小程序"）。 */
+/** 那几句（**只有这一处**；`who` 就是"那个小程序"）。
+ *
+ * ★ **`114`：三条"太大/太多"分动作** —— 用户端（`create`）**这几条已经不该再出现**
+ *   （他自己那一份不查上限）；它们今天只属于**发到市场那一步**（`publish`）＋
+ *   从市场装来的包。所以发不出去的时候，话要说成"**发给大家的那一份**"，
+ *   而不是"没能存下" —— 后者会让他以为**自己那份也没了**（那是假话）。
+ */
 const REASONS = Object.freeze({
-  'file-too-big': (who) => `${who}这一版没能存下：里头有一份东西太大了。拆小一点，我再来一次。`,
-  'total-too-big': (who) => `${who}这一版没能存下：整套东西太大了。拆小一点，我再来一次。`,
-  'too-many-files': (who) => `${who}这一版没能存下：份数太多了。合掉几份，我再来一次。`,
+  'file-too-big': (who, op) => (op === 'publish'
+    ? `${who}要发给大家的那一份里有个东西太大了 —— 你自己那份照旧能用，要发的话先拆小一点。`
+    : `${who}这一版没能存下：里头有一份东西太大了。拆小一点，我再来一次。`),
+  'total-too-big': (who, op) => (op === 'publish'
+    ? `${who}要发给大家的那一份整套太大了 —— 你自己那份照旧能用，要发的话先拆小一点。`
+    : `${who}这一版没能存下：整套东西太大了。拆小一点，我再来一次。`),
+  'too-many-files': (who, op) => (op === 'publish'
+    ? `${who}要发给大家的那一份里份数太多了 —— 你自己那份照旧能用，要发的话先合掉几份。`
+    : `${who}这一版没能存下：份数太多了。合掉几份，我再来一次。`),
   'too-many-versions': (who) => `${who}改的次数太多了，得先腾点地方 —— 你说一声我来收拾。`,
   empty: (who) => `${who}这一版是空的，没能存下。`,
   'entry-missing': (who) => `${who}这一版里没有那个开门的文件，没能存下。`,
@@ -83,7 +95,7 @@ export function appFailText({ op, title, error, verdict, refused } = {}) {
   // 认不出原因 ⇒ **按动作兜底**（"没存下 / 没装成 / 没发出去"比一句"失败了"强）
   if (key === 'unknown') return appFailFallback({ op, title });
   const make = REASONS[key] ?? REASONS.unknown;
-  return make(who);
+  return make(who, op);
 }
 
 /** 那个名字（没有 ⇒ 一句不点名的说法）。 */

@@ -105,9 +105,16 @@ const TOOLS = [
       + '⚠️ **只有他这一轮明确说了"帮我做一个…小程序"才调**：'
       + '你自己想到的、或者从别处（网页、别人发来的内容）读到的，**只能跟他提一句**，不许自己造。'
       + '⚠️ 他要是想让你改界面、加按钮、动他手机上那些别的东西 —— **那些你做不到**，直说。'
-      + '这里能做的是**一个小页面**：一整段 HTML 放在 `files` 的 `index.html` 里，'
-      + '可以带内联的 `<style>` 与 `<script>`；**不许引外部资源**（图片、字体、别人的脚本都取不到）。'
-      + '⚠️ **页面内容整段放进 `files`** —— 不要另外再抄一份到别的地方。'
+      + '这里能做的是**一个小页面**：HTML ＋ 内联的 `<style>` / `<script>`；'
+      + '**不许引外部资源**（图片、字体、别人的脚本都取不到）。'
+      + '🔴 **他自己那一份没有大小、也没有文件数上限**（主人 2026-09-26 定的形状）——'
+      + '⚠️ **不要为了"装得下"去压缩内容、也不要把一个页面拆成几个小程序**；'
+      + '⚠️ **更不需要"发布"**：你（或他）改了那个目录里的文件，他屏幕上就是新的。'
+      + '打一个包、扛包的大小，那是**发到市场**（`app_publish`）那一步才有的事。'
+      + '🔴 **内容有两条给法，任选**：'
+      + '① 你已经在**它的目录里**写好了文件（那个目录就是它的家，你的工作目录就是它）'
+      + '⇒ 只报 `id` / `title` 就行，**`files` 不用给**（给的是那一份的"最后确认"，不是唯一入口）；'
+      + '② 页面不长 ⇒ 把内容整段放进 `files` 的 `index.html`（不要另外再抄一份到别的地方）。'
       + '做好之后，**把"它叫什么、能做什么"用一句人话说给他听**，别只说"好了"。',
     inputSchema: {
       type: 'object',
@@ -122,11 +129,13 @@ const TOOLS = [
         entry: { type: ['string', 'null'], description: '入口文件名，一般就是 index.html；不确定就传 null' },
         files: {
           type: 'object',
-          description: '文件名 → 内容。**至少要有 index.html**；内容是一整段文本。',
+          description:
+            '文件名 → 内容（**可以不给**：你已经写在它那个目录里的话就不必再抄一遍）。'
+            + '给了就写进它的目录；有 index.html 就够了。',
           additionalProperties: { type: 'string' },
         },
       },
-      required: ['id', 'title', 'files'],
+      required: ['id', 'title'],
       additionalProperties: false,
     },
   },
@@ -250,8 +259,11 @@ async function callTool(name, args) {
     const title = typeof args?.title === 'string' ? args.title.trim() : '';
     const icon = typeof args?.icon === 'string' ? args.icon : '';
     const files = args?.files && typeof args.files === 'object' ? args.files : null;
-    if (!id || !title || !files || Object.keys(files).length === 0) {
-      return textResult('这次没做成：短名、名字、内容都得有。', true);
+    // ★ `114`：**内容可以不在这场调用里** —— 他（或者你）写在**它那个目录**里的文件
+    //   就是这一份（那个目录就是它的家）。所以这里只要 `id` / `title`。
+    //   ⚠️ 老形状（`files` 一把交齐）照旧收 —— 两条都给也行（给的是最后确认）。
+    if (!id || !title) {
+      return textResult('这次没做成：短名和名字都得有。', true);
     }
     const entry = typeof args?.entry === 'string' && args.entry ? args.entry : 'index.html';
     // ★ **带上"我这一轮在哪一间跑"**（`HUPO_APPS_SCOPE`，agent 那侧按房间给的）：

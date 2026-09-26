@@ -25,6 +25,23 @@ import nodePath from 'node:path';
 export const APPS_REL = nodePath.join('hupo', 'apps');
 
 /**
+ * ★ **"活的那一份"的登记文件**（`hupo/apps/<id>/app.json`）—— 用户端**不再是"包"**。
+ *
+ * ── 它为什么存在（主人 2026-09-26 定的形状 · `docs/dev/113-APP-SHAPE-LIVE.md`）──
+ *   *"所谓的版本快照，只在市场中存在。不在用户端。用户 a 创建的，在他自己那里
+ *     就是一段源代码部署……所以**不需要什么压缩**。"*
+ *
+ *  ⇒ 他自己那一份的内容住在**工作区**（`workspaces/<id>/`），桌面点开的也是它（`/w/`）。
+ *    这个文件**只登记那张脸**：`id` / `title` / `icon` / `entry` / 权限 / 一个版本计数。
+ *    🔴 **它不存内容、不查尺寸、不查文件数** —— 那三道是"包"的规矩（`create()`），
+ *      只属于**发到市场那一侧**。
+ *
+ * ⚠️ 旧的（有 `current.json` + `versions/` 的）app **照样认**：`meta()` 两者都读，
+ *    所以"装来的那一份"和"发过一版的"行为一个字没变。
+ */
+export const APP_META = 'app.json';
+
+/**
  * **回收处那一格叫什么**（`<root>/.removed/`）—— **只有这一处**。
  *
  * ⚠️ 单独导出是给 `worlds.js` 用的：它建那条日志时要按留痕抬一个"号的地板"
@@ -265,8 +282,21 @@ export class Apps {
    *        单测里那两个"只有 `{dir, sub}`"的用法不受影响）。
    *        ⚠️ 传**函数**（惰性取）是有意的：`worlds.js` 里那几本账（`unread`/`work`）
    *        在 `new Apps()` 之后才建 —— 但 `remove()` 一定发生在它们建好之后。
+   * @param {object|(()=>object)} [o.live]
+   *        ★ **`114`：活的那一份复制时要读/写工作区**（内容在工作区里，不在这儿）。
+   *        形状 `{ workspaces }`（`AppWorkspaces`）；`null`（缺省）⇒ 只有"包"那一套复制。
+   *        ⚠️ 与 `reclaim` 同一条理由传**函数/惰性**：`workspaces` 在 `new Apps()` 之后才建。
    */
-  constructor({ dir, sub = null, fs = nodeFs, now = Date.now, onAudit = () => {}, onVersion = () => {}, reclaim = null }) {
+  constructor({
+    dir,
+    sub = null,
+    fs = nodeFs,
+    now = Date.now,
+    onAudit = () => {},
+    onVersion = () => {},
+    reclaim = null,
+    live = null,
+  }) {
     if (!dir) throw new AppsError('dir 必填');
     this.dir = dir;
     this.sub = sub;
@@ -275,6 +305,17 @@ export class Apps {
     this.onAudit = onAudit;
     this.onVersion = onVersion;
     this.reclaim = reclaim;
+    this.live = live;
+  }
+
+  /** 惰性取"活的那一份"要用的那两样（工作区）。取不到 ⇒ `null`（调用方如实说）。 */
+  #liveWorkspaces() {
+    try {
+      const holder = typeof this.live === 'function' ? this.live() : this.live;
+      return holder?.workspaces ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /** 这个人的制品库根目录（不在时装不建 —— 只在真的要写的时候建）。 */
@@ -327,6 +368,169 @@ export class Apps {
     }
   }
 
+  /** "活的那一份"那张脸的登记文件（`hupo/apps/<id>/app.json`）。 */
+  metaPath(id) {
+    return nodePath.join(this.appDir(id), APP_META);
+  }
+
+  /** 盘上那份登记（没有 / 坏了 ⇒ `null`，**不猜**）。 */
+  #readMeta(id) {
+    try {
+      const j = JSON.parse(this.fs.readFileSync(this.metaPath(id), 'utf8'));
+      if (!j || j.id !== id) return null;
+      return j;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * ★ **一个 app 的那张脸**（`list()` / 认人 / 改名都走它）—— **只有这一处**。
+   *
+   * 两个来源，优先级刻意（两种 app 今天同时在世上）：
+   *   · **活的那一份**（`app.json`）：名字 / 图标 / 入口 / 权限**以它为准**（他改的名字立刻算数）；
+   *   · **包**（`current.json` + `manifest.json`）：版本 / `rootHash` / 字节数**以它为准**
+   *     （发过一版、或者从市场装来的，就是有一个包）。
+   * ⇒ 只有包（旧的 / 装来的）⇒ 逐字是原来那一条；只有登记（他自己造的）⇒ 报一个版本计数。
+   *
+   * @returns {object|null} `null` = 这儿没有这个东西
+   */
+  meta(id) {
+    checkAppId(id);
+    const live = this.#readMeta(id);
+    const v = this.current(id);
+    if (live === null && v === null) return null;
+    if (live === null) {
+      const m = this.manifest(id, v);
+      if (!m) return null;
+      return {
+        id,
+        title: m.title,
+        icon: m.icon,
+        version: v,
+        entry: m.entry,
+        rootHash: m.rootHash,
+        bytes: m.bytes,
+        permissions: [...(m.permissions ?? [])],
+        minShellVersion: m.minShellVersion,
+        createdAt: m.createdAt,
+        live: false,
+      };
+    }
+    if (v === null) {
+      return {
+        id,
+        title: typeof live.title === 'string' ? live.title : id,
+        icon: live.icon ?? null,
+        version: Number.isInteger(live.version) && live.version >= 1 ? live.version : 1,
+        entry: typeof live.entry === 'string' && live.entry !== '' ? live.entry : 'index.html',
+        rootHash: live.rootHash ?? null,
+        bytes: live.bytes ?? null,
+        permissions: [...(live.permissions ?? [])],
+        minShellVersion: 1,
+        createdAt: live.createdAt ?? null,
+        live: true,
+      };
+    }
+    const m = this.manifest(id, v);
+    if (!m) return null;
+    return {
+      id,
+      title: typeof live.title === 'string' ? live.title : m.title,
+      icon: live.icon ?? m.icon,
+      version: v,
+      entry: typeof live.entry === 'string' && live.entry !== '' ? live.entry : m.entry,
+      rootHash: m.rootHash,
+      bytes: m.bytes,
+      permissions: [...(live.permissions ?? [])],
+      minShellVersion: m.minShellVersion,
+      createdAt: live.createdAt ?? m.createdAt,
+      live: true,
+    };
+  }
+
+  /** 这个东西在他这儿吗（**活的那一份与包都算**）。 */
+  has(id) {
+    try {
+      return this.meta(id) !== null;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * ★ **登记"他自己那一份"**（用户端唯一那一刀 · 契约 `docs/dev/114`）。
+   *
+   * 🔴 **它不写内容、不建版本目录、不查尺寸/文件数** —— 内容住在**工作区**里，
+   *    桌面点开的就是它。这一刀只回答"桌面上那张脸叫什么、点开是哪个文件"。
+   * 🔴 **上限一个都不查**：那是"包"的规矩（`create()`），只属于市场那一侧
+   *    （主人原话：*"所以不需要什么压缩"*）。
+   * ⚠️ 校验里保留的是**形状**那几道（id / 保留名 / 权限白名单 / 名字长度 / 入口路径）
+   *    —— 它们是安全与协议，不是容量。
+   *
+   * @param {object} o
+   * @param {string} o.id
+   * @param {string} o.title
+   * @param {string} [o.icon]        认不出/没给 ⇒ 自动配一个（同 `create`）
+   * @param {string} o.entry
+   * @param {string[]} [o.permissions]
+   * @param {string} [o.createdBy]   `user` | `agent`
+   * @param {number} [o.createdTurn]
+   * @param {string|null} [o.rootHash] 登记那一刻工作区的指纹（**可以不带**；不带就不写）
+   * @param {number|null} [o.bytes]
+   * @returns {object} 写下去的登记
+   */
+  register({
+    id,
+    title,
+    icon = undefined,
+    entry,
+    permissions = [],
+    createdBy = 'agent',
+    createdTurn = null,
+    rootHash = null,
+    bytes = null,
+  }) {
+    checkAppId(id);
+    refuseReservedAppId(id);
+    if (!Array.isArray(permissions)) throw new AppsError('permissions 必须是数组');
+    for (const p of permissions) {
+      if (!PERMISSIONS.includes(p)) {
+        throw new AppsError(`这个权限现在还不给（${String(p).slice(0, 30)}）—— 制品暂时什么能力都没有`);
+      }
+    }
+    if (typeof title !== 'string' || title.trim().length === 0) throw new AppsError('小程序要有一个名字');
+    if (title.length > MAX_TITLE_CHARS) throw new AppsError(`名字太长（上限 ${MAX_TITLE_CHARS} 个字）`);
+    const picked = resolveIcon({ icon, title, id });
+    if (typeof entry !== 'string' || entry.length === 0) throw new AppsError('入口文件必填');
+    checkRelPath(entry);
+    if (createdBy !== 'user' && createdBy !== 'agent') throw new AppsError(`createdBy 不合法：${String(createdBy).slice(0, 20)}`);
+
+    const prev = this.#readMeta(id);
+    const version = (prev?.version ?? 0) + 1;
+    const now = this.now();
+    const meta = {
+      schema: SCHEMA,
+      live: true,
+      id,
+      title,
+      icon: picked.icon,
+      entry,
+      permissions: [...permissions],
+      version,
+      rootHash: typeof rootHash === 'string' && rootHash !== '' ? rootHash : null,
+      bytes: Number.isInteger(bytes) && bytes >= 0 ? bytes : null,
+      createdBy,
+      createdTurn,
+      createdAt: prev?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.fs.mkdirSync(this.appDir(id), { recursive: true, mode: 0o755 });
+    writeAtomic(this.fs, this.metaPath(id), `${JSON.stringify(meta, null, 2)}\n`, 0o644);
+    this.#audit({ what: prev === null ? 'register' : 'update', id, version, by: createdBy, turn: createdTurn });
+    return meta;
+  }
+
   /** 一个版本目录里有什么（**盘上的**事实；坏 manifest 返回 `null`）。 */
   manifest(id, version) {
     checkAppId(id);
@@ -341,7 +545,13 @@ export class Apps {
     }
   }
 
-  /** **我的清单**：每个 app 的当前版本（坏的就跳过那一个，不许整个清单炸）。 */
+  /**
+   * **我的清单**：每个 app 的那张脸（坏的就跳过那一个，不许整个清单炸）。
+   *
+   * ★ `114`：**活的那一份（只要有 `app.json`）也在里面** —— 他自己造的小程序
+   *   从今天起**不需要先落一版**才上桌面（主人原话：*"版本快照只在市场中存在"*）。
+   *   认人那一步只有一处（`meta()`），所以"活的"与"有包的"不可能分成两套读法。
+   */
   list() {
     let ids = [];
     try {
@@ -353,22 +563,9 @@ export class Apps {
     }
     const out = [];
     for (const id of ids.sort()) {
-      const v = this.current(id);
-      if (!v) continue;
-      const m = this.manifest(id, v);
+      const m = this.meta(id);
       if (!m) continue;
-      out.push({
-        id,
-        title: m.title,
-        icon: m.icon,
-        version: v,
-        entry: m.entry,
-        rootHash: m.rootHash,
-        bytes: m.bytes,
-        permissions: [...(m.permissions ?? [])],
-        minShellVersion: m.minShellVersion,
-        createdAt: m.createdAt,
-      });
+      out.push(m);
     }
     return out;
   }
@@ -557,7 +754,7 @@ export class Apps {
   /** **授予 / 撤销**（只认白名单里的名字；不是白名单的一律丢掉）。 */
   setGrants(id, permissions) {
     checkAppId(id);
-    if (this.current(id) === null) throw new AppsError('这个小程序不在你这儿');
+    if (!this.has(id)) throw new AppsError('这个小程序不在你这儿');
     const keep = [];
     for (const p of permissions ?? []) {
       if (!PERMISSIONS.includes(p)) throw new AppsError(`这个权限不认识：${String(p).slice(0, 20)}`);
@@ -634,21 +831,32 @@ export class Apps {
   setTitle(id, title) {
     checkAppId(id);
     const version = this.current(id);
+    const live = this.#readMeta(id);
     // 认不出 / 不在他这儿 ⇒ 404（`status` 不写，由调用方按老规矩当 404）
-    if (version === null) throw new AppsError('这个小程序不在你这儿');
+    if (version === null && live === null) throw new AppsError('这个小程序不在你这儿');
     const name = typeof title === 'string' ? title.trim() : '';
     // 空名字 / 太长 ⇒ 400 ＋ 人话
     if (name.length === 0) throw new AppsError('名字不能是空的', 400);
     if (name.length > MAX_TITLE_CHARS) {
       throw new AppsError(`名字太长（上限 ${MAX_TITLE_CHARS} 个字）`, 400);
     }
-    const m = this.manifest(id, version);
-    if (!m) throw new AppsError('这个小程序的清单坏了，改不了名字');
-    writeAtomic(
-      this.fs,
-      nodePath.join(this.versionDir(id, version), 'manifest.json'),
-      `${JSON.stringify({ ...m, title: name }, null, 2)}\n`,
-    );
+    // ★ `114`：活的那一份 —— 名字改在**登记**上（桌面显示的就是它 `meta()`）
+    if (live !== null) {
+      writeAtomic(this.fs, this.metaPath(id), `${JSON.stringify({ ...live, title: name }, null, 2)}\n`, 0o644);
+    }
+    // 有包的那一份：清单里的名字照旧跟着改（老行为一个字不变）
+    if (version !== null) {
+      const m = this.manifest(id, version);
+      if (!m) {
+        if (live === null) throw new AppsError('这个小程序的清单坏了，改不了名字');
+      } else {
+        writeAtomic(
+          this.fs,
+          nodePath.join(this.versionDir(id, version), 'manifest.json'),
+          `${JSON.stringify({ ...m, title: name }, null, 2)}\n`,
+        );
+      }
+    }
     this.#audit({ what: 'rename', id, version, title: name });
     return name;
   }
@@ -677,9 +885,32 @@ export class Apps {
   copy(id) {
     checkAppId(id);
     const from = this.current(id);
-    if (from === null) throw new AppsError('这个小程序不在你这儿');
+    const liveMeta = this.#readMeta(id);
+    if (from === null && liveMeta === null) throw new AppsError('这个小程序不在你这儿');
     const newId = this.#freeCopyId(id);
-    const title = this.#freeCopyTitle(this.manifest(id, from)?.title ?? '');
+    const title = this.#freeCopyTitle(liveMeta?.title ?? this.manifest(id, from)?.title ?? '');
+
+    // ── ★ `114`：**活的那一份**（他自己造的、还没有包）──────────────────
+    //    它没有 `versions/` 可搬 ⇒ 复制的是**他正在改的那间工作区里的字节**
+    //    （`104` §三那条"字节一模一样"照旧成立：源工作区 → 新工作区，逐字节）。
+    //    ⚠️ 新那一间照旧**是空的**：只复制东西，不复制那一段经历（用量/授予/血缘/对话都不进）。
+    if (from === null) {
+      const ws = this.#liveWorkspaces();
+      if (!ws) throw new AppsError('这一份是活的，复制它要从工作区那一侧走（这儿没接上）');
+      const src = ws.read(id);
+      ws.ensure(newId, { title, entry: liveMeta.entry ?? src.entry });
+      ws.write(newId, src.files);
+      const m = this.register({
+        id: newId,
+        title,
+        icon: liveMeta.icon,
+        entry: liveMeta.entry ?? src.entry,
+        permissions: liveMeta.permissions ?? [],
+        createdBy: 'user',
+      });
+      this.#audit({ what: 'copy', id, newId, title });
+      return { id: newId, title: m.title };
+    }
 
     // ── ① 源那份全读进内存（顺便逐文件核 hash：源被人动过 ⇒ 如实拒）──────
     const packs = [];
@@ -794,7 +1025,7 @@ export class Apps {
    */
   remove(id) {
     checkAppId(id);
-    if (this.current(id) === null) throw new AppsError('这个小程序不在你这儿');
+    if (!this.has(id)) throw new AppsError('这个小程序不在你这儿');
     const at = this.now();
     const to = nodePath.join(this.root, REMOVED_DIRNAME, `${id}-${at}`);
     this.fs.mkdirSync(nodePath.dirname(to), { recursive: true, mode: 0o755 });
@@ -856,7 +1087,7 @@ export class Apps {
    */
   noteLineage(id, entry = {}) {
     checkAppId(id);
-    if (this.current(id) === null) throw new AppsError('这个小程序不在你这儿');
+    if (!this.has(id)) throw new AppsError('这个小程序不在你这儿');
     const all = this.lineage(id);
     const rec = { at: this.now(), ...entry };
     all.push(rec);

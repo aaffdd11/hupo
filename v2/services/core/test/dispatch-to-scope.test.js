@@ -301,7 +301,8 @@ test('🔴 P1：他说"做一个 X 的 app" ⇒ 他答了之后那一间**被建
     assert.match(packet, /主人让你在这里做一件东西/, `🔴 由来丢了（它不知道自己为什么在做这个）：${packet}`);
     assert.match(packet, /帮我做一个练算数的小程序/, `🔴 他说的那句原话丢了：${packet}`);
     // ★ 而且它是**真收到**的：子进程照着那份任务书把东西做出来了（真 spawn ＋ 真投递）
-    await waitFor(() => w.apps.current('math-drill') !== null, '🔴 子进程没真收到那条任务');
+    // ★ `114`：他那一份是**活的**（登记 ＋ 工作区），不再要求“落了一版包”
+    await waitFor(() => w.apps.has('math-drill'), '🔴 子进程没真收到那条任务');
     assert.equal(w.jobs.forScope('math-drill').why, '帮我做一个练算数的小程序', '★ 由来也要落进登记');
 
     // ★ **负向对照**：换个**已经有一处**的名字 ⇒ 拒（P1 不是"什么名字都建"）
@@ -332,7 +333,7 @@ test('🔴 P2：`app_create` 那一段在**那一间**；主进程里**没有**�
       `🔴 那一间里没有它自己的过程：${textOf(childSeen)}`,
     );
     // ② **活真在那一间干的**：制品是它在**那间**里造出来的（真那条口）
-    assert.notEqual(w.apps.current('math-drill'), null, 'app_create 没落进制品库');
+    assert.equal(w.apps.has('math-drill'), true, 'app_create 没登记上（`114`：用户端是登记 ＋ 工作区）');
     assert.equal(
       nodeFs.existsSync(nodePath.join(w.workspaces.root, 'math-drill', 'index.html')),
       true,

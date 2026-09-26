@@ -316,10 +316,25 @@ test('🔴 A1：造 app ⇒ 文件只出现在它自己的工作区里；主目�
     '🔴 工作区**不许在主目录里面** —— 必须平行（否则主目录的 agent 写得到它）',
   );
 
-  // 制品库那一份（快照）也在，而且同源
-  const art = nodePath.join(w.dir, 'hupo', 'apps', 'city-weather', 'versions', '1', 'index.html');
-  assert.equal(nodeFs.existsSync(art), true, '★ 还要登记进制品库（第 1 版）');
-  assert.equal(nodeFs.readFileSync(art, 'utf8'), body);
+  // ★ **`114`：用户端就到此为止** —— 桌面上那一格靠**登记**（`app.json`），
+  //    内容就是**这一间工作区**（活的），**不落"包"**（版本快照只在市场那一侧）。
+  const artRoot = nodePath.join(w.dir, 'hupo', 'apps', 'city-weather');
+  assert.equal(nodeFs.existsSync(nodePath.join(artRoot, 'app.json')), true, '★ 要登记（桌面认人靠它）');
+  assert.equal(
+    nodeFs.existsSync(nodePath.join(artRoot, 'versions')), false,
+    '🔴 用户端不许落"包"（主人 2026-09-26：版本快照只在市场中存在）',
+  );
+  assert.ok(w.apps.list().some((a) => a.id === 'city-weather'), '★ 清单里要看得见它');
+  assert.equal(JSON.parse(nodeFs.readFileSync(nodePath.join(artRoot, 'app.json'), 'utf8')).title, '天气');
+  // **反例的正身**：真去打一版"包" ⇒ 内容对得上（证明工作区那一份就是源头）
+  const packed = snapshotWorkspace({
+    apps: w.apps,
+    workspaces: w.workspaces,
+    id: 'city-weather',
+    title: '天气',
+    createdBy: 'user',
+  });
+  assert.equal(packed.manifest.files.find((f) => f.path === 'index.html').bytes, Buffer.byteLength(body));
 
   // **反例的正身**：同一个内容若真写进主目录，上面那条 walkFiles 立刻非空 ⇒ 红
   const leak = nodePath.join(mainDir, 'city-weather');

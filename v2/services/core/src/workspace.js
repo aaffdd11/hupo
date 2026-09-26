@@ -27,10 +27,7 @@ import nodePath from 'node:path';
 import { checkLiveRel, liveRelOk } from './app-live.js';
 import {
   AppsError,
-  MAX_FILES,
-  MAX_FILE_BYTES,
   MAX_ID_CHARS,
-  MAX_TOTAL_BYTES,
   MAX_VERSIONS,
   checkAppId,
   checkRelPath,
@@ -335,10 +332,14 @@ export class AppWorkspaces {
     }
     const paths = Object.keys(files);
     if (paths.length === 0) throw new AppsError('一个文件都没有');
-    if (paths.length > MAX_FILES) throw new AppsError(`文件太多（上限 ${MAX_FILES} 个）`);
+    // 🔴 **`114`：这一侧不查尺寸、不查文件数**（主人 2026-09-26 定的形状）。
+    //    *"用户 a 创建的，在他自己那里就是一段源代码部署……所以不需要什么压缩。"*
+    //    ⇒ `MAX_FILES` / `MAX_FILE_BYTES` / `MAX_TOTAL_BYTES` 是**"包"的规矩**
+    //      （`apps.create()` 那一侧照旧全查，它只服务"发到市场"）。
+    //    ⚠️ 留着的这几道是**形状与安全**，不是容量：路径白名单（不许越界）
+    //      ＋ 我们自己的清单名不许被占（`.hupo*`）。
 
     const checked = [];
-    let total = 0;
     for (const rel of paths) {
       checkRelPath(rel);
       // 🔴 我们自己那份清单的名字**不许被制品占掉**
@@ -348,11 +349,8 @@ export class AppWorkspaces {
       const raw = files[rel];
       const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw), 'utf8');
       if (buf.length === 0) throw new AppsError(`空文件：${rel}`);
-      if (buf.length > MAX_FILE_BYTES) throw new AppsError(`单个文件太大：${rel}`);
-      total += buf.length;
       checked.push({ rel, buf });
     }
-    if (total > MAX_TOTAL_BYTES) throw new AppsError('这一份东西太大了');
 
     for (const f of checked) {
       const target = nodePath.join(dir, f.rel);
@@ -588,6 +586,28 @@ export function snapshotWorkspace({
 export function workspaceRootHash(workspaces, id) {
   const ws = workspaces.read(id);
   return rootHashOf(Object.entries(ws.files).map(([path, buf]) => ({ path, sha256: sha256hex(buf) })));
+}
+
+/**
+ * ★ **`114`：工作区那一份的三个数**（登记时记一笔：指纹 / 字节数 / 入口）。
+ *
+ * ⚠️ 它**不是承诺**：他随时会改那些文件（那正是"活的"的意思）⇒ 这里给的只是
+ *    **登记那一刻**的样子。桌面显示与打开**都不看它**（`meta()` 只把它带出去）。
+ * 🔴 **不查上限**（同 `write()`）：这是用户端。
+ *
+ * @returns {{rootHash:string, bytes:number, entry:string|null, files:string[]}}
+ */
+export function workspaceStat(workspaces, id) {
+  const ws = workspaces.read(id);
+  const files = Object.keys(ws.files).sort();
+  let bytes = 0;
+  for (const b of Object.values(ws.files)) bytes += b.length;
+  return {
+    rootHash: rootHashOf(files.map((path) => ({ path, sha256: sha256hex(ws.files[path]) }))),
+    bytes,
+    entry: ws.entry ?? null,
+    files,
+  };
 }
 
 /**
