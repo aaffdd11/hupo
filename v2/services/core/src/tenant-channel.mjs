@@ -31,6 +31,24 @@ import { Duplex } from 'node:stream';
 export const CHANNEL_VERSION = 1;
 
 /**
+ * **那一帧长什么样**（`#readyPayload` → 帧 · `#174`）。
+ *
+ * ⚠️ 三档，**一档都不许含糊**：
+ *   · 有模型钥匙（可能还有别的几样）⇒ `ready` ＋ `key`（老盒子认它）＋ `creds`（新盒子合并写）；
+ *   · **只有别的几样**（语音 / 图片 / 视频）⇒ `ready` ＋ `creds` ——
+ *     盒子那边照样写（`tenant-shell.mjs` 那条 `creds` 分支），**而且它还会接着守着**；
+ *   · 一样都没有 ⇒ `waiting`（**绝不**塞一个空包假装有东西）。
+ */
+function readyFrameOf({ hasKey, key, pack }) {
+  if (!hasKey && !pack) return { state: 'waiting' };
+  return {
+    state: 'ready',
+    ...(hasKey ? { key } : {}),
+    ...(pack ? { creds: pack } : {}),
+  };
+}
+
+/**
  * 一个租户一个套接字。
  *
  * @param {string} dir
@@ -58,6 +76,8 @@ export function channelPathFor(dir, userId) {
 export class TenantChannel {
   #dir;
   #keyFor;
+  /** ★ **中心存着的那几样**（语音三样 / 图片 / 视频）：每次连上来顺手给一份（`#174`）。 */
+  #credsFor;
   /** 见构造参数 `onKeyBad`（容器说"那把钥匙不灵了"）。 */
   #onKeyBad = null;
   #log;
@@ -108,11 +128,20 @@ export class TenantChannel {
    * @param {object} o
    * @param {string} o.dir                    套接字放哪个目录
    * @param {(userId:string)=>(string|null)} o.keyFor  **这个人的 key**；`null` = 还没有
+   * @param {(userId:string)=>(Record<string,string>|null)} [o.credsFor]
+   *        ★ **这个人在中心存着的那几样**（`#174` · 2026-09-27）：语音三样 / 图片 / 视频。
+   *        🔴 为什么非有不可：那几样**不像模型钥匙**那样有别的送达路 —— 只在
+   *           "用户提交那一拍"推一次；盒子那一刻要是不在（重启 / 刚重建），
+   *           那几样就**只剩在中心**，而盒子的识别路读的是**盒子自己**那份
+   *           ⇒ 屏幕说"填好了"、那台一直回「没配凭据」。
+   *        ⇒ 盒子**每次连上来**（它每几秒重连一次、一直守着）都顺手给它一份，
+   *           盒子那边是**合并**写 ⇒ 什么时候到都不丢、也不会抹掉别的。
    * @param {(m:string)=>void} [o.log]
    */
   constructor({
     dir,
     keyFor,
+    credsFor = null,
     log = () => {},
     onKeyBad = null,
     onBuild = null,
@@ -123,11 +152,31 @@ export class TenantChannel {
     if (typeof keyFor !== 'function') throw new Error('TenantChannel 需要 keyFor(userId)');
     this.#dir = dir;
     this.#keyFor = keyFor;
+    this.#credsFor = typeof credsFor === 'function' ? credsFor : null;
     this.#log = log;
     this.#onKeyBad = onKeyBad;
     this.#onBuild = onBuild;
     this.#onKeyUp = onKeyUp;
     this.#onWorkspaceChanged = onWorkspaceChanged;
+  }
+
+  /**
+   * **这一拍该给它的那一包**（短名 → 值）＋ 有没有模型那一把。
+   *
+   * ⚠️ 两个来源**分开取**：模型那把住在宿主内存（`keyFor`），其余几样在中心的存档里
+   *    （`credsFor`）。**一个字符都不许进日志。**
+   */
+  #readyPayload(userId) {
+    const key = this.#keyFor(userId);
+    const hasKey = typeof key === 'string' && key.length > 0;
+    let pack = null;
+    try {
+      const got = this.#credsFor ? this.#credsFor(userId) : null;
+      if (got && typeof got === 'object' && Object.keys(got).length > 0) pack = got;
+    } catch {
+      pack = null; // 读存档出问题**不许**把这条通道带倒
+    }
+    return { hasKey, key: hasKey ? key : null, pack };
   }
 
   /** 每台自报的版本（`userId → 指纹`）。**算出来的，不是记出来的**。 */
@@ -206,9 +255,8 @@ export class TenantChannel {
      * ⚠️ 这一行**只说"谁连上了、当时有没有 key"**，**不说 key 是什么**：
      *    日志是这个项目里最容易漏的地方（`AGENTS.md` §六.1）。
      */
-    const key = this.#keyFor(userId);
-    const hasKey = typeof key === 'string' && key.length > 0;
-    this.#record(userId, hasKey ? 'ready' : 'waiting');
+    const payload = this.#readyPayload(userId);
+    this.#record(userId, payload.hasKey ? 'ready' : 'waiting');
     // 🔴 **这里不再念"容器连进来了"**（2026-09-23 修，账 #54）。
     //
     //    为什么：**这条连接不一定是容器**。容器里那个"等钥匙"的轮询
@@ -248,7 +296,10 @@ export class TenantChannel {
 
     // ★ 容器一连上就先把它要的东西给它：**不等它问**
     //   （少一次往返，也少一个"该谁先说话"的歧义）
-    this.#send(conn, hasKey ? { state: 'ready', key } : { state: 'waiting' });
+    //   ★ `#174`：**除了模型那一把，还要带上中心存着的那几样**（语音三样 / 图片 / 视频）——
+    //      盒子那边是**合并**写，所以什么时候到都不丢；它每几秒重连一次、一直守着
+    //      （`tenant-shell.mjs` 的"领到了也要接着守"）⇒ 这就是"没送到"的那条兜底路。
+    this.#send(conn, readyFrameOf(payload));
   }
 
   #onLine(userId, conn, line) {
@@ -271,12 +322,9 @@ export class TenantChannel {
         return;
       case 'need-key': {
         // 容器说"我还没拿到 key，再给我一次"（它自己会退避重试）
-        const key = this.#keyFor(userId);
-        if (typeof key === 'string' && key.length > 0) {
-          this.#send(conn, { state: 'ready', key });
-        } else {
-          this.#send(conn, { state: 'waiting' });
-        }
+        // ★ `#174`：**同一帧里把它该有的那一包一起给它**（不只是模型那一把）——
+        //    "用户填了、可那会儿盒子不在"这种情况就靠这一拍补上（盒子一直守着）。
+        this.#send(conn, readyFrameOf(this.#readyPayload(userId)));
         return;
       }
       case 'ready':

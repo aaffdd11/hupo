@@ -27,7 +27,10 @@ import { DEFAULT_IMAGE_MODEL, DEFAULT_IMAGE_URL, generateImage, imageErrorWords 
 export function makeDrawImage({ dataDir, env = process.env, fetch = globalThis.fetch, log = () => {} } = {}) {
   return async function drawImage(userId, prompt) {
     // ⚠️ 用 `credsFor`：盒子里那份是**单文件**（P1-29）
-    const mine = credsFor({ dataDir, sub: userId }).values;
+    // 🔴 **`env` 必须一起传下去**（`#174` · 2026-09-27，与 `asr-creds.js` 同一个坑）：
+    //    "盒子里读那份单文件"那一支只在 `env.HUPO_ROLE === 'tenant'` 时才走，
+    //    而 `credsFor` 的 `env` 默认**空对象** ⇒ 不传 = 盒子里画图永远说"没有钥匙"。
+    const mine = credsFor({ dataDir, sub: userId, env }).values;
     const key = typeof mine.image === 'string' ? mine.image.trim() : '';
     if (key === '') {
       return { ok: false, why: 'no-key', text: imageErrorWords({ why: 'no-key' }) };

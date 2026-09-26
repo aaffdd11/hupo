@@ -36,7 +36,7 @@ import { createAppsMigrateServer, migrateSocketPath } from './apps-migrate.js';
 import { createAsrRelay } from './asr.js';
 import { createHarnessRelay } from './harness-session.mjs';
 import { createDevWebRelay } from './dev-mode.js';
-import { readUserCreds, writeUserCreds } from './creds-store.js';
+import { readUserCreds, tenantCredsPack, writeUserCreds } from './creds-store.js';
 import { makeDrawImage } from './image-use.js';
 import { OWNER_KEY_REF, writeOwnerKey } from './owner-creds.js';
 import { describeVoiceCreds, resolveVoiceCreds, voiceCredsFor } from './asr-creds.js';
@@ -436,6 +436,15 @@ const channel = new TenantChannel({
     const uid = userOfTenant(tenant);
     return uid ? (tenantKeys.get(uid) ?? null) : null;
   },
+  // ★ **中心存着的那几样**（语音三样 / 图片 / 视频 · `#174` · 2026-09-27）：
+  //   盒子每次连上来（它每几秒重连一次、一直守着）都顺手给它一份 —— 盒子那边是
+  //   **合并**写 ⇒ "填了，可那会儿盒子不在"这种情况下一拍就补上，也不会抹掉别的。
+  //   🔴 修之前那一包**只在"提交里有模型钥匙"那一拍**才推 ⇒ 语音那一屏永远进不了盒子。
+  credsFor: (tenant) => {
+    const uid = userOfTenant(tenant);
+    if (!uid) return null;
+    return tenantCredsPack({ dataDir: cfg.dataDir, sub: uid, model: tenantKeys.get(uid) ?? null });
+  },
   // ★ **容器自报的版本指纹**（契约 `docs/dev/45-TENANT-UPDATE.md`）：
   //   比完**该说话就说话**（`compareTenantBuild` 是纯函数，`test/unit` 里真验），
   //   不一致就**叫它重开**（那一帧不带内容；退不退由它自己定）。
@@ -602,8 +611,11 @@ function ownerHasModelKey() {
  *   · 语言那一把 + 主人 ⇒ 写 **DSH 自己那份凭据**（他授权我动它：2026-09-24）；
  *   · 语言那一把 + 租户 ⇒ **已有的那条路**（推给他盒子的卷，`setModelKey`）；
  *   · 其余三样 ⇒ **中心这份按人存档**（`creds-store.js`）。
- *     ⚠️ 为什么不塞进盒子那个文件：盒子那边是**整份重写**（只写一行模型钥匙）
- *        ⇒ 下一次送钥匙就把它们抹掉；要真进盒子得改产品层（部署期，要主人签字）。
+ *     ⚠️ 存档不是终点：**每一次改动都会再推给他盒子一份**（下面那段 ★ · `#174`）——
+ *        盒子那边是**合并**写（`mergeKeyFile`），所以模型钥匙不会被抹掉。
+ *     ⚠️ 2026-09-27 更正：这里原来写"要真进盒子得改产品层（部署期，要主人签字）"——
+ *        **产品层那边早就改好了**（P1-29 的合并写），真正缺的是**这一侧的触发**：
+ *        只有带 `model` 的那一拍才推 ⇒ 语音那一屏永远送不进去（见下面 ★ 那段）。
  *
  * @returns {{ok:boolean, why:string, status?:number, text?:string, creds?:object}}
  */
@@ -645,6 +657,31 @@ function setCreds(userId, patch) {
   if (Object.keys(others).length > 0) {
     const r = writeUserCreds(cfg.dataDir, userId, others);
     if (!r?.ok) return { ok: false, why: r?.why ?? 'cannot-set', status: 409 };
+  }
+
+  // ── ★ **租户：任何一次改动都要推给他那台**（`#174` · 2026-09-27 修一个真缺陷）──
+  //   🔴 修之前：**只有带 `model` 的那一次**才推（`setModelKey` 里那一下）——
+  //      而配置页是**一屏一次提交**（语音三样 / 图片 / 视频各一屏）⇒
+  //      在"语音"那一屏填的三样**永远送不进盒子**：中心存下了、页面回报"有"，
+  //      而盒子里那条识别路读的是**盒子自己**那份 ⇒ 那台永远回「没配凭据」
+  //      （主人 2026-09-27 在手机上按了 8 下，盒子里 8 条"有人来了，但这台没配凭据"）。
+  //   ⚠️ 模型那一把**中心不存**（在他盒子自己那份里）⇒ 手里有就一起带上（`tenantCredsPack`），
+  //      没有就**只推那几样** —— 盒子那边是**合并**写（`mergeKeyFile`），
+  //      所以"没带模型钥匙"**不会**把它原来那把抹掉。
+  //   ⚠️ 盒子没连着（`pushed === 0`）⇒ 那几样**还在中心**，等它连上自己来领
+  //      （它每几秒重连一次 —— `tenant-shell.mjs` 的 `watchForKey`）。
+  const tenant = tenantOf(userId);
+  if (tenant) {
+    const model = tenantKeys.get(userId) ?? null;
+    const pack = tenantCredsPack({ dataDir: cfg.dataDir, sub: userId, model });
+    if (pack) {
+      const pushed = channel.pushKey(tenant, model, pack);
+      if (pushed === 0) {
+        console.log(
+          `  🔑 ${userId} 的凭据已存在中心（他那台现在没连着，等它连上会自动领走）`,
+        );
+      }
+    }
   }
   return { ok: true, why: 'saved', creds: credStatusOf(userId) };
 }

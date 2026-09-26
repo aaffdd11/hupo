@@ -262,3 +262,39 @@ test('★ 那条闸的真值表：认得出"他要我画"才放（保守：认�
     assert.equal(asksToDrawImage(t), false, `这句不是"他要我画"，不该认：${JSON.stringify(t)}`);
   }
 });
+
+// ── ★ `#174`（2026-09-27）：**盒子那台读的是"单文件"那一份** ─────────────
+//
+// 🔴 与 `asr-creds.js` 同一个坑：`makeDrawImage` 调 `credsFor` 时**没把 `env` 传下去**，
+//    而"盒子里读单文件"那一支只在 `HUPO_ROLE=tenant` 时才走 ⇒ 盒子里画图永远回"没有钥匙"。
+test('★ 🔴 盒子里那份**单文件**：画图那条路也要读得到（`env` 必须传下去）', async () => {
+  const { makeDrawImage } = await import('../src/image-use.js');
+  const { mergeKeyFile } = await import('../src/tenant-shell.mjs');
+  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-img-'));
+  try {
+    mergeKeyFile(nodePath.join(dir, 'creds.yaml'), { image: 'fake-img-key-box' });
+    let seen = null;
+    const draw = makeDrawImage({
+      dataDir: dir,
+      env: { HUPO_ROLE: 'tenant' },
+      fetch: fakeFetch(async (url, init) => {
+        seen = init;
+        return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ url: 'https://x.example/b.png' }] }) };
+      }),
+      log: () => {},
+    });
+    const r = await draw('owner', '一只猫');
+    assert.equal(r.ok, true, '★ 盒子里推进去的那把要真的用得上');
+    assert.equal(seen.headers.authorization, 'Bearer fake-img-key-box');
+
+    // 负向对照：**没有那一台的角色** ⇒ 那份单文件不认（宿主上不许拿它顶）
+    const host = makeDrawImage({ dataDir: dir, env: {}, fetch: fakeFetch(async () => {
+      throw new Error('不该发出去');
+    }), log: () => {} });
+    const r2 = await host('owner', '一只猫');
+    assert.equal(r2.ok, false);
+    assert.equal(r2.why, 'no-key', '★ 宿主上宁可说"没有钥匙"');
+  } finally {
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
+});

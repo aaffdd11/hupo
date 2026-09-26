@@ -147,7 +147,15 @@ export function voiceCredsFor({ sub = null, dataDir, env = process.env, fs = nod
   //   ⚠️ **三样齐了才算数**（缺一样就是没填过）—— 与页面回报的口径**同一个规则**
   //      （`creds.mjs` 的 `credStatus`），不然会出现"页面说有、发出去是空的"。
   // ⚠️ 用 `credsFor`（不是 `readUserCreds`）：**盒子里那份是单文件**（P1-29）
-  const mine = who ? credsFor({ dataDir, sub: who }).values : {};
+  // 🔴 **`env` 与 `fs` 必须一起传下去**（`#174` · 2026-09-27 修一个真缺陷）：
+  //    `credsFor` 的"盒子里读那份单文件"那一支**只在 `env.HUPO_ROLE === 'tenant'` 时**才走，
+  //    而它的 `env` 默认是**空对象**（不是 `process.env`）。
+  //    ⇒ 这里不传 = 盒子里那条兜底路**从来没走过**：钥匙推进去了、`/data/creds.yaml`
+  //      里明明有那三样，识别路照样回「没配凭据」（主人 2026-09-27 手机上就是这个）。
+  //    ⚠️ 这是"判据打在另一侧"那一族：`test/creds-box.test.js` 直接调 `credsFor` 时
+  //      **显式**给了 `env: {HUPO_ROLE:'tenant'}`（所以那条一直是绿的），
+  //      而产品这条路上**没人给** —— 判据现在补在 `voiceCredsFor` 这一侧（见同批测试）。
+  const mine = who ? credsFor({ dataDir, sub: who, env, fs }).values : {};
   const mineOk = VOICE_ENV_NAMES.every((n) => typeof mine[VOICE_FIELD_OF[n]] === 'string'
     && mine[VOICE_FIELD_OF[n]].length > 0);
   if (mineOk) {

@@ -279,3 +279,37 @@ test('他自己填了 ⇒ 不许走"取证中转"（那是给没钥匙时验链�
     nodeFs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── ★ `#174`（2026-09-27）：**盒子那台读的是"单文件"那一份** ─────────────
+//
+// 🔴 修之前这里是**坏的**：`voiceCredsFor` 调 `credsFor` 时**没把 `env` 传下去**，
+//    而 `credsFor` 的"盒子里读单文件"那一支**只在 `HUPO_ROLE=tenant` 时**才走
+//    （它的 `env` 默认是空对象）⇒ 钥匙推进盒子了、`/data/creds.yaml` 里明明有，
+//    识别路照样回「没配凭据」。
+// ⚠️ 这条判据打的就是**产品这条路**（`voiceCredsFor`），不是 `credsFor` 本身 ——
+//    "判据打在另一侧"那一族就是这么来的。
+test('★ 🔴 盒子里那份**单文件**：识别路要读得到（`env` 必须传下去）', async () => {
+  const dir = tmp();
+  try {
+    const { mergeKeyFile, writeKeyFile } = await import('../src/tenant-shell.mjs');
+    const file = nodePath.join(dir, 'creds.yaml');
+    writeKeyFile(file, 'sk-box-model'); // 老的：只有模型那一把
+    mergeKeyFile(file, {
+      voiceAppId: '1300000001',
+      voiceSecretId: 'box-id',
+      voiceSecretKey: 'box-key',
+    });
+    // 盒子里：那份单文件 ＋ `HUPO_ROLE=tenant` ⇒ 必须认出来
+    const cfg = voiceCredsFor({ sub: 'owner', dataDir: dir, env: { HUPO_ROLE: 'tenant' } });
+    assert.equal(cfg.configured, true, '★ 盒子里推进去的三样要真的接上识别路');
+    assert.equal(cfg.source, 'his-own');
+    assert.equal(cfg.appid, '1300000001');
+    assert.equal(cfg.secretKey, 'box-key');
+
+    // 负向对照：**没有那一台的角色** ⇒ 宿主上不许拿一份陈旧单文件去顶（宁可说"没配"）
+    const host = voiceCredsFor({ sub: 'owner', dataDir: dir, env: {} });
+    assert.equal(host.configured, false, '★ 宿主上不认那份单文件（免得"看不出原因"）');
+  } finally {
+    nodeFs.rmSync(dir, { recursive: true, force: true });
+  }
+});

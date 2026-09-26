@@ -81,6 +81,27 @@ export function writeUserCreds(dataDir, sub, patch, fs = nodeFs) {
 }
 
 /**
+ * ★ **该推进他盒子的那一包**（短名 → 值 · `#174` 2026-09-27）。
+ *
+ * 🔴 为什么要有它：中心按人存的那几样（**语音三样 / 图片 / 视频**）与"模型那一把"
+ *    住的地方**不一样** —— 模型那把**中心不存**（只在宿主内存 `tenantKeys` 里，
+ *    落盘的是他盒子自己那份）。所以"该推什么"必须**现合**：
+ *    `readUserCreds` 读回中心存的那几样 ＋（手里有就带上）模型那一把。
+ *
+ * ⚠️ **返回值可能是 `null`**（一样都没有）—— 调用方据此**不要发空推**。
+ * ⚠️ **一个字符都不许进日志**（这把包里有密钥；`serve.js` 那边只念"推了几条"）。
+ *
+ * @param {{dataDir:string, sub:string, model?:string|null, fs?:object}} o
+ * @returns {Record<string,string>|null}
+ */
+export function tenantCredsPack({ dataDir, sub, model = null, fs = nodeFs } = {}) {
+  const { values } = readUserCreds(dataDir, sub, fs);
+  const pack = { ...values };
+  if (typeof model === 'string' && model.length > 0) pack.model = model;
+  return Object.keys(pack).length > 0 ? pack : null;
+}
+
+/**
  * **这一份凭据从哪读** —— 按人分目录 **或** 盒子那份单文件（P1-29 · 2026-09-24）。
  *
  * ── 为什么要有这条兜底 ──────────────────────────────────────
