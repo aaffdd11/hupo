@@ -30,6 +30,7 @@ import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/desktop_words.dart';
 import 'package:hupo_app/models/dsh_design.dart';
 import 'package:hupo_app/models/harness.dart';
+import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/models/message_state.dart';
 import 'package:hupo_app/models/chat_view.dart';
 import 'package:hupo_app/models/process_levels.dart';
@@ -40,6 +41,7 @@ import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/timeline.dart';
 import 'package:hupo_app/models/tool_row.dart';
 import 'package:hupo_app/models/tool_row_words.dart';
+import 'package:hupo_app/models/voice_try.dart';
 import 'package:hupo_app/models/trajectory_words.dart';
 import 'package:hupo_app/models/queue_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
@@ -529,6 +531,39 @@ Future<void> _openConfig(WidgetTester tester, double scale) async {
   //    点"设置"这行字落到了"点桌面空白"上（只收起了聊天），而下面那道扫描
   //    **照样绿** —— 因为它扫的是**桌面**，根本没进设置那一屏。那就是"闸变弱了"。
   expect(find.byType(SettingsScreen), findsOneWidget, reason: '★ 没进设置那一屏 ⇒ 这两条判据扫错了屏幕');
+}
+
+/// ★ 批 7（契约 `docs/dev/123-VOICE-TEST-BUTTON.md`）：
+/// **直接泵配置页「语音」那一屏**（含那颗「试一下」＋ 那个文本框）。
+///
+/// ⚠️ 为什么不从真入口进（同「配置页·图片那一屏」那条的理由）：真入口那趟
+///    不接 `onSubmitCreds`、也拿不到 `creds` ⇒ 那一块**不画**（"不给假按钮"那条
+///    纪律就是这么定的），于是这道闸会**扫错屏**还照样绿。
+///    溢出与命中区这两档要的是**那一棵树**，所以直接把那一屏泵出来。
+/// ⚠️ 负向对照：**那一块真的进去了**才算数（不然这些话是白说的）。
+Future<void> _pumpVoiceTab(WidgetTester tester, double scale) async {
+  await _pump(
+    tester,
+    Scaffold(
+      body: SettingsScreen(
+        hasKey: true,
+        keyBad: false,
+        creds: const SpaceCreds(voice: true),
+        localOnly: true,
+        onSubmit: (k) async => KeySend.ok,
+        onSubmitCreds: (t, v) async => KeySend.ok,
+        // 开麦/收手在 VM 上没有真那一份 ⇒ 注一个假的（它只是形状）。
+        voiceTry: VoiceTryHandlers(start: (e) async => null, stop: () {}),
+        canHear: true,
+        onLogout: () {},
+      ),
+    ),
+    scale,
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(credTabVoice));
+  await tester.pumpAndSettle();
+  expect(find.text(voiceTryStart), findsOneWidget, reason: '★ 那一块没进这棵树 ⇒ 这道闸扫错了屏');
 }
 
 
@@ -1347,6 +1382,13 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '图片那一屏（含试一张）在 ${s}x 溢出了');
       });
 
+      testWidgets('配置页·语音那一屏（含「试一下」＋ 文本框）@ ${s}x', (tester) async {
+        // ⚠️ 批 7（契约 `docs/dev/123`）：**新加的那一块**（一颗按钮 ＋ 一个文本框）
+        //    必须也过"五档不溢出"这道硬闸 —— 不然它会随时间失效。
+        await _pumpVoiceTab(tester, s);
+        expect(_drain(tester), isEmpty, reason: '语音那一屏（含试一下）在 ${s}x 溢出了');
+      });
+
       testWidgets('发现（从真入口进）@ ${s}x', (tester) async {
         await _openDiscover(tester, s);
         expect(_drain(tester), isEmpty, reason: '发现在 ${s}x 溢出了');
@@ -1571,6 +1613,13 @@ void main() {
       testWidgets('配置页（从真入口进）@ ${s}x', (tester) async {
         await _openConfig(tester, s);
         await sweep(tester, '配置页 @${s}x');
+      });
+
+      testWidgets('配置页·语音那一屏那颗「试一下」（直接泵）@ ${s}x', (tester) async {
+        // ⚠️ 批 7（契约 `docs/dev/123`）：那颗按钮是"要真按下去"的那一下 ⇒
+        //    它的命中区必须 ≥44。⚠️ 那一屏真入口进不去（见 `_pumpVoiceTab`）。
+        await _pumpVoiceTab(tester, s);
+        await sweep(tester, '语音「试一下」@${s}x');
       });
 
       testWidgets('发现（从真入口进）@ ${s}x', (tester) async {

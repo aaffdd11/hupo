@@ -24,11 +24,13 @@ import '../models/dsh_design.dart';
 import '../models/image_outcome.dart';
 import '../models/space.dart';
 import '../models/space_words.dart';
+import '../models/voice_try.dart';
 import '../services/api.dart';
 import '../widgets/cred_form.dart';
 import '../widgets/dsh_look.dart';
 import '../widgets/image_try.dart';
 import '../widgets/key_form.dart';
+import '../widgets/voice_try.dart';
 import 'about_screen.dart';
 
 /// **分区标题**（设置页这一层就两三个，形状只有一种）。
@@ -65,6 +67,8 @@ class SettingsScreen extends StatelessWidget {
     this.creds = const SpaceCreds(),
     this.onSubmitCreds,
     this.onDrawImage,
+    this.voiceTry,
+    this.canHear = false,
     this.localOnly = false,
     this.onCancel,
     this.onCancelled,
@@ -85,6 +89,22 @@ class SettingsScreen extends StatelessWidget {
   /// **画一张图**（P1-27）：图片那一屏下面的「试一张」用它。
   /// ⚠️ `null` ⇒ 不画那一块（这条路没接上时**不给假按钮**）。
   final Future<ImageOutcome> Function(String prompt)? onDrawImage;
+
+  /// ★ **试一下语音**（批 7 · 主人 2026-09-26）：语音那一屏那颗按钮用它。
+  ///
+  /// 🔴 **钥匙只有一条路**（这一批的硬要求）：这颗按钮**不碰任何钥匙**，
+  ///    它只把麦克风那段音频送到 `/api/asr`（和聊天里那颗话筒**同一个地址、
+  ///    同一个服务**：`services/hearing.dart`）。服务端按**验过签的身份**
+  ///    现取凭据（`v2/services/core/src/asr-creds.js` 的 `voiceCredsFor`），
+  ///    读的就是**上面这个表单写进去的那一份**（`/api/creds` ⇒
+  ///    `data/creds/<他>.yaml`）。⇒ 这里**不许**再存一份钥匙、也不许另算一个地址。
+  ///
+  /// ⚠️ `null` ⇒ 不画那一块（这条路没接上时**不给假按钮**）。
+  final VoiceTryHandlers? voiceTry;
+
+  /// 这个页面**开得了麦吗**（`services/hearing.dart` 的 `canHear`）。
+  /// ⚠️ 假 ⇒ 那颗按钮**照画**，点下去只说一句白话（不装开麦 —— 同聊天那颗话筒）。
+  final bool canHear;
 
   /// **某一屏填好了要送出去**（tab 的名字 ＋ 那一屏的值）。
   ///
@@ -280,6 +300,7 @@ class SettingsScreen extends StatelessWidget {
       _ => const <CredField>[],
     };
     final draw = onDrawImage;
+    final vt = voiceTry;
     return [
       CredForm(
         fields: fields,
@@ -290,6 +311,14 @@ class SettingsScreen extends StatelessWidget {
       //   ⚠️ 没接上线（`onDrawImage == null`）就不画 —— 不给假按钮。
       if (tab == credTabImage && draw != null && credsFor(tab))
         ImageTry(onDraw: (prompt) => draw(prompt)),
+      // ★ **试一下语音**（批 7 · 主人 2026-09-26）：只有"语音"那一屏、而且接线了才给。
+      //   🔴 **和上面那个表单是同一份钥匙**：这里不传任何钥匙进这一块 ——
+      //      音频走 `/api/asr`，服务端按他验过签的身份现取（见本类顶上那段）。
+      //   ⚠️ 没接线（`voiceTry == null`）就不画 —— 不给假按钮。
+      //   ⚠️ **填没填都画**：这一档要能当场告诉他"还没配好、上面那三样就是它要用的"
+      //      （图片那块不同：它没有"没配好"这一档，所以只在填了之后才画）。
+      if (tab == credTabVoice && vt != null)
+        VoiceTry(handlers: vt, hasOwn: credsFor(tab), canHear: canHear),
     ];
   }
 

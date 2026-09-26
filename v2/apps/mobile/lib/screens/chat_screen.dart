@@ -45,6 +45,7 @@ import '../models/timeline.dart';
 import '../models/trajectory.dart';
 import '../models/trajectory_words.dart';
 import '../models/trash_words.dart';
+import '../models/voice_try.dart';
 import '../services/api.dart';
 import '../services/appearance_store.dart';
 import '../services/chat_controller.dart';
@@ -1041,6 +1042,13 @@ class _ChatScreenState extends State<ChatScreen> {
           creds: widget.space.creds,
           onSubmitCreds: widget.onSendCreds,
           onDrawImage: widget.onDrawImage,
+          // ★ 批 7：**语音那一屏的「试一下」**（主人 2026-09-26）——
+          //   开麦/收手与聊天那颗话筒**共用同两个函数**（`services/hearing.dart`），
+          //   地址也共用 `stream_uri.dart` 那一个；这里只是把控制器那两个动作接上。
+          //   🔴 **不碰钥匙**：那三样走 `/api/creds` ⇒ 服务端的 `voiceCredsFor`，
+          //      这颗按钮只把音频送到 `/api/asr`（钥匙只有这一条路）。
+          voiceTry: VoiceTryHandlers(start: c.hearOnce, stop: c.stopHearingNow),
+          canHear: c.canHear,
           onCancel: widget.onCancelMe,
           onCancelled: widget.onLoggedOut,
           onKeyChanged: widget.onKeyChanged,

@@ -15,6 +15,7 @@ import 'package:hupo_app/models/desktop_words.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
 import 'package:hupo_app/models/file_panel_words.dart';
 import 'package:hupo_app/models/harness_words.dart';
+import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/models/job_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
 import 'package:hupo_app/models/login_words.dart';
@@ -348,6 +349,19 @@ void main() {
       filePanelTurnHead(3),
       filePanelTurnFiles(2),
       filePanelArgsTruncatedLine(2000),
+      // ★ 2026-09-26（契约 `docs/dev/123-VOICE-TEST-BUTTON.md`）：配置页「语音」
+      //    那一屏那颗「试一下」的每一句 —— **直接引数据源**（手抄会漂）。
+      //    ⚠️ 这一批最容易混进来的是"模型 / 工具 / 客户端"那类内部词；
+      //       允许的是他说得懂的话："试一下"、"停下"、"上面那三样"。
+      voiceTryTitle,
+      voiceTryStart,
+      voiceTryStop,
+      voiceTryWorking,
+      voiceTryHint,
+      voiceTryBoxLabel,
+      voiceTryBadFrame,
+      voiceTryNoKeyEmpty,
+      voiceTryNoKeyFilled,
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

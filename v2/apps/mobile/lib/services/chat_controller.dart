@@ -841,6 +841,32 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ── ★ 批 7：配置页「语音」那一屏的「试一下」（主人 2026-09-26）──────────
+  //
+  // 🔴 **不是第二条录音路**：开麦/收手就是聊天那颗话筒用的**同两个函数**
+  //    （`services/hearing.dart`，构造时可注入），地址也走同一个 `asrUri`
+  //    （那条"客户端自己算地址、闸却打在另一侧"的事故，见 `stream_uri.dart` 顶上）。
+  //    唯一分别：这一屏**自带一个 `Hearing`**（存不在这儿），所以这里不接受
+  //    "当前状态"、只把事件转出去。
+
+  /// **开一次麦**（配置页那颗「试一下」按第一下）。
+  ///
+  /// @returns `null` = 真开起来了；否则一句**机器原因**（与原 `startHearing` 同一套）。
+  /// ⚠️ 令牌用**手里这一份**（`_token`），**不重新去盘上读**：开麦要发生在
+  ///    用户手势那一拍里（异步读盘会把那一拍拖过去；iOS 上那条更明显）。
+  Future<String?> hearOnce(
+    void Function(Map<String, dynamic>) onEvent,
+  ) async {
+    final t = _token;
+    if (t == null) return 'failed';
+    return _startHear(url: asrUri(base: '', page: Uri.base), token: t, onEvent: onEvent);
+  }
+
+  /// **收手**（配置页那颗「试一下」按第二下）。
+  /// ⚠️ 与聊天那颗话筒**共用同一个服务状态**：语音那一头一次只开一条
+  ///    （`hearing_web.dart` 的 `_closeAll()`），所以两处同时按不会开出两条流。
+  void stopHearingNow() => _stopHear();
+
   /// 时间线里那一条助手的话（自动念要它的原文）。
   ///
   /// ⚠️ 找不到就返回空串 ⇒ **不念**（绝不念一个猜出来的东西）。
