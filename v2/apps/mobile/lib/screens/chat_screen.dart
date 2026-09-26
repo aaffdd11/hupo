@@ -23,6 +23,7 @@ import '../models/dev_harness.dart';
 import '../models/image_outcome.dart';
 import '../models/conn_state.dart';
 import '../models/chat_select.dart';
+import '../models/chat_view.dart';
 import '../models/design.dart' as d;
 import '../models/desktop_words.dart';
 import '../models/export_words.dart';
@@ -36,15 +37,19 @@ import '../models/mini_update.dart';
 import '../models/scope.dart';
 import '../models/space_words.dart';
 import '../models/timeline.dart';
+import '../models/trajectory.dart';
+import '../models/trajectory_words.dart';
 import '../models/trash_words.dart';
 import '../services/api.dart';
 import '../services/chat_controller.dart';
+import '../services/chat_view_store.dart';
 import '../services/dev_harness_client.dart';
 import '../services/harness_client.dart';
 import '../services/links.dart';
 import '../services/hearing.dart';
 import '../services/speech.dart';
 import '../widgets/app_desktop.dart';
+import '../widgets/chat_tabs.dart';
 import '../widgets/harness_pane.dart';
 import '../widgets/job_ask_sheet.dart';
 import '../widgets/mini_app_icons.dart';
@@ -61,6 +66,7 @@ import '../widgets/process_level_menu.dart';
 import '../widgets/queue_strip.dart';
 import '../widgets/process_view.dart';
 import '../widgets/tool_row_view.dart';
+import '../widgets/trajectory_view.dart';
 import '../widgets/trash_plan_sheet.dart';
 import 'discover_screen.dart';
 import 'export_screen.dart';
@@ -281,6 +287,65 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _processFolded(int turn, int closedThrough) =>
       turn <= closedThrough && !_unfoldedTurns.contains(turn);
 
+  // ── ★ `118`：轨迹那一屏（DSH 的第二个 tab · 主人 2026-09-26）────────
+  //
+  // 聊天 / 轨迹 是**同一条会话的两个视图**（研究 `115` §一.4）。切换是**瞬时**的、
+  // **不重连**，而且**聊天那一屏的滚动位置一点都不能动** —— 做法是
+  // `_viewArea` 里那两个 `Offstage`：非当前那一档**留在树里**（只是不画、
+  // 不让点、不出现在无障碍树里），于是它的 `ScrollPosition` 原样留着。
+
+  /// 现在看的是哪一档。
+  ChatView _view = defaultChatView;
+
+  /// 轨迹那一屏**建出来了没有**（第一次切过去才建 —— 省得每次聊天重绘都白算一张表）。
+  bool _trajectoryBuilt = false;
+
+  /// 看哪一档存在哪（**按设备**；照 `process_level_store.dart` 那一对）。
+  final _viewStore = ChatViewStore();
+
+  /// 轨迹那一屏就地要说的那句实话（`null` = 什么都不说）。
+  ///
+  /// ⚠️ 只用来放"这一条在聊天里没有单独一行"这类**如实说明**，
+  ///    不是错误层、也不弹窗（弹窗会挡住他要看的东西）。
+  String? _jumpNote;
+
+  /// **跳转用的锚**（时间线条目 → 那一格在聊天里的 key）。
+  ///
+  /// ⚠️ 为什么需要它：列表是**懒加载**的（`ListView.builder`）⇒ 要"滚到某一条"
+  ///    得先知道它在不在树里（在 ⇒ `ensureVisible`；不在 ⇒ 二分找偏移，
+  ///    见 [`_scrollToItem`]）。
+  /// ⚠️ 键按**对象身份**存（`TimelineItem` 没重写 `==`）；每次算完这一屏的格子
+  ///    把不在里面的清掉，免得住着不走（`_planSlots` 末尾）。
+  final Map<TimelineItem, GlobalKey> _itemKeys = {};
+
+  /// 二分找偏移最多几步（一步一帧；16 步足够覆盖几千条的列表）。
+  static const int _jumpSearchSteps = 16;
+
+  /// 滚过去之后目标停在视口的哪儿（0 = 顶、1 = 底）。
+  static const double _jumpAlignment = 0.25;
+
+  /// **那一档换了**（点 tab / 点轨迹里的一行）。
+  void _setView(ChatView v) {
+    if (v == _view) return; // ★ 点当前那一档 = **空动作**（不是"按了没反应"）
+    setState(() {
+      _view = v;
+      if (v == ChatView.trajectory) _trajectoryBuilt = true;
+      _jumpNote = null;
+    });
+    // 存不上也得能用（下一次进来看的是旧的那一档，但这一次是对的）。
+    unawaited(_viewStore.write(v));
+  }
+
+  /// 进来时读一次"上次看的是哪一档"（读不出来 ⇒ 聊天 —— 见 `ChatViewStore`）。
+  Future<void> _loadView() async {
+    final v = await _viewStore.read();
+    if (!mounted || v == _view) return;
+    setState(() {
+      _view = v;
+      if (v == ChatView.trajectory) _trajectoryBuilt = true;
+    });
+  }
+
   // ── 多选态（契约 `docs/dev/106-CHAT-SELECT.md` §一）──────────────
 
   /// 现在在不在**多选态**（点了菜单里那个【多选】之后）。
@@ -310,6 +375,8 @@ class _ChatScreenState extends State<ChatScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _followBottom());
     // ★ `116`：焦点离开时间线时，把那次"因为焦点在里面而推迟的折叠"补上。
     FocusManager.instance.addListener(_onFocusChanged);
+    // ★ `118`：进来先读一次"上次看的是聊天还是轨迹"（读不出来 ⇒ 聊天）。
+    unawaited(_loadView());
   }
 
   @override
@@ -620,6 +687,9 @@ class _ChatScreenState extends State<ChatScreen> {
               key: _floaterKey,
               maxHeight: maxH,
               title: '助手',
+              // ★ `118`：标题行上那两个 tab（聊天 / 轨迹）—— DSH 的会话头就是这个形状。
+              //    ⚠️ 点当前那一档是**空动作**（`_setView` 认"还是这一档"）。
+              tabs: ChatTabs(current: _view, onPick: _setView),
               initialTier: widget.initialTier,
               trailing: _actions(c),
               composer: _composer(c),
@@ -1282,37 +1352,7 @@ class _ChatScreenState extends State<ChatScreen> {
       key: chatBodyKey,
       children: [
         _StatusStrip(state: c.conn, error: c.lastError),
-        Expanded(
-          child: Center(
-            child: ConstrainedBox(
-              // 内容列限宽（手册 D4.6 / R5）：平板上一行七十个字读不下去
-              constraints: const BoxConstraints(maxWidth: 760),
-              // ⚠️ **更早那句提示不许放在列表外面**（2026-09-23 实测栽过）：
-              //    它一出现就会把列表的**视口**压小 —— 而"最老那条消息在不在树里"
-              //    是 a11y 那条判据量的东西（3.1 倍字号下当场红）。⇒ 它现在当
-              //    **列表的第一项**（见 `_body`），视口一个像素都不变。
-              child: Stack(
-                children: [
-                  _body(c),
-                  // ★ **回到最新**（用户自己翻走了才出现；他没翻走 = 本来就在最新）
-                  //    ⚠️ 它是 `Positioned` ⇒ **不参与 Stack 的尺寸计算**，视口不受影响。
-                  if (_userScrolledAway)
-                    Positioned(
-                      right: 8,
-                      bottom: 8,
-                      child: FilledButton.tonalIcon(
-                        // 命中区 ≥44（D3.6）
-                        style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
-                        onPressed: _backToBottom,
-                        icon: const Icon(Icons.arrow_downward, size: 18),
-                        label: const Text(backToLatestWords),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ),
+        Expanded(child: _viewArea(c)),
         // ★ **多选态**那条底栏工具条（契约 `docs/dev/106-CHAT-SELECT.md` §一）。
         //   ⚠️ 只在多选态出现 ⇒ 平时这一屏**一个像素都不变**
         //      （通知那条 D4.8："高度变化 = 0px" 量的是平时那一屏）。
@@ -1326,6 +1366,87 @@ class _ChatScreenState extends State<ChatScreen> {
       ],
     );
   }
+
+  /// ★ `118`：浮窗里那一块**画哪一档**（聊天 / 轨迹）。
+  ///
+  /// 🔴 **两个视图都留在树里**（`Offstage`），只画当前那一档：
+  ///   · 切回来时**聊天那一屏的滚动位置一点都没动**（`ScrollPosition` 没被销毁，
+  ///     元素也还在）—— 这是"切过去看一眼再切回来"最要紧的一条；
+  ///   · 切换**不重连**：那条流在 `ChatController` 里，这里只是换个 `Widget`；
+  ///   · `Offstage` 不进无障碍树、也不画 ⇒ 读屏与那道 a11y 硬闸只看得到当前那一档
+  ///     （`find.text` 默认也跳过 offstage 的东西）。
+  /// ⚠️ 轨迹那一档**第一次切过去才建**（`_trajectoryBuilt`）：没看过它的人
+  ///    不该为它每一帧都算一张表。
+  Widget _viewArea(ChatController c) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Offstage(offstage: _view != ChatView.chat, child: _chatPane(c)),
+        if (_trajectoryBuilt)
+          Offstage(offstage: _view != ChatView.trajectory, child: _trajectoryPane(c)),
+      ],
+    );
+  }
+
+  /// 聊天那一档（就是原来那一块：时间线 ＋ 「回到最新」）。
+  Widget _chatPane(ChatController c) {
+    return Center(
+      child: ConstrainedBox(
+        // 内容列限宽（手册 D4.6 / R5）：平板上一行七十个字读不下去
+        constraints: const BoxConstraints(maxWidth: 760),
+        // ⚠️ **更早那句提示不许放在列表外面**（2026-09-23 实测栽过）：
+        //    它一出现就会把列表的**视口**压小 —— 而"最老那条消息在不在树里"
+        //    是 a11y 那条判据量的东西（3.1 倍字号下当场红）。⇒ 它现在当
+        //    **列表的第一项**（见 `_body`），视口一个像素都不变。
+        child: Stack(
+          children: [
+            _body(c),
+            // ★ **回到最新**（用户自己翻走了才出现；他没翻走 = 本来就在最新）
+            //    ⚠️ 它是 `Positioned` ⇒ **不参与 Stack 的尺寸计算**，视口不受影响。
+            if (_userScrolledAway)
+              Positioned(
+                right: 8,
+                bottom: 8,
+                child: FilledButton.tonalIcon(
+                  // 命中区 ≥44（D3.6）
+                  style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+                  onPressed: _backToBottom,
+                  icon: const Icon(Icons.arrow_downward, size: 18),
+                  label: const Text(backToLatestWords),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 轨迹那一档：把**同一份** `items` 摊成一张表（`models/trajectory.dart`）。
+  ///
+  /// ⚠️ 三个查询全部走 `ChatController`（`processOfTurn` / `turnUsage` /
+  ///    `closedThrough`）—— 计数与用量的规矩**一条都不在这里重写**。
+  Widget _trajectoryPane(ChatController c) {
+    final table = trajectoryTableOf(
+      items: c.items,
+      words: trajectoryWords,
+      processOfTurn: c.processOfTurn,
+      usageOf: c.turnUsage,
+      unfoldedTurns: _unfoldedTurns,
+      closedThrough: c.closedThrough,
+      historyComplete: _historyComplete(c),
+    );
+    return TrajectoryView(table: table, note: _jumpNote, onPick: _onTrajectoryPick);
+  }
+
+  /// **更早的是不是都加载完了**（轨迹那一屏靠它决定说不说"到最早那一条了"）。
+  ///
+  /// 两条**真的**信号，缺一不可地"敢说全部"：
+  ///   · 手上最老那一号就是 `1`（这条会话最早那一件事就在这一窗里）；或者
+  ///   · 服务端亲口说过没有更早的了（`olderExhausted`）**且**不是本机留的页数到顶
+  ///     （`olderCapped` —— 那是"我们不再留了"，不是"没有更早的"）。
+  /// ⇒ 其余一切情况一律**不说"全部"**（`118`：宁可不说，也不许把一窗说成整条会话）。
+  bool _historyComplete(ChatController c) =>
+      c.oldestLoadedSeq == 1 || (c.olderExhausted && !c.olderCapped);
 
   /// **输入条**（收起态和展开态共用的**同一个**东西）。
   Widget _composer(ChatController c) {
@@ -1488,12 +1609,24 @@ class _ChatScreenState extends State<ChatScreen> {
       if (it is TimelineTurnUsage && lastUsageSeq[it.turn] != it.seq) continue;
       slots.add(_ItemSlot(it));
     }
+    // ★ `118`：跳转用的锚表跟着这一屏**真的画出来的**那几格走 ——
+    //   不在里面的清掉（折起来的那一轮、被藏起来的那几条都不该留着 key）。
+    final present = <TimelineItem>{
+      for (final s in slots)
+        if (s is _ItemSlot) s.item,
+    };
+    _itemKeys.removeWhere((k, v) => !present.contains(k));
     return slots;
   }
 
   /// 画一格（真条目走 [_render]；折叠控件走它自己那一个）。
   Widget _renderSlot(_Slot slot, ChatController c) => switch (slot) {
-    _ItemSlot(:final item) => _render(item, c),
+    // ⚠️ `KeyedSubtree` 包一层只是为了挂那个跳转锚（`GlobalKey`）——
+    //    渲染出来的东西与改前**一模一样**。
+    _ItemSlot(:final item) => KeyedSubtree(
+      key: _itemKeys.putIfAbsent(item, () => GlobalKey()),
+      child: _render(item, c),
+    ),
     _FoldSlot(:final turn) => TurnProcessControl(
       counts: c.processOfTurn(turn),
       expanded: !_processFolded(turn, c.closedThrough),
@@ -1502,6 +1635,113 @@ class _ChatScreenState extends State<ChatScreen> {
       }),
     ),
   };
+
+  // ── ★ `118`：从轨迹跳到聊天里的那一条 ─────────────────────────
+
+  /// 点轨迹里那一行 ⇒ **把那一轮展开（如果要）、切回聊天、滚到那一条**。
+  ///
+  /// 🔴 两条"过不去"都要**如实说**，绝不许滚到别的地方去（那比不动更坏）：
+  ///   · 这一条在聊天那一屏里**没有单独的一格**（同一轮不是最后一条的用量）；
+  ///   · 滚不过去（懒加载的列表到不了它那儿）。
+  void _onTrajectoryPick(TrajectoryRow row) {
+    if (!row.inChat) {
+      setState(() => _jumpNote = trajectoryJumpUnavailableLine);
+      return;
+    }
+    final target = row.item;
+    setState(() {
+      _jumpNote = null;
+      // 被折起来的那一轮 ⇒ 先展开：他要看的是**那一条**，不是那一行的折叠控件。
+      final turn = row.turn;
+      if (row.needsUnfold && turn != null) _unfoldedTurns.add(turn);
+      _view = ChatView.chat;
+    });
+    unawaited(_viewStore.write(ChatView.chat));
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_scrollToItem(target)));
+  }
+
+  /// **滚到时间线上的那一条**。
+  ///
+  /// ⚠️ 为什么不是一句 `ensureVisible` 就完：列表是 `ListView.builder`（**懒加载**）——
+  ///    目标离视口远的时候**它根本还没被建出来**，`currentContext` 是 `null`。
+  ///    做法：拿"这一帧真的建出来了的那一段"当尺子，在 `[0, maxScrollExtent]` 上
+  ///    **二分**找目标所在的偏移（一步一帧，最多 [_jumpSearchSteps] 步），
+  ///    到了就把那一格用 `ensureVisible` 摆到视口里。
+  /// ⚠️ 到不了就**说一句**（`trajectoryJumpFailedLine`），**不假装到了**。
+  Future<void> _scrollToItem(TimelineItem target) async {
+    if (!mounted) return;
+    final key = _itemKeys[target];
+    if (key != null && key.currentContext != null) {
+      await _revealItem(key);
+      return;
+    }
+    if (!_scroll.hasClients) return _sayJumpFailed();
+    final items = widget.controller.items;
+    final targetIndex = items.indexOf(target);
+    // 它不在这一窗里（被删了 / 换了房间）⇒ 如实说，别乱滚。
+    if (targetIndex < 0) return _sayJumpFailed();
+    var lo = 0.0;
+    var hi = _scroll.position.maxScrollExtent;
+    for (var i = 0; i < _jumpSearchSteps && hi - lo > 1; i += 1) {
+      final mid = (lo + hi) / 2;
+      _scroll.jumpTo(mid.clamp(0.0, _scroll.position.maxScrollExtent));
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || !_scroll.hasClients) return;
+      if (key != null && key.currentContext != null) return _revealItem(key);
+      final range = _builtItemRange(items);
+      if (range == null) break; // 一屏什么都没建出来（空列表）⇒ 到不了
+      if (targetIndex < range.$1) {
+        hi = mid; // 目标在**上面**
+      } else if (targetIndex > range.$2) {
+        lo = mid; // 目标在**下面**
+      } else {
+        // 印出来的这一段已经盖住它了，可它的 key 还是没 context ⇒ 不再试
+        break;
+      }
+    }
+    _sayJumpFailed();
+  }
+
+  /// 把某一格摆到视口里（`alignment` = 它停在视口的百分之几处）。
+  Future<void> _revealItem(GlobalKey key) async {
+    final ctx = key.currentContext;
+    if (ctx == null || !mounted) return;
+    await Scrollable.ensureVisible(
+      ctx,
+      alignment: _jumpAlignment,
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
+  }
+
+  /// **这一帧真的建出来了的那一段**（在 `items` 里的下标区间）；一格都没有 ⇒ `null`。
+  ///
+  /// ⚠️ 判据是"key 有 `currentContext`" = 它在**树里**（懒加载的列表把
+  ///    视口附近那几格建出来，它们就有 context）。
+  (int, int)? _builtItemRange(List<TimelineItem> items) {
+    final index = <TimelineItem, int>{
+      for (var i = 0; i < items.length; i += 1) items[i]: i,
+    };
+    int? lo;
+    int? hi;
+    for (final e in _itemKeys.entries) {
+      if (e.value.currentContext == null) continue;
+      final i = index[e.key];
+      if (i == null) continue;
+      if (lo == null || i < lo) lo = i;
+      if (hi == null || i > hi) hi = i;
+    }
+    if (lo == null || hi == null) return null;
+    return (lo, hi);
+  }
+
+  /// 滚不过去时**如实说一句**（一条短提示，不改屏幕上的任何东西）。
+  void _sayJumpFailed() {
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(content: Text(trajectoryJumpFailedLine)),
+    );
+  }
 
   /// **离顶多近就触发"再往前取一页"**（住代码里；大一点更容易触发，但会多问几次）。
   static const double _olderTriggerPx = 32;

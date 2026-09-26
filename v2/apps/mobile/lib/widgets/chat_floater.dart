@@ -85,6 +85,7 @@ class ChatFloater extends StatefulWidget {
     required this.title,
     required this.child,
     required this.composer,
+    this.tabs,
     this.trailing = const <Widget>[],
     this.initialTier = FloaterTier.collapsed,
     this.onTier,
@@ -109,6 +110,15 @@ class ChatFloater extends StatefulWidget {
   /// 抓手行右边的动作（回收站/导出/过程/配置/退出那套）。
   /// ⚠️ **收起态不画它们** —— 收起条只留"带字的展开入口"（D3.8）。
   final List<Widget> trailing;
+
+  /// **标题行上那两个 tab**（聊天 / 轨迹，契约 `docs/dev/118-TRAJECTORY-VIEW.md` §一）。
+  ///
+  /// DSH 的会话头就是这个形状（标题 ＋ `role="tablist"`）。`null` = 不画
+  /// （老调用方 / 单看这一块的测试照旧）。
+  /// ⚠️ **收起态不画它**（收起条只有一行：抓手 ＋ 输入框）。
+  /// ⚠️ 它是**视图切换**，不是"另开一屏"：换的是 `child` 那块画什么，
+  ///    浮窗自己一个字节都不动（更不重连）。
+  final Widget? tabs;
 
   // ⚠️ 2026-09-24：原来这里有一个 `leading`（标题前面那个"在哪儿说话"的图标）。
   //    聊天窗口收成**一行**之后，它搬到了输入条那一行的最前面
@@ -371,15 +381,31 @@ class ChatFloaterState extends State<ChatFloater> {
                         child: Row(
                           children: [
                             const SizedBox(width: d.gapS),
-                            Text(
-                              widget.title,
-                              // ★ 2026-09-23：`titleSmall`(≈14) → `titleMedium`(≈16)
-                              //   —— 它是这一屏的名字，原来和旁边那排图标一样大。
-                              style: t.textTheme.titleMedium?.copyWith(
-                                color: d.ink,
-                                fontWeight: FontWeight.w600,
+                            // ⚠️ `118` 起标题**可以让位**（窄屏 + 大字号下右边还要摆
+                            //    两个 tab）：原来的 Text 是不弹性的 ⇒ 加了 tab 之后
+                            //    这一行会横向溢出。`Flexible` + 省略号把它变成
+                            //    "地方不够就截字"，**位置与大小在地方够时一字不变**
+                            //    （`notice_overlay_test` 量的就是那个矩形）。
+                            Flexible(
+                              child: Text(
+                                widget.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                // ★ 2026-09-23：`titleSmall`(≈14) → `titleMedium`(≈16)
+                                //   —— 它是这一屏的名字，原来和旁边那排图标一样大。
+                                style: t.textTheme.titleMedium?.copyWith(
+                                  color: d.ink,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
+                            // ★ `118`：聊天 / 轨迹 两个 tab（DSH 的会话头就是这个形状）。
+                            //    ⚠️ 它是**不弹性**的：挤的时候让标题去截字，
+                            //       两个 tab 永远整颗看得见（切换器的出口不许被藏）。
+                            if (widget.tabs != null) ...[
+                              const SizedBox(width: d.gapS),
+                              widget.tabs!,
+                            ],
                             const Spacer(),
                             // ⚠️ 那一串动作要能**横向滚**：窄屏 + 大字号下它**一定**放不下；
                             //    折行会让这一行变高 ⇒ 把时间线挤没。一行 + 横滚：高度不变、一个都不藏。

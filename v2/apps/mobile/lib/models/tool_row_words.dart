@@ -96,7 +96,14 @@ String groupDigits(int n) {
 ///    把它的值当"这一轮一共花了多少"画出去就是**编了一个数**（缓存没报时它会偏小）。
 ///    要总数得先有"每一个桶都报了"这个前提 —— 那正是 `foldTurnUsage` 管的事，
 ///    而它允许可选桶缺席 ⇒ 我们只列在场的桶。
-String turnUsageLine(TurnUsage u) {
+String turnUsageLine(TurnUsage u) => '$turnUsageHead · ${turnUsageBucketsLine(u)}';
+
+/// **那几个桶本身**（`未缓存输入 1 tok · 输出 2 tok · …`）—— 抬头由调用方给。
+///
+/// ⚠️ 为什么单列一个函数：`118` 的轨迹合计那一行也要列同一批桶，而它抬头是
+///    "这一屏合计"、不是"本轮用量"。两处各写一份列桶的代码 = 两个真相
+///    （迟早一处加了桶、另一处没加）。
+String turnUsageBucketsLine(TurnUsage u) {
   final parts = <String>[
     '$turnUsageInput ${groupDigits(u.input)} $turnUsageUnit',
     '$turnUsageOutput ${groupDigits(u.output)} $turnUsageUnit',
@@ -104,7 +111,7 @@ String turnUsageLine(TurnUsage u) {
     if (u.cacheWrite != null) '$turnUsageCacheWrite ${groupDigits(u.cacheWrite!)} $turnUsageUnit',
     if (u.reasoning != null) '$turnUsageReasoning ${groupDigits(u.reasoning!)} $turnUsageUnit',
   ];
-  return '$turnUsageHead · ${parts.join(dshTurnProcessSeparator)}';
+  return parts.join(dshTurnProcessSeparator);
 }
 
 /// ── 过程折叠那一行（DSH `TurnProcessNodeView` 的 label）──────────

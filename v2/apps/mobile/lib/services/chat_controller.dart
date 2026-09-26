@@ -554,6 +554,14 @@ class ChatController extends ChangeNotifier {
   /// 到头了（服务端说没有更早的，或者本机留的页数到顶了）。
   bool get olderExhausted => _olderDone;
 
+  /// **手上这一窗最老那一号**（含往上翻上来的那几页）；一条都没有 ⇒ `null`。
+  ///
+  /// ★ `118` 的轨迹那一屏要它：这一号是 `1` ⇒ **这条会话最早那一件事就在手上**
+  ///   ⇒ 才敢说"到最早那一条了"（见 `ChatScreen` 的 `_historyComplete`）。
+  /// ⚠️ **它不是"服务端还有没有更早的"**：那是 `olderExhausted`
+  ///   （而且它只在真的翻过一次之后才有意义 —— 见 `_applyAutoFold` 那段）。
+  int? get oldestLoadedSeq => _oldestKnownSeq();
+
   /// 刚才**没问上**（跟"真到头了"是两件事，界面上要分开说）。
   bool get olderFailed => _olderFailed;
 

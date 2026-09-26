@@ -33,6 +33,7 @@
 | **聊天窗口要不要、能不能做得跟 DSH 的窗口一样**（DSH 的窗口有什么 · 我们差在哪 · 三条路与代价） | [`dev/115-DSH-WINDOW-PARITY.md`](dev/115-DSH-WINDOW-PARITY.md)（研究：区域/transcript 的各式行/输入区/设置/视觉 · 信息处理的那些规矩 · 前后端分离的实际形态 · 差距表 · **甲直接用它的窗口 / 乙重写前端 / 丙只对齐信息** · 真机截图与读数）· 原始证据在 `dev/115-raw/` | 想动"聊天窗口的形状 / 信息量 / 过程可见性 / 输入区语义"之前 |
 | **聊天窗口「信息全部开放」＋ 按 DSH 重做（第一批：工具行/过程折叠）** | [`dev/116-CHAT-OPEN-AND-REDESIGN.md`](dev/116-CHAT-OPEN-AND-REDESIGN.md)（契约：三条已签的形状 · 「全部开放」的可执行定义 · 四条新事件与四条规矩 · 客户端落点 · 判据）＋ 研究在 [`dev/115-DSH-WINDOW-PARITY.md`](dev/115-DSH-WINDOW-PARITY.md) | 动「聊天窗口显示什么 / 工具行 / 过程折叠 / 系统提示词 / 用量」之前 |
 | **聊天窗口重做（第二批：排队看得见、撤得掉）** | [`dev/117-QUEUE-VISIBLE.md`](dev/117-QUEUE-VISIBLE.md)（契约：DSH 的 QueueDock 形状 · 那条瞬态帧与连上时的快照 · 客户端那一帧回程 · 两边的判据 · 如实说）＋ 上一批 [`dev/116-CHAT-OPEN-AND-REDESIGN.md`](dev/116-CHAT-OPEN-AND-REDESIGN.md) | 动「运行中再发一句 / 排队 / 撤掉还没轮到它的那句」之前 |
+| **聊天窗口重做（第三批：轨迹那一屏 —— 同一条会话的第二个视图）** | [`dev/118-TRAJECTORY-VIEW.md`](dev/118-TRAJECTORY-VIEW.md)（契约：两个 tab 与"切回来滚动位置不动" · 那张表的纯逻辑与判据 · 点一行怎么跳回聊天 · **我们收不到、所以一格都不画的那几样**）＋ 研究 [`dev/115-DSH-WINDOW-PARITY.md`](dev/115-DSH-WINDOW-PARITY.md) | 动「聊天 / 轨迹 两个 tab · 会话摊成表 · 从表里跳回聊天某一条」之前 |
 | **手册改过什么 · 现在是什么版本** | [`handbook/CHANGELOG.md`](handbook/CHANGELOG.md) | 要改手册之前 |
 | **还有哪些账没还 · 哪几条卡在主人身上** | [`dev/00-PROGRESS.md`](dev/00-PROGRESS.md) §六（还开着的都在那一节；§6.1 是**不是待办**的两条）+ [`dev/63-OWNER-DECISIONS.md`](dev/63-OWNER-DECISIONS.md)（**要主人拍板的那几条**，一句话版） | 想接手 / 想知道"还欠什么"时 |
 | **麦克风（真接）走哪条路 · 为什么还没做** | [`dev/69-ASR-ROUTES.md`](dev/69-ASR-ROUTES.md)（那两分钟怎么验 · 判据 · 三条路各自要动什么 · `D5.10` 的语料硬闸）| 动语音输入之前 |

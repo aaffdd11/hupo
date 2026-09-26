@@ -31,59 +31,20 @@ import 'package:flutter/material.dart';
 import '../models/dsh_design.dart';
 import '../models/tool_row.dart';
 import '../models/tool_row_words.dart';
+import 'dsh_look.dart';
 
-// ── 一小层样式换算（DshType → TextStyle；**一个数都不写死**）──────
+// ── 样式换算（DshType → TextStyle）现在住在 `dsh_look.dart` ──────────
+//
+// ⚠️ `118` 把这一小层抽出去了：轨迹表与那两个 tab 要用**同一份**换算
+//    （各写一份 = 三份会漂的代码）。这里只留两个短别名，行为一字未改
+//    （`DshLook` 直接用那一个类）。
 
-/// DSH 的字重只有 400/500/600/700。
-FontWeight _weightOf(int w) => switch (w) {
-  500 => FontWeight.w500,
-  600 => FontWeight.w600,
-  700 => FontWeight.w700,
-  _ => FontWeight.w400,
-};
+/// 本文件里的短别名：`_styleOf` → [dshTextStyle]。
+TextStyle _styleOf(DshType t, Color color, {String? family}) =>
+    dshTextStyle(t, color, family: family);
 
-/// 把 DSH 的"字号 + 绝对行高"翻成 Flutter 的 `TextStyle`
-/// （`height` 是**倍数**，所以要 `lineHeight / size`）。
-///
-/// ⚠️ 不碰 `textScaler`：缩放由 `Text` 自己按 `MediaQuery` 施加
-///    （D3.5 那条"不封顶"就是靠它 —— 我们在这里夹一刀就把那个设置废了）。
-TextStyle _styleOf(DshType t, Color color, {String? family}) => TextStyle(
-  fontFamily: family,
-  fontFamilyFallback: family == null ? null : const ['Menlo', 'Consolas', 'monospace'],
-  fontSize: t.size,
-  height: t.lineHeight / t.size,
-  fontWeight: _weightOf(t.weight),
-  color: color,
-);
-
-/// DSH 的代码字体栈（真包 `--dsh-font-mono`；平台没有就退回系统等宽）。
-const String _monoFamily = 'monospace';
-
-/// 这一屏的色板 + 用户字号轴（一处算好，往下传）。
-class _DshLook {
-  const _DshLook(this.palette, this.scale);
-
-  final DshPalette palette;
-  final DshContentScale scale;
-
-  /// 亮/暗跟着 `Theme` 走（今天全站只有亮色，但别把"暗色 = 另一套色板"这件事写死错）。
-  static _DshLook of(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    // ⚠️ 字号这一批**还没有用户设置**（115 丙-8 才有）⇒ 走默认档。
-    //    但**入口留好了**：接了设置之后只需把 `null` 换成读出来的那个值。
-    return _DshLook(dshPaletteFor(dark: dark), dshContentScale(null));
-  }
-
-  /// 工具行/系统提示词行**抬头**那一档（DSH 正文 14/24）。
-  DshType get content => scale.content;
-
-  /// 抬头下面那行小字（DSH 二级台阶 13/20）。
-  DshType get caption => scale.secondaryAt(DshTypes.xs);
-
-  /// 展开后那块正文（DSH 代码块小阶 11/16 —— 我们**没有 11px 这个 token**，
-  /// 用二级台阶代替；差的那一档等真的需要时再进 `dsh_design.dart`）。
-  DshType get mono => scale.secondaryAt(DshTypes.xs);
-}
+/// 本文件里的短别名：`_monoFamily` → [dshMonoFamily]。
+const String _monoFamily = dshMonoFamily;
 
 /// 一次工具调用 → 屏幕上**一行**（收起）/ 一个带正文的卡（展开）。
 ///
@@ -104,7 +65,7 @@ class _ToolRowViewState extends State<ToolRowView> {
 
   @override
   Widget build(BuildContext context) {
-    final look = _DshLook.of(context);
+    final look = DshLook.of(context);
     final p = look.palette;
     final row = widget.row;
     final (IconData glyph, Color glyphColor) = switch (row.status) {
@@ -168,7 +129,7 @@ class _ToolRowViewState extends State<ToolRowView> {
   }
 
   /// 展开那一块：**有界**（能滚到底）、**纯文本**（不是 Markdown）。
-  Widget _body(_DshLook look) {
+  Widget _body(DshLook look) {
     final p = look.palette;
     final row = widget.row;
     final args = row.args;
@@ -235,7 +196,7 @@ class _SystemPromptViewState extends State<SystemPromptView> {
 
   @override
   Widget build(BuildContext context) {
-    final look = _DshLook.of(context);
+    final look = DshLook.of(context);
     final p = look.palette;
     final row = widget.row;
     return Padding(
@@ -317,7 +278,7 @@ class TurnUsageRowView extends StatelessWidget {
   Widget build(BuildContext context) {
     final u = usage;
     if (u == null) return const SizedBox.shrink();
-    final look = _DshLook.of(context);
+    final look = DshLook.of(context);
     final p = look.palette;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: DshSpace.s4),
@@ -354,7 +315,7 @@ class TurnProcessControl extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final look = _DshLook.of(context);
+    final look = DshLook.of(context);
     final p = look.palette;
     final label = dshTurnProcessLabel(counts, turnProcessChatWords);
     return Padding(
