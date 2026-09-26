@@ -11,6 +11,9 @@
 //   prompt-reject ★ **投递失败**（判据 T3）：`session/prompt` **一帧就回 error、
 //              不发 `turn/start`** —— 2026-09-26 真机那种形状（id 形状不认）。
 //              用它验"投递失败必须给用户一条看得见的话"（`deliveryFailed`）。
+//   lease-owned ★ **写租约**（判据 L4 · B46）：`session/prompt` 回一句
+//              `already owned by an active write handle`（同一条会话在另一个进程手里）
+//              —— 用它验"那一档要说那条能指路的人话"，别的失败照旧走原来那句（L5）。
 //   crash      中途进程退出（必须收口）
 //   slow       答得很慢（用来验淘汰前会先收口）
 //   two-step   两步：先应一声（quick），再给结论（deep）
@@ -275,6 +278,24 @@ function onMessage(msg) {
             message:
               `sessionId 形状不认（只收 [A-Za-z0-9._~-]、最长 200）：${JSON.stringify(sid)}` +
               ' ⇒ 不猜、也不替它换一个 —— 请用映射（dsh-sessions.mjs）产出的那个 id',
+          },
+        })}\n`,
+      );
+      return;
+    }
+    // ★ **B46 ②（2026-09-26 真机原话）**：同一条会话在**另一个进程**手里
+    //   ⇒ DSH 的持久化层那把**写租约**（`session.lock`，flock）把这一轮挡回去。
+    //   形状与 `prompt-reject` 一样：**回 error 帧、一个 `turn/start` 都不发**。
+    //   ⚠️ 判据 L4 打的就是它（真 stdio ＋ 这一帧）—— 用户该看到的是那条
+    //   "这一间你正开着看…" 的人话，而不是含糊的"我接不上活"。
+    if (scenario === 'lease-owned') {
+      process.stdout.write(
+        `${JSON.stringify({
+          jsonrpc: '2.0',
+          id: msg.id,
+          error: {
+            code: -32603,
+            message: `session "${sid}" is already owned by an active write handle`,
           },
         })}\n`,
       );

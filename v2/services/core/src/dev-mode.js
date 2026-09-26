@@ -1490,11 +1490,61 @@ export function createDevWebRelay({
   /**
    * 收掉现在这一台并**忘掉选过哪间**（房间没了 / 关掉中继时用）。
    * ⚠️ 与 `killChild()` 分开：那一个只收进程（"换一间"还要把新那间记上）。
+   * 🔴 **把它那个"真的收干净了"的 promise 交出去**（B46）：聊天那条路要让开时
+   *    必须能等到**写租约真的放开**（不然下一轮 prompt 照旧被拒）。
    */
   function dropCurrent() {
-    killChild();
+    const gone = killChild();
     currentId = null;
     currentCwd = null;
+    return gone;
+  }
+
+  /**
+   * 🔴 **让开这一间**（B46 · 2026-09-26 真机）。
+   *
+   * **为什么要有它**：主人在**产品里**跟某一间说话时，开发者入口那台 `dsh web`
+   *   正开着**同一间** ⇒ DSH 的持久化层对那条会话有一把**写租约**（`session.lock`，
+   *   flock），第二个进程直接被拒（真机原话：
+   *   `session "owner/aoshu-bank.muh709vsibnh.1" is already owned by an active write handle`）
+   *   ⇒ 那一轮答不上。**主人在产品里说话永远优先于"他开着看的那个窗口"**。
+   *
+   * 🔴 **三条守卫**（每一条都有判据钉着）：
+   *   · **只收"正开着的、而且就是这一间"那一台** —— 别的房间一台都不许动（L2）；
+   *   · 走的就是 `dropCurrent()`（换房间 / 关中继那**同一条**路，
+   *     `killChild()` ＋ 核实真死 ＋ 失败如实说）—— **不另写第二套收台逻辑**；
+   *   · 宿主侧根本没有这个中继（`serve.js` 只在容器里建）⇒ 调用方拿到 `null`，
+   *     一次都不问（L3）。
+   *
+   * ⚠️ **代价是明说的**：收掉之后那个窗口会断开，入口回到房间清单页
+   *    —— 房间清单页上本来就写着"一次只开一间"。
+   *
+   * @param {string} roomId 要说话的那一间（＝ scope id）
+   * @returns {Promise<{held:boolean, room:string|null, pid:number|null, dropped:boolean}>}
+   *   `held` = 这一间**正是**入口现在开着的那一间（⇒ 收了）；
+   *   `dropped` = 真的有一台在跑／在起（收的是它）。
+   */
+  async function yieldRoom(roomId) {
+    const id = typeof roomId === 'string' && roomId !== '' ? roomId : null;
+    // ⚠️ **不是这一间 ⇒ 一个手指头都不许碰**（别的房间照常开着看 —— L2 的变异就在这行）
+    if (id === null || currentId !== id) {
+      return { held: false, room: id, pid: null, dropped: false };
+    }
+    const pid = pidOf(child);
+    const wasRunning = pid !== null || starting !== null;
+    const name = findRoom(id)?.name ?? id;
+    // ★ **如实记一句**（哪一间、为什么收）—— 这是排障时唯一能看见"让开发生过"的地方
+    say(
+      `开发者入口正开着「${name}」这一间 ⇒ 收掉那台 dsh web` +
+        `（主人在产品里跟这一间说话：聊天优先；那个窗口会断开，房间清单页上写着"一次只开一间"）`,
+    );
+    const gone = dropCurrent();
+    try {
+      await gone; // 等**写租约真的放开**（`killChild()` 自己不抛，这里兜底）
+    } catch {
+      /* 收不干净由 `killChild()` 那句"没收掉"如实说；调用方拿到的读数照旧 */
+    }
+    return { held: true, room: id, pid, dropped: wasRunning };
   }
 
   /** 起进程，等 stdout 上那一行。`room` = **那一间**（cwd 就是它）。 */
@@ -2046,6 +2096,12 @@ export function createDevWebRelay({
   return {
     handle,
     handleUpgrade,
+    /**
+     * 🔴 **让开这一间**（B46）：聊天那条路在某一间起一轮之前问一句
+     * "这一间你正开着吗"，开着就**走 `dropCurrent()` 那条路收掉那台**。
+     * ⚠️ **只收正开着的这一间**；别的房间、宿主侧（没有这个中继）什么都不做。
+     */
+    yieldRoom,
     /**
      * 起（或复用）**某一间**那台（给判据/排障用）。
      * ⚠️ 不给 `id` 就用**现在选的那一间**；没选过 ⇒ 抛。

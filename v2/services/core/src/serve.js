@@ -48,6 +48,8 @@ import { createTurnStatus, statusPath } from './turn-status.js';
 // ★ P1（契约 `docs/dev/88-P1-TIME-WAIT.md` §四 T6）：服务起来时留一把锁，
 //   让**迁移脚本**答得出"这个数据目录现在热不热"（热就不许并 —— 会撞号 #123）。
 import { clearServeLock, writeServeLock } from './serve-lock.js';
+// 🔴 **B38（2026-09-26）**：收工这条路上每一步都带**上限**（卡住就点名 ＋ 继续，见那个文件头）。
+import { runShutdown } from './shutdown-budget.js';
 import { ROLLOUT_SWEEP_MS, compareTenantBuild, createNagBook, planRollout, readProductLayer } from './product-layer.js';
 import { DEFAULT_DROP_DIR, createKeyDrop, resolveDropName } from './key-drop.js';
 import { keyFileFor } from './key-path.mjs';
@@ -129,6 +131,13 @@ if (cfg.ownerPhone) {
 //    `cfgFor` 是个**闭包**（调用时才读 `worlds`，那时已经赋好了）。
 // ════════════════════════════════════════════════════════════
 let worlds = null;
+/**
+ * 🔴 **开发者入口那台中继**（B46 ① · 2026-09-26）——**先声明、后赋值**。
+ *
+ * 它只在**盒里**建（`cfg.trustedSocketPath` 只有容器设）；`worlds` 建的时候它还没生出来，
+ * 所以上面给 `worlds` 的是一个**取值函数**（与 `cfgFor` 同一个写法：调用时才读）。
+ */
+let devContainer = null;
 const runtime = new AgentRuntime({
   cfg,
   // 🔴 DSH_HOME / 工作目录**按人取** —— 少了这一句，甲乙共用一个 DSH_HOME
@@ -154,6 +163,16 @@ worlds = new Worlds({
   runtime,
   log: (m) => console.log(m),
   warn: (m) => console.warn(m),
+  /**
+   * 🔴 **B46 ①（2026-09-26 真机）**：开发者入口那台 `dsh web` 正开着某一间时，
+   * DSH 的写租约（`session.lock`）会把**同一间**的聊天挡回去。
+   * ⇒ 把中继给 `worlds`，让聊天那条路在起一轮之前先问一句、开着就让它让开。
+   *
+   * ⚠️ **给的是取值函数**：建 `worlds` 的这一刻中继**还没生出来**（顺序上有个环，
+   *    与上面 `cfgFor` 同一个写法）⇒ 到用的时候才读。
+   * ⚠️ 宿主上它永远是 `null`（那一支不建中继）⇒ 聊天那条路一次都不问（L3）。
+   */
+  devContainer: () => devContainer,
   // ★ 上游回 401 ⇒ 把那一把标成"用不了"（`hasKey` 随之变回 false）
   onAuthFailure: (userId) => {
     // 🔴 **每一次都要真做，去重只留给日志**（2026-09-21 实测栽了一次）：
@@ -750,6 +769,59 @@ const appsOrigin = createAppServer({
   log: (m) => console.warn(`  ⚠️ ${m}`),
 });
 
+/**
+ * 🔴 **开发者入口那台中继**（B46 ① · 2026-09-26 起）：**只在盒里建**
+ *    （`cfg.trustedSocketPath` 只有容器设；宿主那条公开口永远不接 `/h`）。
+ *
+ * ⚠️ 位置从 `createServer()` 的入参里搬到这儿，是为了让上面 `worlds` 拿到的
+ *    那个取值函数**在聊天那条路上读得到它**（先声明、后赋值）。
+ * ⚠️ 它多了一个公开动作 `yieldRoom`（B46）：某一间正被它开着时，
+ *    聊天那条路先让它让开（写租约只有一把）。
+ */
+if (cfg.trustedSocketPath) {
+  devContainer = createDevWebRelay({
+    cfg,
+    /**
+     * ★ **房间清单的来源与真那台同源**（契约 `docs/dev/109-DEV-ENTRY-IS-YOURS.md`）：
+     *   `main` 的 cwd 就是 `paths.agentCwd`（盒里 `/data/main`）—— **不是 `/data`**；
+     *   别的房间走 `roomFor()` 用的同一处（`workspaces.dirFor(scope)`）。
+     *   ⇒ 点哪间就用**那间的 cwd** 起，看到的必须是**同一份会话**（判据 D2/D3）。
+     * ⚠️ **每次现取**（新工作区不用重启就能看见）；`worldFor` 只是取（世界早就热过了）。
+     */
+    rooms: () => {
+      const w = worlds.worldFor(OWNER_ID);
+      return [
+        { id: MAIN_SCOPE, name: '主对话', cwd: w.cfg.agentCwd },
+        ...w.workspaces.list().map((s) => ({ id: s, name: s, cwd: w.workspaces.dirFor(s) })),
+      ];
+    },
+    /**
+     * 🔴 **让 DSH 认得这些房间**（主人 2026-09-25 **批**了这一条；契约 109 §八）。
+     *
+     * 真机读数：DSH 的工作区注册表一旦 `initialized === true`，**再也不发现新房间**，
+     * 界面会把那一间的对话整个藏掉（**光把 cwd 指对不够**）⇒ D3/D6 都会红。
+     * 打开它 = 起那台之前把 `initialized` 置回 `false`（让 DSH 按对话头重新发现所有房间）。
+     * ⚠️ 那属于"写运行中的东西" ⇒ 默认**关**；这一行是主人点头之后才加上去的。
+     */
+    workspaceNudge: true,
+    /**
+     * 🔴 **扫盒里别的 `--profile web`**（B43 第二版 · 2026-09-26）。
+     *
+     * 起新台之前，盒里除了中继自己起的那台，**不该**有别的开发者入口界面
+     * ——多一台多 ~490MB，而这一层只有那么大（`memory.max` 就那么点）。
+     * 留着的孤儿就是下一次换房间被 OOM 杀掉的根。
+     *
+     * ⚠️ **这个开关只许在这一支里打开**：这个对象**只在容器里**建
+     *    （就是上面那一行 `if (cfg.trustedSocketPath)`，宿主上根本不建它）。
+     *    宿主上主人的 `dsh` 一堆，在那儿扫就是收掉别人的东西。
+     *    ⇒ `dev-mode.js` 里那个 `sweepOrphans` **默认是 `false`**，
+     *      判据 K3 钉的就是"默认关着的时候一台都不许动"。
+     */
+    sweepOrphans: true,
+    log: (m) => console.log(`  ${m}`),
+  });
+}
+
 const { listen, listenTrusted, close } = createServer({
   // ★ **多租户那一侧**：每个请求按令牌里的 `sub` 取那个人的世界。
   //   ⚠️ 上面那五个单例**不再传**了 —— 传了就等于"所有人共用一份"。
@@ -810,49 +882,7 @@ const { listen, listenTrusted, close } = createServer({
   dev: isHostSide
     ? { key: appsSignKey, base: cfg.devBase, scheme: cfg.devScheme }
     : null,
-  devContainer: cfg.trustedSocketPath
-    ? createDevWebRelay({
-        cfg,
-        /**
-         * ★ **房间清单的来源与真那台同源**（契约 `docs/dev/109-DEV-ENTRY-IS-YOURS.md`）：
-         *   `main` 的 cwd 就是 `paths.agentCwd`（盒里 `/data/main`）—— **不是 `/data`**；
-         *   别的房间走 `roomFor()` 用的同一处（`workspaces.dirFor(scope)`）。
-         *   ⇒ 点哪间就用**那间的 cwd** 起，看到的必须是**同一份会话**（判据 D2/D3）。
-         * ⚠️ **每次现取**（新工作区不用重启就能看见）；`worldFor` 只是取（世界早就热过了）。
-         */
-        rooms: () => {
-          const w = worlds.worldFor(OWNER_ID);
-          return [
-            { id: MAIN_SCOPE, name: '主对话', cwd: w.cfg.agentCwd },
-            ...w.workspaces.list().map((s) => ({ id: s, name: s, cwd: w.workspaces.dirFor(s) })),
-          ];
-        },
-        /**
-         * 🔴 **让 DSH 认得这些房间**（主人 2026-09-25 **批**了这一条；契约 109 §八）。
-         *
-         * 真机读数：DSH 的工作区注册表一旦 `initialized === true`，**再也不发现新房间**，
-         * 界面会把那一间的对话整个藏掉（**光把 cwd 指对不够**）⇒ D3/D6 都会红。
-         * 打开它 = 起那台之前把 `initialized` 置回 `false`（让 DSH 按对话头重新发现所有房间）。
-         * ⚠️ 那属于"写运行中的东西" ⇒ 默认**关**；这一行是主人点头之后才加上去的。
-         */
-        workspaceNudge: true,
-        /**
-         * 🔴 **扫盒里别的 `--profile web`**（B43 第二版 · 2026-09-26）。
-         *
-         * 起新台之前，盒里除了中继自己起的那台，**不该**有别的开发者入口界面
-         * ——多一台多 ~490MB，而这一层只有那么大（`memory.max` 就那么点）。
-         * 留着的孤儿就是下一次换房间被 OOM 杀掉的根。
-         *
-         * ⚠️ **这个开关只许在这一支里打开**：这个对象**只在容器里**建
-         *    （上面那一行 `cfg.trustedSocketPath ? … : null`，宿主上根本不建它）。
-         *    宿主上主人的 `dsh` 一堆，在那儿扫就是收掉别人的东西。
-         *    ⇒ `dev-mode.js` 里那个 `sweepOrphans` **默认是 `false`**，
-         *      判据 K3 钉的就是"默认关着的时候一台都不许动"。
-         */
-        sweepOrphans: true,
-        log: (m) => console.log(`  ${m}`),
-      })
-    : null,
+  devContainer,
   // ★ **字体镜像的缓存目录**（`/fonts/…` 那条口）：镜像下来的字体落在这儿
   fontCacheDir: nodePath.join(cfg.dataDir, 'font-cache'),
   // ★ **我的小程序清单**（乙-1）：给了才挂 `/api/apps`
@@ -1248,37 +1278,56 @@ console.log('──────────────────────�
 
 // 优雅退出：先停止接新连接，再关。
 // ⚠️ 不要 resume/续做任何东西——那是**下次启动**的事（对账在启动时做）。
+//
+// 🔴 **B38（2026-09-26 · 主人原话「90秒窗口关闭不对吧？」）**：这一串原来
+//    **每一步都没有上限** ⇒ 只要挂着一条没发完的连接，`close()` 就永远不返回：
+//    真机读数 = 空载收工 **16 毫秒**，而挂着一条半开连接时 **40 秒都没退**
+//    （线上那两次是 90 秒被 systemd `SIGKILL`），而且日志里 `收到 SIGTERM，收工。`
+//    之后**一个字都不打** ⇒ 事后谁也说不清卡在哪一步。
+//    ⇒ 现在交给 `runShutdown()`（`src/shutdown-budget.js`）：**顺序逐字没变**，
+//      每一步带上限（＋整条一个总上限），超时就**如实点名**再继续往下收 ——
+//      **不是**把正在跑的活掐掉（那正是 N19 那条纪律不许的）。
 let closing = false;
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, async () => {
     if (closing) return;
     closing = true;
     console.log(`\n收到 ${sig}，收工。`);
-    // ⚠️ 顺序：**先把话说圆、再放 agent 走**
-    // ⚠️ 现在**每个人都要收**：只收主人那一份 = 别人的话被切断
-    //    （而且他们的 agent 会成为孤儿进程）。
-    await worlds.shutdownDispatchers();
-    await runtime.shutdown();
-    await close();
-    turnStatus.stop();
-    clearInterval(trashSweep);
-    // ★ P2-12：巡检那个定时器也要停（它 `unref` 过，但收工要干净）
-    diskWatch.stop();
-    // ⚠️ 账本那些口要关掉**并把套接字文件删掉**：留着它，下次
-    //    `listen()` 会撞上 `EADDRINUSE`，而那句话看起来像"端口被占"。
-    worlds.closeSockets();
-    channel.close();
-    // ⚠️ 迁移那条维护口也要关掉**并把套接字文件删掉**（同上面那几条的理由）
-    try {
-      await appsMigrate?.close();
-      nodeFs.unlinkSync(migrateSocketPath(cfg.dataDir));
-    } catch {
-      /* 已经没了 */
-    }
-    // ★ 每个人各留一个"这次是好好走的"标记 ⇒ 下次开机才知道上一次是不是被硬杀的
-    worlds.markCleanExitAll();
-    // ★ T6：干净退场 ⇒ 撤掉那把锁（不然迁移脚本会一直以为这里热着）。
-    clearServeLock(cfg.dataDir);
-    process.exit(0);
+    await runShutdown({
+      // ⚠️ `hooks` 的键就是 `SHUTDOWN_STEPS` 里那些 `id` —— 缺一个会被点名（判据钉着）。
+      hooks: {
+        // ⚠️ 顺序：**先把话说圆、再放 agent 走**
+        // ⚠️ 现在**每个人都要收**：只收主人那一份 = 别人的话被切断
+        //    （而且他们的 agent 会成为孤儿进程）。
+        dispatchers: () => worlds.shutdownDispatchers(),
+        runtime: () => runtime.shutdown(),
+        server: () => close(),
+        'turn-status': () => turnStatus.stop(),
+        'trash-sweep': () => clearInterval(trashSweep),
+        // ★ P2-12：巡检那个定时器也要停（它 `unref` 过，但收工要干净）
+        'disk-watch': () => diskWatch.stop(),
+        // ⚠️ 账本那些口要关掉**并把套接字文件删掉**：留着它，下次
+        //    `listen()` 会撞上 `EADDRINUSE`，而那句话看起来像"端口被占"。
+        sockets: () => worlds.closeSockets(),
+        channel: () => channel.close(),
+        // ⚠️ 迁移那条维护口也要关掉**并把套接字文件删掉**（同上面那几条的理由）
+        migrate: async () => {
+          try {
+            await appsMigrate?.close();
+            nodeFs.unlinkSync(migrateSocketPath(cfg.dataDir));
+          } catch {
+            /* 已经没了 */
+          }
+        },
+        // ★ 每个人各留一个"这次是好好走的"标记 ⇒ 下次开机才知道上一次是不是被硬杀的。
+        //    ⚠️ 上限到了（有一步没等完）⇒ `runShutdown` **不许**打这个标记：
+        //       "我好好走了"是一句说出去的话，没做到就不许说
+        //       （那次开机横幅会如实写"没善终"）。
+        'clean-exit': () => worlds.markCleanExitAll(),
+        // ★ T6：干净退场 ⇒ 撤掉那把锁（不然迁移脚本会一直以为这里热着）。
+        //    ⚠️ 它**与"有没有善终"无关**：锁不撤，迁移会永远以为这个数据目录热着。
+        'serve-lock': () => clearServeLock(cfg.dataDir),
+      },
+    });
   });
 }

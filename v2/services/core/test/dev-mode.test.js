@@ -1927,6 +1927,70 @@ async function hitHome(relay, tries = 200) {
   return res;
 }
 
+test('🔴 L2（真那个中继）：入口开着**别的**房间 ⇒ `yieldRoom` 一个手指头都不许碰（变异：见谁都收 ⇒ 红）', async () => {
+  const alive = new Set([7501, 7502]);
+  const byPid = new Map();
+  const kills = fakeKillPid({ alive, byPid });
+  const kids = [];
+  const said = [];
+  const spawnFn = () => {
+    const pid = 7501 + kids.length;
+    const c = pidChild(pid, `dsh web: http://127.0.0.1:${43300 + kids.length}/?token=L${kids.length}`);
+    byPid.set(pid, c);
+    kids.push(c);
+    return c;
+  };
+  const { httpRequest } = fakeUpstream();
+  const relay = createDevWebRelay({
+    cfg: KCFG,
+    rooms: () => KROOMS,
+    spawnFn,
+    httpRequest,
+    killPid: kills,
+    pidAliveFn: (pid) => alive.has(Number(pid)),
+    log: (m) => said.push(String(m)),
+    killGraceMs: 10,
+    bootTimeoutMs: 2000,
+    memFn: () => null,
+  });
+  try {
+    // 入口把 `main` 开着（这一台真的在跑）
+    assert.equal((await selectRoom(relay, 'main')).status, 302);
+    assert.equal((await hitHome(relay)).status, 200);
+    const before = relay.state();
+    assert.equal(before.running, true);
+    assert.equal(before.room, 'main');
+
+    // ★ **说话的是别的房间** ⇒ 只回"不是我开着的"，进程/信号**一个都不许有**
+    const other = await relay.yieldRoom('other');
+    assert.deepEqual(
+      other,
+      { held: false, room: 'other', pid: null, dropped: false },
+      '别的房间 ⇒ 如实回"没开着这一间"',
+    );
+    assert.equal(kills.calls.length, 0, '★ 别的房间：一发信号都不许有');
+    assert.equal(kids[0].killedViaHandle, false, '★ 也不许走句柄那条路（盒里那条本来就不管用）');
+    assert.equal(relay.state().running, true, '★ 那一台照旧活着');
+    assert.equal(relay.state().room, 'main', '★ 开着的还是那一间（没被顶掉）');
+    // ★ 变异：把 `yieldRoom` 里那句 `currentId !== id` 的守卫删掉（"见谁都收"）
+    //    ⇒ 上面这几条当场红。
+
+    // 正例：说话的就是它开着的那一间 ⇒ 收掉，而且**点名是那一台那个 pid**
+    const mine = await relay.yieldRoom('main');
+    assert.equal(mine.held, true, '就是这一间 ⇒ 收');
+    assert.equal(mine.room, 'main');
+    assert.equal(mine.pid, before.pid, '★ 点名是那一台那个 pid');
+    assert.equal(mine.dropped, true, '真的有一台在跑 ⇒ 真的收了它');
+    assert.equal(relay.state().running, false, '★ 让开之后那一台真的没了');
+    assert.equal(relay.state().room, null, '让开之后回到"还没选哪间"（入口回房间清单页）');
+    const text = said.join('\n');
+    assert.match(text, /主对话/u, `要如实记一句（哪一间）：${text.slice(-300)}`);
+    assert.match(text, /让开|收掉/u, `要如实记一句（为什么收）：${text.slice(-300)}`);
+  } finally {
+    relay.shutdown();
+  }
+});
+
 test('🔴 K1：`killChild()` 走的是**注入的那个 `killPid`**（不是 `child.kill`）—— 变异：改回 `c.kill` ⇒ 红', async () => {
   const alive = new Set([7001, 7002]);
   const byPid = new Map();

@@ -242,6 +242,11 @@ export class Worlds {
   #wantTrash;
   /** 见构造参数 `onAuthFailure`（上游说"钥匙不对"时叫一声）。 */
   #onAuthFailure = null;
+  /**
+   * 🔴 **开发者入口那台中继**（B46；宿主上 `null`）。取值函数就**现取**
+   * （建 `worlds` 时它还没建出来 —— 顺序上有个环，同 `cfgFor`）。
+   */
+  #devContainer = null;
   /** userId → 世界 */
   #worlds = new Map();
   /**
@@ -298,6 +303,12 @@ export class Worlds {
    * @param {(m:string)=>void} [o.warn]    警告日志
    * @param {boolean} [o.trash]            开不开回收站（默认开）
    * @param {number} [o.now]
+   * @param {object|Function} [o.devContainer]
+   *        🔴 **开发者入口那台中继**（B46 · 2026-09-26）：聊天那条路在某一间起一轮之前
+   *        要问它一句"这一间你正开着吗"，开着就**让它让开**（同一条会话有一把写租约）。
+   *        ⚠️ **宿主上它不存在**（`serve.js` 只在容器那一支建）⇒ `null` ⇒ 一次都不问。
+   *        ⚠️ 给**取值函数**也行：建 `worlds` 时那台中继还没建出来（顺序上有个环，
+   *           同 `cfgFor`），到用的时候才读。
    */
   constructor({
     cfg,
@@ -309,6 +320,8 @@ export class Worlds {
     now = Date.now,
     /** 见 `Dispatcher` 的同名参数：上游说"钥匙不对"时叫一声。 */
     onAuthFailure = null,
+    /** 🔴 见上面那段：开发者入口那台中继（宿主上 `null`）。 */
+    devContainer = null,
   }) {
     if (!cfg) throw new Error('Worlds 需要 cfg');
     if (!runtime) throw new Error('Worlds 需要 runtime（agent 那个进程池）');
@@ -326,11 +339,32 @@ export class Worlds {
     //    而两条单测都是**直接打 `Dispatcher`** 的 ⇒ **全绿**。
     //    ⇒ 教训：接线的每一段都要有一条闸**从外面**打进来（见下面那条 Worlds 级的用例）。
     this.#onAuthFailure = onAuthFailure;
+    this.#devContainer = devContainer;
     this.#makeTrash = (o) => new Trash(o);
   }
 
   get tenants() {
     return this.#tenants;
+  }
+
+  /**
+   * 🔴 **B46：现在那个开发者中继**（`null` = 宿主侧 / 还没建出来 / 认不出来）。
+   *
+   * ⚠️ 只认它那个**公开动作** `yieldRoom`（一个函数）—— 中继内部长什么样，
+   *    这一层与调度器都**不看**（"不许让 dispatcher 直接 require dev-mode 的内部变量"）。
+   * ⚠️ 取值函数抛错 ⇒ 当真没有（**不许把一次排障读数的失败变成聊天失败**）。
+   */
+  #devRelay() {
+    const d = this.#devContainer;
+    let v = d;
+    if (typeof d === 'function') {
+      try {
+        v = d();
+      } catch {
+        return null;
+      }
+    }
+    return v && typeof v.yieldRoom === 'function' ? v : null;
   }
 
   /** 已经取过几个人（**不是"在线人数"**）。 */
@@ -760,6 +794,13 @@ export class Worlds {
       onAuthFailure: this.#onAuthFailure ? () => this.#onAuthFailure(t.userId) : null,
       // ⚠️ 协议字段照旧（`main`）：它是写到事件里的，盘上已有的事件也是它
       scopeId: 'main',
+      /**
+       * 🔴 **B46 ①（2026-09-26）**：主人在产品里跟某一间说话时，开发者入口
+       * 那一台 `dsh web` 若正开着**同一间**，DSH 的写租约会把这一轮挡回去。
+       * ⇒ 把"让开这一间"这**一个动作**交给调度器（每一步都单独判据钉着）。
+       * ⚠️ 宿主侧 `#devRelay()` 是 `null` ⇒ 传 `null` ⇒ 一次都不问（L3）。
+       */
+      yieldRoom: (scopeId) => this.#devRelay()?.yieldRoom(scopeId) ?? null,
       // 🔴 进程池的键**按人不同** —— 就是这一条在修"甲说的话进乙的窗口"
       agentKey: agentKeyFor(t.userId),
       store: t.store,

@@ -57,6 +57,36 @@ import { FAILED_LINES as _FAILED_LINES } from './notice.js';
 const AGENT_UNAVAILABLE_LINE = '我现在接不上活。你这句话我记下了，等我缓过来再说。';
 
 /**
+ * 🔴 **B46 ②：「那一间你正开着看」那一句**（2026-09-26 真机）。
+ *
+ * 万一还是撞上写租约（时序 / 别的进程），**要能指路** —— 现在这句告诉用户
+ * "怎么办"，而不是含糊的"我接不上活"。
+ *
+ * ⚠️ **一个内部词都不许有**（走 `forbidden_words_test.dart` 那张表：
+ *    工作区 / 会话 / 连接 / 客户端 / 云端 / 工具 / 模型…一个都不许）。
+ *    这一句是**服务端给的、客户端照抄**，所以它不进客户端那份文案清单
+ *    （同 `jobAsk` 那句问话的道理）。
+ */
+const AGENT_ROOM_BUSY_LINE = '这一间你正开着看，先把它关掉、或者换一间，再跟我说话。';
+
+/**
+ * 🔴 **这条失败是不是"那一间正被另一个进程用着"**（B46 · 2026-09-26 真机读数）。
+ *
+ * DSH 的持久化层对每条会话有一把**写租约**（`session.lock`，flock）——
+ * 第二个进程直接被拒。真机原话：
+ *
+ *     session "owner/aoshu-bank.muh709vsibnh.1" is already owned by an active write handle
+ *
+ * ⚠️ **只认这一句**（外加 DSH 那个错误名 `SessionAlreadyOwned`）：别的失败
+ *    （id 形状不认 / 超时 / 进程没起来）一律照旧走原来那句
+ *    —— 把两档混成一个，用户就再也分不清"是我开着那个窗口"还是"它真坏了"（L5）。
+ */
+export function isWriteLeaseError(err) {
+  const s = String(err?.message ?? err ?? '');
+  return /already owned by an active write handle/iu.test(s) || /SessionAlreadyOwned/iu.test(s);
+}
+
+/**
  * 单轮硬收口（手册 `08-SPEC.md` §10.2 给的阈值就是它）。
  *
  * 为什么需要：agent 卡住就是**永远卡住**——用户等一条不会来的回答。
@@ -120,6 +150,11 @@ class Session {
   #onUsage = null;
   /** ★ P2-8 出网留痕（见构造参数 `onEgress`）。不接 ⇒ 老行为。 */
   #onEgress = null;
+  /**
+   * 🔴 **B46 ①：说话之前让开发者入口让开这一间**（`(scopeId) => Promise|null`）。
+   * 不接 ⇒ 老行为（宿主侧没有那个中继，一次都不问 —— L3）。
+   */
+  #yieldRoom = null;
   /** turn → 计时器。一轮一个，所以"后一轮开始把前一轮的计时器顶掉"不会丢东西。 */
   #deadlines = new Map();
 
@@ -374,6 +409,15 @@ class Session {
      */
     onEgress = null,
     /**
+     * ★ **B46 ①：说话之前让开发者入口让开这一间**（`(scopeId) => Promise|null`）。
+     *
+     * 那个中继只活在**盒子**里（`serve.js` 只在容器那一支建它）—— 宿主上不接，
+     * 于是这里一次都不问（**什么都不做，也不抛** · L3）。
+     * ⚠️ 只传**一个动作**进来（谁建的、内部长什么样，调度器一概不知道）。
+     * 收台失败**不许挡着人说话**（真撞上写租约还有 `AGENT_ROOM_BUSY_LINE` 兜底）。
+     */
+    yieldRoom = null,
+    /**
      * ★ **D 期：转交那本账**（`HandoffBook` · 一个人一本）。
      * 不接 ⇒ 转交那条工具口如实回"这一台还没接上"（**fail-closed**，绝不假装转了）。
      */
@@ -407,6 +451,8 @@ class Session {
     this.#onAuthFailure = onAuthFailure;
     this.#onUsage = onUsage;
     this.#onEgress = onEgress;
+    // ★ B46 ①：那个"让开这一间"的动作（不接 ⇒ `null` ⇒ 一次都不问）
+    this.#yieldRoom = typeof yieldRoom === 'function' ? yieldRoom : null;
     // ★ D 期：转交（一个人一本账 ＋ "这一间存不存在"那个判据）
     this.#handoffs = handoffs;
     this.#scopeExists = typeof scopeExists === 'function' ? scopeExists : () => false;
@@ -1078,6 +1124,31 @@ class Session {
     });
   }
 
+  /**
+   * 🔴 **B46 ①：说话（/接活）之前，先让开发者入口从这一间上让开。**
+   *
+   * **为什么**（2026-09-26 真机）：入口那台 `dsh web` 正开着**同一间**时，
+   * DSH 的持久化层对那条会话有一把**写租约**（`session.lock`，flock）⇒
+   * 我们这边一轮 `prompt` 直接被拒（`already owned by an active write handle`）。
+   * 主人在产品里说话**永远优先**于"他开着看的那个窗口"。
+   *
+   * ⚠️ **必须在 `#ensureAgent()` / `prompt` 之前** —— 晚一步写租约还在，
+   *    这一轮照旧被拒（那时只剩 `AGENT_ROOM_BUSY_LINE` 兜底）。
+   * ⚠️ **宿主侧没有这个回调**（`null`）⇒ 什么都不做（L3）。
+   * ⚠️ 收台失败**不许挡着人说话**：如实记进 `lastError`，让这一轮照走
+   *    （真撞上写租约时，用户看到的是那条能指路的人话）。
+   */
+  async #yieldEntryForTalk() {
+    const fn = this.#yieldRoom;
+    if (typeof fn !== 'function') return null; // 宿主侧 / 老调用方：一次都不问
+    try {
+      return (await fn(this.#scopeId ?? 'main')) ?? null;
+    } catch (err) {
+      this.#lastError = `开发者入口那台没收掉：${err?.message ?? err}`;
+      return null;
+    }
+  }
+
   /** 取 agent，并在**换了实例**时把它的三类事件接到翻译层上。 */
   /**
    * 取 agent，并在**换了实例**时把它的三类事件接到翻译层上。
@@ -1191,6 +1262,9 @@ class Session {
    * @returns {Promise<{delivered: boolean, messageId?: string, error?: string, recapped?: boolean}>}
    */
   async deliver(text, { messageId = null, job = false } = {}) {
+    // 🔴 **B46 ①**：主人在产品里跟这一间说话 ⇒ 先让开发者入口从这一间上让开
+    //   （必须在 `#ensureAgent()` / `prompt` **之前** —— 那一台正占着写租约）。
+    await this.#yieldEntryForTalk();
     const agent = this.#ensureAgent();
 
     // 只对"还没喂过的那个实例"喂一次。按**实例**记，不按"启动过没有"记——
@@ -1273,15 +1347,20 @@ class Session {
       //    （下面那条瞬态 `error` 客户端今天**不渲染** ⇒ 不算"看得见"。）
       //    ⇒ 换成 `deliveryFailed`：先走既有的失败收口，**一轮都没开**时
       //      再主动落一条给用户的话（`AGENT_UNAVAILABLE_LINE`，**落盘**）。
+      //
+      // 🔴 **B46 ②（2026-09-26）**：如果这条失败**点名写租约**
+      //    （`already owned by an active write handle` ⇒ 那一间正被开发者入口开着），
+      //    就换一条**能指路**的人话 —— 别的失败**照旧**走原来那句（L5）。
+      const failLine = isWriteLeaseError(err) ? AGENT_ROOM_BUSY_LINE : AGENT_UNAVAILABLE_LINE;
       try {
-        this.#translator.deliveryFailed('failed', { line: AGENT_UNAVAILABLE_LINE });
+        this.#translator.deliveryFailed('failed', { line: failLine });
       } catch (terr) {
         this.#lastError = `投递失败的话没写出去：${terr?.message ?? terr}`;
       }
       this.#timeline.emitTransient({
         type: 'error',
         kind: 'agent-unavailable',
-        text: AGENT_UNAVAILABLE_LINE,
+        text: failLine,
       });
       return { delivered: false, error: this.#lastError };
     }
@@ -1467,6 +1546,9 @@ class Session {
     } catch {
       writer = null;
     }
+    // 🔴 **B46 ①**：接活那一间也可能正被开发者入口开着 ⇒ 先让它让开
+    //   （同 `deliver`：必须在 `#ensureAgent()` / `prompt` **之前**）。
+    await this.#yieldEntryForTalk();
     // ⚠️ **顺序不许反**：`#ensureAgent()` 会 `reset()` 翻译层（换了进程 ⇒ 轮账、
     //   排队、`#adoptions` 一起清）—— 所以它必须**在**登记接活那一条**之前**跑，
     //    否则刚登记的那一条会被它当场清掉（D-4 的续写就丢了）。
@@ -1516,8 +1598,11 @@ class Session {
       //    🔴 同 `deliver` 那一处：交接包被拒时这一间**可能一轮都没开**
       //    （`forceClose` 收 0 轮 ⇒ 一个字都不写）⇒ 用 `deliveryFailed`
       //    保证落一条用户看得见的话。
+      //    🔴 **B46 ②**：写租约那一档换那条能指路的人话；别的失败照旧（L5）。
       try {
-        this.#translator.deliveryFailed('failed', { line: AGENT_UNAVAILABLE_LINE });
+        this.#translator.deliveryFailed('failed', {
+          line: isWriteLeaseError(err) ? AGENT_ROOM_BUSY_LINE : AGENT_UNAVAILABLE_LINE,
+        });
       } catch (terr) {
         this.#lastError = `交接失败的话没写出去：${terr?.message ?? terr}`;
       }
@@ -1634,6 +1719,12 @@ export class Dispatcher {
   /** ★ P2-8 出网留痕（见 `Session` 的 `onEgress`）——每个用户一份，所有会话共用。 */
   #onEgress;
 
+  /**
+   * 🔴 **B46 ①：让开发者入口让开这一间**（见 `Session` 的 `yieldRoom`）——
+   * 每个用户一份（盒里只有那台中继），所有会话共用。
+   */
+  #yieldRoom;
+
   /** ★ **D 期：转交那本账**（一个人一本；见 `Session` 的 `handoffs`）。 */
   #handoffs;
   /** ★ **D 期：怎么算"这一间存在"**（`(scope) => boolean`；见 `Session` 的 `scopeExists`）。 */
@@ -1733,6 +1824,8 @@ export class Dispatcher {
     this.#onUsage = args.onUsage ?? null;
     // ★ P2-8：出网留痕同理（一个人一份，房间里的出网也记到同一个人头上）。
     this.#onEgress = args.onEgress ?? null;
+    // ★ B46 ①："让开发者入口让开这一间"那个动作（宿主上不接 ⇒ `null`）。
+    this.#yieldRoom = typeof args.yieldRoom === 'function' ? args.yieldRoom : null;
     // ★ **D 期：转交 / 焦点 / 未读**（一个人各一份；见各字段的说明）。
     this.#handoffs = args.handoffs ?? null;
     // ★ **派活**（契约 102）：那本简登记 ＋ "建一间"那一刀（都由 `Worlds` 给）。
@@ -1897,6 +1990,9 @@ export class Dispatcher {
       onUsage: this.#onUsage,
       // ★ P2-8：**每一个房间**的出网痕迹都记到同一个人头上（留痕只分人，不分房间）。
       onEgress: this.#onEgress,
+      // ★ B46 ①：**每一间**说话之前都要先让开发者入口让开那一间
+      //   （⚠️ 这一段特别容易漏 —— `worlds.js` 顶上就记着"接线的一段断了而闸全绿"的教训）。
+      yieldRoom: this.#yieldRoom,
     });
     this.#sessions.set(id, s);
     return s;

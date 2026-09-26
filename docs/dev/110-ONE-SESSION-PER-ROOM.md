@@ -453,3 +453,46 @@ bash scripts/check-dev-mode-container.sh --layer <指纹> --seq ghost,ghost,ghos
 - 该做的（等主人拍）：把"这一间正开着"**单独说一句人话**（например「这一间你正开着看，先把它关掉（或换一间）再说话」），
   或者入口那边的房间在"有人聊"时**让开**（收掉那台 `dsh web`），或者给聊天那条路一小段**重试**。
 ⇒ 记 **B46**。
+
+### 八·补4·修 · ✅ **B46 修法与真机**（`#157` · 2026-09-26）
+
+**两条一起做**（都在**那一个**服务进程里：没新开 HTTP 路由、没改协议字段、没让调度器碰中继的内部变量）：
+
+1. 🔴 **让开（首选）** —— 聊天那条路在某一间**起一轮之前**先问开发者中继"这一间你开着吗"；
+   开着 ⇒ 走 `dev-mode.js` 里**已有的** `dropCurrent()`/`killChild()` 那条路收掉那台 `dsh web`
+   （**不另写第二套收台逻辑**），并**如实记一句**（哪一间、为什么收）。
+   **接缝就是已有的那个形状**：`worlds.js` 把中继的**一个动作**（`yieldRoom`）传给调度器 ——
+   与 `onUsage` / `onEgress` / `scopeExists` **同一条路**；调度器只知道"有个动作可以叫"，
+   中继内部长什么样它一概不看。三条守卫：**只收"正开着的那一间"**（别的房间一台都不许动）·
+   **宿主侧没有那个中继 ⇒ 一次都不问**（不抛）· 收台失败**不许挡着人说话**（那一刻还有下面那一条兜底）。
+   ⚠️ **代价是明说的**：收掉之后那个窗口会断开、入口回房间清单页 —— 那页上本来就写着"一次只开一间"。
+2. 🔴 **说不清就说明白（兜底）** —— 万一还是撞上写租约（时序 / 别的进程）：
+   `session/prompt` 回来的错误里**点名写租约**（`already owned by an active write handle`）⇒ 换成那条能指路的人话
+   **「这一间你正开着看，先把它关掉、或者换一间，再跟我说话。」**（**一个内部词都没有**，走 `forbidden_words_test.dart` 那张表）。
+   **别的失败照旧**走原来那句 —— 两档混成一个，用户就再也分不清"是我开着那个窗口"还是"它真坏了"。
+
+🔴 **真机读数（一次性容器 · 同镜像/同 cap（**没有 `CAP_KILL`**）/`--memory=768m`/`--pids-limit=512` ·
+挂**未发布**的新产品层 `14503d3f1e3e` · **不碰 u2、不发布、不重启**）** —— 脚本 `scripts/check-room-yield-container.sh`：
+
+```
+① 用真 dsh --profile sdk 造出这一间的会话（会话映射 {"aoshu-bank":"aoshu-bank"}）
+② 真中继起一台真 dsh web 把那间开着：选=302 取页=200(有 boot) 升级=101
+   /proc：{pid:47, profile:web, rssKb:~390000}；oom_kill=0
+②′ 让那台 web 真的写开这条会话（＝浏览器真的在看它）
+   —— 打它自己那条 /api/session/selectModel（第一句 resolveAgent ⇒ ctx.agents.resume）
+   回的是 {"code":"session/model-unavailable"} ⇒ 盒里没有模型；不要紧，写开那一步已经发生了
+
+③ 真调度器往同一间说一句
+   修后（新产品层）  ：delivered=true   中继日志：开发者入口正开着「aoshu-bank」这一间 ⇒ 收掉那台 dsh web…
+   对照层（修前那四个文件）：delivered=false  session "aoshu-bank" is already owned by an active write handle
+④ 修后：/proc 里 --profile web=0 台 / --profile sdk=1 台（pid 91）· oom_kill 0→0 · mem 387MB→188MB
+   对照层：--profile web 照旧 1 台（pid 47 没死）
+```
+
+⚠️ **如实说（两条）**：
+- 容器里没有浏览器 ⇒ 让 `dsh web` **写开**这条会话用的是它自己那条 `/api` RPC
+  （`session/selectModel` 第一句就是 `resolveAgent`）；**真机那次是主人把那一间的页面开着**，
+  两者在"写租约被谁拿着"这件事上是同一个形状（对照层的读数就是证据）；
+- u2 盒里的后修读数**还没打**（要先发布产品层 ＋ 让他那台容器重开 —— 那一步是**父 agent** 的，子 agent 不许）。
+
+⇒ **B46 的账在 `77-BLOCKERS.md`（已修）与 `00-PROGRESS.md` `#157`。**
