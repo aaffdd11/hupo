@@ -13,6 +13,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/dsh_design.dart';
+import 'appearance_scope.dart';
 
 /// DSH 的字重只有 400/500/600/700。
 FontWeight dshWeightOf(int w) => switch (w) {
@@ -43,11 +44,17 @@ class DshLook {
   final DshPalette palette;
   final DshContentScale scale;
 
-  /// 亮/暗跟着 `Theme` 走（今天全站只有亮色，但别把"暗色 = 另一套色板"这件事写死错）。
+  /// **聊天窗口现在什么样** —— 有 `AppearanceScope` 就照它来（用户在设置里选的
+  /// 那一档已经对着设备亮度解析过），没有就退回老规矩（跟着 `Theme` 的亮暗、
+  /// 字号走默认档）。⇒ 单看某一块的判据（直接把控件泵出来那种）一字不用改。
+  ///
+  /// ⚠️ `system` 的解析**在这一层之上**（`screens/chat_screen.dart` 按
+  ///    `MediaQuery.platformBrightness` 解掉）—— 所以这里拿到的 `variant`
+  ///    已经是"亮"或"暗"其中一个，不会再有第三种。
   static DshLook of(BuildContext context) {
+    final scope = AppearanceScope.maybeOf(context);
+    if (scope != null) return DshLook(scope.variant.palette, scope.scale);
     final dark = Theme.of(context).brightness == Brightness.dark;
-    // ⚠️ 字号设置（`115` 丙-8）**还没接**⇒ 走默认档。
-    //    入口已经留好：接了设置之后只需把 `null` 换成读出来的那个值。
     return DshLook(dshPaletteFor(dark: dark), dshContentScale(null));
   }
 

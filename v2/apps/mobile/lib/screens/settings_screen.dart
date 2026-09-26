@@ -18,12 +18,15 @@
 
 import 'package:flutter/material.dart';
 
+import '../models/appearance.dart';
 import '../models/design.dart' as d;
+import '../models/dsh_design.dart';
 import '../models/image_outcome.dart';
 import '../models/space.dart';
 import '../models/space_words.dart';
 import '../services/api.dart';
 import '../widgets/cred_form.dart';
+import '../widgets/dsh_look.dart';
 import '../widgets/image_try.dart';
 import '../widgets/key_form.dart';
 import 'about_screen.dart';
@@ -67,6 +70,9 @@ class SettingsScreen extends StatelessWidget {
     this.onCancelled,
     this.onKeyChanged,
     this.onLogout,
+    this.appearance = const ChatAppearanceSettings(),
+    this.onAppearanceChanged,
+    this.onFontSizeChanged,
   });
 
   /// 现在有没有一串能用的钥匙（服务端说的）。
@@ -104,6 +110,19 @@ class SettingsScreen extends StatelessWidget {
   /// ⚠️ 它**原来挂在聊天抓手行上**（一个 logout 图标）—— 现在搬进来了：
   ///    那一行是"聊天"的地方，而退出登录不是聊天的事。
   final VoidCallback? onLogout;
+
+  // ── ★ 批次 4：「这块窗口」那两行（契约 `docs/dev/119`）──────────────
+
+  /// 现在选的是哪一档外观 ＋ 多大的字。
+  /// ⚠️ 状态**不住在这儿**（住 `ChatScreen`）：这一屏只是那两行的入口 ——
+  ///    两份状态 = 迟早会漂（同一件事两个真相是这个项目的老毛病）。
+  final ChatAppearanceSettings appearance;
+
+  /// 换了外观 / 换了字号 ⇒ 交给上层（它写盘 ＋ 让聊天面当场跟着变）。
+  /// ⚠️ `null` = 这一条路没接上（单看这一屏的判据）⇒ 那两颗控件**按不动**，
+  ///    但**不许**因此画一个假的当前值（见 `_formFor` 那条同一条纪律）。
+  final ValueChanged<ChatAppearance>? onAppearanceChanged;
+  final ValueChanged<int>? onFontSizeChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -187,7 +206,12 @@ class SettingsScreen extends StatelessWidget {
         // ⑤ **这个助手**（关于 / 退出登录）：只在**第一屏**（聊天）底下。
         //    ⚠️ 为什么不放"四屏共用的固定页脚"：字放到 3.1 倍时那个页脚会把
         //      上面挤爆（D3.5 那道硬闸当场判红）。放进可滚列里就永远滚得到。
+        //
+        // ★ 批次 4：这一组上面还有**「这块窗口」**（外观 / 字号）—— 同一条理由
+        //   （它是关于**聊天这一扇窗**的设置，不属于那四样钥匙）⇒ 也只在第一屏底下。
         if (tab == credTabChat) ...[
+          const SizedBox(height: d.gapL),
+          _appearanceCard(context),
           const SizedBox(height: d.gapL),
           _aboutCard(context),
         ],
@@ -267,6 +291,159 @@ class SettingsScreen extends StatelessWidget {
       if (tab == credTabImage && draw != null && credsFor(tab))
         ImageTry(onDraw: (prompt) => draw(prompt)),
     ];
+  }
+
+  /// **这块窗口**那张卡：外观（三选一）＋ 字号（12–17，带**实时预览**）。
+  ///
+  /// 形状的依据：DSH 的设置里跟外观有关的只有这两样
+  /// （`115-raw/A-layout.md` §470：*"color scheme + content font size
+  /// (integer 12–17px, default 14px, stepper)"*）。
+  ///
+  /// 🔴 三条不许破：
+  ///   ① **当前值看得出来，而且不只靠颜色**：选中那一档除了字更实，还带一个勾
+  ///      （色盲 / 屏幕反光下颜色是最不可靠的通道 —— 同 `bubbles.dart` 四态那条）；
+  ///   ② **预览是真的**：那一行字**就按当前字号画**（`dshContentScale` 那条轴），
+  ///      不写死、也不是一张图 —— 改一下立刻看得见；
+  ///   ③ **到边界就按不动**（12 时"小一点"、17 时"大一点"是灰的）：
+  ///      夹住不许假装还能再小，也不许画一个按了没反应的键。
+  ///      ⚠️ 这与"界面上不许出现按不动的东西"不冲突：那是"做不到的事不许摆出来"，
+  ///      这里是**做得到但已经到头了**（发送键没字时也是灰的，同一条）。
+  Widget _appearanceCard(BuildContext context) {
+    final t = Theme.of(context);
+    final scale = appearance.scale;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _SectionTitle(settingsAppearanceSection),
+        const SizedBox(height: d.gapS + 2),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(d.gapM),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── ① 外观（三选一）──────────────────────────────
+                Text(
+                  settingsAppearanceLabel,
+                  style: t.textTheme.titleSmall?.copyWith(
+                    color: d.ink,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: d.gapS),
+                // ⚠️ `Wrap`：3.1 倍字号下三个选项一定放不下 ⇒ 折行，**绝不横向溢出**
+                //    （D3.5 那道硬闸）。
+                Wrap(
+                  spacing: d.gapS,
+                  runSpacing: d.gapS,
+                  children: [
+                    for (final a in ChatAppearance.values) _appearanceChoice(a),
+                  ],
+                ),
+                const SizedBox(height: d.gapXs),
+                Text(
+                  settingsAppearanceHint,
+                  style: t.textTheme.bodySmall?.copyWith(color: d.muted),
+                ),
+                Divider(height: d.gapL, color: d.line),
+                // ── ② 字号（12–17，步进器）────────────────────────
+                Text(
+                  settingsFontSizeLabel,
+                  style: t.textTheme.titleSmall?.copyWith(
+                    color: d.ink,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: d.gapS),
+                Row(
+                  children: [
+                    IconButton(
+                      // 12 时按不动（已经到头了）
+                      onPressed: appearance.fontSize > dshContentFontSizeMin &&
+                              onFontSizeChanged != null
+                          ? () => onFontSizeChanged!(appearance.fontSize - 1)
+                          : null,
+                      tooltip: settingsFontSizeSmaller,
+                      icon: const Icon(Icons.remove),
+                    ),
+                    // 现在是多少号字（**当前值**，不是"默认值"）
+                    Text(
+                      '${appearance.fontSize}',
+                      style: t.textTheme.titleMedium?.copyWith(
+                        color: d.ink,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    IconButton(
+                      // 17 时按不动
+                      onPressed: appearance.fontSize < dshContentFontSizeMax &&
+                              onFontSizeChanged != null
+                          ? () => onFontSizeChanged!(appearance.fontSize + 1)
+                          : null,
+                      tooltip: settingsFontSizeBigger,
+                      icon: const Icon(Icons.add),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: d.gapXs),
+                // 🔴 **实时预览**：这一行**就按当前那条字号轴画**。
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: d.gapM,
+                    vertical: d.gapS,
+                  ),
+                  decoration: BoxDecoration(
+                    color: d.paper,
+                    borderRadius: BorderRadius.circular(d.radiusField),
+                    border: Border.all(color: d.line),
+                  ),
+                  child: Text(
+                    settingsFontSizePreview,
+                    style: dshTextStyle(scale.content, d.ink),
+                  ),
+                ),
+                const SizedBox(height: d.gapXs),
+                Text(
+                  settingsFontSizeHint,
+                  style: t.textTheme.bodySmall?.copyWith(color: d.muted),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 外观三档里的一颗（**选中带勾 ＋ 字更实**：不许只靠颜色）。
+  Widget _appearanceChoice(ChatAppearance a) {
+    final on = a == appearance.appearance;
+    return TextButton(
+      // D3.6：命中区下限 44（视觉可以小，命中区不许小）
+      style: TextButton.styleFrom(
+        minimumSize: const Size(44, 44),
+        foregroundColor: on ? d.ink : d.muted,
+        padding: const EdgeInsets.symmetric(horizontal: d.gapM),
+      ),
+      onPressed: onAppearanceChanged == null ? null : () => onAppearanceChanged!(a),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (on) ...[
+            const Icon(Icons.check, size: 18),
+            const SizedBox(width: d.gapXs),
+          ],
+          Text(
+            a.label,
+            style: TextStyle(
+              color: on ? d.ink : d.muted,
+              fontWeight: on ? FontWeight.w600 : FontWeight.w400,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// **这个助手**那张卡（关于 / 退出登录）。

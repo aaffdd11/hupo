@@ -24,13 +24,26 @@
 //    `deferToChild` 挡不住，点空白会**漏到桌面**。
 //    ⚠️ **不用 `GestureDetector`**：源码级禁令（`accessibility_test.dart`）。
 //    拖拽与双击都走 `Listener`（原始指针）；可点的东西一律是 Material 按钮。
+//
+// ── ★ 批次 4：浮窗的**面子**换成 DSH 那套 token（契约 `docs/dev/119`）──────
+// 底色 / 发丝线 / 标题 / 抓手 / 里面那一整棵 Material 主题，全部跟着
+// `AppearanceScope` 的色板走（用户选亮/暗/跟随系统）。三条边界：
+//   · **窗口外面一个像素都不动**：桌面图标墙 / 首页 / 登录 / 小程序容器那一圈壳
+//     照旧是暖白纸那套（`models/design.dart`）。整机暗色**不是这一批的事**
+//     —— 那等于要给暖白纸品牌色**发明**一份暗色版，得主人点头；
+//   · **字号那一轴不在这里**：浮窗自己的字号（抓手/标题/动作）跟系统缩放走，
+//     用户的 12–17 **只影响聊天内容**（DSH 原话，`115-raw/B-render.md` §3.1）；
+//   · **阴影还是从 `d.ink` 来**（`desktop_floater_test` 钉着那个数）：阴影是
+//     "压在多亮的底上"那件事，不是窗口自己的面子。
 
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import '../models/dsh_design.dart';
 import '../models/space_words.dart';
+import 'appearance_scope.dart';
 
 /// 三档（手册 §6.2）。
 enum FloaterTier {
@@ -305,6 +318,15 @@ class ChatFloaterState extends State<ChatFloater> {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
+    // ★ 批次 4：这一屏的面子（色板）从 `AppearanceScope` 来；没有 scope
+    //   （单看这一块的判据）就退回"跟着 Theme 的亮暗"，与原来逐字一致。
+    final scope = AppearanceScope.maybeOf(context);
+    final variant =
+        scope?.variant ??
+        (Theme.of(context).brightness == Brightness.dark
+            ? DshVariant.dark
+            : DshVariant.light);
+    final p = variant.palette;
     final maxH = math.max(widget.maxHeight, FloaterMetrics.dragFloor);
     final h = _heightFor(maxH);
     final collapsed = _collapsed;
@@ -315,136 +337,150 @@ class ChatFloaterState extends State<ChatFloater> {
         if (mounted && h != null) widget.onHeight!(h);
       });
     }
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxHeight: maxH),
-      // ⚠️ 收起档 `h == null` ⇒ `SizedBox` 不约束高度 ⇒ 由内容算（D3.5）
-      child: SizedBox(
-        height: h,
-        child: DecoratedBox(
-          // 阴影照手册 §10.1 阈值总表：外 blur 32 · α.45 · offset(0,-6)
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(d.radiusCard),
-            boxShadow: [
-              BoxShadow(
-                color: d.ink.withValues(alpha: 0.45),
-                blurRadius: 32,
-                offset: const Offset(0, -6),
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(d.radiusCard),
-            child: Listener(
-              // 🔴 **点浮窗自己不许漏到下面**（§6.3）：opaque 吃掉所有指针事件。
-              // ⚠️ 这里**不接手势**（没有 onPointerXxx）—— 它只负责"挡住"。
-              //    手势绑在抓手那一行（见下），否则会把**时间线的滚动**吃掉：
-              //    2026-09-22 实测，第一版把 `_onMove` 挂在整块浮窗上，
-              //    于是"往上拖时间线"被当成"把窗口拉高"，`重发`那条判据当场红。
-              behavior: HitTestBehavior.opaque,
-              child: Material(
-                color: d.card,
-                child: Column(
-                  mainAxisSize: collapsed ? MainAxisSize.min : MainAxisSize.max,
-                  children: [
-                    // ── 抓手（主人 2026-09-24）────────────────────────
-                    //   原话：*"展开用一条杠，杠上面有一个小箭头，箭头比较平，
-                    //   所以不会显得那么突兀，放在上边框的正中央"*
-                    //
-                    // 🔴 **一根杠 + 一个"平"的小箭头**，**永远在上边框正中央**
-                    //    （收起、展开都在同一个位置 —— 位置不动，只有箭头朝上/朝下）。
-                    //   · **点它 = 收起 ⇄ 展开**（单击就够）；
-                    //   · **竖向拖它 = 跟手变高**（§6.3 的手势表）。
-                    //
-                    //   ⚠️ **命中区 96×44（D3.6）**，图形只有 26×7 —— 好点，但不显眼。
-                    //   ⚠️ 它**没有可见的字**（主人这次的原话就是"一条杠 + 小箭头"）：
-                    //      D3.8 那条"必须带字"由这一版**改掉**（手册同日改），
-                    //      字改挂在 tooltip 与无障碍名上（`展开` / `收起`）。
-                    //   ⚠️ 手势**只绑在这一行**（§6.3）：绑在整块浮窗上会把时间线的滚动吃掉
-                    //      —— 那正是上一版没暴露的 bug。
-                    Listener(
-                      behavior: HitTestBehavior.opaque,
-                      onPointerDown: _onDown,
-                      onPointerMove: _onMove,
-                      onPointerUp: _onUp,
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: _handle(collapsed),
-                      ),
-                    ),
-                    // ── 展开态：标题行（**收起态不画它** —— 那一档就是"一行"）──
-                    if (!collapsed)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: d.gapS,
-                          vertical: 2,
+    return Theme(
+      // 🔴 **窗口里面那一整棵**换成这一档的 Material 主题（见 `appearance_scope.dart`
+      //    里 `chatThemeOf` 顶上那段：不这么做，里面那些读 `Theme` 的控件
+      //    ——气泡、输入框、状态条——会把近黑的字压在近黑的底上，而判据照样全绿）。
+      data: chatThemeOf(variant),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxH),
+        // ⚠️ 收起档 `h == null` ⇒ `SizedBox` 不约束高度 ⇒ 由内容算（D3.5）
+        child: SizedBox(
+          height: h,
+          child: DecoratedBox(
+            // 阴影照手册 §10.1 阈值总表：外 blur 32 · α.45 · offset(0,-6)
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(d.radiusCard),
+              boxShadow: [
+                BoxShadow(
+                  color: d.ink.withValues(alpha: 0.45),
+                  blurRadius: 32,
+                  offset: const Offset(0, -6),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(d.radiusCard),
+              child: Listener(
+                // 🔴 **点浮窗自己不许漏到下面**（§6.3）：opaque 吃掉所有指针事件。
+                // ⚠️ 这里**不接手势**（没有 onPointerXxx）—— 它只负责"挡住"。
+                //    手势绑在抓手那一行（见下），否则会把**时间线的滚动**吃掉：
+                //    2026-09-22 实测，第一版把 `_onMove` 挂在整块浮窗上，
+                //    于是"往上拖时间线"被当成"把窗口拉高"，`重发`那条判据当场红。
+                behavior: HitTestBehavior.opaque,
+                child: Material(
+                  // ★ 窗口的底 = DSH 的 `bg-layer-1`（亮色就是纯白，暗色 #232324）。
+                  color: p.bgLayer1,
+                  child: Column(
+                    mainAxisSize: collapsed ? MainAxisSize.min : MainAxisSize.max,
+                    children: [
+                      // ── 抓手（主人 2026-09-24）────────────────────────
+                      //   原话：*"展开用一条杠，杠上面有一个小箭头，箭头比较平，
+                      //   所以不会显得那么突兀，放在上边框的正中央"*
+                      //
+                      // 🔴 **一根杠 + 一个"平"的小箭头**，**永远在上边框正中央**
+                      //    （收起、展开都在同一个位置 —— 位置不动，只有箭头朝上/朝下）。
+                      //   · **点它 = 收起 ⇄ 展开**（单击就够）；
+                      //   · **竖向拖它 = 跟手变高**（§6.3 的手势表）。
+                      //
+                      //   ⚠️ **命中区 96×44（D3.6）**，图形只有 26×7 —— 好点，但不显眼。
+                      //   ⚠️ 它**没有可见的字**（主人这次的原话就是"一条杠 + 小箭头"）：
+                      //      D3.8 那条"必须带字"由这一版**改掉**（手册同日改），
+                      //      字改挂在 tooltip 与无障碍名上（`展开` / `收起`）。
+                      //   ⚠️ 手势**只绑在这一行**（§6.3）：绑在整块浮窗上会把时间线的滚动吃掉
+                      //      —— 那正是上一版没暴露的 bug。
+                      Listener(
+                        behavior: HitTestBehavior.opaque,
+                        onPointerDown: _onDown,
+                        onPointerMove: _onMove,
+                        onPointerUp: _onUp,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: _handle(collapsed, p),
                         ),
-                        child: Row(
-                          children: [
-                            const SizedBox(width: d.gapS),
-                            // ⚠️ `118` 起标题**可以让位**（窄屏 + 大字号下右边还要摆
-                            //    两个 tab）：原来的 Text 是不弹性的 ⇒ 加了 tab 之后
-                            //    这一行会横向溢出。`Flexible` + 省略号把它变成
-                            //    "地方不够就截字"，**位置与大小在地方够时一字不变**
-                            //    （`notice_overlay_test` 量的就是那个矩形）。
-                            Flexible(
-                              child: Text(
-                                widget.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                // ★ 2026-09-23：`titleSmall`(≈14) → `titleMedium`(≈16)
-                                //   —— 它是这一屏的名字，原来和旁边那排图标一样大。
-                                style: t.textTheme.titleMedium?.copyWith(
-                                  color: d.ink,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                            // ★ `118`：聊天 / 轨迹 两个 tab（DSH 的会话头就是这个形状）。
-                            //    ⚠️ 它是**不弹性**的：挤的时候让标题去截字，
-                            //       两个 tab 永远整颗看得见（切换器的出口不许被藏）。
-                            if (widget.tabs != null) ...[
+                      ),
+                      // ── 展开态：标题行（**收起态不画它** —— 那一档就是"一行"）──
+                      if (!collapsed)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: d.gapS,
+                            vertical: 2,
+                          ),
+                          child: Row(
+                            children: [
                               const SizedBox(width: d.gapS),
-                              widget.tabs!,
-                            ],
-                            const Spacer(),
-                            // ⚠️ 那一串动作要能**横向滚**：窄屏 + 大字号下它**一定**放不下；
-                            //    折行会让这一行变高 ⇒ 把时间线挤没。一行 + 横滚：高度不变、一个都不藏。
-                            Flexible(
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                reverse: true,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: widget.trailing,
+                              // ⚠️ `118` 起标题**可以让位**（窄屏 + 大字号下右边还要摆
+                              //    两个 tab）：原来的 Text 是不弹性的 ⇒ 加了 tab 之后
+                              //    这一行会横向溢出。`Flexible` + 省略号把它变成
+                              //    "地方不够就截字"，**位置与大小在地方够时一字不变**
+                              //    （`notice_overlay_test` 量的就是那个矩形）。
+                              Flexible(
+                                child: Text(
+                                  widget.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  // ★ 2026-09-23：`titleSmall`(≈14) → `titleMedium`(≈16)
+                                  //   —— 它是这一屏的名字，原来和旁边那排图标一样大。
+                                  // ★ 批次 4：字色跟色板走（暗色下 `d.ink` 是黑字）。
+                                  style: t.textTheme.titleMedium?.copyWith(
+                                    color: p.labelPrimary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
-                            ),
-                            // 🔴 **「收起」钉在横滚之外**（主人 2026-09-22：*"展开后要有收回的按钮"*）：
-                            //    它原来在那条**横向滚动**里 ⇒ 窄屏 + 大字号下会被滚出视野，
-                            //    而"想收起来"的时候找不到按钮 = 一个点不到的出口。
-                            //    ⚠️ **只在展开态画它**（收起态本来就已经收起来了）。
-                            //    ⚠️ 2026-09-24 起**抓手自己也收得起来**，这个按钮留着是"看得见的出口"。
-                            IconButton(
-                              tooltip: chatCollapse,
-                              onPressed: () => _setTier(
-                                FloaterTier.collapsed,
-                                auto: false,
+                              // ★ `118`：聊天 / 轨迹 两个 tab（DSH 的会话头就是这个形状）。
+                              //    ⚠️ 它是**不弹性**的：挤的时候让标题去截字，
+                              //       两个 tab 永远整颗看得见（切换器的出口不许被藏）。
+                              if (widget.tabs != null) ...[
+                                const SizedBox(width: d.gapS),
+                                widget.tabs!,
+                              ],
+                              const Spacer(),
+                              // ⚠️ 那一串动作要能**横向滚**：窄屏 + 大字号下它**一定**放不下；
+                              //    折行会让这一行变高 ⇒ 把时间线挤没。一行 + 横滚：高度不变、一个都不藏。
+                              Flexible(
+                                child: SingleChildScrollView(
+                                  scrollDirection: Axis.horizontal,
+                                  reverse: true,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: widget.trailing,
+                                  ),
+                                ),
                               ),
-                              icon: const Icon(Icons.keyboard_arrow_down),
-                            ),
-                          ],
+                              // 🔴 **「收起」钉在横滚之外**（主人 2026-09-22：*"展开后要有收回的按钮"*）：
+                              //    它原来在那条**横向滚动**里 ⇒ 窄屏 + 大字号下会被滚出视野，
+                              //    而"想收起来"的时候找不到按钮 = 一个点不到的出口。
+                              //    ⚠️ **只在展开态画它**（收起态本来就已经收起来了）。
+                              //    ⚠️ 2026-09-24 起**抓手自己也收得起来**，这个按钮留着是"看得见的出口"。
+                              IconButton(
+                                tooltip: chatCollapse,
+                                onPressed: () => _setTier(
+                                  FloaterTier.collapsed,
+                                  auto: false,
+                                ),
+                                icon: const Icon(Icons.keyboard_arrow_down),
+                                color: p.labelTertiary,
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    // 收起态：**只画输入条**（时间线不画 —— 免得它被压成一条时还在偷偷布局，
-                    // 那正是上一版溢出的来源）。主人 2026-09-22："收缩的时候也有一个输入框。"
-                    if (collapsed)
-                      widget.composer
-                    else ...[
-                      Divider(height: 1, color: d.line),
-                      Expanded(child: widget.child),
-                      widget.composer,
+                      // 收起态：**只画输入条**（时间线不画 —— 免得它被压成一条时还在偷偷布局，
+                      // 那正是上一版溢出的来源）。主人 2026-09-22："收缩的时候也有一个输入框。"
+                      if (collapsed)
+                        widget.composer
+                      else ...[
+                        // ★ 批次 4：发丝线（0.5，不是 1.0）＋ 这一档的描边色。
+                        Divider(
+                          height: 1,
+                          thickness: dshHairline,
+                          color: p.borderL3,
+                        ),
+                        Expanded(child: widget.child),
+                        widget.composer,
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -463,7 +499,8 @@ class ChatFloaterState extends State<ChatFloater> {
   ///
   /// ⚠️ **单击 = 收起 ⇄ 展开**（不再有双击：两次单击会互相抵消 ⇒ "点了没反应"）。
   /// ⚠️ 字挂在 `Tooltip`（web 上悬停看得见）+ 无障碍名上（D3.8 的"带字"由 2026-09-24 改掉）。
-  Widget _handle(bool collapsed) {
+  /// ★ 批次 4：那一笔与那条杠的颜色跟色板走（`label-tertiary` / `border-l3`）。
+  Widget _handle(bool collapsed, DshPalette p) {
     final button = TextButton(
       key: chatHandleKey,
       onPressed: () =>
@@ -471,21 +508,21 @@ class ChatFloaterState extends State<ChatFloater> {
       style: TextButton.styleFrom(
         minimumSize: const Size(96, 44),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-        foregroundColor: d.muted,
+        foregroundColor: p.labelTertiary,
       ),
       child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             CustomPaint(
               size: const Size(26, 7),
-              painter: _FlatChevron(color: d.muted, up: collapsed),
+              painter: _FlatChevron(color: p.labelTertiary, up: collapsed),
             ),
             const SizedBox(height: 3),
           Container(
             width: 44,
             height: 4,
             decoration: BoxDecoration(
-              color: d.line,
+              color: p.borderL3,
               borderRadius: BorderRadius.circular(2),
             ),
           ),

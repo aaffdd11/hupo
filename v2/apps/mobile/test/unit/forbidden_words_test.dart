@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/about_facts.dart';
+import 'package:hupo_app/models/appearance.dart';
 import 'package:hupo_app/models/chat_view.dart';
 import 'package:hupo_app/models/dev_harness.dart';
 import 'package:hupo_app/models/dev_harness_words.dart';
@@ -309,6 +310,20 @@ void main() {
       trajectoryJumpFailedLine,
       trajectoryUsageNotSettled,
       trajectoryBlankSummary,
+      // ★ 2026-09-26（契约 `docs/dev/119-APPEARANCE-AND-FONT.md`）：「这块窗口」
+      //    那两行（外观 / 字号）的每一句 ＋ 三档的名字（亮 / 暗 / 跟随系统）
+      //    —— **直接引数据源**（手抄会漂）。
+      //    ⚠️ 这一批最容易混进来的是"主题 / 档位 / 客户端 / 工作区"那类内部词；
+      //       允许的是他说得懂的话："这块窗口"、"字"、"亮 / 暗 / 跟随系统"。
+      settingsAppearanceSection,
+      settingsAppearanceLabel,
+      settingsAppearanceHint,
+      settingsFontSizeLabel,
+      settingsFontSizeHint,
+      settingsFontSizePreview,
+      settingsFontSizeSmaller,
+      settingsFontSizeBigger,
+      for (final a in ChatAppearance.values) a.label,
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

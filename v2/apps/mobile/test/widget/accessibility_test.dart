@@ -27,6 +27,7 @@ import 'package:hupo_app/models/export_words.dart';
 import 'package:hupo_app/models/dev_harness.dart';
 import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/desktop_words.dart';
+import 'package:hupo_app/models/dsh_design.dart';
 import 'package:hupo_app/models/harness.dart';
 import 'package:hupo_app/models/message_state.dart';
 import 'package:hupo_app/models/chat_view.dart';
@@ -68,6 +69,30 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// D3.5 点名的五档。
 const scales = <double>[1.0, 1.3, 1.75, 2.0, 3.1];
+
+/// ★ 批次 4 点名的那三档**用户字号**（契约 `docs/dev/119`）。
+///
+/// ⚠️ 它是**另一条轴**，不是"第六档系统字号"：那五档改的是 `textScaler`
+///    （整页一起缩放），这三档改的是**字号本身**（`14 + Δ`，而且只有聊天内容
+///    跟着动）——两条轴都会改布局，所以都要过"不溢出 + 命中区 ≥44"。
+const userFontSizes = <int>[
+  dshContentFontSizeMin,
+  dshContentFontSizeDefault,
+  dshContentFontSizeMax,
+];
+
+/// **先灌盘（= 用户上次就选了这一档），再 pump** —— 走的是真入口。
+///
+/// ⚠️ `hupo_chat_appearance` 就是 `AppearanceStore` 里那**一个** key（逐字相同）。
+/// ⚠️ **必须 `pumpAndSettle`**：`ChatScreen` 读那个值是异步的，多等一帧
+///    才真的换过去（不然量到的还是默认档 —— 那这道闸就是空转）。
+Future<void> _pumpFont(WidgetTester tester, Widget child, double scale, int fontSize) async {
+  SharedPreferences.setMockInitialValues(<String, Object>{
+    'hupo_chat_appearance': 'system|$fontSize',
+  });
+  await _pump(tester, child, scale);
+  await tester.pumpAndSettle();
+}
 
 /// D3.6 点名的下限。
 const minTouch = 44.0;
@@ -931,6 +956,64 @@ Map<String, dynamic> _noticeEvent() => {
 /// 服务端给的那个撤销按钮字。
 const noticeUndoLabel2 = '拿回来';
 
+/// **命中区扫描**（D3.6）—— 量的是**语义矩形**，不是内部那个 `InkWell`。
+///
+/// D3.6 原话是"视觉仍小，**用透明 padding 撑命中区**"——
+/// 也就是说**视觉框允许多小**，判据是**命中区**。
+/// Flutter 的 `MaterialTapTargetSize.padded`（默认）正是把那圈 padding 加在
+/// `InkWell` **外面**：实测某个 `IconButton` 的 `InkWell` 是 40×40，
+/// 而它的**语义矩形是 48×48**。
+/// ⇒ 量内层那个框会**误报**（我第一版就是这么误报的，见 `13-A11Y.md` §三）。
+/// ⚠️ 量之前**先把这个按钮完整露出来**（见下面"被裁过的矩形"那段）。
+///
+/// ⚠️ 批次 4 把它从 D3.6 那个 `group` 里**提到顶层**：用户字号那一组也要用它
+///    （12/14/17 是**另一条轴**，命中区一样不许小）。搬动**没改一个字节的行为**。
+Future<void> sweep(WidgetTester tester, String where) async {
+  var checked = 0;
+  // ⚠️ **用 `is ButtonStyleButton`，不要用 `find.byType(TextButton)`**
+  //    （2026-09-23 修）：`TextButton.icon(...)` / `FilledButton.tonalIcon(...)`
+  //    造出来的是**子类**（`_TextButtonWithIcon`…），而 `find.byType` 只认
+  //    **精确类型** ⇒ 那些**带图标的按钮从来没被这道闸量过**。
+  //    发现经过：出处那几行新加的按钮一条都没扫到，而 `checked > 0` 照样绿
+  //    （顶栏那几个图标撑着它）—— 这正是"闸在替自己作假"的形状。
+  final targets = <(String, Finder)>[
+    ('IconButton', find.byType(IconButton)),
+    ('ButtonStyleButton', find.byWidgetPredicate((w) => w is ButtonStyleButton)),
+  ];
+  for (final (label, finder) in targets) {
+    for (final e in finder.evaluate()) {
+      final type = label;
+      final w = find.byWidget(e.widget);
+      // ⚠️ **先 `ensureVisible`，再量语义矩形。**
+      //    为什么非这样不可（2026-09-21 实测）：时间线**会滚**之后，
+      //    一个滚到一半的按钮，它的语义矩形是**被视口裁过的**——
+      //    「重发」明明有 44 高，量出来是 `Size(65.2, 20.5)`。
+      //    ⇒ 那种读数**随滚动位置变**：同一份代码，滚到哪儿决定闸红不红。
+      //      而"读数会变的闸"下一步就是被绕过。
+      await tester.ensureVisible(w);
+      await tester.pumpAndSettle();
+      final r = tester.getSemantics(w).rect;
+      checked += 1;
+      expect(
+        r.width >= minTouch && r.height >= minTouch,
+        isTrue,
+        reason: '$where：$type 的**命中区**是 ${r.size}，小于 $minTouch×$minTouch',
+      );
+    }
+  }
+  // ⚠️ **故意不扫 `GestureDetector`。**
+  //    Flutter 会给每个 `TextField` 在**应用最外层的 Overlay** 里塞两个选字手柄
+  //    （`_SelectionHandleOverlay`），它们就是**裸的 GestureDetector**，
+  //    而且只有 22×22 / 40×40 —— 那是**框架的**东西，不是我们的命中区，
+  //    在真机上也由系统按平台习惯画。
+  //    试过按祖先过滤（"在 EditableText 里就跳过"）：**不管用** ——
+  //    手柄在 Overlay 里，`EditableText` **不是它的祖先**。
+  //    ⇒ 改成两条：这里只扫我们自己的按钮；再用一条源码级断言
+  //      **禁止 lib 里出现裸 GestureDetector**（真加了，就必须把它加进这份扫描）。
+  // 负向对照：一个都没扫到 ⇒ 这条闸是空转的
+  expect(checked, greaterThan(0), reason: '$where：一个能点的都没扫到');
+}
+
 void main() {
   // 换档会写本机设置（`ProcessLevelStore`）——测试里给它一个空盘，
   // 免得真去敲一个不存在的平台插件（写失败也不会抛，但别让它去敲）。
@@ -1343,61 +1426,6 @@ void main() {
   // ── D3.6 ──────────────────────────────────────────────────
 
   group('D3.6：触控目标 ≥44（**视觉可以小，命中区不许小**）', () {
-    /// ⚠️ 量的是**语义矩形**，不是内部那个 `InkWell`。
-    ///
-    /// D3.6 原话是"视觉仍小，**用透明 padding 撑命中区**"——
-    /// 也就是说**视觉框允许多小**，判据是**命中区**。
-    /// Flutter 的 `MaterialTapTargetSize.padded`（默认）正是把那圈 padding 加在
-    /// `InkWell` **外面**：实测某个 `IconButton` 的 `InkWell` 是 40×40，
-    /// 而它的**语义矩形是 48×48**。
-    /// ⇒ 量内层那个框会**误报**（我第一版就是这么误报的，见 `13-A11Y.md` §三）。
-    /// ⚠️ 量之前**先把这个按钮完整露出来**（见下面"被裁过的矩形"那段）。
-    Future<void> sweep(WidgetTester tester, String where) async {
-      var checked = 0;
-      // ⚠️ **用 `is ButtonStyleButton`，不要用 `find.byType(TextButton)`**
-      //    （2026-09-23 修）：`TextButton.icon(...)` / `FilledButton.tonalIcon(...)`
-      //    造出来的是**子类**（`_TextButtonWithIcon`…），而 `find.byType` 只认
-      //    **精确类型** ⇒ 那些**带图标的按钮从来没被这道闸量过**。
-      //    发现经过：出处那几行新加的按钮一条都没扫到，而 `checked > 0` 照样绿
-      //    （顶栏那几个图标撑着它）—— 这正是"闸在替自己作假"的形状。
-      final targets = <(String, Finder)>[
-        ('IconButton', find.byType(IconButton)),
-        ('ButtonStyleButton', find.byWidgetPredicate((w) => w is ButtonStyleButton)),
-      ];
-      for (final (label, finder) in targets) {
-        for (final e in finder.evaluate()) {
-          final type = label;
-          final w = find.byWidget(e.widget);
-          // ⚠️ **先 `ensureVisible`，再量语义矩形。**
-          //    为什么非这样不可（2026-09-21 实测）：时间线**会滚**之后，
-          //    一个滚到一半的按钮，它的语义矩形是**被视口裁过的**——
-          //    「重发」明明有 44 高，量出来是 `Size(65.2, 20.5)`。
-          //    ⇒ 那种读数**随滚动位置变**：同一份代码，滚到哪儿决定闸红不红。
-          //      而"读数会变的闸"下一步就是被绕过。
-          await tester.ensureVisible(w);
-          await tester.pumpAndSettle();
-          final r = tester.getSemantics(w).rect;
-          checked += 1;
-          expect(
-            r.width >= minTouch && r.height >= minTouch,
-            isTrue,
-            reason: '$where：$type 的**命中区**是 ${r.size}，小于 $minTouch×$minTouch',
-          );
-        }
-      }
-      // ⚠️ **故意不扫 `GestureDetector`。**
-      //    Flutter 会给每个 `TextField` 在**应用最外层的 Overlay** 里塞两个选字手柄
-      //    （`_SelectionHandleOverlay`），它们就是**裸的 GestureDetector**，
-      //    而且只有 22×22 / 40×40 —— 那是**框架的**东西，不是我们的命中区，
-      //    在真机上也由系统按平台习惯画。
-      //    试过按祖先过滤（"在 EditableText 里就跳过"）：**不管用** ——
-      //    手柄在 Overlay 里，`EditableText` **不是它的祖先**。
-      //    ⇒ 改成两条：这里只扫我们自己的按钮；再用一条源码级断言
-      //      **禁止 lib 里出现裸 GestureDetector**（真加了，就必须把它加进这份扫描）。
-      // 负向对照：一个都没扫到 ⇒ 这条闸是空转的
-      expect(checked, greaterThan(0), reason: '$where：一个能点的都没扫到');
-    }
-
     for (final s in scales) {
       testWidgets('第一屏（landing）@ ${s}x', (tester) async {
         await _pump(tester, LandingScreen(onStart: () {}), s);
@@ -1695,6 +1723,123 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '出处那几行在 ${s}x 溢出了');
       }
     });
+  });
+
+  // ── ★ 批次 4：**用户字号**那条轴（契约 `docs/dev/119`）──────────────
+  //
+  // ⚠️ 和上面每一组同一条理由：**新加的设置必须也过这两道硬闸**
+  //    （五档不溢出 + 命中区 ≥44），不然"字号能调"这件事会随时间退化成
+  //    "调大之后有东西被挤没 / 有按钮点不到"。
+  // ⚠️ 这里用**系统 1.0x 与 1.75x 两档**配 12/14/17：两条轴是**乘起来**的
+  //    （用户字号改的是字号本身，系统缩放再乘上去）—— 最坏的一档是两者都大。
+  group('D3.5/D3.6 · 批 4：**用户字号** 12/14/17 也一样', () {
+    for (final u in userFontSizes) {
+      testWidgets('主界面（满内容）@ 用户字号 $u · 系统 1.0x', (tester) async {
+        final c = _controller();
+        _stuff(c.timeline);
+        await _pumpFont(
+          tester,
+          ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}),
+          1.0,
+          u,
+        );
+        expect(_drain(tester), isEmpty, reason: '主界面在用户字号 $u（1.0x）溢出了');
+      });
+
+      testWidgets('主界面（满内容）@ 用户字号 $u · 系统 1.75x', (tester) async {
+        // 🔴 **两条轴一起**：用户字号是"字号更大"，系统缩放是"整页再放大"。
+        final c = _controller();
+        _stuff(c.timeline);
+        await _pumpFont(
+          tester,
+          ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}),
+          1.75,
+          u,
+        );
+        expect(_drain(tester), isEmpty, reason: '主界面在用户字号 $u × 系统 1.75x 溢出了');
+      });
+
+      testWidgets('工具行（展开着）@ 用户字号 $u', (tester) async {
+        final c = _toolRowOnly();
+        await _pumpFont(
+          tester,
+          ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}),
+          1.75,
+          u,
+        );
+        await _toTop(tester);
+        // 负向对照：**那一行真的画出来了**才算数
+        expect(find.text('bash'), findsOneWidget, reason: '★ 工具行没进这棵树 ⇒ 这道闸扫错了屏');
+        await _expandToolRow(tester);
+        expect(_drain(tester), isEmpty, reason: '工具行（展开）在用户字号 $u 溢出了');
+      });
+
+      testWidgets('排队横条（三条展开）@ 用户字号 $u', (tester) async {
+        final c = _queueOnly(3);
+        await _pumpFont(
+          tester,
+          ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}),
+          1.75,
+          u,
+        );
+        await tester.tap(find.byKey(queueHeaderKey));
+        await tester.pumpAndSettle();
+        expect(find.byTooltip(queueCancelLabel), findsNWidgets(3), reason: '★ 展开没成');
+        expect(_drain(tester), isEmpty, reason: '排队横条在用户字号 $u 溢出了');
+      });
+
+      testWidgets('轨迹那一屏 @ 用户字号 $u', (tester) async {
+        final c = _trajectoryFeed();
+        await _pumpFont(
+          tester,
+          ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}),
+          1.75,
+          u,
+        );
+        await _openTrajectoryTab(tester);
+        expect(find.text(trajectoryTotalsHead), findsOneWidget, reason: '★ 合计那一行没进这棵树');
+        expect(_drain(tester), isEmpty, reason: '轨迹那一屏在用户字号 $u 溢出了');
+      });
+
+      testWidgets('配置页（「这块窗口」那两行 · 不溢出 ＋ 命中区 ≥44）@ 用户字号 $u', (tester) async {
+        // 🔴 这是**这一批新加的那两行**：3.1x 系统字号下它最容易顶出屏幕
+        //    （三个选项 + 一个步进器 + 一行预览），所以两条闸都要量。
+        SharedPreferences.setMockInitialValues(<String, Object>{
+          'hupo_chat_appearance': 'system|$u',
+        });
+        await _pump(
+          tester,
+          ChatScreen(
+            controller: _controller(),
+            onLoggedOut: () {},
+            space: const SpaceInfo(kind: 'tenant', state: 'ready', hasKey: false),
+            onSendKey: (_) async => KeySend.ok,
+          ),
+          3.1,
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(settingsAppLabel));
+        await tester.pumpAndSettle();
+        expect(find.byType(SettingsScreen), findsOneWidget, reason: '★ 没进设置那一屏');
+        // 滚到那两行（窄屏 + 3.1x 下它在折叠线以下 —— 用户也是滚过去的）
+        await tester.scrollUntilVisible(
+          find.text(settingsFontSizeLabel),
+          200,
+          scrollable: find
+              .descendant(
+                of: find.byKey(const ValueKey('credTab:$credTabChat')),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
+        await tester.pumpAndSettle();
+        // 负向对照：那两行**真的画出来了**
+        expect(find.text(settingsAppearanceLabel), findsOneWidget, reason: '★「外观」那一行没进这棵树');
+        expect(find.text(settingsFontSizePreview), findsOneWidget, reason: '★ 那一行实时预览没进这棵树');
+        expect(_drain(tester), isEmpty, reason: '「这块窗口」在用户字号 $u 溢出了');
+        await sweep(tester, '「这块窗口」@用户字号 $u');
+      });
+    }
   });
 
   test('🔴 lib 里不许出现**裸的** GestureDetector（框架的选字手柄不算）', () {

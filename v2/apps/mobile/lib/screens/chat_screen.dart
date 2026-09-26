@@ -19,6 +19,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../models/appearance.dart';
 import '../models/dev_harness.dart';
 import '../models/image_outcome.dart';
 import '../models/conn_state.dart';
@@ -41,6 +42,7 @@ import '../models/trajectory.dart';
 import '../models/trajectory_words.dart';
 import '../models/trash_words.dart';
 import '../services/api.dart';
+import '../services/appearance_store.dart';
 import '../services/chat_controller.dart';
 import '../services/chat_view_store.dart';
 import '../services/dev_harness_client.dart';
@@ -49,6 +51,7 @@ import '../services/links.dart';
 import '../services/hearing.dart';
 import '../services/speech.dart';
 import '../widgets/app_desktop.dart';
+import '../widgets/appearance_scope.dart';
 import '../widgets/chat_tabs.dart';
 import '../widgets/harness_pane.dart';
 import '../widgets/job_ask_sheet.dart';
@@ -346,6 +349,48 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  // ── ★ 批次 4：聊天窗口的外观与字号（契约 `docs/dev/119`）────────────
+  //
+  // 这一屏是**这两样的主人**：设置页那两行写的是这里的状态，`AppearanceScope`
+  // 把解析之后的色板与字号轴发给聊天面每一个用 token 的控件。
+  // ⇒ "改一下马上生效"是**结构**保证的（同一个 `setState` 里既写盘又重建那一棵子树），
+  //    不靠重连、不靠刷新。
+
+  /// 用户选的那两样（默认 = 跟随系统 ＋ 14 字）。
+  ChatAppearanceSettings _appearance = const ChatAppearanceSettings();
+
+  /// 它存在哪（**按设备**；照 `process_level_store.dart` 那一对）。
+  final _appearanceStore = AppearanceStore();
+
+  /// 进来时读一次"上次选的亮暗与字号"（读不出来 ⇒ 默认档 —— 见 `AppearanceStore`）。
+  ///
+  /// ⚠️ **读盘是异步的**：第一帧可能是默认档（亮/14），读到之后才换成他选的那一档。
+  ///    这是**刻意**的取舍：把它变成"先等盘、再画第一帧"会让冷启动多一帧空白，
+  ///    而那一帧空白的代价比"闪一下默认外观"大（首屏那一条见 `17-LOCAL-FIRST.md`）。
+  Future<void> _loadAppearance() async {
+    final s = await _appearanceStore.read();
+    if (!mounted || s == _appearance) return;
+    setState(() => _appearance = s);
+  }
+
+  /// 用户换了一档外观（设置页那三个之一）。
+  void _setAppearance(ChatAppearance a) {
+    if (a == _appearance.appearance) return; // 点当前那一档 = 空动作（切换器里不许有死键）
+    final next = _appearance.copyWith(appearance: a);
+    setState(() => _appearance = next);
+    // 存不上也得能用（这一次会话里屏幕上是对的）——同 `ChatViewStore` 那条。
+    unawaited(_appearanceStore.write(next));
+  }
+
+  /// 用户换了字号（设置页那个步进器）。**值已经夹在 12–17**（到边界按钮就按不动）。
+  void _setFontSize(int size) {
+    final n = chatFontSizeOf(size);
+    if (n == _appearance.fontSize) return;
+    final next = _appearance.copyWith(fontSize: n);
+    setState(() => _appearance = next);
+    unawaited(_appearanceStore.write(next));
+  }
+
   // ── 多选态（契约 `docs/dev/106-CHAT-SELECT.md` §一）──────────────
 
   /// 现在在不在**多选态**（点了菜单里那个【多选】之后）。
@@ -377,6 +422,8 @@ class _ChatScreenState extends State<ChatScreen> {
     FocusManager.instance.addListener(_onFocusChanged);
     // ★ `118`：进来先读一次"上次看的是聊天还是轨迹"（读不出来 ⇒ 聊天）。
     unawaited(_loadView());
+    // ★ 批次 4：进来先读一次"上次选的亮暗与字号"（读不出来 ⇒ 跟随系统 ＋ 14）。
+    unawaited(_loadAppearance());
   }
 
   @override
@@ -730,26 +777,41 @@ class _ChatScreenState extends State<ChatScreen> {
     //    而且**不参与 `Stack` 的尺寸计算**（`Stack` 的尺寸由非 positioned 的
     //    那个孩子决定）。这就是"浮在上面、不挤动下面"的**结构**保证——
     //    不是靠"看起来像浮着"。
-    return PopScope(
-      // ⚠️ 退出这一屏就把浮窗撤了：它是"现在喊你一声"，
-      //    而下一屏上没有它（不然那个钟到点时会去动一棵已经没了的树）。
-      onPopInvokedWithResult: (didPop, _) => c.dismissNotice(),
-      child: Stack(
-        children: [
-          sheet,
-          if (n != null)
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: NoticeOverlay(
-                notice: n,
-                // ⚠️ 浮窗那个**不带 `from`**：它读浮窗手上那一条
-                onUndo: () => _undoNotice(),
-                onDismiss: c.dismissNotice,
+    // ★ 批次 4：**这一棵子树**就是"聊天窗口"那两样的作用域。
+    //   ⚠️ 解析发生在**这里**（`MediaQuery.platformBrightness`）：用户在系统里切了
+    //      暗色，`MediaQuery` 一变这一屏就重建 ⇒ `system` 当场跟着变（不用重开）。
+    //   ⚠️ 包在**整棵树**（含桌面与小程序容器）上，但只有**调用 `DshLook.of` 的控件**
+    //      读它 ⇒ 桌面图标墙 / 首页 / 登录 / 小程序容器那一圈壳一个像素都不动
+    //      （整机暗色**不是这一批的事**，见 `docs/dev/119` §五）。
+    final platformDark =
+        MediaQuery.platformBrightnessOf(context) == Brightness.dark;
+    return AppearanceScope(
+      variant: _appearance.resolve(platformDark: platformDark),
+      scale: _appearance.scale,
+      settings: _appearance,
+      onAppearance: _setAppearance,
+      onFontSize: _setFontSize,
+      child: PopScope(
+        // ⚠️ 退出这一屏就把浮窗撤了：它是"现在喊你一声"，
+        //    而下一屏上没有它（不然那个钟到点时会去动一棵已经没了的树）。
+        onPopInvokedWithResult: (didPop, _) => c.dismissNotice(),
+        child: Stack(
+          children: [
+            sheet,
+            if (n != null)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: NoticeOverlay(
+                  notice: n,
+                  // ⚠️ 浮窗那个**不带 `from`**：它读浮窗手上那一条
+                  onUndo: () => _undoNotice(),
+                  onDismiss: c.dismissNotice,
+                ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -837,6 +899,12 @@ class _ChatScreenState extends State<ChatScreen> {
           onCancelled: widget.onLoggedOut,
           onKeyChanged: widget.onKeyChanged,
           onLogout: _logout(c),
+          // ★ 批次 4：**这块窗口**那两行（外观 / 字号）。
+          //   ⚠️ 状态住**这一屏**（`_appearance`）：设置页只是那两行的入口，
+          //      改完由 `setState` + `AppearanceScope` 让聊天面**当场**跟着变。
+          appearance: _appearance,
+          onAppearanceChanged: _setAppearance,
+          onFontSizeChanged: _setFontSize,
         ),
         title: configTitle,
       );

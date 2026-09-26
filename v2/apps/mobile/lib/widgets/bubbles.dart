@@ -6,17 +6,31 @@
 // 另一条：**四态必须一眼可辨，而且不能只靠颜色**。
 // 色盲、屏幕反光、平板在阳台上——颜色是最不可靠的那个通道。
 // ⇒ 每态都配一个**图标 + 文字**。
+//
+// ── ★ 批次 4：气泡的**字**跟着用户字号走（契约 `docs/dev/119`）──────────
+// 用户那个 12–17 只影响**聊天内容**（DSH 原话：`B-render.md` §3.1），
+// 而气泡正是内容 ⇒ 正文用 `scale.at(DshTypes.base)`（= `calc(16px + Δ)`，
+// 与屏幕上原来那个 16 在默认档**一模一样**），小字用
+// `scale.secondaryAt(DshTypes.xxs)`（= `calc(12px + Δ₂)`，默认档也一模一样）。
+// ⇒ **默认档下这一屏一个像素都不变**，只有用户真去调字号时才动。
+// ⚠️ 气泡的颜色**不在这一份里改**：它们读 `Theme.of(context)`，而聊天浮窗
+//    里面那一整棵的主题由 `appearance_scope.dart` 的 `chatThemeOf` 换掉了
+//    （`specific-bubble` / `bg-layer-2` / 失败那一档的罩色）—— 一处出处。
+// ⚠️ 多选态那两样（罩色 / 圈边 / 勾）**刻意留在暖色那套**（`d.accent`）：
+//    那是批 3 的选中语义，这一批不碰（见 `docs/dev/119` §五）。
 
 import 'package:flutter/material.dart';
 
 import '../models/image_links.dart';
 import '../models/space_words.dart';
 import '../models/design.dart' as d;
+import '../models/dsh_design.dart';
 import '../models/message_state.dart';
 import '../models/notice_words.dart';
 import '../models/source_words.dart';
 import '../models/speak_words.dart';
 import '../models/timeline.dart';
+import 'dsh_look.dart';
 
 /// 四态的视觉。**图标 + 文字**双通道，不靠颜色单独承载信息。
 ({IconData icon, String label}) _stateMark(MessageState s) => switch (s) {
@@ -84,9 +98,14 @@ class UserBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final look = DshLook.of(context);
+    final p = look.palette;
     final failed = utterance.state == MessageState.failed;
     final mark = _stateMark(utterance.state);
     final base = failed ? theme.colorScheme.errorContainer : theme.colorScheme.primaryContainer;
+    // ★ 批次 4：那条正文的字号从用户那条轴来（默认档下与 `bodyLarge` 同值）。
+    final bodyStyle = dshTextStyle(look.scale.at(DshTypes.base), p.labelPrimary);
+    final smallStyle = dshTextStyle(look.scale.secondaryAt(DshTypes.xxs), p.labelSecondary);
 
     return Align(
       alignment: Alignment.centerRight,
@@ -117,14 +136,14 @@ class UserBubble extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   if (selected) _SelectedMark(theme: theme),
-                  Text(utterance.text, style: theme.textTheme.bodyLarge),
+                  Text(utterance.text, style: bodyStyle),
                   const SizedBox(height: 4),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(mark.icon, size: theme.textTheme.bodySmall!.fontSize! + 4),
+                      Icon(mark.icon, size: smallStyle.fontSize! + 4),
                       const SizedBox(width: 4),
-                      Text(mark.label, style: theme.textTheme.bodySmall),
+                      Text(mark.label, style: smallStyle),
                       if (failed && onResend != null) ...[
                         const SizedBox(width: 12),
                         // 触控目标 ≥44：视觉上是个小按钮，用 padding 把命中区撑起来
@@ -205,9 +224,13 @@ class AnswerBubble extends StatelessWidget {
   /// ⚠️ 认得出**才**画（`imageUrlsIn` 是纯函数，判据钉着）——
   ///    认不出就一个字都不动（把普通网址当图片去取 = 屏幕上多一块空白）。
   /// ⚠️ 取不到图 ⇒ **说一句实话**（地址是临时的那种），不留一块空白让人猜。
-  List<Widget> _imageRows(ThemeData theme, String text) {
+  List<Widget> _imageRows(DshLook look, String text) {
     final urls = imageUrlsIn(text);
     if (urls.isEmpty) return const [];
+    final small = dshTextStyle(
+      look.scale.secondaryAt(DshTypes.xxs),
+      look.palette.labelSecondary,
+    );
     return [
       for (final url in urls) ...[
         const SizedBox(height: d.gapS),
@@ -218,26 +241,30 @@ class AnswerBubble extends StatelessWidget {
             fit: BoxFit.contain,
             errorBuilder: (_, __, ___) => Text(
               imageGoneWords,
-              style: theme.textTheme.bodySmall,
+              style: small,
             ),
             loadingBuilder: (_, child, progress) => progress == null
                 ? child
                 : Padding(
                     padding: const EdgeInsets.symmetric(vertical: d.gapXs),
-                    child: Text(imageLoadingWords, style: theme.textTheme.bodySmall),
+                    child: Text(imageLoadingWords, style: small),
                   ),
           ),
         ),
         const SizedBox(height: d.gapXs),
-        Text(imageTempWords, style: theme.textTheme.bodySmall),
+        Text(imageTempWords, style: small),
       ],
     ];
   }
 
-  List<Widget> _sourceRows(ThemeData theme) {
+  List<Widget> _sourceRows(DshLook look) {
     final shown = message.sources.take(sourcesShown).toList();
     final extra = message.sources.length - shown.length;
-    final markSize = (theme.textTheme.bodySmall?.fontSize ?? 12) + 4;
+    final small = dshTextStyle(
+      look.scale.secondaryAt(DshTypes.xxs),
+      look.palette.labelSecondary,
+    );
+    final markSize = small.fontSize! + 4;
     final rows = <Widget>[];
     for (final s in shown) {
       final url = '${s['url'] ?? ''}'.trim();
@@ -248,12 +275,12 @@ class AnswerBubble extends StatelessWidget {
         onOpenSource == null
             ? Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Text('· $label', style: theme.textTheme.bodySmall),
+                child: Text('· $label', style: small),
               )
             : TextButton.icon(
                 onPressed: () => onOpenSource!(url),
                 icon: Icon(Icons.open_in_new, size: markSize),
-                label: Text(label, style: theme.textTheme.bodySmall),
+                label: Text(label, style: small),
                 style: TextButton.styleFrom(
                   // D3.6：命中区 ≥44（视觉可以小，手指要够得着）
                   minimumSize: const Size(0, 44),
@@ -267,7 +294,7 @@ class AnswerBubble extends StatelessWidget {
       rows.add(
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Text(sourcesMoreWords(extra), style: theme.textTheme.bodySmall),
+          child: Text(sourcesMoreWords(extra), style: small),
         ),
       );
     }
@@ -277,8 +304,13 @@ class AnswerBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final look = DshLook.of(context);
+    final p = look.palette;
     final text = message.displayText;
     final base = theme.colorScheme.surfaceContainerHighest;
+    // ★ 批次 4：正文与那几行小字都跟着用户那条字号轴（默认档下与原来同值）。
+    final bodyStyle = dshTextStyle(look.scale.at(DshTypes.base), p.labelPrimary);
+    final smallStyle = dshTextStyle(look.scale.secondaryAt(DshTypes.xxs), p.labelSecondary);
 
     return Align(
       alignment: Alignment.centerLeft,
@@ -304,19 +336,19 @@ class AnswerBubble extends StatelessWidget {
                   if (selected) _SelectedMark(theme: theme),
                   if (text.isEmpty)
                     // 一句话都还没有：不要留一个空气泡，给一个"在处理"的轻标记
-                    Text('在处理…', style: theme.textTheme.bodySmall)
+                    Text('在处理…', style: smallStyle)
                   else ...[
                     // ⚠️ **画出来的图那一行地址不重复显示**（图就在下面）——
                     //    但**只有整行都是地址**时才去掉（句子里的地址留着）
-                    Text(textWithoutImageLines(text), style: theme.textTheme.bodyLarge),
+                    Text(textWithoutImageLines(text), style: bodyStyle),
                     // ★ **画好的图**（P1-27 后半）：回话里带着图片地址 ⇒ **画在聊天里**
-                    ..._imageRows(theme, text),
+                    ..._imageRows(look, text),
                   ],
                   if (message.sources.isNotEmpty) ...[
                     const SizedBox(height: 10),
-                    Text(sourcesHeadWords, style: theme.textTheme.bodySmall),
+                    Text(sourcesHeadWords, style: smallStyle),
                     const SizedBox(height: 2),
-                    ..._sourceRows(theme),
+                    ..._sourceRows(look),
                   ],
                   // ★ **读一遍**（主人 2026-09-23 定案：每条都能念）
                   //
@@ -331,13 +363,13 @@ class AnswerBubble extends StatelessWidget {
                       icon: Icon(
                         speaking ? Icons.stop_circle_outlined : Icons.volume_up_outlined,
                         // ★ 2026-09-23：字号跟着标签那一档走（原来按 bodySmall 算，偏小）
-                        size: (theme.textTheme.labelLarge?.fontSize ?? 14) + 4,
+                        size: (look.scale.at(DshTypes.s).size) + 4,
                       ),
                       label: Text(
                         speaking ? speakStopWords : speakOnceWords,
                         // ★ 2026-09-23：`bodySmall`(≈12) → `labelLarge`(≈14) + 淡色
                         //   （原来又小又淡，主人这一批"整理 UI"里点过它）
-                        style: theme.textTheme.labelLarge?.copyWith(color: d.muted),
+                        style: dshTextStyle(look.scale.at(DshTypes.s), p.labelSecondary),
                       ),
                       style: TextButton.styleFrom(
                         // D3.6：命中区 ≥44
@@ -350,7 +382,7 @@ class AnswerBubble extends StatelessWidget {
                   if (message.ended && message.reason != null && message.reason != 'completed')
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
-                      child: Text('（这条没说完）', style: theme.textTheme.bodySmall),
+                      child: Text('（这条没说完）', style: smallStyle),
                     ),
                 ],
               ),

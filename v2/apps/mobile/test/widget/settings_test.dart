@@ -69,6 +69,29 @@ Future<void> goTab(WidgetTester tester, String tab) async {
   await tester.pumpAndSettle();
 }
 
+/// **像用户那样滚到「这个助手」那一块**（批次 4 起这一步是必须的）。
+///
+/// ⚠️ 为什么：`lib/screens/settings_screen.dart` 的聊天那一屏上面多了
+///    **「这块窗口」那张卡**（外观 / 字号，契约 `docs/dev/119`）⇒
+///    「关于 / 退出登录」那一段落到了折叠线以下，而 `ListView`
+///    **不会把屏幕外的孩子建出来** ⇒ 不滚的话 `find.text(settingsAboutSection)`
+///    一个都找不到（这正是"用户得滚一下才看得见"）。
+/// ⚠️ 指名道姓到**那一屏的内容列**（`credTab:聊天` 里的那个 `Scrollable`）：
+///    `SettingsScreen` 里第一个 `Scrollable` 是 `TabBar` 自己那一行（横滚）。
+Future<void> scrollToAbout(WidgetTester tester) async {
+  await tester.scrollUntilVisible(
+    find.text(settingsAboutSection),
+    240,
+    scrollable: find
+        .descendant(
+          of: find.byKey(const ValueKey('credTab:$credTabChat')),
+          matching: find.byType(Scrollable),
+        )
+        .first,
+  );
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('① 四个 tab 都在，顺序＝主人说的那样', (tester) async {
     await pump(tester);
@@ -195,6 +218,8 @@ void main() {
 
   testWidgets('⑦ 关于 / 退出登录还在（第一屏底下）；退出登录**仍然是红的**', (tester) async {
     await pump(tester);
+    // ⚠️ 批次 4：这一块现在在这一屏的**下面**了 ⇒ 像用户那样先滚过去。
+    await scrollToAbout(tester);
     expect(find.text(settingsAboutSection), findsOneWidget);
     expect(find.text('关于'), findsOneWidget);
     expect(find.text(aboutEntryHint), findsOneWidget);
@@ -204,6 +229,7 @@ void main() {
 
   testWidgets('⑧ 分区标题是"黑 + 加粗"，**不是**强调色（那看着像警告）', (tester) async {
     await pump(tester);
+    await scrollToAbout(tester);
     final title = tester.widget<Text>(find.text(settingsAboutSection));
     expect(title.style?.color, d.ink, reason: '分区名要稳 —— 红色的意思留给"退出登录"这类事');
     expect(title.style?.color, isNot(d.accent));

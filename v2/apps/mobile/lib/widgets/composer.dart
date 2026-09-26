@@ -11,14 +11,26 @@
 //
 // 另一条：**打字框永远不许锁**（D5.14）。
 // 09 是"网好时打字、出电梯才发"——把他锁住等于毁掉唯一顺畅的用法。
+//
+// ── ★ 批次 4：这一条的**字**与**色**跟着聊天窗口那两轴走（契约 `docs/dev/119`）──
+// 用户那个 12–17 只影响**聊天内容** ⇒ 框里自己打的字（以及草稿那一段预览）
+// 用 `scale.at(DshTypes.s)`（= `calc(14px + Δ)`，默认档下还是 14）。
+// ⚠️ 其余那几行（"正在听…"/一句白话）是**窗口的零件**，字号照旧跟系统缩放走
+//    （DSH 那条"字体设置只影响会话内容"就是这条边界）；颜色则一律从色板来
+//    —— 暗色下 `d.muted` / `d.ink` 压在新底上读不出来。
+// ⚠️ 它在浮窗**里面**，所以 `Theme.of(context)` 已经是聊天窗口那一份
+//    （`appearance_scope.dart` 的 `chatThemeOf`）；这里的显式取色只是为了
+//    那几处**原来写死暖色**（`d.accent` / `d.muted`）的地方跟上去。
 
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import '../models/dsh_design.dart';
 import '../models/hearing_session.dart';
 import '../models/hearing_words.dart';
 import '../models/speak_words.dart';
 import '../models/space_words.dart';
+import 'dsh_look.dart';
 
 class Composer extends StatefulWidget {
   /// ⚠️ **刻意没有 `enabled` 参数**——手册 D5.14 说"打字框永远不许锁"。
@@ -227,6 +239,9 @@ class _ComposerState extends State<Composer> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // ★ 批次 4：用户选的外观与字号（没有 scope 时退回默认档 —— 单看这一条的判据不受影响）。
+    final look = DshLook.of(context);
+    final p = look.palette;
     // 框里有字 ⇒ 不画草稿条（同一句话不许画两遍）
     final showDraft =
         (widget.draft?.isNotEmpty ?? false) && _controller.text.isEmpty;
@@ -239,12 +254,12 @@ class _ComposerState extends State<Composer> {
           // ── **上面那条草稿**（主人 2026-09-22）──────────────────
           //   规则：**框是空的、而且本机存着一份草稿**时才出现。
           //   ⚠️ 一旦他开始打字（框里有字），这条就收起来 —— 不然同一句话画两遍。
-          if (showDraft) _draftStrip(theme),
+          if (showDraft) _draftStrip(theme, look),
           // 一句白话（有才画）——例如"这里开不了麦"
-          if (_notice.isNotEmpty) _noticeStrip(theme),
+          if (_notice.isNotEmpty) _noticeStrip(theme, look),
           // ★ **正在听 / 为什么停了**（2026-09-24：只剩这一行 —— 字直接落进框里）
           if (widget.hearing.busy || widget.hearing.notice.isNotEmpty)
-            _hearingStrip(theme),
+            _hearingStrip(theme, look),
           // ★ 2026-09-24：**这一条现在只有一行**（主人：*"我们做成一行"*）——
           //   `[在哪儿说话] [框（右边里头是话筒）] [发送]`
           Row(
@@ -261,12 +276,12 @@ class _ComposerState extends State<Composer> {
               //   `suffixIcon`（见 `_field`）。**没有"语音档"了**：按一下就开始听、
               //   字直接落进这个框、再按一下结束。
               // ★ 框（**话筒在它里面的右侧** —— 主人 2026-09-24）
-              Expanded(child: _field()),
+              Expanded(child: _field(look)),
               const SizedBox(width: 4),
               // ★ **发送**（主人 2026-09-24：*"聊天框右侧应该是一个发送按钮。一开始是灰色的。"*）
               //   ⚠️ 这一条**推翻了 2026-09-23 那个"有字才画"**（那也是主人拍的板）：
               //      现在它**一直在**，没字时是灰的、按不动 —— 位置固定，界面不跳（D4.8）。
-              _sendButton(theme),
+              _sendButton(theme, p),
             ],
           ),
         ],
@@ -275,27 +290,28 @@ class _ComposerState extends State<Composer> {
   }
 
   /// 草稿条：**说清这是你打了一半的字**，并给两条出路（接着写 / 不用了）。
-  Widget _draftStrip(ThemeData theme) => Padding(
+  Widget _draftStrip(ThemeData theme, DshLook look) => Padding(
     padding: const EdgeInsets.only(bottom: 8),
     child: Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
       decoration: BoxDecoration(
-        color: d.card,
+        color: look.palette.bgLayer2,
         borderRadius: BorderRadius.circular(d.radiusField),
-        border: Border.all(color: d.line),
+        border: Border.all(color: look.palette.borderL2),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             composeDraftTitle,
-            style: theme.textTheme.labelLarge?.copyWith(color: d.accent),
+            style: dshTextStyle(look.scale.at(DshTypes.sStrong), look.palette.stateBusiness),
           ),
           const SizedBox(height: 4),
           Text(
             widget.draft!,
-            style: theme.textTheme.bodyMedium?.copyWith(color: d.ink),
+            // 这一段是他自己打了一半的字 ⇒ 它属于"内容"，跟着用户字号走。
+            style: dshTextStyle(look.scale.at(DshTypes.s), look.palette.labelPrimary),
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),
@@ -321,18 +337,21 @@ class _ComposerState extends State<Composer> {
   );
 
   /// **一句白话**（例如"这里开不了麦"）：一行、淡色、不占地方。
-  Widget _noticeStrip(ThemeData theme) => Padding(
+  Widget _noticeStrip(ThemeData theme, DshLook look) => Padding(
     padding: const EdgeInsets.only(bottom: 8),
     child: Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       decoration: BoxDecoration(
-        color: d.accentTint,
+        // ⚠️ 原来这里用暖色那套的 `accentTint`：暗色下它是一块亮橙，
+        //    压在新底上比正文还抢眼 ⇒ 换成"这一档的淡底 + 描边"。
+        color: look.palette.bgLayer2,
         borderRadius: BorderRadius.circular(d.radiusField),
+        border: Border.all(color: look.palette.borderL2),
       ),
       child: Text(
         _notice,
-        style: theme.textTheme.bodySmall?.copyWith(color: d.accent),
+        style: theme.textTheme.bodySmall?.copyWith(color: look.palette.labelSecondary),
       ),
     ),
   );
@@ -346,13 +365,20 @@ class _ComposerState extends State<Composer> {
   /// ⚠️ **话筒在框里面**（`suffixIcon`）：它在，就一定点得到（命中区 ≥44）；
   ///    **开不了麦也画它**（点下去说一句白话 —— 2026-09-23 主人问过"为什么录音的
   ///    icon 没有"，藏起来的那个决定是坏的）。
-  Widget _field() => TextField(
+  Widget _field(DshLook look) => TextField(
     controller: _controller,
     focusNode: _focus,
     enabled: true, // ★ 永远不锁（D5.14）
     minLines: 1,
     maxLines: 6,
     textInputAction: TextInputAction.send,
+    // ★ 批次 4：**框里那几个字**是聊天内容 ⇒ 字号从用户那条轴来
+    //   （`DshTypes.base` = 16/24，**默认档下与改前逐像素相同** —— 只有用户
+    //    真去调字号时才动。⚠️ 别改成 14：那会让输入条矮 6 像素，而时间线的
+    //    `followSlack`（160）正好卡在它的 `maxScrollExtent` 上 —— 6 像素就够
+    //    让 a11y 那条"先把时间线拉回最上面"的判据失效，见 `docs/dev/119` §六）。
+    style: dshTextStyle(look.scale.at(DshTypes.base), look.palette.labelPrimary),
+    cursorColor: look.palette.stateBusiness,
     // ★ **点了打字框 ⇒ 告诉上层"把窗口打开"**（主人 2026-09-22：
     //   *"点击说点什么，聊天窗口会自动打开。"*）
     onTap: widget.onFocused,
@@ -360,6 +386,7 @@ class _ComposerState extends State<Composer> {
     onSubmitted: (_) => _submit(),
     decoration: InputDecoration(
       hintText: widget.hint ?? '说点什么',
+      hintStyle: dshTextStyle(look.scale.at(DshTypes.base), look.palette.labelTertiary),
       border: const OutlineInputBorder(),
       isDense: true,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
@@ -372,8 +399,8 @@ class _ComposerState extends State<Composer> {
           // ★ **读出来**（主人 2026-09-23 定案：替掉原来演示用的「听筒 / 扬声器」）。
           //   契约 `docs/dev/68-SPEAK.md`。**念不了就不画**（界面上不许有按不动的东西）。
           //   2026-09-24：它原来住在"语音档"里，那一档没了 ⇒ 跟话筒一起住在框里。
-          if (widget.canSpeak) _speakerButton(),
-          _micButton(),
+          if (widget.canSpeak) _speakerButton(look.palette),
+          _micButton(look.palette),
         ],
       ),
     ),
@@ -384,7 +411,7 @@ class _ComposerState extends State<Composer> {
   /// 按一下**开始听**、再按一下**结束**；正在听时它是红的、图形换成"停"。
   /// ⚠️ `canHear` 假 ⇒ **照样画**，点下去说一句白话（`hearCantHere`）——
   ///    不装开麦、不进语音档、不出假字。
-  Widget _micButton() {
+  Widget _micButton(DshPalette p) {
     final busy = widget.hearing.busy;
     return IconButton(
       tooltip: busy ? hearStop : hearStart,
@@ -398,18 +425,19 @@ class _ComposerState extends State<Composer> {
       },
       icon: Icon(
         busy ? Icons.stop_circle_outlined : Icons.mic_none,
-        color: busy ? d.accent : d.muted,
+        // ★ 批次 4：暗色下 `d.accent` / `d.muted` 压在新底上读不出来 ⇒ 走色板。
+        color: busy ? p.stateError : p.labelTertiary,
       ),
     );
   }
 
   /// **读出来**那个开关（设备级偏好，状态住上层）。
-  Widget _speakerButton() => IconButton(
+  Widget _speakerButton(DshPalette p) => IconButton(
     tooltip: widget.autoSpeak ? speakAutoHintOn : speakAutoHintOff,
     onPressed: () => widget.onToggleAutoSpeak?.call(!widget.autoSpeak),
     icon: Icon(
       widget.autoSpeak ? Icons.volume_up : Icons.volume_off_outlined,
-      color: widget.autoSpeak ? d.accent : d.muted,
+      color: widget.autoSpeak ? p.stateBusiness : p.labelTertiary,
     ),
   );
 
@@ -419,7 +447,7 @@ class _ComposerState extends State<Composer> {
   ///    ⚠️ 位置与大小**固定 48×48**：它要是一会儿有一会儿没有，框的宽度就会跳
   ///      —— 那是 D4.8 一种病（界面自己抖）。
   /// ⚠️ 只有这一小块跟着输入变（`ValueListenableBuilder`）—— **框本身不重建**。
-  Widget _sendButton(ThemeData theme) => SizedBox(
+  Widget _sendButton(ThemeData theme, DshPalette p) => SizedBox(
     width: 48,
     height: 48,
     child: ValueListenableBuilder<TextEditingValue>(
@@ -440,10 +468,13 @@ class _ComposerState extends State<Composer> {
             tooltip: '发送',
             style: IconButton.styleFrom(
               minimumSize: const Size(48, 48),
-              backgroundColor: canSend ? theme.colorScheme.primary : d.line,
-              disabledBackgroundColor: d.line,
-              foregroundColor: canSend ? theme.colorScheme.onPrimary : d.muted,
-              disabledForegroundColor: d.muted,
+              // ★ 批次 4：主按钮色走 DSH 的 brand（近黑/近白），不是 Material 那个蓝。
+              //   前景色跟着**这一档主题的** `onPrimary`（亮=白 / 暗=近黑）——
+              //   两处各写一份迟早会漂，所以只认主题那一个（`appearance_scope` 拼的）。
+              backgroundColor: canSend ? p.brandPrimary : p.borderL1,
+              disabledBackgroundColor: p.borderL1,
+              foregroundColor: canSend ? theme.colorScheme.onPrimary : p.labelCaption,
+              disabledForegroundColor: p.labelCaption,
             ),
           ),
         );
@@ -456,9 +487,10 @@ class _ComposerState extends State<Composer> {
   /// 🔴 2026-09-24：原来它是一大块（"语音档"里那个卡片 + 大按钮），现在**只剩这一行** ——
   ///    识别出来的字**直接落进框里**（`_pushMirror`），屏幕上的字只有一份。
   /// ⚠️ **"正在听"这三个字只在真的在听时出现**（D5.13：不录音时禁用"听"字）。
-  Widget _hearingStrip(ThemeData theme) {
+  Widget _hearingStrip(ThemeData theme, DshLook look) {
     final h = widget.hearing;
     final live = h.listening;
+    final p = look.palette;
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
@@ -467,14 +499,14 @@ class _ComposerState extends State<Composer> {
             Text(
               '●',
               style: theme.textTheme.labelSmall?.copyWith(
-                color: live ? d.accent : d.muted,
+                color: live ? p.stateError : p.labelTertiary,
               ),
             ),
             const SizedBox(width: 6),
             Text(
               live ? hearListening : hearFinishing,
               style: theme.textTheme.labelSmall?.copyWith(
-                color: live ? d.accent : d.muted,
+                color: live ? p.stateError : p.labelTertiary,
               ),
             ),
             const SizedBox(width: 8),
@@ -485,7 +517,7 @@ class _ComposerState extends State<Composer> {
               h.notice,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall?.copyWith(color: d.muted),
+              style: theme.textTheme.bodySmall?.copyWith(color: p.labelSecondary),
             ),
           ),
         ],

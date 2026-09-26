@@ -14,9 +14,10 @@
 // 颜色 / 字号 / 行高 / 间距 / 发丝线全部来自 `models/dsh_design.dart`
 // （那一份顶上写着数值是哪来的：DSH 真包解出来的 token）。这一份里**没有一个写死的数**
 // —— `design_tokens_test.dart` 那条棘轮盯着（新文件的上限是 0 处）。
-// ⚠️ 样式换算那一小层（`DshType` → `TextStyle`）与 `tool_row_view.dart` 里那份
-//    **逐字一样**：两份 widget 各留一份是刻意的（那是私有的，抽公共件要动
-//    批次 1 已经落地的文件；等有第三处用它时再抽）。
+// ⚠️ `DshType` → `TextStyle` 那一小层与"色板 ＋ 用户字号轴"都走
+//    `widgets/dsh_look.dart`：批次 4 起它是**唯一**的取值口（`appearance_scope`
+//    把用户选的外观与字号传下来）——原来这一份自己抄了一小份 `_QueueLook`，
+//    用户字号一接上就会变成"这一块不跟着设置走"，所以那一份**删掉**了。
 //
 // ── 三条硬约束 ────────────────────────────────────────────
 //   ① **有界 ≠ 截断**：两条以上时列表有最高高度（`dshQueueListMaxHeight`），
@@ -34,47 +35,11 @@ import 'package:flutter/material.dart';
 import '../models/chat_queue.dart';
 import '../models/dsh_design.dart';
 import '../models/queue_words.dart';
+import 'dsh_look.dart';
 
 /// 判据用的键：那条横条本体 / 两条以上时那个抬头。
 const Key queueStripKey = Key('queue-strip');
 const Key queueHeaderKey = Key('queue-header');
-
-/// ── 一小层样式换算（DshType → TextStyle；一个数都不写死）──────
-/// （与 `widgets/tool_row_view.dart` 里那份同一个形状 —— 见文件头那条说明）
-
-FontWeight _weightOf(int w) => switch (w) {
-  500 => FontWeight.w500,
-  600 => FontWeight.w600,
-  700 => FontWeight.w700,
-  _ => FontWeight.w400,
-};
-
-TextStyle _styleOf(DshType t, Color color) => TextStyle(
-  fontSize: t.size,
-  height: t.lineHeight / t.size,
-  fontWeight: _weightOf(t.weight),
-  color: color,
-);
-
-/// 这一屏的色板 ＋ 用户字号轴。
-class _QueueLook {
-  const _QueueLook(this.palette, this.scale);
-
-  final DshPalette palette;
-  final DshContentScale scale;
-
-  static _QueueLook of(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    // ⚠️ 字号这一批**还没有用户设置**（115 丙-8 才有）⇒ 走默认档（同 `tool_row_view`）。
-    return _QueueLook(dshPaletteFor(dark: dark), dshContentScale(null));
-  }
-
-  /// 那一行正文字号（DSH 正文 14/24，跟着用户字号轴走）。
-  DshType get content => scale.content;
-
-  /// 抬头/注脚那一档（DSH 二级台阶 13/20）。
-  DshType get caption => scale.secondaryAt(DshTypes.xs);
-}
 
 /// **排队那条横条**（渲染在输入条**上面**、浮窗里面）。
 ///
@@ -103,7 +68,7 @@ class _QueueStripState extends State<QueueStrip> {
     final items = widget.queue.items;
     // 🔴 `rowCount === 0 → null`（DSH 原话）：空的时候**什么都不画**。
     if (items.isEmpty) return const SizedBox.shrink();
-    final look = _QueueLook.of(context);
+    final look = DshLook.of(context);
     final p = look.palette;
     final multi = items.length > 1;
     // 一条 ⇒ 直接内联；两条以上 ⇒ 抬头说了算。
@@ -141,7 +106,7 @@ class _QueueStripState extends State<QueueStrip> {
   }
 
   /// 两条以上时那个抬头（点它展开 / 收起）。
-  Widget _header(_QueueLook look, int count) {
+  Widget _header(DshLook look, int count) {
     final p = look.palette;
     return SizedBox(
       width: double.infinity,
@@ -168,7 +133,7 @@ class _QueueStripState extends State<QueueStrip> {
               child: Text(
                 queueCountHeader(count),
                 overflow: TextOverflow.ellipsis,
-                style: _styleOf(look.content, p.labelSecondary),
+                style: dshTextStyle(look.content, p.labelSecondary),
               ),
             ),
             // 抬头那一颗也带一句读屏/悬停的话（它是"点开会发生什么"）。
@@ -183,7 +148,7 @@ class _QueueStripState extends State<QueueStrip> {
   }
 
   /// 一行 = 那句话（一行、超出省略号）＋ 撤掉那颗按钮。
-  Widget _row(_QueueLook look, ChatQueueItem item) {
+  Widget _row(DshLook look, ChatQueueItem item) {
     final p = look.palette;
     return Padding(
       padding: const EdgeInsets.only(left: DshSpace.s8),
@@ -199,7 +164,7 @@ class _QueueStripState extends State<QueueStrip> {
               item.text,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: _styleOf(look.content, p.labelSecondary),
+              style: dshTextStyle(look.content, p.labelSecondary),
             ),
           ),
           // 撤掉这颗**是真按钮**：命中区由 Material 撑着（D3.6 ≥44）。

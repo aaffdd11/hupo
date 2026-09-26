@@ -174,6 +174,44 @@ const String aboutEntryHint = '它的能力、记忆和边界';
 /// 设置里那一条：退出登录（原来挂在聊天抓手行上）。
 const String settingsLogout = '退出登录';
 
+// ── ★ 批次 4：「这块窗口」那一组（外观 / 字号 · 契约 `docs/dev/119`）────────
+//
+// 主人 2026-09-26：*"首先全部开放，聊天窗口的设计也要重做。"* —— DSH 的设置里
+// 只有**两样**跟外观有关（`115-raw/A-layout.md` §470 逐字：*"Two settings only:
+// color scheme + content font size (integer 12–17px, default 14px, stepper)"*）
+// ⇒ 这一组就那两行。
+//
+// ⚠️ 三档的名字（亮 / 暗 / 跟随系统）住在 `models/appearance.dart` 的枚举上
+//    （与 `chat_view.dart` 的 `tab`、`process_levels.dart` 的 `title` 同一条纪律：
+//    **用户会看到的字要进得了禁用词那道扫描**），所以这里没有第二份。
+// ⚠️ 这里每一句都**没有内部词**：说的是"这块窗口""字"，不是"主题 / 字号档位 / 客户端"。
+
+/// 那一组的小标题（第三个分区）。
+///
+/// ⚠️ 说"**这块窗口**"而不是"外观"：它管的是**聊天那一扇窗**，
+///    首页 / 登录 / 设置页自己**一个像素都不变**（`119` §五 那条边界）。
+const String settingsAppearanceSection = '这块窗口';
+
+/// 那一行：三选一（亮 / 暗 / 跟随系统）。
+const String settingsAppearanceLabel = '外观';
+
+/// 「外观」下面那句说明（**如实说边界**：只改这一扇窗）。
+const String settingsAppearanceHint = '只改聊天这扇窗口，别的页面不变。';
+
+/// 那一行：字号（12–17，步进器）。
+const String settingsFontSizeLabel = '字号';
+
+/// 字号那一行下面那句说明（**如实说边界**：只管聊天里的字 —— 与 DSH 逐字同一条）。
+const String settingsFontSizeHint = '只影响聊天里的字，别处不变。';
+
+/// 字号那一行下面**实时预览**用的那句（它自己**就按当前字号画**）。
+/// ⚠️ 这就是"改一下马上看得见"那件事在**屏幕上**的证据 —— 不许换成一张静止的图。
+const String settingsFontSizePreview = '这一行就是聊天里的字。';
+
+/// 步进器两颗按钮的说明（读屏 / 悬停看得见；它们本身没有可见的字）。
+const String settingsFontSizeSmaller = '字小一点';
+const String settingsFontSizeBigger = '字大一点';
+
 /// 钥匙那一段的小标题。
 const String configKeySection = '你那串钥匙';
 

@@ -197,3 +197,21 @@ Stack(fit: StackFit.expand)
 仍受与 `116`/`117` 同一条限制：Flutter 画布里的合成手势送不进去，
 所以它由 `test/widget/trajectory_view_test.dart`（6 条，真渲染树）与
 `test/widget/accessibility_test.dart`（＋20 实例，五档）兜着。
+
+---
+
+## 附：**"屏幕那一张图"到底怎么才能拍到**（三次尝试的负结果，2026-09-26 记）
+
+批 1/2/3 都欠同一张图（浮窗展开后的那一屏）。这一轮把能试的都试了，**都没成**，记下来免得下一个人重走：
+
+| # | 办法 | 结果 |
+|---|---|---|
+| 1 | 打开无障碍语义树后，对 `aria-label` 含「展开」的 `flt-semantics` 调 `el.click()` | 报"点了"，**屏幕逐像素不变**（两张 PNG 同 sha） |
+| 2 | `--click-at 578,453`（真 CDP 鼠标事件，打在手抓那条杠上） | 截图仍是收起态 |
+| 3 | 对同一个节点补 `pointerdown/pointerup/mousedown/mouseup/click` 一整串 | 语义树里**仍然只有「展开」「发送」两个节点** ⇒ 没有展开 |
+
+⇒ **结论**：Flutter web 画布**只收滚轮**（本仓库早就记过：`flt-glass-pane` 上派 `WheelEvent` 有效、指针无效）。
+要拿到那张图，只有两条路：**（甲）**给客户端加一个"启动时展开"的调试开关（要改产品代码，得主人点头）；
+**（乙）**在探针里用 CDP 的 `Input.dispatchKeyEvent`/`Input.dispatchTouchEvent` 走真浏览器输入（本仓库的
+`check-web-browser.mjs` 今天只封装了 `--eval` 与 `--click-at`，要扩）。
+⚠️ 在那之前，这一屏的渲染继续由 **widget 判据**（真渲染树、五档字号）兜着 —— 那不是"看过一眼"，**不许当成看过**。
