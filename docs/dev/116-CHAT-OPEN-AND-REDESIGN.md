@@ -117,3 +117,27 @@
 ⚠️ **本批明确不做**（第二批起，见 `115` §六·丙-5…丙-8）：
 左栏房间/会话树 · 右栏文件与预览 · **Trajectory** 视图 · **Queue / Steer** 两档输入语义 ·
 亮/暗主题开关与字号设置（token 与轴已经就位）· 待办/目标的显示位置调整。
+
+---
+
+## 三、真机读数（2026-09-26 · 临时核心 ＋ 真跑一个 agent ＋ 真浏览器）
+
+**这一趟不花一个 token**：用一个**临时核心**（`HUPO_DATA=/tmp/hupo116/data`、`HUPO_PORT=18777`、
+`HUPO_WEB=` 已构建的客户端、`DSH_HOME=/tmp/hupo116/dsh`）＋ 一个**真被 spawn 的假 harness**
+（`test/fake-agent.mjs`，`FAKE_SCENARIO=tool-write`，走真 stdio JSON-RPC）＋ **真 `/api/say`** ＋
+**真浏览器**（`scripts/check-web-browser.mjs`）。读完即收（那个临时核心按 pid 精确收掉 —— **线上那台没碰**）。
+
+| 读数 | 值 |
+|---|---|
+| 一轮下来的事件序列（盘上） | `user/echo · tool/call · task/mutated · message/start · message/text · turn/usage · message/end` |
+| `tool/call` 那一帧原话 | `{"type":"tool/call","turn":1,"step":1,"callId":"call_write_3","name":"write","title":null,"args":"{}","bytes":2,"truncated":false,"seq":2}` |
+| `turn/usage` 那一帧原话 | `{"type":"turn/usage","turn":1,"usage":{"input":10,"output":5,"cacheRead":85,"cacheWrite":null,"reasoning":null},"complete":true,"seq":6}` |
+| 浏览器 | 那条流 **1 条 socket / 断 0 次**；收到 **8 帧**；**客户端认出的类型里含 `tool/call` 与 `turn/usage`**（说明新接线在真浏览器里真的活了，不只是单测） |
+| 反例（正对照） | 推理原文**没有**出现在盘上/重放里（同一条判据在 `test/process-level.test.js` 里逐字钉着） |
+
+⚠️ **还欠一个"像素级"读数**：浮窗默认是**收起态**，而 Flutter 画布里的手势**送不进去**
+（本仓库早就记过：合成指针事件对 `flt-glass-pane` 无效；只有无障碍语义节点能点）。
+语义树里只找得到「展开」「发送」两个节点，点「展开」那一下在这一次没把浮窗打开
+⇒ **"展开后的那一屏长什么样"这张图我没拍到**。它由 `test/widget/tool_rows_test.dart`（6 条，含
+五档字号下的真实布局）与 `test/widget/accessibility_test.dart`（＋35 实例）在**真渲染树**上兜着；
+**屏幕上的那一眼**要等一次真人会话（或者下一个人补一个能点开浮窗的探针）。
