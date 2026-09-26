@@ -71,6 +71,18 @@ import { FAILED_LINES } from './notice.js';
 // ★ **计划条**（主人 2026-09-23 要的「目标 / 任务列表」）：把 harness 自己的
 //   `todo/write` 快照与 `goal/change` 翻成**人话**再发出去。**工具名 / 内部 id 不发**。
 import { PLAN_EVENT, goalFromChange, planIsEmpty, todosFromWrite } from './plan.js';
+// ★ **`116`：工具行 / 每轮用量 / 系统提示词**（主人 2026-09-26：*"首先全部开放"*）。
+//   这一层的活是**把它摊开**：工具名、一句话标题、有界入参、有界输出摘要、
+//   每轮 token、模型看到的系统提示词 —— 都走**持久**事件（有号、落盘、翻页拿得到），
+//   形状与边界住 `src/tool-rows.js`（**唯一出处**，纯函数、可逐字钉住）。
+import {
+  MAX_SYSTEM_PROMPT_CHARS,
+  clip,
+  foldUsage,
+  resultExcerpt,
+  toolArgsSummary,
+  toolTitleFor,
+} from './tool-rows.js';
 
 /**
  * 被截断时补的那句话。
@@ -507,6 +519,11 @@ export class TurnTranslator extends EventEmitter {
         //   ⚠️ 走**瞬态**：不占号、不落盘 —— 见文件头 ④。
         this.#emitStep(type, data);
         break;
+      case 'system/message':
+        // ★ **`116`：模型看到的那段系统提示词**（主人：*"首先全部开放"*）。
+        //   有界（`MAX_SYSTEM_PROMPT_CHARS`）＋ 如实报 `bytes`/`truncated`。
+        this.#onSystemMessage(data);
+        break;
       default:
         // 其它（request/*、permission/*、sandbox/*、agent/inbox/*…）安静忽略
         break;
@@ -564,6 +581,28 @@ export class TurnTranslator extends EventEmitter {
   #onToolResult(data) {
     const turn = data?.turn;
     if (typeof turn !== 'number') return;
+    // ★★ **`116`：这一行的"成败 + 输出摘要"**（同 `#onToolCall` 那条：早退之前）。
+    {
+      const step = typeof data?.step === 'number' ? data.step : null;
+      const callId = typeof data?.callId === 'string' ? data.callId : null;
+      const out = resultExcerpt(data?.message);
+      const err = data?.error ?? null;
+      const errText = typeof err?.message === 'string' && err.message !== ''
+        ? err.message
+        : typeof err?.name === 'string' && err.name !== '' ? err.name : null;
+      const ok = err === null || err === undefined;
+      this.emitToolRow({
+        type: 'tool/result',
+        turn,
+        step,
+        callId,
+        ok,
+        error: ok ? null : clip(errText ?? '工具报错了', 400).text,
+        excerpt: out.excerpt,
+        bytes: out.bytes,
+        truncated: out.truncated,
+      });
+    }
     const name = typeof data?.step === 'number' ? this.#stepTools.get(`${turn}:${data.step}`) : undefined;
     // ★ **P2-8：出网留痕**（主人 2026-09-25）。⚠️ 放在"这一轮还在账上"那道判断
     //   **之前**：留痕记的是**已经发生过的**那次出网，与"出处要不要贴到气泡上"无关。
@@ -620,6 +659,28 @@ export class TurnTranslator extends EventEmitter {
   #onToolCall(data) {
     const turn = data?.turn;
     if (typeof turn !== 'number') return;
+    // ★★ **`116`：这一行就是"那次工具调用"本身**（主人 2026-09-26：*"首先全部开放"*）。
+    //    🔴 **放在所有早退之前** —— 早退管的是"这一轮要不要报 mutated / 类别"，
+    //       与"这一行要不要给人看"是两件事（改前那些 `return` 会把工具行吞掉）。
+    //    ⚠️ **持久**（`emit`）＝有号、落盘、翻页/重连都拿得到；有界见 `tool-rows.js`。
+    {
+      const step = typeof data?.step === 'number' ? data.step : null;
+      const name = typeof data?.name === 'string' ? data.name : '';
+      if (name !== '') {
+        const args = toolArgsSummary(data?.arguments);
+        this.emitToolRow({
+          type: 'tool/call',
+          turn,
+          step,
+          callId: typeof data?.callId === 'string' ? data.callId : null,
+          name,
+          title: toolTitleFor(name, data?.arguments),
+          args: args.text,
+          bytes: args.bytes,
+          truncated: args.truncated,
+        });
+      }
+    }
     // ★ **这一步用的是哪件工具**：`tool/result` 上**没有工具名**（实测），
     //   而"出处"只认 `web_search` / `web_fetch` ⇒ 名字只能在这一侧配上去。
     //   ⚠️ 键与 `#seenSteps` 同款（`turn:step`）⇒ 收尾时一起清。
@@ -654,6 +715,49 @@ export class TurnTranslator extends EventEmitter {
     const state = stepStateForTool(name);
     if (state === null) return;
     this.#timeline.emitTransient({ type: 'step/start', turn, step, state });
+  }
+
+  /**
+   * ★★ **`116`：工具行 / 系统提示词行那一刀**（主人 2026-09-26：*"首先全部开放"*）。
+   *
+   * 🔴 **`emit`（持久），不是 `emitTransient`** —— 这三样都是"这条会话发生过的事"：
+   *    翻页、重连、切回这一间都要拿得到（与 `message/*` 同一条纪律）。
+   * ⚠️ 有界、如实报 `bytes`/`truncated`：边界与形状住 `src/tool-rows.js`（唯一出处）。
+   * ⚠️ 它**不认识档位**（`level`）：档位是每条连接的事，闸在 `server.js` 那一侧
+   *    （与 `step/*` 同一条分层 —— 见文件头 ④）。
+   */
+  emitToolRow(event) {
+    if (!event?.type) return null;
+    try {
+      return this.#timeline.emit(event);
+    } catch (err) {
+      // ⚠️ 落盘失败**不许把这一轮带走**（S1：失败要上抛给"谁接"，但这条是旁路观感，
+      //    主流程的可见性由 `message/*` 保证）—— 如实记一句，继续。
+      this.emit('tool-row-error', err);
+      return null;
+    }
+  }
+
+  /**
+   * ★ **`116`：模型看到的那段系统提示词**（每一条非空的 `system/message` 一次）。
+   *
+   * 🔴 有界：超了只留前 `MAX_SYSTEM_PROMPT_CHARS` 个字，并**如实**写 `bytes`/`truncated`
+   *    （界面上要能说出"这条被截了"）。
+   * ⚠️ 与推理原文不同：这是**模型输入的一部分**，DSH 自己的会话日志里本来就有它。
+   */
+  #onSystemMessage(data) {
+    const raw = data?.message;
+    let text = '';
+    if (typeof raw === 'string') text = raw;
+    else if (Array.isArray(raw?.content)) {
+      text = raw.content.filter((b) => typeof b?.text === 'string').map((b) => b.text).join('\n');
+    } else if (typeof raw?.text === 'string') text = raw.text;
+    if (text.trim() === '') return;
+    const bytes = Buffer.byteLength(text, 'utf8');
+    const c = clip(text, MAX_SYSTEM_PROMPT_CHARS);
+    const turn = typeof data?.turn === 'number' ? data.turn : null;
+    const step = typeof data?.step === 'number' ? data.step : null;
+    this.emitToolRow({ type: 'system/prompt', turn, step, text: c.text, bytes, truncated: c.truncated });
   }
 
   /**
@@ -738,6 +842,9 @@ export class TurnTranslator extends EventEmitter {
         // ★ **D 期：这一轮把话交出去了**（`MessageWriter.handoff()` 成功 ⇒ true）。
         //   收口那条路要看它：交出去的那条消息**不许在本间收口**（D-4 / D-8）。
         handedOff: false,
+        // ★ **`116`：这一轮每一次尝试的用量**（`assistant/message.usage`）。
+        //   收口时按 DSH 那条规矩折：**任何一次没报准 ⇒ 整块不画**（`foldUsage`）。
+        usages: [],
       });
     }
     this.emit('turn-start', turn);
@@ -811,6 +918,11 @@ export class TurnTranslator extends EventEmitter {
     const rec = this.#turns.get(turn);
     if (typeof turn !== 'number') return;
 
+    // ★ **`116`：这一轮每一次尝试的用量**（收口时按 DSH 那条规矩折，见 `foldUsage`）。
+    //   ⚠️ 放在下面所有早退**之前**：只有推理段、或者文本为空的那几次尝试，
+    //      也照样"报过用量"——不记的话收口时会误判成"有一次没报准"。
+    if (rec) rec.usages.push(data?.usage ?? null);
+
     const content = data?.message?.content;
     if (!Array.isArray(content)) return;
 
@@ -862,6 +974,14 @@ export class TurnTranslator extends EventEmitter {
     const rec = this.#turns.get(turn);
     if (!rec) return;
     this.#turns.delete(turn); // ★ 用 turn 删 —— 键和存的时候一致
+
+    // ★ **`116`：这一轮的用量**（一次一条，持久）。
+    //   🔴 **DSH 那条规矩**：任何一次尝试没报准 ⇒ `complete:false` ＋ `usage:null`
+    //      —— **宁可整块不画，也不给半个总数**（判据在 `test/tool-rows.test.js`）。
+    {
+      const folded = foldUsage(rec.usages);
+      this.emitToolRow({ type: 'turn/usage', turn, usage: folded.usage, complete: folded.complete });
+    }
 
     const kind = data?.reason?.kind ?? 'completed';
     // ★ **D 期：这一轮把话交出去了**（`handoff()` 成功 ⇒ `rec.handedOff`）。

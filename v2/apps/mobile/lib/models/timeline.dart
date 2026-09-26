@@ -14,6 +14,7 @@
 import 'message_state.dart';
 import 'notice.dart';
 import 'process_words.dart';
+import 'tool_row.dart';
 
 /// 一条时间线条目。`seq` 是服务端发的号；本地乐观发言借用"当前最大号"。
 sealed class TimelineItem {
@@ -191,6 +192,59 @@ class TimelineNotice extends TimelineItem {
   NoticeUndo? get undo => (notice.undo?.usable ?? false) ? notice.undo : null;
 }
 
+// ── 开出来的那三样（`116` · 主人 2026-09-26：*"首先全部开放"*）──────
+//
+// 服务端把**工具调用 / 模型看到的系统提示词 / 每一轮的 token** 也发上来了
+// （`tool/call` · `tool/result` · `system/prompt` · `turn/usage`；都是**持久**事件，
+// 带号、落盘、翻页拿得到 —— 引擎在 `v2/services/core/src/tool-rows.js`）。
+// 这一层只做一件事：**把它们当事实收进同一条日志**（排序、去重、隐藏、复位都照旧）。
+//
+// 🔴 **这里不做"消息配对"**（协议 R1 那条禁令还在：客户端不判断哪句该配哪句）。
+//    工具行那一步是**认领身份**：`tool/result` 拿服务端给的 `callId` 找回**同一次调用**
+//    那一行、就地补上结果（和 `user/echo` 认领本地那条乐观发言是同一个姿势）。
+//    行的位置**不动**（还是 `tool/call` 那个 `seq`）⇒ "一条日志按 `(seq, tie)` 排"不变。
+
+/// 时间线上的一次**工具调用**（`tool/call` → 一行；`tool/result` 回来就地补上）。
+class TimelineToolCall extends TimelineItem {
+  TimelineToolCall({required this.row, required super.seq});
+
+  /// 那一行的全部内容（`ToolRow.parse` 出来的纯值）。
+  ///
+  /// ⚠️ **可变**：结果那一半到的时候**换掉它**（不是再插一行）——
+  ///    换上去之后这行的 `seq` 还是调用那一个，位置一动都不动。
+  ToolRow row;
+
+  /// 配对用的身份（服务端给的）。
+  String get callId => row.callId;
+
+  /// 挂在哪一轮（折叠按它分组）。
+  int get turn => row.turn;
+}
+
+/// 时间线上的一条**系统提示词**（`system/prompt`）。
+///
+/// ⚠️ 它是"**模型看到了什么**"的唯一凭据 ⇒ 逐字存着，一个字都不改
+///    （`SystemPromptRow` 顶上那条：截断/改写的提示词行比没有更坏）。
+class TimelineSystemPrompt extends TimelineItem {
+  const TimelineSystemPrompt({required this.row, required super.seq});
+
+  final SystemPromptRow row;
+
+  int get turn => row.turn;
+}
+
+/// 时间线上的一条**用量**（`turn/usage`；一轮**一次尝试**一条）。
+///
+/// ⚠️ 它自己**不直接画**：账要**折过**才画（`foldTurnUsage`：任何一次没报准 ⇒ 整块不画），
+///    由界面那一层在"这一轮的页脚"画一行。它进日志是为了**取号、落盘、翻页拿得到**。
+class TimelineTurnUsage extends TimelineItem {
+  const TimelineTurnUsage({required this.attempt, required super.seq});
+
+  final TurnUsageAttempt attempt;
+
+  int get turn => attempt.turn;
+}
+
 /// 过程里的**一步**（第 ③ 档「步骤流水」，契约 §三 `step/*`）。
 ///
 /// ⚠️ **瞬态**：不占号、不落盘（决策 P-g）⇒ 它**不是**时间线条目，
@@ -285,6 +339,12 @@ List<TurnGroup> turnGroupsOf(Iterable<TimelineItem> items) {
         continue; // 分隔线不属于任何一轮
       case TimelineNotice():
         continue; // 通知也不属于任何一轮（它没有 messageId，删的是"话"）
+      case TimelineToolCall():
+      case TimelineSystemPrompt():
+      case TimelineTurnUsage():
+        // ★ `116` 那三样是**过程内容**，不是"谁说的话" ⇒ 不属于任何一轮
+        //   （它们没有 messageId，删除那条路碰不到它们）。
+        continue;
     }
   }
   return groups;
@@ -358,6 +418,20 @@ class Timeline {
   /// ⚠️ 它同样是"只在内存里"（不占号、不进存储）。
   String _pendingReasoning = '';
 
+  /// **结果先到、调用还没到**的那几条 `tool/result`（键 = `callId`）。
+  ///
+  /// ⚠️ 为什么会有这种顺序：`tool/call` 与 `tool/result` 之间可能**隔着一次翻页**
+  ///    （往上翻是一页一页取的，切口正好落在两者之间；本机缓存那 200 条的裁剪
+  ///    也可能把调用那条挤掉）。那时先到的是结果。
+  /// ⚠️ 不能直接丢掉它：调用那条**晚一步**（翻到更早那一页时）到了之后，
+  ///    没有它这一行会**永远停在"在跑"** —— 那是屏幕上说假话。
+  /// ⚠️ **有界**：认不出对应调用的结果最多留 [maxPendingToolResults] 条
+  ///    （先来先丢）—— 坏帧 / 协议异常不许把内存撑爆。
+  final Map<String, Map<String, dynamic>> _pendingToolResults = {};
+
+  /// [Timeline._pendingToolResults] 的上限。
+  static const int maxPendingToolResults = 64;
+
   /// 服务端说了"它断了 / 接不上活" ⇒ **那一轮已经死了**。
   ///
   /// ⚠️ 为什么要单独一个标志：`_hasOpenAssistant` 那条兜底（给断线重连用的）
@@ -419,6 +493,13 @@ class Timeline {
   /// 已收到的最大服务端号。**补发就从它开始要**。
   int get lastSeq => _lastSeq;
 
+  /// **已经收口到的最高轮号**（`≤` 它的轮都不再动了）。
+  ///
+  /// ⚠️ 过程折叠要它：一轮**收口之后**那些工具行才折起来（还在跑时展开着 —— DSH 同一条）。
+  ///    收口事件里没有 `turn`（见 [_closedThrough]），所以这是一个"见到的最大轮号"的近似；
+  ///    现实中轮是串行的（一次只有一轮在跑）⇒ 这个近似是准的。
+  int get closedThrough => _closedThrough;
+
   /// **我手上最老那一号**（往前翻的游标；一条都没有 ⇒ `null`）。
   ///
   /// ⚠️ 用 `_seenSeq` 而不是"第一个条目"：条目里有日期行那种没有号的装饰，
@@ -458,6 +539,12 @@ class Timeline {
   ///
   /// ⚠️ 藏起来的若是**还开着的那条**（它正在说），过程那一块也跟着撤：
   ///    步骤流水是"那一轮的事"，那一轮被删了还留在屏幕上是在说一件没发生的事。
+  ///
+  /// ⚠️ **`116` 的工具行藏不掉**（这一批有意留的缺口，如实写在这里）：
+  ///    墓碑事件给的是 `messageIds`，而工具行**没有 `messageId`**，客户端也没有
+  ///    "哪一轮 = 哪条消息"的映射（`message/start` 不带 `turn`）⇒ 删一轮之后
+  ///    那一轮的工具行**仍留在屏幕上**。要收口得让服务端在墓碑事件里带上 `turn`
+  ///    （或让 `message/*` 带 `turn`）—— 那时这一段才有依据去藏。
   void hideMessages(Iterable<String> messageIds) {
     final ids = _ids(messageIds);
     if (ids.isEmpty) return;
@@ -600,6 +687,27 @@ class Timeline {
           seq: rawSeq,
           catchUp: catchUp,
         ));
+      // ── ★ `116` 那三样（主人 2026-09-26：*"首先全部开放"*）──────────
+      //
+      // ⚠️ 四条都是**持久**事件（服务端 `Timeline.emit`：有号、落盘、翻页/重连拿得到）
+      //    ⇒ 它们走的就是这条"带 seq"的路（和 `message/*` 同一条纪律）。
+      // ⚠️ 认不出来的 payload 一律**安静丢掉**（`ToolRow.parse` / `…parse` 返回 `null`）：
+      //    坏数据的后果只许是"这一行不画"，**绝不能是"打不开聊天"**。
+      case 'tool/call':
+        _applyToolCall(event, rawSeq);
+      case 'tool/result':
+        _applyToolResult(event, rawSeq);
+      case 'system/prompt':
+        final p = SystemPromptRow.parse(event);
+        // 空的那条**不占一行**（DSH：非空的 `system/message` 才有一行）
+        if (p == null || p.text.isEmpty) return;
+        _items.add(TimelineSystemPrompt(row: p, seq: rawSeq));
+      case 'turn/usage':
+        final u = TurnUsageAttempt.parse(event);
+        // `usage:null, complete:false` 那条是**合法的**（"这一轮没报用量"）——
+        // 它照样进日志（取号、落盘），只是折出来是 `null` ⇒ 界面上一行都不画。
+        if (u == null) return;
+        _items.add(TimelineTurnUsage(attempt: u, seq: rawSeq));
       // ── 系统通知（契约 `29-NOTICE.md` 约束 2：**时间线里必须有那一条**）──
       //
       // ⚠️ `text` **由服务端给、客户端照抄**（§五 🔴）——这里一个字都不重写。
@@ -660,6 +768,75 @@ class Timeline {
       state: MessageState.confirmed,
     ));
   }
+
+  /// `tool/call`：**新增一行**（结果那一半可能已经在 [_pendingToolResults] 里等着）。
+  ///
+  /// ⚠️ `ToolRow.parse` 认不出来（缺 `callId`/`name`/`turn`/`step`）⇒ **不画**
+  ///    （fail-closed：猜一个成败/名字画到屏幕上比少一行更坏）。
+  void _applyToolCall(Map<String, dynamic> event, int seq) {
+    final callId = event['callId'];
+    final pending = callId is String ? _pendingToolResults.remove(callId) : null;
+    final row = ToolRow.parse(event, pending);
+    if (row == null) return;
+    // ★ 之前可能已经画过"**只有结果那一行**"（合同 `116` §一 规矩 4）——
+    //   配对之后那两半是**一行**：**就地换掉它**（位置改成**调用**那个 `seq` ——
+    //   结果那一行的位置排晚了）。已有的那一行（有名字的）⇒ 幂等，不再插一条。
+    for (var i = 0; i < _items.length; i += 1) {
+      final it = _items[i];
+      if (it is! TimelineToolCall || it.callId != row.callId) continue;
+      if (it.row.name.isEmpty) _items[i] = TimelineToolCall(row: row, seq: seq);
+      return;
+    }
+    _items.add(TimelineToolCall(row: row, seq: seq));
+  }
+
+  /// `tool/result`：**就地补上结果**（认领身份，不是再插一行 —— 见那三样顶上那段）。
+  ///
+  /// ⚠️ 找不到对应调用（翻页 / 缓存裁剪把调用那条隔掉了）⇒ **先把结果那一行画出来**
+  ///    （合同 `116` §一 规矩 4：配不上就只画结果那一行），并把它记进
+  ///    [_pendingToolResults]，等调用那条晚一步到了再换成一整行。
+  ///    直接丢的后果是那一行**永远看不见**，而屏幕上那句话是**真发生过**的。
+  void _applyToolResult(Map<String, dynamic> event, int seq) {
+    final callId = event['callId'];
+    if (callId is! String || callId.isEmpty) return;
+    for (final it in _items) {
+      if (it is! TimelineToolCall || it.callId != callId) continue;
+      if (it.row.name.isEmpty) {
+        // 已经画着"只有结果那一行" ⇒ 换掉它（同名同 seq，位置不动）
+        final only = ToolRow.parseResultOnly(event);
+        if (only != null) it.row = only;
+      } else {
+        // 已经有那一行（有名字的调用）⇒ 补上结果。
+        // ⚠️ 结果坏了（`ok` 不是布尔 / `bytes` 读不出）⇒ `parse` 返回 `null`
+        //    ⇒ **行不动**（宁可留着"在跑"，也不猜一个成败）。
+        final next = ToolRow.parse(_callPayloadOf(it), event);
+        if (next != null) it.row = next;
+      }
+      return;
+    }
+    // 还没有那一行：**先画结果那一行**（名字那一格空着 —— 不猜），并记着等调用那条。
+    final only = ToolRow.parseResultOnly(event);
+    if (only != null) _items.add(TimelineToolCall(row: only, seq: seq));
+    // ⚠️ 有界（先来先丢），坏帧不许把内存撑爆。
+    _pendingToolResults[callId] = event;
+    while (_pendingToolResults.length > maxPendingToolResults) {
+      _pendingToolResults.remove(_pendingToolResults.keys.first);
+    }
+  }
+
+  /// 从已经建好的那一行反推出 `tool/call` 的 payload（结果回来时要重新 parse 一对）。
+  ///
+  /// ⚠️ 只 {@link ToolRow.parse} 认那几个字段；`at` 这类**不参与绘制**的字段丢了没关系
+  ///    （它们本来也不进 `ToolRow`）。
+  static Map<String, dynamic> _callPayloadOf(TimelineToolCall it) => {
+        'type': 'tool/call',
+        'turn': it.row.turn,
+        'step': it.row.step,
+        'callId': it.row.callId,
+        'name': it.row.name,
+        'title': it.row.title,
+        'args': it.row.args,
+      };
 
   /// 瞬态：只改状态，**不新增条目**（决策 P-g）。
   void _applyTransient(Map<String, dynamic> event) {
@@ -837,6 +1014,10 @@ class Timeline {
     // 过程（步骤 + 还没挂上去的那段推理）跟着一起清
     _steps.clear();
     _pendingReasoning = '';
+    // ★ `116`：还没配上的那几条工具结果也一起清 —— 它们是"上一个世界"的残留
+    //   （清掉会丢的只是"那一行暂时还停在在跑"，而留着会把上一屏的结果
+    //    配到重放之后新出现的一行上 —— 那才是真的配错）。
+    _pendingToolResults.clear();
     // ⚠️ 推理原文的**终点就在这儿**：重放（服务端说号不对了）与退出登录
     //    都走 `reset()`，而它本来就不该存在于任何地方（契约 §二）。
     //    气泡本身已经被上面清掉了（只留用户自己没确认的那几句），

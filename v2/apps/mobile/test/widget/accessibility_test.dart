@@ -35,6 +35,8 @@ import 'package:hupo_app/models/source_words.dart';
 import 'package:hupo_app/models/speak_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/timeline.dart';
+import 'package:hupo_app/models/tool_row.dart';
+import 'package:hupo_app/models/tool_row_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/widgets/bubbles.dart';
@@ -443,6 +445,123 @@ Future<ChatController> _processController() async {
   return c;
 }
 
+// ── ★ `116`：工具行 / 系统提示词行 / 每轮用量 / 过程折叠（主人 2026-09-26）────
+//
+// ⚠️ 和关于页 / 过程四档同一条理由：**新加的界面必须也过这两道硬闸**
+//    （五档不溢出 + 命中区 ≥44），不然"五档不溢出"会随时间失效。
+// ⚠️ 四条新事件都走**真入口**（`controller.ingest`）—— 不直接 pump 那几个 widget：
+//    那样它底下没有聊天屏，量的就不是用户真会看到的那棵树。
+// ⚠️ 两种状态各量一次：**还在跑**（工具行直接摆着）与**收口了**（折成一个控件）——
+//    它们是两套控件（IconButton vs TextButton），只量一种会漏掉另一种的命中区。
+
+/// **只有工具行那一格**（那一轮还在跑）。
+///
+/// ⚠️ **一格一个控制器**（不把三样塞进同一屏）：3.1x 下 `ListView` 是懒加载的，
+///    一屏塞不下时**后面那几格根本不会被 build**，闸就量了个空
+///    （实测栽过：3.1x 下 `find.text('bash')` 一个都没有）。一格一屏最稳。
+/// ⚠️ 前面也不放用户那条气泡（同一个理由）。
+ChatController _toolRowOnly() {
+  final c = _trashController();
+  c.ingest({'type': 'message/status', 'turn': 1, 'state': 'started'});
+  c.ingest({
+    'type': 'tool/call',
+    'seq': 2,
+    'turn': 1,
+    'step': 1,
+    'callId': 'c_1',
+    'name': 'bash',
+    'title': '跑一下测试',
+    'args': '{"command":"ls -la"}',
+  });
+  c.ingest({
+    'type': 'tool/result',
+    'seq': 3,
+    'turn': 1,
+    'step': 1,
+    'callId': 'c_1',
+    'ok': true,
+    'excerpt': 'a.txt\nb.txt\nc.txt',
+    'bytes': 1234,
+    'truncated': true,
+  });
+  return c;
+}
+
+/// **只有系统提示词那一格**。
+ChatController _systemPromptOnly() {
+  final c = _trashController();
+  c.ingest({
+    'type': 'system/prompt',
+    'seq': 4,
+    'turn': 1,
+    'step': 1,
+    'text': '你是琥珀。\n第二行。',
+    'bytes': 9999,
+    'truncated': true,
+  });
+  return c;
+}
+
+/// **只有用量那一行**（五个桶都报 ⇒ 那一行最长的那一档）。
+ChatController _usageOnly() {
+  final c = _trashController();
+  c.ingest({
+    'type': 'turn/usage',
+    'seq': 1,
+    'turn': 1,
+    'usage': {'input': 800, 'output': 434, 'cacheRead': 900, 'cacheWrite': 20, 'reasoning': 5},
+    'complete': true,
+  });
+  return c;
+}
+
+/// 同一轮**收口了**：工具行折成那一个控件（后面跟着它的用量行）。
+ChatController _foldedOnly() {
+  final c = _toolRowOnly();
+  c.ingest({'type': 'message/start', 'seq': 5, 'messageId': 'm_1'});
+  c.ingest({'type': 'message/text', 'seq': 6, 'messageId': 'm_1', 'block': 'quick', 'text': '这周 7 小时。'});
+  c.ingest({
+    'type': 'turn/usage',
+    'seq': 7,
+    'turn': 1,
+    'usage': {'input': 800, 'output': 434, 'cacheRead': 900},
+    'complete': true,
+  });
+  c.ingest({'type': 'message/end', 'seq': 8, 'messageId': 'm_1', 'reason': 'completed'});
+  return c;
+}
+
+/// 折叠控件上那句字（**从文案源算**，不手抄 —— 手抄会漂）。
+String _foldLabel() => dshTurnProcessLabel(
+  const TurnProcess(toolCalls: 1, messages: 0, subagents: 0),
+  turnProcessChatWords,
+);
+
+/// **像用户那样**把时间线拉回最上面。
+///
+/// ⚠️ 必须的一步：打开就停在最新那一条（`27-SCROLL.md`），3.1x 下头几格会被
+///    滚出视口 ⇒ `ListView` 不建它们 ⇒ 这几道闸就成了空转。
+///    顺手把 `_userScrolledAway` 立起来，免得跟随又把人拽回底部。
+Future<void> _toTop(WidgetTester tester) async {
+  await tester.drag(find.byType(ListView), const Offset(0, 4000));
+  await tester.pumpAndSettle();
+}
+
+/// **像用户那样**把工具行展开（点它右边那个箭头）。
+///
+/// ⚠️ 这一步是**必须**的：收起时那两块正文根本不在树里，不展开就量不到
+///    "入参/输出/截断那句"在五档字号下会不会溢。
+Future<void> _expandToolRow(WidgetTester tester) async {
+  await tester.tap(find.byIcon(Icons.keyboard_arrow_right).first);
+  await tester.pumpAndSettle();
+  // 负向对照：**那段正文真的画出来了**才算数
+  expect(
+    find.text(toolTruncatedLine(1234)),
+    findsOneWidget,
+    reason: '★ 展开之后"已截断"那句没进这棵树 ⇒ 这道闸量的是收起的样子',
+  );
+}
+
 /// 一份"什么内容都有"的时间线：四态、快答+深答、标记、断了的那条。
 void _stuff(Timeline t) {
   t.addLocalUtterance('帮我把这周工时记一下', 'u_1');
@@ -750,6 +869,42 @@ void main() {
         final c = await _processController();
         await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
         expect(_drain(tester), isEmpty, reason: '过程那一块在 ${s}x 溢出了');
+      });
+
+      testWidgets('主界面 @ ${s}x（工具行 —— 116 新加的·展开着）', (tester) async {
+        final c = _toolRowOnly();
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        await _toTop(tester);
+        // 负向对照：**那一行真的画出来了**才算数（没画出来的话这道闸扫的是别的屏）
+        expect(find.text('bash'), findsOneWidget, reason: '★ 工具行没进这棵树 ⇒ 这道闸扫错了屏');
+        await _expandToolRow(tester);
+        expect(_drain(tester), isEmpty, reason: '工具行（展开）在 ${s}x 溢出了');
+      });
+
+      testWidgets('主界面 @ ${s}x（系统提示词行 —— 116 新加的）', (tester) async {
+        final c = _systemPromptOnly();
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        await _toTop(tester);
+        expect(find.text(systemPromptTitle), findsOneWidget, reason: '★ 系统提示词那一行没进这棵树');
+        expect(_drain(tester), isEmpty, reason: '系统提示词行在 ${s}x 溢出了');
+      });
+
+      testWidgets('主界面 @ ${s}x（每轮用量那一行 —— 116 新加的）', (tester) async {
+        final c = _usageOnly();
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        await _toTop(tester);
+        expect(find.textContaining(turnUsageUnit), findsOneWidget, reason: '★ 用量那一行没进这棵树');
+        expect(_drain(tester), isEmpty, reason: '用量那一行在 ${s}x 溢出了');
+      });
+
+      testWidgets('主界面 @ ${s}x（过程折起来那一条 —— 116 新加的）', (tester) async {
+        final c = _foldedOnly();
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        await _toTop(tester);
+        expect(find.text(_foldLabel()), findsOneWidget, reason: '★ 折叠控件没进这棵树');
+        // 负向对照：折起来就必须**真的少画**（不然量的是"没折"的样子）
+        expect(find.text('bash'), findsNothing, reason: '★ 折起来之后那一行不该还在树里');
+        expect(_drain(tester), isEmpty, reason: '折叠控件在 ${s}x 溢出了');
       });
 
       testWidgets('主界面 @ ${s}x（出处那几行拉满 —— 2026-09-23 新加的）', (tester) async {
@@ -1249,6 +1404,37 @@ void main() {
         //    两个按钮的命中区都要 ≥44（这是他真要按下去的那一下）。
         await _openJobAsk(tester, s);
         await sweep(tester, '派活确认层 @${s}x');
+      });
+
+      testWidgets('工具行的展开按钮（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ `116`：那一格里的 `IconButton`（展开/收起）必须进这份扫描 ——
+        //    不然它的命中区没有任何东西守着（D3.6 就是"命中区 ≥44"）。
+        //    ⚠️ **不展开**：展开那块正文里没有按钮，而展开会把时间线拉高 ⇒
+        //       `ensureVisible` 一滚、懒加载就把快照里的控件换掉了（那条路实测会翻车）。
+        final c = _toolRowOnly();
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        await _toTop(tester);
+        expect(find.text('bash'), findsOneWidget, reason: '★ 工具行没进这棵树');
+        await sweep(tester, '工具行 @${s}x');
+      });
+
+      testWidgets('系统提示词行的展开按钮（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ `116`：另一个 `IconButton`（同一个形状、另一格）—— 单独量一次。
+        final c = _systemPromptOnly();
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        await _toTop(tester);
+        expect(find.text(systemPromptTitle), findsOneWidget, reason: '★ 系统提示词那一行没进这棵树');
+        await sweep(tester, '系统提示词行 @${s}x');
+      });
+
+      testWidgets('过程折叠控件（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ `116`：折起来那一条是**另一个控件**（通栏 `TextButton`）——
+        //    不单独泵一次的话，它的命中区没人量。
+        final c = _foldedOnly();
+        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
+        await _toTop(tester);
+        expect(find.text(_foldLabel()), findsOneWidget, reason: '★ 折叠控件没进这棵树');
+        await sweep(tester, '折叠控件 @${s}x');
       });
     }
 

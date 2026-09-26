@@ -33,6 +33,7 @@ import 'stream.dart';
 import 'stream_uri.dart';
 import '../models/scope.dart';
 import '../models/token_sub.dart';
+import '../models/tool_row.dart';
 import 'timeline_store.dart';
 import 'token_store.dart';
 
@@ -444,6 +445,50 @@ class ChatController extends ChangeNotifier {
   /// ⚠️ **推理原文不算在内**：它挂在气泡上、由 `_render` 那条路画，
   ///    不在尾巴上（批 3 改过一次，见 `AssistantMessage.reasoning`）。
   bool get hasProcess => agentLine != null || steps.isNotEmpty;
+
+  // ── ★ `116`：工具行 / 系统提示词 / 每轮用量 / 过程折叠（主人 2026-09-26）──
+  //
+  // 那一批的事实现在**就住在同一条时间线里**（`TimelineToolCall` /
+  // `TimelineSystemPrompt` / `TimelineTurnUsage`，见 `models/timeline.dart`）。
+  // 这里只补三个**给界面用的纯查询** —— 判断（折几行、显不显示用量）都留在
+  // `models/tool_row.dart` 那两个纯函数里（所以它们进得了 `test/unit`）。
+
+  /// **已经收口到的最高轮号**（`≤` 它的轮才算"做完了"）。
+  ///
+  /// ⚠️ 折叠要它：**收口之后**那些工具行才折（还在跑时展开着 —— DSH 同一条）。
+  int get closedThrough => timeline.closedThrough;
+
+  /// 这一轮里的**工具行**（按时间线顺序）。
+  ///
+  /// ⚠️ 取的是**画得出来的那些**（`items`：本间 + 翻上来的老页 + 带过来的那句），
+  ///    和屏幕上看到的**同一份** —— 从这里另推一份清单就迟早会漂。
+  List<TimelineToolCall> toolRowsOfTurn(int turn) => [
+    for (final it in items)
+      if (it is TimelineToolCall && it.turn == turn) it,
+  ];
+
+  /// 这一轮的过程计数（`dshTurnProcessLabel` 就是拿它拼那一行字）。
+  ///
+  /// ⚠️ **消息数这一档今天恒为 0**（如实说，不是漏了）：
+  ///    DSH 那一档数的是"**严格早于最终答案那一步**、且有正文的助手消息"，
+  ///    而我们的 `message/start` / `message/end` **不带 `turn`/`step`**
+  ///    ⇒ 客户端算不出"哪条消息是哪一步的"。`fold` 收到空 `replySteps` ⇒ messages = 0，
+  ///    于是那一行**永远不会出现"N 条消息"**（宁可不显示，也不编一个数）。
+  ///    要补上它，得让服务端在 `message/*` 上带 `turn`/`step`（现在没有）。
+  TurnProcess processOfTurn(int turn) => TurnProcess.fold(
+    rows: [for (final it in toolRowsOfTurn(turn)) it.row],
+    turn: turn,
+  );
+
+  /// 这一轮**折出来的**用量；`null` = **一个数都不许画**。
+  ///
+  /// ⚠️ **折**（不是拿一条就画）：`foldTurnUsage` 的规矩是"任何一次尝试没报准 ⇒ 整块不画"；
+  ///    服务端今天一轮只发一条（它自己已经折过），但客户端**照同一条规矩再折一遍** ——
+  ///    这样"重发 / 多次尝试"那一天的形状不用改界面。
+  TurnUsage? turnUsage(int turn) => foldTurnUsage([
+    for (final it in items)
+      if (it is TimelineTurnUsage && it.turn == turn) it.attempt,
+  ]);
 
   /// **现在这一份计划**（harness 自己的目标 / 任务清单）—— 没有就 `null`。
   ///

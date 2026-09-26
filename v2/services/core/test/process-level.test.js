@@ -2,11 +2,16 @@
 //
 // 这一篇守两件**最容易做错、代价最大**的事：
 //
-//   ① 🔴 **泄露闸**（契约 §二）：推理原文与步骤是**瞬态**的 ——
+//   ① 🔴 **泄露闸**（契约 §二）：**推理原文与步骤**是**瞬态**的 ——
 //      新连接 `sinceSeq=0` 重放**拿不到一个字节**，盘上的日志也**grep 不到**。
 //      为什么这么贵：`emit()` 会落盘，而新连接会 replay 全部历史 ⇒
-//      一段走了 `emit()` 的推理原文，**以后每个连上来的人都能拿到**，
-//      而它可能含系统提示词片段（`08-SPEC.md` §4.4 / D7.4）。
+//      一段走了 `emit()` 的推理原文，**以后每个连上来的人都能拿到**。
+//      ★ **`116`（2026-09-26 主人："首先全部开放"）改了这条闸的另一半**：
+//        **工具名 / 入参 / 输出摘要 / 每轮用量 / 系统提示词** 从"内部词，一个字节都不许出去"
+//        改成 **持久事件**（有号、落盘、翻页与重连都拿得到）——契约 `docs/dev/116`。
+//        ⇒ 这一份判据现在钉的是**两件事同时成立**：
+//          · 推理原文与 `step/*` **仍然**一个字节都不落盘；
+//          · 工具行那几样**必须**落盘（否则"全部开放"是假的）。
 //
 //   ② **四档那道闸只管"过程"这一路**（`server.js` `levelAllows`）。
 //      这条是**踩过坑补的**：早先写成白名单，默认档把 `user/echo`、
@@ -35,6 +40,8 @@ import {
 
 /** 那一段**绝不许出去**的推理原文（grep 用它）。 */
 const SECRET = '推理原文样本-别让任何人看见-7f3a9c';
+/** `116`：系统提示词那一段（它**应该**落盘 —— "全部开放"）。 */
+const SYS_PROMPT = '系统提示词样本-该落盘-116';
 /** 它**应该**落盘（正对照：证明"grep 不到"不是因为什么都没写）。 */
 const VISIBLE = '好的，我查到了。';
 
@@ -124,22 +131,33 @@ function feedOneTurn(t, { name = 'web_search' } = {}) {
 
 // ── 一、🔴 泄露闸 ────────────────────────────────────────────
 
-test('🔴 泄露闸（盘）：推理原文与工具名**一个字节都不落盘**（正对照：正文在）', () => {
+test('🔴 泄露闸（盘）：推理原文与步骤**仍然**不落盘；而工具行/用量**必须**落盘（`116` 全部开放）', () => {
   const b = bench();
   feedOneTurn(b.translator);
+  b.translator.handle({ event: { type: 'system/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: SYS_PROMPT }] } } } });
 
   const raw = disk(b);
   assert.ok(raw.includes(VISIBLE), '★ 正对照：它说的话**应该**在盘上（否则"grep 不到"是假绿）');
   assert.ok(!raw.includes(SECRET), '★ 推理原文绝不许落盘 —— 它会 replay 给每一个新连接');
-  assert.ok(!raw.includes('web_search'), '★ 工具名是内部词，落盘就会被 replay 到界面上');
   assert.ok(!raw.includes('step/start'), '★ 步骤是过程噪音，也不许落盘');
+  // ★ `116`：这三样**必须**在盘上（主人 2026-09-26：*"首先全部开放"*）
+  assert.ok(raw.includes('web_search'), '★ 工具名要落盘（不然"全部开放"是假的）');
+  assert.ok(raw.includes('"type":"tool/call"'), '★ 工具行要落盘（有号、翻页拿得到）');
+  assert.ok(raw.includes('"callId":"call_1"'), '★ callId 要在（结果行靠它配回调用行）');
+  assert.ok(raw.includes('"type":"turn/usage"'), '★ 每轮用量要落盘');
+  assert.ok(raw.includes(SYS_PROMPT), '★ 系统提示词要落盘');
+  // ⚠️ 反着验：这条闸不是恒真 —— 认不出的档/TYPE 不会被顺手写进去
+  assert.ok(!raw.includes('reasoning/delta'), '★ 推理那一路仍然一个字节都不许落盘');
 });
 
-test('🔴 泄露闸（重放）：新连接 `sinceSeq=0` 一条推理原文都收不到', async () => {
+test('🔴 泄露闸（重放）：新连接 `sinceSeq=0` 收不到推理原文；但**收得到工具行**（`116`）', async (t) => {
   const b = bench();
   feedOneTurn(b.translator);
 
   const srv = await serveOn(b);
+  // ⚠️ 收尾挂在 `t.after` 上：断言失败也要把这个服务关掉 ——
+  //    否则一个挂着的 HTTP server 会让整个测试文件**永远不退出**（2026-09-26 真栽过一次）。
+  t.after(() => srv.close());
   // ⚠️ 用**默认档**连：这一条要证明的是"盘上根本没有"，
   //    而不是"某一档把它挡了"（档位是第二道，不是地基）。
   const { ws, frames } = await wsConnect(srv.wsUrl, { token: srv.token, sinceSeq: 0 });
@@ -149,10 +167,12 @@ test('🔴 泄露闸（重放）：新连接 `sinceSeq=0` 一条推理原文都�
   const blob = JSON.stringify(frames);
   assert.ok(!blob.includes(SECRET), '★ 重放里绝不许有推理原文');
   assert.ok(!frames.some((f) => f.type === 'reasoning/delta'), '★ 一条都没有');
-  assert.ok(!blob.includes('web_search'), '★ 工具名也不许重放出去');
+  assert.ok(!blob.includes('step/start'), '★ 步骤也不许重放（它没落盘）');
   // 正对照：重放**确实**把落盘的东西给了（不然上面几条可能是"什么都没发"）
   assert.ok(blob.includes(VISIBLE), '★ 正对照：落盘的正文必须在重放里');
-  await srv.close();
+  // ★ `116`：工具行这一半**必须**在重放里（默认档也要给 —— 它不是"过程"那一档的事）
+  assert.ok(blob.includes('web_search'), '★ 工具名要在重放里');
+  assert.ok(frames.some((f) => f.type === 'tool/call'), '★ 工具行要在重放里');
 });
 
 // ── 二、四档那道闸 ──────────────────────────────────────────

@@ -59,6 +59,7 @@ import '../widgets/composer.dart';
 import '../widgets/notice.dart';
 import '../widgets/process_level_menu.dart';
 import '../widgets/process_view.dart';
+import '../widgets/tool_row_view.dart';
 import '../widgets/trash_plan_sheet.dart';
 import 'discover_screen.dart';
 import 'export_screen.dart';
@@ -201,6 +202,84 @@ class _ChatScreenState extends State<ChatScreen> {
   ///    ⇒ **打开就停在最老那一条**。判据本身搬去了 `models/scroll_follow.dart`。
   bool _userScrolledAway = false;
 
+  // ── ★ `116`：过程折叠（DSH 的 `turn-process` 控件 · 主人 2026-09-26）────
+
+  /// **时间线那一块**（自动折叠要问它"键盘焦点在不在里面"，见 [_focusInTranscript]）。
+  final _transcriptKey = GlobalKey();
+
+  /// **用户自己展开过的那几轮**（键 = 轮号）。
+  ///
+  /// ⚠️ 语义只有这一条：**收口之后默认折起来，用户点开过就展开**
+  ///    （`_applyAutoFold` 只在"这一轮第一次收口"那一下动它一次 —— 之后听用户的）。
+  /// ⚠️ 换房间要清（轮号在两间里各自从 1 开始 ⇒ 不清会把 A 间展开过的第 3 轮
+  ///    带到 B 间去）。
+  final Set<int> _unfoldedTurns = {};
+
+  /// **已经为哪几轮做过"收口那一下"的决定**（各只做一次）。
+  final Set<int> _autoFoldApplied = {};
+
+  /// 时间线那一块的 [FocusManager] 监听（焦点离开时要补做那次"迟到的折叠"）。
+  ///
+  /// ⚠️ 为什么要监听焦点：自动折叠撞上焦点在里面时**必须推迟**（见 [_applyAutoFold]），
+  ///    而"焦点什么时候走"不是一个滚动/控制器事件 —— 不监听就再也没有第二次机会。
+  void _onFocusChanged() => _applyAutoFold(widget.controller);
+
+  /// **自动折叠一次**（每轮只在收口那一下做一次）。
+  ///
+  /// 🔴 **硬规矩：自动折叠绝不许吃掉键盘焦点**（DSH `B-render.md` §2.3：
+  ///    *"if it would, the group stays open and focus stays put"*）。
+  ///    做法：收口那一下如果焦点**就在这一屏里**（比如用户正把光标停在某个
+  ///    工具行的展开按钮上），就**这一轮保持展开**、并记下"已决定"——
+  ///    人还在那儿，东西不许在他眼皮底下消失。
+  ///
+  /// ⚠️ **没做到 DSH 那条"上面还有更早的就不折"**（诚实说清缺什么）：
+  ///    DSH 的 `historyIncomplete = hasMore` 是一个**权威的**"更早还有没有"，
+  ///    它从会话窗口（翻页游标 + 服务端的 projection）直接读得到。
+  ///    我们这一侧**没有这样一个权威的 hasMore**：`ChatController.olderExhausted`
+  ///    只在**用户真的往上翻过一次之后**才有意义（在那之前它恒为 false —— 谁都没问过）。
+  ///    ⇒ 按"不知道就不假装知道"：**不拿它当折叠闸**。拿它当闸的后果是
+  ///    "用户不往上翻，屏幕上的过程行就永远不折"——那不是 DSH 那条规矩，是我们编的。
+  ///    要补上它，得让服务端在流/接口上给一个权威的"更早还有没有"（今天没有）。
+  void _applyAutoFold(ChatController c) {
+    final closed = c.closedThrough;
+    if (closed <= 0) return;
+    final pending = <int>[
+      for (final it in c.items)
+        if (it is TimelineToolCall && it.turn <= closed && _autoFoldApplied.add(it.turn)) it.turn,
+    ];
+    if (pending.isEmpty) return;
+    if (_focusInTranscript()) {
+      // 焦点还在里面 ⇒ 这一轮**保持展开**（人还在看/在操作）。
+      _unfoldedTurns.addAll(pending);
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// **键盘焦点现在在不在时间线里**。
+  ///
+  /// ⚠️ 论"在不在"要**沿祖先走**（`primaryFocus.context` 是那个具体控件，
+  ///    不是时间线本身）；只看"有没有焦点"会把**输入框里打字**（最常见的那档）
+  ///    误判成"焦点在过程里"，于是永远不折 —— 那是把这条规矩用反了。
+  bool _focusInTranscript() {
+    final focusCtx = FocusManager.instance.primaryFocus?.context;
+    final root = _transcriptKey.currentContext;
+    if (focusCtx == null || root == null) return false;
+    if (identical(focusCtx, root)) return true;
+    var inside = false;
+    focusCtx.visitAncestorElements((e) {
+      if (identical(e, root)) {
+        inside = true;
+        return false;
+      }
+      return true;
+    });
+    return inside;
+  }
+
+  /// 这一轮的过程行**现在折起来了吗**（收口 + 用户没展开过）。
+  bool _processFolded(int turn, int closedThrough) =>
+      turn <= closedThrough && !_unfoldedTurns.contains(turn);
+
   // ── 多选态（契约 `docs/dev/106-CHAT-SELECT.md` §一）──────────────
 
   /// 现在在不在**多选态**（点了菜单里那个【多选】之后）。
@@ -228,11 +307,14 @@ class _ChatScreenState extends State<ChatScreen> {
     // ⚠️ **首屏也要跟一次**：本机缓存那一屏（`17-LOCAL-FIRST.md`）可能
     //    在挂载之前就已经在控制器里了，那时 `_onChanged` 一次都不会触发。
     WidgetsBinding.instance.addPostFrameCallback((_) => _followBottom());
+    // ★ `116`：焦点离开时间线时，把那次"因为焦点在里面而推迟的折叠"补上。
+    FocusManager.instance.addListener(_onFocusChanged);
   }
 
   @override
   void dispose() {
     widget.controller.removeListener(_onChanged);
+    FocusManager.instance.removeListener(_onFocusChanged);
     // 离开这一屏 ⇒ 把「我自己那台」那一头收干净（对面就不会留一个孤儿进程）
     _closeHarness();
     _scroll.dispose();
@@ -241,6 +323,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _onChanged() {
     if (!mounted) return;
+    // ★ `116`：先做"这一轮收口了没有"那一下自动折叠（它自己会 setState）。
+    //    ⚠️ 必须在下面那次 setState **之前**：不然屏幕上会先闪一帧"没折"的样子。
+    _applyAutoFold(widget.controller);
     setState(() {});
     // ★ **服务端说"装上了一个小程序"** ⇒ 重拉一次清单（桌面**自己长出来**，不用刷新页面）
     final rev = widget.controller.appsRevision;
@@ -279,6 +364,9 @@ class _ChatScreenState extends State<ChatScreen> {
     if (widget.controller.scope != _shownScope) {
       _shownScope = widget.controller.scope;
       _userScrolledAway = false;
+      // ★ `116`：轮号在两间里各自从 1 开始 ⇒ 折叠那两份账也跟着换（见 `_unfoldedTurns`）。
+      _unfoldedTurns.clear();
+      _autoFoldApplied.clear();
       WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToLatest());
     }
     // 新东西进来时重绘 + 滚到底；**用户正在往上翻时不打断他**
@@ -1320,6 +1408,8 @@ class _ChatScreenState extends State<ChatScreen> {
     // ★ **更早那句提示当第一项**（放外面会改变视口 —— 见 `_sheetBody` 那条注释）
     final olderLine = _olderLine(c);
     final header = olderLine == null ? 0 : 1;
+    // ★ `116`：先把"这一屏到底画哪几格"算出来（折叠就是把某些工具行换成那一个控件）。
+    final slots = _planSlots(c);
     return NotificationListener<ScrollNotification>(
       // ⚠️ **只有手指拖出来的滚动**才算"用户自己翻走了"。
       //    我们自己 `animateTo` 产生的那一次不算 —— 否则第一次跟随
@@ -1340,14 +1430,15 @@ class _ChatScreenState extends State<ChatScreen> {
         return false;
       },
       child: ListView.builder(
+        key: _transcriptKey,
         controller: _scroll,
         // ★ 主人 2026-09-22："聊天浮窗的 padding 减少一些"（里面这一圈）：12 → 8
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        itemCount: header + c.items.length + (c.hasProcess ? 1 : 0),
+        itemCount: header + slots.length + (c.hasProcess ? 1 : 0),
         itemBuilder: (context, i) {
           if (header == 1 && i == 0) return olderLine!;
           final k = i - header;
-          if (k < c.items.length) return _render(c.items[k], c);
+          if (k < slots.length) return _renderSlot(slots[k], c);
           return ProcessTail(
             level: c.level,
             busyText: c.agentLine,
@@ -1357,6 +1448,47 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
   }
+
+  /// **这一屏画哪几格**：真条目 + "折起来的那一轮"那一个控件。
+  ///
+  /// 规矩三条（都来自 DSH，见 `docs/dev/115-raw/B-render.md` §2.3）：
+  ///   · **还在跑的那一轮不折**（过程行照画）；
+  ///   · **收口之后**同一轮的工具行折成一个控件 —— 控件画在**第一条**那个位置
+  ///     （哪一条是"答案"我们这一侧认不出来，见 `turn/usage` 那段：`message/*` 不带 step）；
+  ///   · **系统提示词行不参与折叠**（DSH：它是 `TURN_PROCESS_INDEPENDENT_KINDS`），
+  ///     用量行也不（它是这一轮的页脚）。
+  List<_Slot> _planSlots(ChatController c) {
+    final closed = c.closedThrough;
+    final slots = <_Slot>[];
+    // 一轮的用量只在**它最后一条** `turn/usage` 上画一次（服务端今天一轮发一条；
+    // 多发也不许画出两行 —— 那会像"这一轮花了两次钱"）。
+    final lastUsageSeq = <int, int>{};
+    for (final it in c.items) {
+      if (it is TimelineTurnUsage) lastUsageSeq[it.turn] = it.seq;
+    }
+    final placed = <int>{};
+    for (final it in c.items) {
+      if (it is TimelineToolCall && _processFolded(it.turn, closed)) {
+        if (placed.add(it.turn)) slots.add(_FoldSlot(it.turn));
+        continue;
+      }
+      if (it is TimelineTurnUsage && lastUsageSeq[it.turn] != it.seq) continue;
+      slots.add(_ItemSlot(it));
+    }
+    return slots;
+  }
+
+  /// 画一格（真条目走 [_render]；折叠控件走它自己那一个）。
+  Widget _renderSlot(_Slot slot, ChatController c) => switch (slot) {
+    _ItemSlot(:final item) => _render(item, c),
+    _FoldSlot(:final turn) => TurnProcessControl(
+      counts: c.processOfTurn(turn),
+      expanded: !_processFolded(turn, c.closedThrough),
+      onToggle: () => setState(() {
+        if (!_unfoldedTurns.remove(turn)) _unfoldedTurns.add(turn);
+      }),
+    ),
+  };
 
   /// **离顶多近就触发"再往前取一页"**（住代码里；大一点更容易触发，但会多问几次）。
   static const double _olderTriggerPx = 32;
@@ -1444,6 +1576,17 @@ class _ChatScreenState extends State<ChatScreen> {
       notice: item.notice,
       onUndo: item.undo == null ? null : () => _undoNotice(item),
     ),
+    // ── ★ `116` 那三样（主人 2026-09-26：*"首先全部开放"*）──────────
+    //
+    // ⚠️ 折叠**不在这里做**：折起来的那几行由 `_planSlots` 换成那个控件、
+    //    **根本不会走到这儿**（少画 = 真省，不是画出来再藏）。
+    TimelineToolCall() => ToolRowView(key: ValueKey('tool:${item.callId}'), row: item.row),
+    TimelineSystemPrompt() => SystemPromptView(
+      key: ValueKey('sys:${item.seq}'),
+      row: item.row,
+    ),
+    // ⚠️ 用量那一行**由控制器折过**才画（`turnUsage`：任何一次没报准 ⇒ null ⇒ 一个像素不占）。
+    TimelineTurnUsage() => TurnUsageRowView(usage: c.turnUsage(item.turn)),
   };
 
   /// 按"撤销"（**浮窗里那个与时间线里那个共用这一条**，约束 3）。
@@ -1654,6 +1797,27 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(line)));
   }
+}
+
+/// **时间线上一格**（`116`）：要么是一条真条目，要么是"折起来的那一轮"那一个控件。
+///
+/// ⚠️ 为什么要这一层：折叠之后**那一轮的工具行根本不建**（不是画出来再藏）——
+///    DSH 那边是靠 `hidden` 藏（浏览器 Ctrl-F 还找得到），我们这一侧没有那个机制，
+///    所以选择"少画"；代价是折起来的过程行**屏幕上搜不到**（如实记在这儿）。
+sealed class _Slot {
+  const _Slot();
+}
+
+/// 一格真条目（照旧走 `_render`）。
+class _ItemSlot extends _Slot {
+  const _ItemSlot(this.item);
+  final TimelineItem item;
+}
+
+/// 一格"这一轮折起来了"那个控件。
+class _FoldSlot extends _Slot {
+  const _FoldSlot(this.turn);
+  final int turn;
 }
 
 /// 顶部状态条。**只在"需要用户知道点什么"的时候出现**——
