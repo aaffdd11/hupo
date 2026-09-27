@@ -164,6 +164,38 @@ const String settingsAppLabel = '设置';
 /// 小程序容器顶栏那个返回箭头（读屏用）。
 const String miniAppBack = '返回';
 
+// ── ★ 桌面上那颗加号：**创建一个小程序**（主人 2026-09-27）──────────────
+//
+// 原话：*"帮我在 home 那边增加一个加号…这个叫做创建小程序吧，然后点击它以后会出现一个
+// 浮窗，然后它就可以选择小程序名字…创建小程序名字是必须的，然后还有一个就是描述，
+// 这个描述用户可以写也可以不写。"*
+//
+// ⚠️ 界面上只说"名字 / 描述"这两样，**一个字都不许出现内部词**（工作区 / 清单 / 制品…）。
+
+/// 那一格上的字（桌面图标下面那一行）。
+const String createAppLabel = '创建小程序';
+
+/// 那一层浮窗的抬头。
+const String createAppTitle = '新建一个小程序';
+
+const String createAppNameLabel = '名字';
+const String createAppNameHint = '给它起个名字（比如"买菜清单"）';
+
+/// **描述那一栏是选填的** —— 字面上就要说清（他不写也能建）。
+const String createAppDescLabel = '描述（可以不写）';
+const String createAppDescHint = '一句话：它是干什么用的';
+
+const String createAppOk = '建好';
+const String createAppNo = '算了';
+
+/// 名字空了 ⇒ **本地就拦住**（别发一个注定被拒的请求）。
+const String createAppNeedName = '得先给它起个名字。';
+/// 服务端那句人话之外的兜底（网络 / 认不出的回执）。
+const String createAppFailed = '没建成，等会儿再试一次。';
+
+/// 成了 ⇒ 一句话（**它在桌面上多了一格** —— 这就是他要的"能看见"）。
+const String createAppDone = '建好了 —— 桌面上多了一格，点它进去。';
+
 /// ★ **进小程序之后那条浮窗**（主人 2026-09-27：*"点击这里可以回到桌面哦"*）。
 ///
 /// 🔴 为什么要有它：容器那条**顶栏与返回箭头撤掉之后**（同一天），

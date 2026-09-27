@@ -6,11 +6,13 @@
 //   ③ 🔴 **两张白名单不许漂**：客户端这份映射表 vs 服务端 `apps.js` 的 `ICONS` 逐字对
 //   ④ 一条坏记录不许把整个桌面弄空（跳过那一条）
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/app_spec.dart';
+import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/widgets/mini_app_icons.dart';
 
 void main() {
@@ -120,5 +122,42 @@ void _discoverModelTests() {
     expect(DiscoverApp.parse('不是一条'), isNull);
   });
 
+
+
+// ── ★ 2026-09-27（契约 `docs/dev/127-CREATE-APP-FROM-DESKTOP.md`）──────────
+//    **"建一个空的小程序"那一条的回执**：与改名/复制**刻意不同** ——
+//    它要**把服务端那句人话带回来**（上限住在他那儿，客户端不许自己编一个数）。
+group('createAppOutcomeOf：那一条回执的分岔（纯函数）', () {
+  test('200 且明说 ok ⇒ 成了（带回 id / title / icon）', () {
+    final o = createAppOutcomeOf(
+      200,
+      jsonEncode({'ok': true, 'id': 'app-x1', 'title': '买菜清单', 'icon': 'dice'}),
+    );
+    expect(o, isA<CreateAppOk>());
+    final ok = o as CreateAppOk;
+    expect(ok.id, 'app-x1');
+    expect(ok.title, '买菜清单');
+    expect(ok.icon, 'dice');
+  });
+
+  test('401 ⇒ 令牌不行（那是另一件事，不是"没建成"）', () {
+    expect(createAppOutcomeOf(401, ''), isA<CreateAppUnauthorized>());
+  });
+
+  test('🔴 其余（含 400 与"200 但回执不 ok"）⇒ 没成，而且**带上服务端那句话**', () {
+    final bad = createAppOutcomeOf(
+      400,
+      jsonEncode({'error': 'title-too-long', 'text': '名字太长了（最多 40 个字）。'}),
+    );
+    expect(bad, isA<CreateAppFailed>());
+    expect((bad as CreateAppFailed).words, '名字太长了（最多 40 个字）。', reason: '★ 原话上屏');
+
+    // 200 但 `ok` 不是 true ⇒ **一个字节都不当成功**
+    expect(createAppOutcomeOf(200, jsonEncode({'id': 'x'})), isA<CreateAppFailed>());
+    // 读不出来的回执 / 网络那一条的兜底 ⇒ 空串（界面用自己那句）
+    expect((createAppOutcomeOf(502, '<html>') as CreateAppFailed).words, '');
+    expect((createAppOutcomeOf(500, '') as CreateAppFailed).words, '');
+  });
+});
 
 }

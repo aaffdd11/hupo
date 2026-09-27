@@ -57,6 +57,13 @@ export const SCHEMA = 1;
 export const MAX_ID_CHARS = 32;
 /** 标题的字符上限（它是**给人看的名字**，D3.8 不许只有图形）。 */
 export const MAX_TITLE_CHARS = 40;
+
+/**
+ * **描述**最多多少个字（主人 2026-09-27 要的那一栏：**可以不填**）。
+ * ⚠️ 它只是"这一间是干什么的"一句话 —— 给助手看的活页夹封面，不是内容，
+ *    所以**短**：太长就该写进页面里，而不是塞进清单。
+ */
+export const MAX_DESC_CHARS = 200;
 /** 一个版本最多几个文件。 */
 export const MAX_FILES = 40;
 /** 单个文件上限。 */
@@ -172,6 +179,52 @@ export function refuseReservedAppId(raw) {
   if (!REFUSED_APP_IDS.includes(s)) return s;
   if (s === 'main') throw new AppsError(`"${s}" 是主线那个房间，不能再拿它当小程序的名字`);
   throw new AppsError(`"${s}" 是桌面上本来就有的那一格，不能再拿它当小程序的名字`);
+}
+
+/**
+ * ★ **给"从桌面上新建的那个小程序"配一个短名**（主人 2026-09-27：加号那颗按钮）。
+ *
+ * 🔴 **服务端生成，客户端不猜**（同 `/api/app-rename` 那条：id 由服务端定）：
+ *    他填的是**名字**（中文也行），而 id 只许小写字母/数字/短横
+ *    ⇒ 从名字里"音译"一个 id 是**编**，所以取随机那几个字符。
+ *
+ * ⚠️ **撞了就再抽**（有界重试）：`taken` 由调用方给（它就是"他这儿有没有这个东西"）。
+ *
+ * @param {{taken?:(id:string)=>boolean, rand?:()=>string, tries?:number}} [o]
+ * @returns {string} 一个**没被占**的合法 id
+ */
+export function newAppId({ taken = () => false, rand = null, tries = MAX_COPY_TRIES } = {}) {
+  const pick = typeof rand === 'function'
+    ? rand
+    : () => Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 8).padEnd(8, '0');
+  for (let i = 0; i < Math.max(1, tries); i += 1) {
+    const id = `app-${pick()}`.slice(0, MAX_ID_CHARS);
+    if (taken(id)) continue;
+    return checkAppId(id);
+  }
+  throw new AppsError('取不出一个没被占用的短名（试了几次都不行）');
+}
+
+/**
+ * ★ **这一间是不是"一个小程序"**（主人 2026-09-27 那条"里面不能再开一个"的判据）。
+ *
+ *   · 他库里真有的那一个（`has`）；或者
+ *   · 桌面内置那几格（`REFUSED_APP_IDS`：设置 / 发现 /「我自己那台」）。
+ *
+ * ⚠️ `main` **不算**（那是桌面本身）；**派活/长活那种临时的间也不算**
+ *    （它们不在他的库里）—— 长活"另开一处做"那条路本来就要在那里把新 app 造出来。
+ * ⚠️ 认不出（`apps` 没给 / `has` 抛）⇒ **`false`**：这是"别再套娃"的礼貌闸，
+ *    不是安全闸（安全那两道是身份与保留 id）。
+ */
+export function isAnAppRoom(apps, scope) {
+  const s = typeof scope === 'string' ? scope.trim() : '';
+  if (!s || s === 'main') return false;
+  if (REFUSED_APP_IDS.includes(s)) return true;
+  try {
+    return apps?.has?.(s) === true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -406,6 +459,7 @@ export class Apps {
       return {
         id,
         title: m.title,
+        description: '',
         icon: m.icon,
         version: v,
         entry: m.entry,
@@ -421,6 +475,7 @@ export class Apps {
       return {
         id,
         title: typeof live.title === 'string' ? live.title : id,
+        description: typeof live.description === 'string' ? live.description : '',
         icon: live.icon ?? null,
         version: Number.isInteger(live.version) && live.version >= 1 ? live.version : 1,
         entry: typeof live.entry === 'string' && live.entry !== '' ? live.entry : 'index.html',
@@ -437,6 +492,7 @@ export class Apps {
     return {
       id,
       title: typeof live.title === 'string' ? live.title : m.title,
+      description: typeof live.description === 'string' ? live.description : '',
       icon: live.icon ?? m.icon,
       version: v,
       entry: typeof live.entry === 'string' && live.entry !== '' ? live.entry : m.entry,
@@ -488,6 +544,7 @@ export class Apps {
     permissions = [],
     createdBy = 'agent',
     createdTurn = null,
+    description = '',
     rootHash = null,
     bytes = null,
   }) {
@@ -501,6 +558,10 @@ export class Apps {
     }
     if (typeof title !== 'string' || title.trim().length === 0) throw new AppsError('小程序要有一个名字');
     if (title.length > MAX_TITLE_CHARS) throw new AppsError(`名字太长（上限 ${MAX_TITLE_CHARS} 个字）`);
+    // ★ **描述：可选**（主人 2026-09-27）。空 ⇒ 存空串（**不写 `undefined`**：
+    //   清单里少一个字段和"这个字段是空的"是两件事，读的人得说得清）。
+    const desc = typeof description === 'string' ? description.trim() : '';
+    if (desc.length > MAX_DESC_CHARS) throw new AppsError(`描述太长（上限 ${MAX_DESC_CHARS} 个字）`);
     const picked = resolveIcon({ icon, title, id });
     if (typeof entry !== 'string' || entry.length === 0) throw new AppsError('入口文件必填');
     checkRelPath(entry);
@@ -514,6 +575,7 @@ export class Apps {
       live: true,
       id,
       title,
+      description: desc,
       icon: picked.icon,
       entry,
       permissions: [...permissions],

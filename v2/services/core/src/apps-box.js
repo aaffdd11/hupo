@@ -89,6 +89,15 @@ export const BOX_APP_RENAME_PATH = '/internal/app-rename';
 export const BOX_APP_COPY_PATH = '/internal/app-copy';
 
 /**
+ * ★ **`126`/桌面上那颗加号：在这一台里"登记一个空的小程序"**
+ *   （`registerBlankApp()`：建工作区 ＋ 登记，**不打成包**）。
+ *
+ * ⚠️ 与改名/复制同一个道理：**租户的库在他盒子里** ⇒ 这一下必须在**盒里落**，
+ *    否则"创建好了"就是一句假话（桌面上什么都没有）。失败 ⇒ 抛 `BoxError`，调用方如实 503。
+ */
+export const BOX_APP_REGISTER_PATH = '/internal/app-register';
+
+/**
  * ★ **B28：按房间回收一间"没有制品"的工作区** —— 让**盒子那份权威**自己动
  * （`world.reclaimRoom()`，落点还是 `src/reclaim.js` 的 `reclaimScope()`）。
  *
@@ -131,6 +140,7 @@ export function parseInternalPath(pathname) {
   if (pathname === BOX_APP_REMOVE_PATH) return { kind: 'app-remove' };
   if (pathname === BOX_APP_RENAME_PATH) return { kind: 'app-rename' };
   if (pathname === BOX_APP_COPY_PATH) return { kind: 'app-copy' };
+  if (pathname === BOX_APP_REGISTER_PATH) return { kind: 'app-register' };
   if (pathname === BOX_ROOM_REMOVE_PATH) return { kind: 'room-remove' };
   return null;
 }
@@ -517,11 +527,54 @@ export function createBoxApps({ sub = 'owner', dial, log = () => {} } = {}) {
     async create(app) {
       return boxPushApp({ dial, app });
     },
+    /**
+     * ★ **桌面上那颗加号**：让盒子自己"登记一个空的小程序"。
+     * ⚠️ 落在盒子自己那条路上（`registerBlankApp()`）⇒ 工作区与登记语义
+     *    与助手在那儿造 app 时**逐字相同**（不是"往它的卷里撒文件"）。
+     */
+    async registerBlank(app) {
+      return boxRegisterBlankApp({ dial, app });
+    },
     /** 只给排障看：这个对象代表谁的盒子。 */
     get sub() {
       return sub;
     },
   };
+}
+
+/**
+ * **让盒子"登记一个空的小程序"**（桌面上那颗加号那一条路）。
+ *
+ * @returns {Promise<object>} 盒子里那份登记（`Apps.register()` 的返回）
+ */
+export async function boxRegisterBlankApp({ dial, app, timeoutMs = BOX_TIMEOUT_MS }) {
+  const payload = Buffer.from(
+    JSON.stringify({
+      id: app.id,
+      title: app.title,
+      icon: app.icon ?? undefined,
+      entry: app.entry ?? 'index.html',
+      description: app.description ?? '',
+    }),
+    'utf8',
+  );
+  const r = await requestOverSocket(dialOnce(dial), {
+    method: 'POST',
+    path: BOX_APP_REGISTER_PATH,
+    headers: { 'content-type': 'application/json', 'content-length': String(payload.length) },
+    body: payload,
+    timeoutMs,
+  });
+  const j = parseJson(r.body);
+  // ⚠️ 与改名/复制同一个形状：**HTTP 200 是"这条口答上来了"，裁决在正文里**
+  //    （`ok` / `status` / `error`）—— 盒里那份 `AppsError.message` 本身就是人话。
+  if (!j || j.ok !== true) {
+    throw new BoxError(
+      typeof j?.error === 'string' && j.error !== '' ? j.error : `盒子那边没建成（HTTP ${r.status}）`,
+      'register-failed',
+    );
+  }
+  return j;
 }
 
 /**

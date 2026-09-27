@@ -332,6 +332,19 @@ void main() {
       //    那一屏那颗「试一下」的每一句 —— **直接引数据源**（手抄会漂）。
       //    ⚠️ 这一批最容易混进来的是"模型 / 工具 / 客户端"那类内部词；
       //       允许的是他说得懂的话："试一下"、"停下"、"上面那三样"。
+      // ★ 2026-09-27（契约 `docs/dev/127-CREATE-APP-FROM-DESKTOP.md`）：桌面上那颗
+      //    「创建小程序」加号与那一层浮窗里的每一句 —— **直接引数据源**。
+      createAppLabel,
+      createAppTitle,
+      createAppNameLabel,
+      createAppNameHint,
+      createAppDescLabel,
+      createAppDescHint,
+      createAppOk,
+      createAppNo,
+      createAppNeedName,
+      createAppFailed,
+      createAppDone,
       voiceTryTitle,
       voiceTryStart,
       voiceTryStop,

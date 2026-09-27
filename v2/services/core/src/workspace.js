@@ -120,6 +120,57 @@ export function placeholderIndex({ id, title = null } = {}) {
 }
 
 /**
+ * ★ **登记一个"空的小程序"**（主人 2026-09-27 那颗加号：填个名字就建一个空白项目）。
+ *
+ * 🔴 **两条路共用它**（"同源"那一条）：桌面上那颗加号（`/api/app-create`）
+ *    与助手那条工具（`apps-socket.js` 的 `create`）**都走这一份** ——
+ *    它就是"用户端建 app"的全部：**建出这一间工作区 ＋ 登记**，
+ *    **不打成包**（主人 2026-09-26：*"所谓的版本快照，只在市场中存在。不在用户端。"*）。
+ *
+ * ⚠️ 空工作区的 `index.html` 由 `ensure()` 的**占位页**填上（`placeholderIndex`）——
+ *    所以"点进去看得见一个空白项目"，而不是一个 404。
+ *
+ * @param {object} o
+ * @param {object} o.apps       他的那个制品库（`appsFor(sub)`；本机那格或盒代理都不该进来）
+ * @param {object} o.workspaces 他的那些工作区
+ * @param {string} o.id         短名（**调用方给**：桌面那条由服务端生成）
+ * @param {string} o.title      名字
+ * @param {string} [o.icon]     图标名（不给 ⇒ 由 `apps.register` 按名字配一个）
+ * @param {string} [o.entry]
+ * @param {'user'|'agent'} [o.createdBy]
+ * @param {number|null} [o.createdTurn]
+ * @param {string} [o.description] 描述（可选）
+ */
+export function registerBlankApp({
+  apps,
+  workspaces,
+  id,
+  title,
+  icon = undefined,
+  entry = 'index.html',
+  createdBy = 'user',
+  createdTurn = null,
+  description = '',
+} = {}) {
+  workspaces.ensure(id, { title, entry });
+  const stat = workspaceStat(workspaces, id);
+  // ⚠️ **入口以工作区里真实存在的那个为准**（工作区可能不是刚交的那一份；
+  //    与 `apps-socket.js` 那条 create 逐字同一条规矩）。
+  return apps.register({
+    id,
+    title,
+    icon,
+    entry: stat.entry ?? entry,
+    permissions: [],
+    createdBy,
+    createdTurn,
+    description,
+    rootHash: stat.rootHash,
+    bytes: stat.bytes,
+  });
+}
+
+/**
  * **一个人的那些工作区**。
  *
  * ⚠️ `dir` 是"他那一格"（`worlds.pathsFor(sub).dir`）——

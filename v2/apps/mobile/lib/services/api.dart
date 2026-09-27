@@ -338,6 +338,32 @@ class Api {
     }
   }
 
+  /// ★ **桌面上那颗加号：建一个空的小程序**（主人 2026-09-27 ·
+  /// 契约 `docs/dev/127-CREATE-APP-FROM-DESKTOP.md`）。
+  ///
+  /// ⚠️ **名字必填、描述选填** —— 两样都由服务端说了算（上限也住那边）
+  ///    ⇒ 这一条**要把服务端那句人话带回来**（[CreateAppFailed.words]）。
+  /// ⚠️ **id / 图标由服务端定**（客户端不许猜）：成了只带回它们，
+  ///    界面那边**重拉一遍清单**，桌子照服务端那一份画。
+  Future<CreateAppOutcome> createApp({
+    required String token,
+    required String title,
+    String description = '',
+  }) async {
+    try {
+      final r = await _c
+          .post(
+            _u('/api/app-create'),
+            headers: {'content-type': 'application/json', 'authorization': 'Bearer $token'},
+            body: jsonEncode({'title': title, 'description': description}),
+          )
+          .timeout(const Duration(seconds: 30));
+      return createAppOutcomeOf(r.statusCode, r.body);
+    } catch (_) {
+      return const CreateAppFailed('');
+    }
+  }
+
   /// **给它改个名字**（契约 `docs/dev/104-APP-MENU.md` §三）。
   ///
   /// ⚠️ 回执只分三种（同 [appRemove] 那条纪律）：只有服务端**明说** `{ok:true}` 才算成了；
@@ -751,6 +777,58 @@ AppEditOutcome appEditOutcomeOf(int status, String body) {
     // 读不出来 ⇒ 落到下面那条"没成"（**不许猜成成功**）
   }
   return const AppEditFailed();
+}
+
+/// **"建一个空的小程序"那一条的回执**（契约 `docs/dev/127-CREATE-APP-FROM-DESKTOP.md`）。
+///
+/// ⚠️ 与改名/复制**刻意不同**：这一条**要把服务端那句人话带回来**
+///    （"得给它起个名字。"/"名字太长了（最多 40 个字）。"）——
+///    那几句话只有服务端说得准（上限住在他那儿，客户端不许自己编一个数）。
+sealed class CreateAppOutcome {
+  const CreateAppOutcome();
+}
+
+class CreateAppOk extends CreateAppOutcome {
+  const CreateAppOk({required this.id, required this.title, required this.icon});
+
+  /// 服务端给的短名（界面不显示它，只用它认人 / 去清单里对）。
+  final String id;
+  final String title;
+
+  /// 服务端配的那个图标名（桌面那一格画的就是它）。
+  final String icon;
+}
+
+class CreateAppUnauthorized extends CreateAppOutcome {
+  const CreateAppUnauthorized();
+}
+
+class CreateAppFailed extends CreateAppOutcome {
+  const CreateAppFailed(this.words);
+
+  /// 服务端那句话（空串 = 网络没通 / 回执读不出来 ⇒ 界面用自己那句兜底）。
+  final String words;
+}
+
+/// 回执 → 结果。**纯函数**（不起网络、不碰界面、不看钟）⇒ 进 `test/unit`。
+CreateAppOutcome createAppOutcomeOf(int status, String body) {
+  if (status == 401) return const CreateAppUnauthorized();
+  Map<String, dynamic>? j;
+  try {
+    final raw = jsonDecode(body);
+    if (raw is Map<String, dynamic>) j = raw;
+  } catch (_) {
+    j = null;
+  }
+  if (status == 200 && j != null && j['ok'] == true) {
+    return CreateAppOk(
+      id: j['id'] is String ? j['id'] as String : '',
+      title: j['title'] is String ? j['title'] as String : '',
+      icon: j['icon'] is String ? j['icon'] as String : '',
+    );
+  }
+  final words = (j?['text'] is String) ? j!['text'] as String : '';
+  return CreateAppFailed(words);
 }
 
 /// 回执 + 解析器 → 结果。**纯函数**（不起网络、不碰界面、不看钟）⇒

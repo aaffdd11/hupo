@@ -48,6 +48,8 @@ import { CATCHUP_RENDER, markCatchUp, planBackfill, planResume } from './resume.
 import { buildExport } from './export.js';
 import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
 import { liveEntryOf } from './app-live.js';
+// ★ **建一个空的小程序**（桌面上那颗加号）：工作区 ＋ 登记，**不打成包**（`#177`）。
+import { registerBlankApp } from './workspace.js';
 import { SIGNED_TTL_MS, liveEntryUrl } from './app-serve.js';
 // ★ **盒子那几条内部口**（B15 · `docs/dev/77-BLOCKERS.md`）：小程序库以**盒子为准**。
 //   ⚠️ 它们**只在 `trusted === true`**（容器里那条 `0600` UDS）上接 —— 公网口一律 404。
@@ -60,7 +62,7 @@ import {
 } from './apps-box.js';
 // ⚠️ 只用它的**错误类型**（内部写入那条路要把"校验不过"如实回给宿主，而不是 500）
 //    与那个总量上限（内部口的身体上限由它推出来，**不另写一个数**）。
-import { AppsError, MAX_TOTAL_BYTES } from './apps.js';
+import { AppsError, MAX_DESC_CHARS, MAX_TITLE_CHARS, MAX_TOTAL_BYTES, isAnAppRoom, newAppId } from './apps.js';
 // ★ **"活的工作区"那一刀**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）：
 //   `/internal/workspace-live`（盒里那条口）读的就是它 —— **以盒子为准**。
 import { readLiveApp } from './workspace.js';
@@ -1016,6 +1018,93 @@ export function createServer({
       // 🔴 **落点只有一处**：`Apps.setTitle()` / `Apps.copy()` —— 宿主与盒里调的是同一个方法
       //    （盒里那条内部口在下面 `handleInternal()`）。
       // ⚠️ 两条的**协议形状是本批新加的**：旧口一个字都没改。
+      // ── ★ **桌面上那颗加号：建一个空的小程序**（主人 2026-09-27）────────
+      // 他要的形状：填个**名字**（必填）＋ 一句**描述**（可不填）⇒ 一个空白项目 ＋
+      // 一个桌面图标；点那个图标就进去。
+      //
+      // 🔴 三条：
+      //   · **id 由服务端生成**（客户端不猜 —— 同改名那条）；名字里的中文不"音译"成 id；
+      //   · **建出来的是"工作区 ＋ 登记"，不打成包**（`114`：用户端没有版本快照那一套）
+      //     ⇒ 空工作区那个 `index.html` 是**占位页**（"这里还空着。"）—— 点进去看得见东西，
+      //       而不是一个 404；
+      //   · **这条路只从桌面走**（那颗按钮长在图标墙上 ⇒ 小程序容器盖住时点不到它）；
+      //     助手那条路（`apps-socket.js` 的 `create`）另有"里面不能再开一个"那道闸。
+      if (path === '/api/app-create' && req.method === 'POST') {
+        let body;
+        try {
+          body = await readJson(req, 16 * 1024);
+        } catch {
+          return sendJson(res, 400, { error: '这一条看不懂' });
+        }
+        const title = typeof body?.title === 'string' ? body.title.trim() : '';
+        const description = typeof body?.description === 'string' ? body.description.trim() : '';
+        // 名字**必填**（N11：说清该怎么办）
+        if (title === '') {
+          return sendJson(res, 400, { error: 'blank-title', text: '得给它起个名字。' });
+        }
+        if (title.length > MAX_TITLE_CHARS) {
+          return sendJson(res, 400, {
+            error: 'title-too-long',
+            text: `名字太长了（最多 ${MAX_TITLE_CHARS} 个字）。`,
+          });
+        }
+        if (description.length > MAX_DESC_CHARS) {
+          return sendJson(res, 400, {
+            error: 'description-too-long',
+            text: `描述太长了（最多 ${MAX_DESC_CHARS} 个字）—— 一句话就够了。`,
+          });
+        }
+        const src = appsFor(claim.sub);
+        if (!src) {
+          return tenant
+            ? sendJson(res, 503, { error: 'tenant-not-ready', text: '你那台还在准备，稍等一下再试。' })
+            : sendJson(res, 404, { error: '这台部署还没开小程序' });
+        }
+        try {
+          if (src.isBox === true) {
+            // ⚠️ **不能在盒里再给一个保留 id**（那是宿主这侧的唯一一道闸）：
+            //    名字与 id 都在这里定下来，盒子只负责落。
+            const taken = (id) => {
+              try {
+                return src.has?.(id) === true;
+              } catch {
+                return false;
+              }
+            };
+            const id = newAppId({ taken });
+            const r = await src.registerBlank({ id, title, description });
+            if (!r.ok) return sendJson(res, r.status ?? 502, { error: r.error, text: r.error });
+            return sendJson(res, 200, {
+              ok: true,
+              id: r.id ?? id,
+              title: r.title ?? title,
+              icon: r.icon ?? null,
+              description,
+            });
+          }
+          const id = newAppId({ taken: (x) => src.has(x) });
+          const m = registerBlankApp({
+            apps: src,
+            workspaces: W.workspaces,
+            id,
+            title,
+            entry: 'index.html',
+            createdBy: 'user',
+            createdTurn: null,
+            description,
+          });
+          return sendJson(res, 200, {
+            ok: true,
+            id: m.id,
+            title: m.title,
+            icon: m.icon,
+            description: m.description ?? '',
+          });
+        } catch (err) {
+          return appMenuFail(res, err, 'app-create');
+        }
+      }
+
       if (path === '/api/app-rename' && req.method === 'POST') {
         let body;
         try {
@@ -2555,6 +2644,52 @@ const TENANT_ROUTES = [
 
     // ── ★ **`103`：从桌面上删掉那个小程序**（在**权威那份**上落）────────────
     // ⚠️ 与上面那条同一个前缀、同一条隧道：**只在可信 UDS 上**（公网口在这之前就 404 了）。
+    // ── ★ **登记一个空的小程序**（桌面上那颗加号；`registerBlankApp()`）────────
+    // ⚠️ 与改名/复制同一个形状：**盒里这份 `src` 必须是本机那格**（不是盒代理），
+    //    落了它，宿主那边才说得出"建好了"。
+    if (hit.kind === 'app-register') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method' });
+      if (src.isBox === true || typeof src.register !== 'function') {
+        return sendJson(res, 500, { ok: false, status: 500, error: '这条"新建"的取值来源接错了' });
+      }
+      const w = worldFor(trustedSub);
+      if (!w?.workspaces) {
+        return sendJson(res, 500, { ok: false, status: 500, error: '这条"新建"的工作区接错了' });
+      }
+      let body;
+      try {
+        body = await readJson(req, 16 * 1024);
+      } catch {
+        return sendJson(res, 400, { ok: false, status: 400, error: '这一条看不懂' });
+      }
+      try {
+        const m = registerBlankApp({
+          apps: src,
+          workspaces: w.workspaces,
+          id: body?.id,
+          title: body?.title,
+          icon: body?.icon,
+          entry: body?.entry,
+          createdBy: 'user',
+          createdTurn: null,
+          description: body?.description,
+        });
+        return sendJson(res, 200, {
+          ok: true,
+          id: m.id,
+          title: m.title,
+          icon: m.icon,
+          description: m.description ?? '',
+        });
+      } catch (err) {
+        // ⚠️ `AppsError.message` 本身就是人话 ⇒ 原样带回去（宿主据此如实报同一个码）
+        const msg = String(err?.message ?? '这一下没建成');
+        const known = err instanceof AppsError;
+        const status = known && Number.isInteger(err.status) ? err.status : known ? 400 : 500;
+        return sendJson(res, 200, { ok: false, status, error: msg });
+      }
+    }
+
     if (hit.kind === 'app-remove') {
       if (req.method !== 'POST') return sendJson(res, 405, { error: 'method' });
       // 盒里这份 `src` **就是**权威那份。真出现"盒里有别的盒子可问"就是接线错了 —— 说出来。

@@ -27,8 +27,10 @@ export const APP_FAIL_OPS = Object.freeze(['create', 'install', 'publish']);
  * * `needs-ask`（P1-22）：他本人没说要做 ⇒ 助手该回头问一句"要我做一个吗"。
  * * `needs-choice`（90 Q4.3）：他手里那份跟上边不一样 ⇒ 助手该回头问
  *   "刷新还是分叉"。**这时候说"没装成"是假话**（是等他拿主意）。
+ * * `inside-app`（2026-09-27）：他在某个小程序里让助手再造一个 ⇒ 助手要回一句
+ *   "回桌面上说" —— 那一句本身就是答复，再喊一条"没做成"就是**两遍**。
  */
-export const APP_FAIL_QUIET_REFUSALS = Object.freeze(['needs-ask', 'needs-choice']);
+export const APP_FAIL_QUIET_REFUSALS = Object.freeze(['needs-ask', 'needs-choice', 'inside-app']);
 
 /**
  * 这一次没做成，要不要**主动跟他说一句**。

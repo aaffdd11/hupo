@@ -17,9 +17,9 @@ import nodeFs from 'node:fs';
 import nodeNet from 'node:net';
 import nodePath from 'node:path';
 
-import { AppsError } from './apps.js';
+import { AppsError, isAnAppRoom } from './apps.js';
 import { shouldTellAppFail } from './app-fail-words.js';
-import { NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
+import { INSIDE_APP_NO_CREATE, NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
 import { NEEDS_ASK_IMAGE, asksToDrawImage } from './image.js';
 import { OutboundError, assertOutboundAllowed } from './outbound.js';
 import { PublishedError, authorHashOf } from './published.js';
@@ -125,6 +125,16 @@ async function runAppsOp(apps, req, ctx = {}) {
           : (typeof ctx.turnInput === 'function' ? ctx.turnInput() : null);
         if (!asksToMakeApp(turnInput)) {
           return { ok: false, error: NEEDS_ASK, refused: 'needs-ask' };
+        }
+        // ★ **已经在一个小程序里了 ⇒ 不许再开一个**（主人 2026-09-27）：
+        //   *"只有 main 里面是可以指导它创建小程序的；如果是在 workspace 下面的
+        //    小程序里面聊天的话，他无法继续创建小程序"*。
+        //   ⚠️ 判据是"**现在这一间是不是已有的一个小程序 / 内置那一格**"，
+        //      **不是** `scope !== main`：派活那间（长活"另开一处做"）本来就要在那里
+        //      把新 app 造出来（`job.js` 抬头上那句注释），那条路照旧放行。
+        const scopeNow = typeof req.scope === 'string' && req.scope.trim() !== '' ? req.scope.trim() : null;
+        if (scopeNow && scopeNow !== 'main' && isAnAppRoom(apps, scopeNow)) {
+          return { ok: false, error: INSIDE_APP_NO_CREATE, refused: 'inside-app' };
         }
         const a = req.app ?? {};
         // ★★ **服务端那一刀**（契约 `83-APP-WORKSPACE.md` §三·4）：**服务端**把这一间

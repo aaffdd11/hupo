@@ -51,6 +51,7 @@ class DesktopApp {
     this.onRemove,
     this.onRename,
     this.onCopy,
+    this.isCreate = false,
   });
 
   final String label;
@@ -81,6 +82,14 @@ class DesktopApp {
   final VoidCallback? onRename;
   final VoidCallback? onCopy;
 
+  /// ★ **这一格是"创建一个小程序"那颗加号**（主人 2026-09-27：
+  ///   *"帮我在 home 那边增加一个加号，要比较显著的有 UI 上面的区分，就是一个空心加号"*）。
+  ///
+  /// 🔴 它**只改长相**（空的、虚线的格子 ＋ 那个加号），**不改任何行为**：
+  ///    点它走 [onOpen] 那一条（上层接的是"开那个新建的小程序那一层浮窗"）。
+  /// ⚠️ 加号那一格**没有菜单**（不改名/不复制/不删）—— 那三样都由 `null` 挡着。
+  final bool isCreate;
+
   /// 未读小点（`02-ARCHITECTURE.md`：**动作可静默，事实不能静默**）。
   /// `0` = 不画。⚠️ 现在还没有人给它赋值 —— 等真有"未读"这件事时再接。
   final int badge;
@@ -92,6 +101,10 @@ class DesktopApp {
 ///   "不会拼音 / 视力弱"的人（`01-PROJECT.md`），52 那一档在手机上看着像一粒纽扣。
 ///   判据 `test/widget/desktop_test.dart` 钉住"不许再缩回去"。
 const double desktopIconBox = 64;
+
+/// **加号那一格**里那个加号多大（比普通图标大一点：它没有名字可认，全靠形状）。
+/// ⚠️ 它量的是**图形**；命中区仍由整个图标格（`desktopIconBox` ≥44）撑着。
+const double desktopAddIconSize = 30;
 
 /// 一格**最多**多宽（名字更长就把字省略，格子不许跟着长胖）。
 /// ⚠️ 原来这个 88 是写死在 `clamp` 里的 —— 提出来，好让"格子和字"一起算。
@@ -346,26 +359,35 @@ class _DesktopIconState extends State<_DesktopIcon> {
                 width: desktopIconBox,
                 height: desktopIconBox,
                 decoration: BoxDecoration(
-                  color: d.card,
+                  // ★ 加号那一格：**空的 + 一圈虚线** ⇒ 一眼看出"这是个空位，点它能加"
+                  //   （主人要的"比较显著的 UI 区分"）；其余那几格照旧是白卡 + 阴影。
+                  color: app.isCreate ? Colors.transparent : d.card,
                   borderRadius: BorderRadius.circular(d.radiusCard),
                   // ★ 主人 2026-09-22：*"小程序图标要有阴影。"*
                   //   浅一点（图标是一小块，用浮窗那种 α.45 会脏）
                   // ⚠️ 这三个数**住 `design.dart`**（`tileShadow*`）：小程序扩开那一层
                   //    的**起点就是它**，两处必须是同一份（主人 2026-09-23 报的"没有阴影"）。
-                  boxShadow: [
-                    BoxShadow(
-                      color: d.ink.withValues(alpha: d.tileShadowAlpha),
-                      blurRadius: d.tileShadowBlur,
-                      offset: const Offset(0, d.tileShadowDy),
-                    ),
-                  ],
+                  boxShadow: app.isCreate
+                      ? const <BoxShadow>[]
+                      : [
+                          BoxShadow(
+                            color: d.ink.withValues(alpha: d.tileShadowAlpha),
+                            blurRadius: d.tileShadowBlur,
+                            offset: const Offset(0, d.tileShadowDy),
+                          ),
+                        ],
                 ),
                 child: Stack(
                   children: [
                     Center(
                       child: Opacity(
                         opacity: hideIcon ? 0 : 1,
-                        child: Icon(app.icon, color: d.ink),
+                        child: Icon(
+                          app.icon,
+                          color: app.isCreate ? d.muted : d.ink,
+                          // 加号那一格：**大一点**（它没有名字可认，全靠形状）
+                          size: app.isCreate ? desktopAddIconSize : null,
+                        ),
                       ),
                     ),
                     if (app.badge > 0)

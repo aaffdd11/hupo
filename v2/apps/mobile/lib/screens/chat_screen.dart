@@ -772,6 +772,17 @@ class _ChatScreenState extends State<ChatScreen> {
                     onCopy: () => _copyMyApp(a.id),
                     onRemove: () => _removeMyApp(a.id),
                   ),
+                // ★ **创建小程序**（主人 2026-09-27）：桌面末尾那一格"空心加号"。
+                //   🔴 **它只长在桌面上** —— 小程序容器一开就把整页盖住 ⇒
+                //      进了小程序就点不到它（"里面不能再建一个"在**看得见**这一侧成立）；
+                //      助手那条路另有一道闸（`apps-socket.js` 的 `create`）。
+                //   ⚠️ 那一格**没有菜单**（不改名 / 不复制 / 不删）：三样都传 `null`。
+                DesktopApp(
+                  label: createAppLabel,
+                  icon: Icons.add,
+                  isCreate: true,
+                  onOpen: (_) => unawaited(_createApp()),
+                ),
               ],
               // ★ 2026-09-24：正在扩开/收回的那一格，**图标先消失**（打开那一瞬间就藏；
               //   收回时**藏到动画结束**才放回来 —— 主人原话："appicon 应该是动效结束后出现"）
@@ -1327,6 +1338,58 @@ class _ChatScreenState extends State<ChatScreen> {
   ///
   /// ⚠️ **空名字本地就拦住**（`desktopRenameEmpty`）：发一个注定被拒的请求，
   ///    然后拿服务端那句工程话去解释，比不说更坏。
+  /// ★ **"创建一个小程序"那一趟**（主人 2026-09-27）。
+  ///
+  /// 顺序：**先问名字与描述**（那一层浮窗）⇒ 交给服务端 ⇒ 成了**重拉清单**
+  /// （桌子照服务端那一份画 —— 新那一格就自己长出来了，不用客户端拼）。
+  ///
+  /// 🔴 三条：
+  ///   · **名字必填**：他按了确定却没写字 ⇒ **本地就拦住**（别发一个注定被拒的请求），
+  ///     并说一句"得先起个名字"；
+  ///   · **描述可以不写**（原话：*"这个描述用户可以写也可以不写"*）；
+  ///   · 服务端拒了（名字太长…）⇒ **把服务端那句人话原样说出来**（那几句话只有它说得准）。
+  Future<void> _createApp() async {
+    final got = await _askNewApp();
+    if (got == null || !mounted) return;
+    if (got.title.isEmpty) {
+      _say(createAppNeedName);
+      return;
+    }
+    final token = widget.controller.token;
+    if (token == null) {
+      _say(createAppFailed);
+      return;
+    }
+    final out = await widget.controller.api.createApp(
+      token: token,
+      title: got.title,
+      description: got.description,
+    );
+    if (!mounted) return;
+    switch (out) {
+      case CreateAppOk():
+        await _loadMyApps();
+        if (mounted) _say(createAppDone);
+      case CreateAppUnauthorized():
+        _unauthorized();
+      case CreateAppFailed(:final words):
+        _say(words.isEmpty ? createAppFailed : words);
+    }
+  }
+
+  /// 那一层浮窗：**名字（必填）＋ 描述（选填）**。
+  ///
+  /// ⚠️ 返回 `null` = 【算了】/ 点外面 ⇒ 什么都不做；返回的那一对**原样**（trim 过的）
+  ///    —— 空名字那一条由 [_createApp] 说一句（**同一处判**，不在这儿再判一遍）。
+  Future<({String title, String description})?> _askNewApp() async {
+    final v = await showDialog<({String title, String description})>(
+      context: context,
+      builder: (_) => const _CreateAppDialog(),
+    );
+    if (v == null) return null;
+    return (title: v.title.trim(), description: v.description.trim());
+  }
+
   Future<void> _renameMyApp(String id, String currentTitle) async {
     final name = await _askNewName(currentTitle);
     if (name == null || !mounted) return;
@@ -2330,6 +2393,79 @@ class _EmptyState extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// **"新建一个小程序"那一层浮窗**（主人 2026-09-27 · 契约 `docs/dev/127`）。
+///
+/// 形状与改名那一层同源（`AlertDialog` + 自己的 `TextEditingController`）：
+/// **一个名字（必填）＋ 一个描述（选填）**，两个按钮。
+/// ⚠️ 控制器住**这一层**（不是 `showDialog` 那个闭包里）：弹层还没拆完就 dispose
+///    会当场抛 `A TextEditingController was used after being disposed`（改名那条踩过）。
+/// ⚠️ 描述那一栏的标签上**就写着"可以不写"** —— 不许让他猜这一栏要不要填。
+class _CreateAppDialog extends StatefulWidget {
+  const _CreateAppDialog();
+
+  @override
+  State<_CreateAppDialog> createState() => _CreateAppDialogState();
+}
+
+class _CreateAppDialogState extends State<_CreateAppDialog> {
+  final _name = TextEditingController();
+  final _desc = TextEditingController();
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _desc.dispose();
+    super.dispose();
+  }
+
+  void _ok() => Navigator.of(context).pop(
+    (title: _name.text, description: _desc.text),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      // 字放大到 3.1 倍时这一层会高过手机 ⇒ **要能滚**（§6.7 第 7 条那族）
+      scrollable: true,
+      title: const Text(createAppTitle),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _name,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: createAppNameLabel,
+              hintText: createAppNameHint,
+            ),
+          ),
+          const SizedBox(height: d.gapM),
+          TextField(
+            controller: _desc,
+            maxLines: 2,
+            decoration: const InputDecoration(
+              labelText: createAppDescLabel,
+              hintText: createAppDescHint,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
+          child: const Text(createAppNo),
+        ),
+        FilledButton(
+          onPressed: _ok,
+          style: FilledButton.styleFrom(minimumSize: const Size(44, 44)),
+          child: const Text(createAppOk),
+        ),
+      ],
     );
   }
 }

@@ -122,17 +122,22 @@ void main() {
     // 真入口：`ChatScreen` 自己喂给桌面那一层的那份清单（**不是** `app_spec.dart` 里的常量）
     final desktop = tester.widget<AppDesktop>(find.byType(AppDesktop));
     final labels = desktop.apps.map((a) => a.label).toList();
+    // ⚠️ 2026-09-27 起末尾还多**一格"创建小程序"**（主人要的那颗空心加号）——
+    //    它不是内置格，但**也在桌面上**，所以这一条按"内置那三格 ＋ 那一格"对表。
     expect(
       labels,
-      [settingsAppLabel, discoverAppLabel, harnessAppLabel],
+      [settingsAppLabel, discoverAppLabel, harnessAppLabel, createAppLabel],
       reason: '★ 桌面上的内置格就是这三个（奥数题那一格已从产品里去掉）；'
-          '多一格 / 少一格 / 还画着它 ⇒ 红',
+          '末尾那一格是"创建小程序"；多一格 / 少一格 / 还画着它 ⇒ 红',
     );
     // 而且**真的画到屏幕上**了（配置里有、屏上没有 ⇒ 红）
-    expect(labels.length, 3, reason: '★ 内置格数 = 3');
     for (final l in labels) {
       expect(find.text(l), findsOneWidget, reason: '★ 「$l」那一格没画到屏幕上');
     }
+    // 那一格**不是内置**（它没有 id ⇒ 不参与"打开哪一间/扩开那一格"那一套）
+    final tail = desktop.apps.last;
+    expect(tail.isCreate, isTrue, reason: '★ 末尾那一格是"创建"那一格');
+    expect(tail.id, isNull, reason: '★ 它没有 id（不是一个小程序）');
   });
 
   testWidgets('清单拉不到（500 / 空）⇒ 只剩内置那几个，聊天照常', (tester) async {
