@@ -24,12 +24,14 @@ import '../models/dsh_design.dart';
 import '../models/image_outcome.dart';
 import '../models/space.dart';
 import '../models/space_words.dart';
+import '../models/voice_record.dart';
 import '../models/voice_try.dart';
 import '../services/api.dart';
 import '../widgets/cred_form.dart';
 import '../widgets/dsh_look.dart';
 import '../widgets/image_try.dart';
 import '../widgets/key_form.dart';
+import '../widgets/voice_record.dart';
 import '../widgets/voice_try.dart';
 import 'about_screen.dart';
 
@@ -68,6 +70,7 @@ class SettingsScreen extends StatelessWidget {
     this.onSubmitCreds,
     this.onDrawImage,
     this.voiceTry,
+    this.voiceRecord,
     this.canHear = false,
     this.localOnly = false,
     this.onCancel,
@@ -101,6 +104,11 @@ class SettingsScreen extends StatelessWidget {
   ///
   /// ⚠️ `null` ⇒ 不画那一块（这条路没接上时**不给假按钮**）。
   final VoiceTryHandlers? voiceTry;
+
+  /// ★ **录一段（录音 ＋ 回放）**（主人 2026-09-27）：只有"语音"那一屏、而且接线了才给。
+  /// ⚠️ 它与 [voiceTry] **刻意不同**：这一块**一个字节都不往外发**
+  ///    （录下来只在这台设备上放），所以它**不关心有没有钥匙**。
+  final VoiceRecordHandlers? voiceRecord;
 
   /// 这个页面**开得了麦吗**（`services/hearing.dart` 的 `canHear`）。
   /// ⚠️ 假 ⇒ 那颗按钮**照画**，点下去只说一句白话（不装开麦 —— 同聊天那颗话筒）。
@@ -301,6 +309,7 @@ class SettingsScreen extends StatelessWidget {
     };
     final draw = onDrawImage;
     final vt = voiceTry;
+    final vr = voiceRecord;
     return [
       CredForm(
         fields: fields,
@@ -317,6 +326,10 @@ class SettingsScreen extends StatelessWidget {
       //   ⚠️ 没接线（`voiceTry == null`）就不画 —— 不给假按钮。
       //   ⚠️ **填没填都画**：这一档要能当场告诉他"还没配好、上面那三样就是它要用的"
       //      （图片那块不同：它没有"没配好"这一档，所以只在填了之后才画）。
+      // ★ **录一段（录音 ＋ 回放）**（主人 2026-09-27）：与上面那个表单**无关** ——
+      //   它不碰钥匙、不走上游：**只验这台设备的麦克风**。
+      //   ⚠️ 排在「试一下」**前面**："先能成功把录音录下来"是更基础的那一件事。
+      if (tab == credTabVoice && vr != null) VoiceRecord(handlers: vr),
       if (tab == credTabVoice && vt != null)
         VoiceTry(handlers: vt, hasOwn: credsFor(tab), canHear: canHear),
     ];

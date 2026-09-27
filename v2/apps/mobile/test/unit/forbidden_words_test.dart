@@ -345,6 +345,15 @@ void main() {
       createAppNeedName,
       createAppFailed,
       createAppDone,
+      // ★ 2026-09-27（契约 `docs/dev/128-VOICE-RECORD-AND-PLAY.md`）：设置页「语音」
+      //    那一屏「录一段」（录音＋回放）的每一句 —— **直接引数据源**。
+      voiceRecTitle,
+      voiceRecHint,
+      voiceRecStart,
+      voiceRecStop,
+      voiceRecPlay,
+      voiceRecPlayStop,
+      voiceRecEmpty,
       voiceTryTitle,
       voiceTryStart,
       voiceTryStop,

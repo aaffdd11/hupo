@@ -40,6 +40,7 @@ import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/timeline.dart';
 import 'package:hupo_app/models/tool_row.dart';
 import 'package:hupo_app/models/tool_row_words.dart';
+import 'package:hupo_app/models/voice_record.dart';
 import 'package:hupo_app/models/voice_try.dart';
 import 'package:hupo_app/models/queue_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
@@ -550,6 +551,15 @@ Future<void> _pumpVoiceTab(WidgetTester tester, double scale) async {
         onSubmitCreds: (t, v) async => KeySend.ok,
         // 开麦/收手在 VM 上没有真那一份 ⇒ 注一个假的（它只是形状）。
         voiceTry: VoiceTryHandlers(start: (e) async => null, stop: () {}),
+        // ★ 2026-09-27：「录一段」那一块也装上 —— 它那两颗按钮要进命中区扫描（≥44），
+        //    那一屏也要在五档字号下不溢出（判据见 `test/widget/voice_record_test.dart`）。
+        voiceRecord: VoiceRecordHandlers(
+          canRecord: true,
+          start: () async => null,
+          stop: () async => const RecordedClip(url: 'blob:judge', ms: 1000),
+          play: (u, onEnded) {},
+          stopPlay: () {},
+        ),
         canHear: true,
         onLogout: () {},
       ),
@@ -1051,20 +1061,29 @@ Future<void> sweep(WidgetTester tester, String where) async {
         recycled += 1;
         continue;
       }
-      // ⚠️ **先 `ensureVisible`，再量语义矩形。**
-      //    为什么非这样不可（2026-09-21 实测）：时间线**会滚**之后，
-      //    一个滚到一半的按钮，它的语义矩形是**被视口裁过的**——
-      //    「重发」明明有 44 高，量出来是 `Size(65.2, 20.5)`。
+      // 🔴 **量的是这颗按钮的布局盒子（`RenderBox.size`），不是语义矩形。**
+      //    为什么换掉（2026-09-27，加"录一段"那一块时撞上）：
+      //    **同一棵树、同一颗** 62 高的按钮，语义矩形会随滚动位置读出
+      //    `Size(552, 62)` / `Size(552, 42)` / `Size(552, -459)` 三种值
+      //    （实测：`配置页·语音那一屏` 3.1x；负的高度连矩形都不是）。
+      //    根子在框架那一侧：语义矩形的几何要按祖先视口的**语义裁剪**
+      //    在变换后的坐标里再切一次，切错了也没人报错。
       //    ⇒ 那种读数**随滚动位置变**：同一份代码，滚到哪儿决定闸红不红。
-      //      而"读数会变的闸"下一步就是被绕过。
+      //      而"读数会变的闸"下一步就是被绕过（原话见上面那段批注）。
+      //    ⚠️ **命中区**该量的是"手势打到哪儿"，而那正是 `RenderBox.hitTest`
+      //      用的 `size`；`_RenderInputPadding` 已经把 `Material` 之外那一圈
+      //      也算进来了（那本来就是 Flutter 给的命中区）。
+      //    ⚠️ 这一改**不放宽**判据：语义矩形只可能比盒子**小**（被裁过），
+      //      所以读数从"裁过的"换成"真的"——只可能把**假的红**量绿，不会反过来。
+      //    ⚠️ 仍然先 `ensureVisible`：先摆到屏幕上再量，"量的是他看得见的那一颗"。
       await tester.ensureVisible(w);
       await tester.pumpAndSettle();
-      final r = tester.getSemantics(w).rect;
+      final r = tester.getSize(w);
       checked += 1;
       expect(
         r.width >= minTouch && r.height >= minTouch,
         isTrue,
-        reason: '$where：$type 的**命中区**是 ${r.size}，小于 $minTouch×$minTouch',
+        reason: '$where：$type 的**命中区**是 $r，小于 $minTouch×$minTouch',
       );
     }
   }

@@ -43,7 +43,11 @@ import '../models/space_words.dart';
 import '../models/timeline.dart';
 import '../models/trash_words.dart';
 import '../models/voice_try.dart';
+import '../models/voice_record.dart';
 import '../services/api.dart';
+// ★ **录一段（录音 ＋ 回放）**：本机那一套（`services/recorder.dart` 的条件导出）。
+//   ⚠️ 取一个前缀：`canRecord` / `play` 这种名字在这里太容易和其它含义撞。
+import '../services/recorder.dart' as rec;
 import '../services/appearance_store.dart';
 import '../services/chat_controller.dart';
 import '../services/dev_harness_client.dart';
@@ -1001,6 +1005,15 @@ class _ChatScreenState extends State<ChatScreen> {
           //   🔴 **不碰钥匙**：那三样走 `/api/creds` ⇒ 服务端的 `voiceCredsFor`，
           //      这颗按钮只把音频送到 `/api/asr`（钥匙只有这一条路）。
           voiceTry: VoiceTryHandlers(start: c.hearOnce, stop: c.stopHearingNow),
+          // ★ **录一段（录音 ＋ 回放）**（主人 2026-09-27）：**本机那一套**，
+          //   与聊天那颗话筒/「试一下」**不共用**（那两条要走上游，这一条不出去）。
+          voiceRecord: VoiceRecordHandlers(
+            canRecord: rec.canRecord,
+            start: rec.recordStart,
+            stop: rec.recordStop,
+            play: rec.play,
+            stopPlay: rec.stopPlay,
+          ),
           canHear: c.canHear,
           onCancel: widget.onCancelMe,
           onCancelled: widget.onLoggedOut,
