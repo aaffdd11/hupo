@@ -156,6 +156,8 @@ class _MiniAppHostState extends State<MiniAppHost>
     // （**不是**"一关就消失"：关的时候要能看见它收回图标那一下）
     if (!widget.open && _c.isDismissed) return const SizedBox.shrink();
     final covered = widget.covered;
+    // 系统那条（状态栏/刘海）：**容器里的内容要从它下面开始**（见下面那个 `Padding`）。
+    final safe = MediaQuery.paddingOf(context);
     final screen = Offset.zero & MediaQuery.sizeOf(context);
     // 没给起点就从屏幕中心长出来（半个屏幕大的一块）
     final from =
@@ -209,7 +211,13 @@ class _MiniAppHostState extends State<MiniAppHost>
                 minHeight: screen.height,
                 maxHeight: screen.height,
                 child: Padding(
-                  padding: EdgeInsets.only(bottom: _inset),
+                  // 🔴 **顶上那条让给状态栏**（2026-09-28 安卓真机报的"顶部跟时间、WiFi 重叠"）：
+                  //    容器里没有抬头了（2026-09-27 撤掉）⇒ 制品/内置那几屏**从窗口最上面**
+                  //    开始画，而安卓是 edge-to-edge ⇒ 它们的第一行压在时钟底下。
+                  //    ⚠️ 网页（含手机浏览器）那条内边距是 0 ⇒ 一个像素都不变。
+                  //    ⚠️ 它和底部那条内缩（`_inset`）走**同一个 `Padding`**：一处口径，
+                  //      免得页面高度被两处各算一遍。
+                  padding: EdgeInsets.only(top: safe.top, bottom: _inset),
                   child: Navigator(
                     key: _nav,
                     onGenerateRoute: (_) =>

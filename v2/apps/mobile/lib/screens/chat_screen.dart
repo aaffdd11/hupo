@@ -15,6 +15,7 @@
 //    有 `forbidden_words` 那道闸守着，改文案时会拦。
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
@@ -712,11 +713,18 @@ class _ChatScreenState extends State<ChatScreen> {
     //    ⇒ 照整屏算出来的 `maxH` 会让浮窗**顶到屏幕外面去**
     //    （真机读数：390×844 + 键盘 300 ⇒ 浮窗顶在 **-270**，抓手/标题行/两个 tab
     //      全在屏幕上方，一个都点不到）。⇒ 减掉 `viewInsets.bottom`。
+    //  ★ **底下那条也要让出来**（2026-09-28 安卓真机）：手势条/导航条那一块
+    //    在 edge-to-edge 下是**盖在窗口上的** ⇒ 浮窗贴底贴到 10 的话，
+    //    输入条会被手势条压住。⇒ 取"我们要的留白"与"系统那条"里**大的那个**：
+    //    · 没有系统条（网页、桌面）⇒ `padding.bottom` 是 0 ⇒ 就是那个留白；
+    //    · 键盘弹起来时 `padding.bottom` 变 0（`Scaffold` 已经把身子缩到键盘之上）⇒ 也是那个留白。
+    final bottomGap = math.max(FloaterMetrics.margin, mq.padding.bottom);
     final maxH =
         mq.size.height -
         mq.padding.top -
         mq.viewInsets.bottom -
-        FloaterMetrics.margin * 2;
+        FloaterMetrics.margin -
+        bottomGap;
     final sheet = Scaffold(
       backgroundColor: d.paper,
       body: Stack(
@@ -828,11 +836,12 @@ class _ChatScreenState extends State<ChatScreen> {
             right: 0,
             child: SafeArea(bottom: false, child: PlanStrip(plan: c.plan)),
           ),
-          // ② 聊天浮窗（贴底、四边 30、永远在最上 —— Z1/Z3/Z4）
+          // ② 聊天浮窗（贴底、四边 `FloaterMetrics.margin`、永远在最上 —— Z1/Z3/Z4）
           Positioned(
             left: FloaterMetrics.margin,
             right: FloaterMetrics.margin,
-            bottom: FloaterMetrics.margin,
+            // ⚠️ 底下那个值见上面 `bottomGap` 那段（**系统那条比我们的留白大时听系统的**）。
+            bottom: bottomGap,
             // ⚠️ **不给 `height`**：收起档的高度要**由内容算**（D3.5）；
             //    半开/最大化由 `ChatFloater` 自己按系数定（它拿到 `maxHeight`）。
             child: ChatFloater(

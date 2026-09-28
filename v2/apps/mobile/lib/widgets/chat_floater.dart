@@ -67,9 +67,14 @@ const Key chatActionsStripKey = Key('chat-actions-strip');
 class FloaterMetrics {
   const FloaterMetrics._();
 
-  /// **四边留的边距**（Z3 + Z4：盖住不是铺满）。主人 2026-09-22 定的数。
+  /// **四边留的边距**（Z3 + Z4：盖住不是铺满）。
+  ///
   /// ⚠️ 表在手册 `08-SPEC.md` §10.1（阈值总表），改这里就要改那儿并升版本。
-  static const double margin = 30;
+  /// 🔴 **2026-09-28 改成 10**（主人在安卓真机上定的：*"底部的聊天窗口有点 margin
+  ///    太多太多了。至少可以少去 2/3"* —— 30 的三分之一就是 10）。
+  /// ⚠️ 它是**四边共用**的一个数：手机上左右也跟着窄了（390 宽下原来左右各吃 30，
+  ///    现在各吃 10）—— 网页桌面那一版也一起变（同一个常量，没有按平台分叉）。
+  static const double margin = 10;
 
   /// 半开占**可用高度**的比例（§6.2：高度用系数表达）。
   static const double halfRatio = 0.55;

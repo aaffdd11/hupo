@@ -733,13 +733,25 @@ ChatController _queueOnly(int n) {
 /// ⚠️ **必须指名是聊天那一屏那个 `ListView`**（批 5 起右栏里也有一个 ⇒
 ///    `find.byType(ListView)` 会**同时找到两个**，`drag` 当场报"ambiguous"）。
 Future<void> _toTop(WidgetTester tester) async {
-  await tester.drag(
+  // 🔴 **2026-09-28 改成"跳到最顶"**（原来是甩一把 `drag(0, 4000)`）。
+  //
+  // 为什么要改：甩的结果由**甩的物理**＋当时的视口高度决定 —— 而浮窗高一点/矮一点
+  // 就会让它停到另一头，`ListView` 的懒加载跟着换一批格子。
+  // 实测：主人把浮窗四边留白从 30 改成 10（`FloaterMetrics.margin`）之后，
+  // 这一甩的落点从"最顶"变成了"最新"，于是「1 次工具调用」那一条**不在树里**了 ——
+  // **被测代码一点毛病都没有**，是这一步的落点不稳（同一族：读数随滚动位置变）。
+  // ⇒ 直接 `jumpTo(minScrollExtent)`：**确定性**，而且它正是这个助手名字说的那件事。
+  final s = tester.state<ScrollableState>(
     find
-        .descendant(of: find.byKey(chatBodyKey), matching: find.byType(ListView))
+        .descendant(of: find.byKey(chatBodyKey), matching: find.byType(Scrollable))
         .first,
-    const Offset(0, 4000),
   );
-  await tester.pumpAndSettle();
+  s.position.jumpTo(s.position.minScrollExtent);
+  // ⚠️ **只 `pump()` 一帧，不 `pumpAndSettle()`**：展开之后应用会**钉到最新**
+  //    （`chat_screen.dart` 那条"展开 = 时间线刚建出来 ⇒ 立刻钉到最新"），
+  //    而 `pumpAndSettle` 正好会把它跑到那儿 ⇒ 一跳回最顶又被拉回最新（实测：
+  //    pixels 122 → 跳 0 → 又变回 122）。一帧够 `ListView` 把那几格建出来。
+  await tester.pump();
 }
 
 /// **像用户那样**把工具行展开（点它右边那个箭头）。
@@ -1055,8 +1067,7 @@ Future<void> sweep(WidgetTester tester, String where) async {
     ];
     for (final (type, widget) in snapshot) {
       final w = find.byWidget(widget);
-      // 这一格已经被列表回收（滚走了）⇒ 它**不在屏幕上**，这一次量不到它。
-      // ⚠️ 如实记数（下面那条 `checked > 0` 的负向对照照旧）。
+      // 这一格已经被列表回收 ⇒ 它**不在屏幕上**，这一次量不到它（如实记数）。
       if (w.evaluate().isEmpty) {
         recycled += 1;
         continue;
@@ -1075,9 +1086,16 @@ Future<void> sweep(WidgetTester tester, String where) async {
       //      也算进来了（那本来就是 Flutter 给的命中区）。
       //    ⚠️ 这一改**不放宽**判据：语义矩形只可能比盒子**小**（被裁过），
       //      所以读数从"裁过的"换成"真的"——只可能把**假的红**量绿，不会反过来。
-      //    ⚠️ 仍然先 `ensureVisible`：先摆到屏幕上再量，"量的是他看得见的那一颗"。
-      await tester.ensureVisible(w);
-      await tester.pumpAndSettle();
+      //
+      // 🔴 **2026-09-28：不再 `ensureVisible` 了**（原来那一滚先摆到屏幕上再量）。
+      //    理由：`RenderBox.size` 本来就**与滚动位置无关**（滚不滚都是那个盒子），
+      //    而那一滚会把懒加载列表里的格子**回收重建** ⇒ 快照里那个 `Widget` 实例
+      //    再也 match 不上（`getSize` 当场 `Bad state: No element`，或如实记进
+      //    `recycled` 而被下面那条"必须量满整屏"的断言抓住 —— 两种都不是被测代码的毛病）。
+      //    实测触发条件只是**浮窗高了 20 像素**（主人把留白 30 改成 10）：
+      //    3.1x 下右栏那一屏有 5 颗按钮被回收。⇒ 不滚就没有回收，
+      //    `recycled` 回到 0（那条断言反而更严了：**整屏每一颗都量到**）。
+      //    ⚠️ 覆盖面一点没少：`evaluate()` 本来就只看得到**已经建出来**的格子。
       final r = tester.getSize(w);
       checked += 1;
       expect(

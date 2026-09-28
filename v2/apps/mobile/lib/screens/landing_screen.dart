@@ -68,8 +68,13 @@ class LandingScreen extends StatelessWidget {
       data: theme,
       child: Scaffold(
         backgroundColor: _paper,
-        body: Center(
-          child: ConstrainedBox(
+        // 🔴 **顶上那条让给状态栏**（2026-09-28 主人在安卓真机上报的：*"我看到它顶部跟时间、
+        //   WiFi 信号重叠了"*）：安卓是 **edge-to-edge**（`targetSdk` 已经到 36 ⇒ 系统强制），
+        //   而这一屏原来直接从窗口最上面开始排 ⇒ 标志与标题压在**时钟、信号**底下。
+        //   ⚠️ 网页上那条内边距是 0（含手机浏览器）⇒ **一个像素都不变** —— 这正是 `SafeArea` 的用法。
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
             // 内容列限宽（参考站也是一条窄列）
             constraints: const BoxConstraints(maxWidth: 640),
             // ⚠️ `ListView` 不是 `Column`：字体放到最大时**能滚**，而不是溢出
@@ -239,6 +244,7 @@ class LandingScreen extends StatelessWidget {
                 ),
               ],
             ),
+          ),
           ),
         ),
       ),

@@ -116,7 +116,11 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      body: Center(
+      // 🔴 **顶上那条让给状态栏**（2026-09-28 安卓真机报的"顶部跟时间、WiFi 重叠"）：
+      //    安卓 edge-to-edge ⇒ 不 `SafeArea` 的话标志/标题压在时钟底下。
+      //    ⚠️ 网页那条内边距是 0 ⇒ 一个像素都不变。
+      body: SafeArea(
+        child: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: ConstrainedBox(
@@ -191,6 +195,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ],
             ),
           ),
+        ),
         ),
       ),
     );
