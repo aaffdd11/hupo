@@ -13,22 +13,21 @@ import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatf
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'models/entry_screen.dart';
 import 'models/forbidden_words.dart';
 import 'screens/chat_screen.dart';
-import 'screens/landing_screen.dart';
 import 'screens/app_theme.dart';
-import 'screens/login_screen.dart';
 import 'services/api.dart';
 import 'models/image_outcome.dart';
 import 'models/space.dart';
 import 'screens/model_key_screen.dart';
+import 'screens/not_logged_in.dart';
 import 'screens/waiting_screen.dart';
 import 'services/chat_controller.dart';
 import 'services/hearing_native.dart';
 import 'services/recorder_native.dart';
 import 'widgets/mini_native_boot.dart';
 import 'services/token_store.dart';
-import 'widgets/soft_switch.dart';
 
 void main() {
   // ★ **网页上关掉浏览器自己的右键菜单**（主人 2026-09-25 签字："关掉"）。
@@ -220,6 +219,21 @@ class _HupoAppState extends State<HupoApp> {
     });
   }
 
+  /// **没登录时那一屏**（网页先落地页；安卓直接登录页 —— 见 `screens/not_logged_in.dart`）。
+  ///
+  /// 🔴 主人 2026-09-28 在安卓真机上定的（原话见那一份的抬头）。
+  /// ⚠️ `landingFirst` 从 `models/entry_screen.dart` 那一处取 —— **别在这儿另写一个判断**。
+  Widget _entryScreens() => NotLoggedInScreen(
+    // 🔴 平台那一刀只有这一处（`landingFirstFor`）
+    landingFirst: landingFirstFor(isWeb: kIsWeb),
+    showLogin: _showLogin,
+    onStart: () => setState(() => _showLogin = true),
+    onBack: () => setState(() => _showLogin = false),
+    api: _api,
+    needsSetup: _needsSetup,
+    onLoggedIn: _onLoggedIn,
+  );
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -276,23 +290,7 @@ class _HupoAppState extends State<HupoApp> {
                     if (t != null) await _askSpace(t);
                   },
                 )
-              : SoftSwitch(
-                  // ★ **首页 ⇄ 登录页 = 丝滑地换，不是硬切**（主人 2026-09-22：
-                  //   *"从首页，点击开始，到登录页显示，我希望是一个丝滑的过渡展示效果，
-                  //   而不是突然出现的效果。"*）
-                  //   ⚠️ 两条路（"开始用"过去 / 箭头回来）**共用这一次过渡**：
-                  //     只做一半的话，回来那一下还是会"啪"地闪。
-                  showSecond: _showLogin,
-                  first: LandingScreen(onStart: () => setState(() => _showLogin = true)),
-                  second: LoginScreen(
-                    api: _api,
-                    needsSetup: _needsSetup,
-                    onLoggedIn: _onLoggedIn,
-                    // ★ **回首页**（主人 2026-09-22）：登录那一屏顶上留着首页的 header，
-                    //   箭头点一下就回到第一屏（不是退出登录 —— 那时还没登录）。
-                    onBack: () => setState(() => _showLogin = false),
-                  ),
-                ),
+              : _entryScreens(),
     );
   }
 }
