@@ -100,6 +100,10 @@ const Key chatHomeHintKey = Key('chat-home-hint');
 /// 那颗 home 的**图形**多大（原来 18 —— 主人 2026-09-27：*"扩大一些"*）。
 const double homeButtonIcon = 22;
 
+/// 那颗 home **实底圆片**的直径（2026-09-29：bar 半透明之后，它得有个不透明的底）。
+/// ⚠️ 比命中区小：**量的是看得见的那一圈**，可点区由 `homeButtonHit` 管（D3.6）。
+const double homeButtonFace = 34;
+
 /// 那颗 home 的**命中区**（D3.6：≥44；图形摆在中间，四周透明）。
 const double homeButtonHit = 44;
 
@@ -1183,20 +1187,39 @@ class _ChatScreenState extends State<ChatScreen> {
   /// ⚠️ **图形规则一个字没改**（主人 2026-09-23 定的）：桌面上是**家**，
   ///    进了某个小程序就是**它自己的图标**（`_scopeIcon`，与桌面上那一个是同一个来源）。
   ///    他这次说的是**那颗按钮**（位置/作用），不是"把图形换成房子"。
-  Widget _homeButton(ChatController c) => Tooltip(
-    message: _scopeWords(c),
-    child: InkWell(
-      key: chatHomeButtonKey,
-      onTap: () => _backToDesktop(c),
-      customBorder: const CircleBorder(),
-      child: SizedBox(
-        // ⚠️ 命中区 ≥44（D3.6）：图形 22 摆在中间，四周是透明的可点区
-        width: homeButtonHit,
-        height: homeButtonHit,
-        child: Center(child: Icon(_scopeIcon(c), size: homeButtonIcon, color: d.ink)),
+  Widget _homeButton(ChatController c) {
+    // ★ 2026-09-29 主人：*"上面的左侧是home按钮……这些按钮就不是透明的了。"*
+    //   ⇒ 底下那条 bar 现在是**半透明**的，而这一颗**不跟着透**：
+    //     一层实底（`bgLayer2`）＋ 圆形裁剪 ⇒ 它看起来是"贴在玻璃上的一枚圆片"。
+    //   ⚠️ 命中区仍是 `homeButtonHit`（≥44，D3.6）：**底是可见的那一圈，
+    //     可点区还是外面那个方框**（图形 22 摆在正中，四周留白照旧算命中区）。
+    final look = DshLook.of(context);
+    return Tooltip(
+      message: _scopeWords(c),
+      child: InkWell(
+        key: chatHomeButtonKey,
+        onTap: () => _backToDesktop(c),
+        customBorder: const CircleBorder(),
+        child: SizedBox(
+          width: homeButtonHit,
+          height: homeButtonHit,
+          child: Center(
+            child: Container(
+              width: homeButtonFace,
+              height: homeButtonFace,
+              decoration: BoxDecoration(
+                color: look.palette.bgLayer2,
+                shape: BoxShape.circle,
+              ),
+              child: Center(
+                child: Icon(_scopeIcon(c), size: homeButtonIcon, color: d.ink),
+              ),
+            ),
+          ),
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   /// **点那颗 home**（主人 2026-09-27：*"点击 home 就是回到桌面"*）。
   ///

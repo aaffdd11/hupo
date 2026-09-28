@@ -285,16 +285,16 @@ class _ComposerState extends State<Composer> {
                 const SizedBox(width: 8),
               ],
               // ★ 2026-09-24：原来这里那个**话筒/键盘切换**按钮搬走了 ——
-              //   主人：*"语音按钮放在聊天框内部的右侧"* ⇒ 它现在是框里那行的
-              //   `suffixIcon`（见 `_field`）。**没有"语音档"了**：按一下就开始听、
+              //   主人：*"语音按钮放在聊天框内部的右侧"* ⇒ 它当时成了框里那行的
+              //   `suffixIcon`。**没有"语音档"了**：按一下就开始听、
               //   字直接落进这个框、再按一下结束。
-              // ★ 框（**话筒在它里面的右侧** —— 主人 2026-09-24）
+              // ★ 2026-09-29 **又搬了一次**（主人：*"上面的左侧是home按钮，中间是文字输入，
+              //   右侧是语音按钮。这些按钮就不是透明的了。"*）：
+              //   ⇒ 这一行现在是**三段**：`[home] [框（发送在框里）] [话筒]`，
+              //     话筒在**这一行的最右**（不在框里面了），而且三样都是**不透明**的。
               Expanded(child: _field(look)),
               const SizedBox(width: 4),
-              // ★ **发送**（主人 2026-09-24：*"聊天框右侧应该是一个发送按钮。一开始是灰色的。"*）
-              //   ⚠️ 这一条**推翻了 2026-09-23 那个"有字才画"**（那也是主人拍的板）：
-              //      现在它**一直在**，没字时是灰的、按不动 —— 位置固定，界面不跳（D4.8）。
-              _sendButton(theme, p),
+              _micButton(p),
             ],
           ),
               if (widget.hintAbove != null)
@@ -417,6 +417,10 @@ class _ComposerState extends State<Composer> {
       hintStyle: dshTextStyle(look.scale.at(DshTypes.base), look.palette.labelTertiary),
       border: const OutlineInputBorder(),
       isDense: true,
+      // ★ 2026-09-29：**框自己是实底**（主人："这些按钮就不是透明的了"）——
+      //   底下那条 bar 是半透明的，框要是也透，字就压在桌面/壁纸上。
+      filled: true,
+      fillColor: look.palette.bgLayer2,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
       // ⚠️ 框里那两颗按钮的**下限**：命中区 ≥44（D3.6）。
       //    不写这一条，`isDense` 的框会把它们压小 —— a11y 那道硬闸当场会抓。
@@ -426,9 +430,13 @@ class _ComposerState extends State<Composer> {
         children: [
           // ★ **读出来**（主人 2026-09-23 定案：替掉原来演示用的「听筒 / 扬声器」）。
           //   契约 `docs/dev/68-SPEAK.md`。**念不了就不画**（界面上不许有按不动的东西）。
-          //   2026-09-24：它原来住在"语音档"里，那一档没了 ⇒ 跟话筒一起住在框里。
           if (widget.canSpeak) _speakerButton(look.palette),
-          _micButton(look.palette),
+          // ★ **发送**（主人 2026-09-24：*"聊天框右侧应该是一个发送按钮。一开始是灰色的。"*）
+          //   ⚠️ 2026-09-23 那个"有字才画"被它推翻了：现在它**一直在**，
+          //      没字时是灰的、按不动 —— 位置固定，界面不跳（D4.8）。
+          //   ★ 2026-09-29：它从"框外面"搬进**框里的最右**（这样这一行的最右
+          //      才是**话筒** —— 主人那句"右侧是语音按钮"）。
+          _sendButton(Theme.of(context), look.palette),
         ],
       ),
     ),
@@ -442,6 +450,8 @@ class _ComposerState extends State<Composer> {
   Widget _micButton(DshPalette p) {
     final busy = widget.hearing.busy;
     return IconButton(
+      // ★ 2026-09-29：**实底**（bar 是半透明的，它不许跟着透）
+      style: IconButton.styleFrom(backgroundColor: p.bgLayer2),
       tooltip: busy ? hearStop : hearStart,
       onPressed: () {
         if (!widget.canHear) {
@@ -519,9 +529,22 @@ class _ComposerState extends State<Composer> {
     final h = widget.hearing;
     final live = h.listening;
     final p = look.palette;
+    // ★ 2026-09-29：**这一行自己也带一块实底** —— bar 现在是半透明的，
+    //   而这行字是直接画在 bar 上的（红点 + "正在听" + 为什么停了）。
+    //   不给它实底的话，它的对比度会**随着底下那张壁纸变**（手册 §8.3 那条
+    //   "正文与底色 ≥ 4.5:1"就成了看运气）⇒ 与上面那条 `_noticeStrip` 同一种形状。
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
+      child: Container(
+        width: double.infinity,
+        // ⚠️ 用 token（`P1-8` 那道棘轮不认数字字面量；这一条就是它教的）
+        padding: const EdgeInsets.symmetric(horizontal: d.gapM, vertical: d.gapS),
+        decoration: BoxDecoration(
+          color: p.bgLayer2,
+          borderRadius: BorderRadius.circular(d.radiusField),
+          border: Border.all(color: p.borderL2),
+        ),
+        child: Row(
         children: [
           if (h.busy) ...[
             Text(
@@ -549,6 +572,7 @@ class _ComposerState extends State<Composer> {
             ),
           ),
         ],
+        ),
       ),
     );
   }

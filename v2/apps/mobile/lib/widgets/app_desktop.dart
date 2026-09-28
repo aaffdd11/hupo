@@ -27,6 +27,7 @@ import 'dart:async';
 import 'package:flutter/gestures.dart' show kPrimaryButton;
 import 'package:flutter/material.dart';
 
+import '../models/app_tint.dart';
 import '../models/design.dart' as d;
 import '../models/space_words.dart';
 import '../models/wallpaper.dart';
@@ -419,8 +420,12 @@ class _DesktopIconState extends State<_DesktopIcon> {
                 height: desktopIconBox,
                 decoration: BoxDecoration(
                   // ★ 加号那一格：**空的 + 一圈虚线** ⇒ 一眼看出"这是个空位，点它能加"
-                  //   （主人要的"比较显著的 UI 区分"）；其余那几格照旧是白卡 + 阴影。
-                  color: app.isCreate ? Colors.transparent : d.card,
+                  //   （主人要的"比较显著的 UI 区分"）；其余那几格照旧是阴影。
+                  // ★ 2026-09-29 主人：*"所有小程序的icon都需要一个背景颜色。不同的背景颜色。"*
+                  //   ⇒ 底色**按这个 app 的身份算**（`appTintFor`，同一个 app 永远同一色；
+                  //     没有 id 的用名字兜底 —— 桌面上不许出现"没底"的一格）。
+                  //   ⚠️ 图标本身还是**墨色**（下面那行），底色那一族都够浅（见 `app_tint.dart`）。
+                  color: app.isCreate ? Colors.transparent : appTintFor(app.id ?? app.label),
                   borderRadius: BorderRadius.circular(d.radiusCard),
                   // ★ 主人 2026-09-22：*"小程序图标要有阴影。"*
                   //   浅一点（图标是一小块，用浮窗那种 α.45 会脏）

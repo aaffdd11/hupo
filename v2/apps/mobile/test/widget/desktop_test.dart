@@ -9,6 +9,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hupo_app/models/app_tint.dart';
+import 'package:hupo_app/models/design.dart' as d;
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/widgets/app_desktop.dart';
 
@@ -57,6 +59,46 @@ void main() {
     );
     expect(box.width, desktopIconBox);
     expect(box.height, desktopIconBox);
+  });
+
+  testWidgets('🔴 每一格的底是**按身份算的那个色**（不是清一色白卡）', (tester) async {
+    // 主人 2026-09-29：*"所有小程序的icon都需要一个背景颜色。不同的背景颜色。"*
+    await pump(tester, [
+      DesktopApp(label: '设置', id: 'settings', icon: Icons.star_outline, onOpen: (_) {}),
+      DesktopApp(label: '发现', id: 'discover', icon: Icons.star_outline, onOpen: (_) {}),
+    ]);
+
+    Color tileColorOf(String label) {
+      // 那一格的图标格（`desktopIconBox` 那个方块）—— 从标签往上找到那个 Container
+      final box = find
+          .ancestor(of: find.text(label), matching: find.byType(Column))
+          .first;
+      final c = find.descendant(of: box, matching: find.byType(Container)).first;
+      final dec = tester.widget<Container>(c).decoration! as BoxDecoration;
+      return dec.color!;
+    }
+
+    final a = tileColorOf('设置');
+    final b = tileColorOf('发现');
+    // 负向对照：**不是**那张白卡（`d.card` 是改之前那一版的样子）
+    expect(a, isNot(d.card), reason: '★ 图标还是白底 —— 这一刀没画到屏幕上');
+    expect(a, appTintFor('settings'));
+    expect(b, appTintFor('discover'));
+    expect(a, isNot(b), reason: '★ 两个身份算出来同一个色（这一条只对这两个内置的钉死）');
+    // ⚠️ 底色**不跟主题走**（它是"这个 app 长什么样"，不是"这块屏什么档"）
+    expect(appTintFor('settings'), appTintFor('settings'));
+  });
+
+  testWidgets('★ 加号那一格**还是空的**（它不是小程序，不给它上色）', (tester) async {
+    var opened = 0;
+    await pump(
+      tester,
+      [DesktopApp(label: '创建小程序', icon: Icons.add, isCreate: true, onOpen: (_) => opened += 1)],
+    );
+    final box = find.ancestor(of: find.text('创建小程序'), matching: find.byType(Column)).first;
+    final c = find.descendant(of: box, matching: find.byType(Container)).first;
+    final dec = tester.widget<Container>(c).decoration! as BoxDecoration;
+    expect(dec.color, Colors.transparent, reason: '加号那一格是"空位"，不是一个小程序 ⇒ 不许上色');
   });
 
   testWidgets('★ 桌子上有一句引导（原来一句都没有）', (tester) async {

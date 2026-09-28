@@ -150,6 +150,14 @@ Material _floaterMaterial(WidgetTester tester) => tester.widget<Material>(
   find.descendant(of: find.byType(ChatFloater), matching: find.byType(Material)).first,
 );
 
+/// **浮窗的底是哪一档色板**（**不看透明度**）。
+///
+/// ⚠️ 2026-09-29 起：**收起那条 bar 是半透明的**（主人要的"一个半透明的bar"，
+///    见 `132`）⇒ 那几个 alpha 不是 1 了。这一组判据问的是"**哪一档**"（亮/暗），
+///    不是"透不透" —— 透不透由 `desktop_floater_test.dart` 单独钉着。
+Color _floaterBg(WidgetTester tester) =>
+    _floaterMaterial(tester).color!.withValues(alpha: 1.0);
+
 /// **像用户那样**打开「设置」那一屏（点桌面上那个图标）。
 Future<void> _openSettings(WidgetTester tester) async {
   await tester.tap(find.text(settingsAppLabel));
@@ -223,7 +231,7 @@ void main() {
     // ① 默认那一档 = 亮（暗色那一套没做完；没做完的样子不许当默认推给人）
     expect((await AppearanceStore().read()).appearance, ChatAppearance.light,
         reason: '★ 没存过时的默认不是亮 ⇒ 暗色手机上又会是"黑底 ＋ 淡粉条"');
-    expect(_floaterMaterial(tester).color, DshPalette.light.bgLayer1,
+    expect(_floaterBg(tester), DshPalette.light.bgLayer1,
         reason: '★ 默认那一档的底不是亮色板');
 
     // ② 设置那一屏：只有「亮」可选，另外两档**不在屏幕上**，但"明说砍了"那句在
@@ -250,7 +258,7 @@ void main() {
     final (screen, _, _) = await _screen();
     await tester.pumpWidget(MaterialApp(home: screen));
     await tester.pumpAndSettle();
-    expect(_floaterMaterial(tester).color, DshPalette.light.bgLayer1,
+    expect(_floaterBg(tester), DshPalette.light.bgLayer1,
         reason: '★ 存着 system 时窗口不是亮的');
 
     await _openSettings(tester);
@@ -285,7 +293,7 @@ void main() {
     await tester.pumpAndSettle();
     // 盘上真存着 `system`（老版本写的 / 他以前选过）—— 照收，但**暂时解成亮**
     expect((await AppearanceStore().read()).appearance, ChatAppearance.system);
-    expect(_floaterMaterial(tester).color, DshPalette.light.bgLayer1,
+    expect(_floaterBg(tester), DshPalette.light.bgLayer1,
         reason: '★ 暗色手机上又跟着系统变暗了 —— 那正是主人报的那一屏（暗色还没做完）');
   });
 
@@ -361,7 +369,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull, reason: '★ 盘上那个串把界面弄崩了');
-    expect(_floaterMaterial(tester).color, DshPalette.light.bgLayer1,
+    expect(_floaterBg(tester), DshPalette.light.bgLayer1,
         reason: '★ 认不出的外观没有退回默认档');
     expect(_rowFontSize(tester), 14, reason: '★ 认不出的字号没有退回默认档');
   });

@@ -377,7 +377,16 @@ class ChatFloaterState extends State<ChatFloater> {
                 behavior: HitTestBehavior.opaque,
                 child: Material(
                   // ★ 窗口的底 = DSH 的 `bg-layer-1`（亮色就是纯白，暗色 #232324）。
-                  color: p.bgLayer1,
+                  // ★ 2026-09-29 主人：*"底部的聊天组件我想要首先一个半透明的bar……
+                  //   这些按钮就不是透明的了。"*
+                  //   ⇒ **收起档那一条**的底是**半透明**的（桌面/壁纸透过来一点），
+                  //     而 bar 上那三样（home / 输入框 / 话筒）各自是不透明实底
+                  //     （见 `composer.dart` 与 `chat_screen.dart` 的 `_homeButton`）。
+                  //   🔴 **展开档必须维持不透明**：那一档里面是时间线，
+                  //     底透了就变成"字压在壁纸上"，读不了（这一条不许顺手改）。
+                  color: collapsed
+                      ? p.bgLayer1.withValues(alpha: d.barVeilAlpha)
+                      : p.bgLayer1,
                   child: Column(
                     mainAxisSize: collapsed ? MainAxisSize.min : MainAxisSize.max,
                     children: [

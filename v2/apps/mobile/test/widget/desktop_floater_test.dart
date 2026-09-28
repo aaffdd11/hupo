@@ -11,7 +11,9 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hupo_app/models/dsh_design.dart';
 import 'package:hupo_app/models/design.dart' as d;
+import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
@@ -77,6 +79,79 @@ void main() {
     // 负向对照：浮窗**不是铺满**（Z3：盖住不是铺满）
     expect(f.width < screen.width, true);
     expect(f.height < screen.height, true);
+  });
+
+  // ── ★ 2026-09-29：底部那条 bar（主人："一个半透明的bar，左 home、中输入、右语音；
+  //    这些按钮就不是透明的了"）────────────────────────────────────────
+
+  /// 浮窗自己那块 `Material`（深度优先里它排在最前面 —— 与 `appearance_test.dart` 同一条）。
+  Material barMaterial(WidgetTester tester) => tester.widget<Material>(
+    find.descendant(of: find.byType(ChatFloater), matching: find.byType(Material)).first,
+  );
+
+  testWidgets('🔴 收起那条 bar 是**半透明**的；展开档**必须不透明**（时间线要读字）', (tester) async {
+    await _pump(tester);
+    final collapsed = barMaterial(tester).color!;
+    expect(collapsed.a, lessThan(1.0), reason: '★ 收起那条 bar 还是实底 —— 桌面透不过来');
+    expect(collapsed.a, closeTo(d.barVeilAlpha, 0.001));
+
+    // ⚠️ **先把上一棵树拆掉**：同类型的 `ChatScreen` 再泵一次会**复用同一个 State**
+    //    ⇒ `initialTier` 不再生效（这一条判据第一版就是这么假绿/假红的）。
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await _pump(tester, tier: FloaterTier.full);
+    final full = barMaterial(tester).color!;
+    expect(full.a, 1.0, reason: '★ 展开档透了 —— 时间线的字会压在壁纸上，读不出来');
+  });
+
+  testWidgets('🔴 bar 上那三样**各自是不透明的**：home 圆片 / 输入框 / 话筒', (tester) async {
+    await _pump(tester);
+    final p = DshPalette.light;
+
+    // ① 输入框：实底（`filled` + `fillColor`），不是透的
+    final field = tester.widget<TextField>(
+      find.descendant(of: find.byType(Composer), matching: find.byType(TextField)),
+    );
+    expect(field.decoration!.filled, true, reason: '★ 输入框没实底 —— bar 透了它也跟着透');
+    expect(field.decoration!.fillColor, p.bgLayer2);
+
+    // ② 话筒：它的 IconButton 带实底
+    // ⚠️ `IconButton(tooltip:)` 把 `Tooltip` 建在**按钮里面** ⇒ 要往上找
+    //    （往下找是 0 个 —— 这一条判据第一版就是这么假的）。
+    final mic = tester.widget<IconButton>(
+      find.ancestor(of: find.byTooltip(hearStart), matching: find.byType(IconButton)).first,
+    );
+    expect(mic.style?.backgroundColor?.resolve(<WidgetState>{}), p.bgLayer2,
+        reason: '★ 话筒没有实底');
+
+    // ③ home 那颗：圆片（`homeButtonFace`）带实底
+    final face = find
+        .descendant(of: find.byKey(chatHomeButtonKey), matching: find.byType(Container))
+        .first;
+    final dec = tester.widget<Container>(face).decoration! as BoxDecoration;
+    expect(dec.color, p.bgLayer2, reason: '★ home 那颗没有实底');
+    expect(tester.getSize(face).width, homeButtonFace);
+    // 负向对照：可点区**比那个圆片大**（D3.6 —— 命中区不许缩成看得见的那一圈）
+    expect(tester.getSize(find.byKey(chatHomeButtonKey)).width,
+        greaterThan(homeButtonFace));
+  });
+
+  testWidgets('🔴 话筒在**这一行的最右**（不在输入框里面了）', (tester) async {
+    await _pump(tester);
+    final mic = find.byTooltip(hearStart);
+    // 负向对照：它**不是**那个 `TextField` 的孩子（2026-09-24 那一版它在框里）
+    expect(
+      find.descendant(of: find.byType(TextField), matching: mic),
+      findsNothing,
+      reason: '★ 话筒还在框里面 —— 主人要的是"右侧是语音按钮"',
+    );
+    // 而且它在框的**右边**（拿屏幕坐标量，不猜结构）
+    final micRect = tester.getRect(mic);
+    final fieldRect = tester.getRect(
+      find.descendant(of: find.byType(Composer), matching: find.byType(TextField)),
+    );
+    expect(micRect.left, greaterThanOrEqualTo(fieldRect.right - 1),
+        reason: '★ 话筒不在输入框右边：mic=$micRect field=$fieldRect');
   });
 
   testWidgets('🔴 浮窗有阴影（不是靠描边假装浮着）', (tester) async {
