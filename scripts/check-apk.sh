@@ -68,14 +68,14 @@ else
   echo "  ✓ 没有后台录音权限"
 fi
 
-# ③ **原生包上还不该有 RECORD_AUDIO**：录音那一件在原生侧根本没做
-#    （`widgets/mini_runtime*` 之外，`services/recorder_stub.dart` 是桩，
-#      包里的 `dart.library.html` 是假的那一支 ⇒ 录音那条路在安卓上是"如实说录不了"）。
-#    ⇒ 真做原生录音（`76-PLAN.md` 的 P1-23）那天，这一条要**反过来要求**（手册 V10 要它必须在）。
+# ③ **`RECORD_AUDIO` 现在必须在**（V10）：原生那份录音 2026-09-28 做出来了
+#    （`NativeRecorder.kt`，主人："你帮我测试录音能力。"）⇒ 少了这条权限，
+#    真机上按「开始录」只会当场失败。⚠️ 而**后台录音仍然一票否决**（②）。
 if echo "$PERMS" | grep -q "android.permission.RECORD_AUDIO"; then
-  echo "  ⚠️ 有 RECORD_AUDIO —— 说明原生录音已经做了，把这条断言反过来（V10 要求它必须在）"
+  echo "  ✓ 有 RECORD_AUDIO（原生录音要用它 —— 手册 V10 要求必须在）"
 else
-  echo "  · 没有 RECORD_AUDIO（原生录音还没做，P1-23；真做的那天 V10 要求它**必须**在）"
+  echo "  ✗ **缺 RECORD_AUDIO** —— 录音那一份在真机上按下去会当场失败（而屏幕上像'点了没反应'）"
+  bad=1
 fi
 
 # ④ **图标从包里核**（2026-09-28 主人："用这个做 app 的 icon"）。

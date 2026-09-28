@@ -109,15 +109,34 @@ void main() {
       );
     });
 
-    test('🔴 不许申请后台录音（批 5 的语音只做"按住说"）', () {
-      final m = _read();
+    test('🔴 后台录音一票否决；而 `RECORD_AUDIO` 现在**必须在**（V10）', () {
+      // ⚠️ **先剥掉 XML 注释**：上面那段注释里正写着"`RECORD_BACKGROUND_AUDIO` 一个都不许有"
+      //    （注释里出现这个词是**说明**，不是申请）⇒ 不剥的话这条判据会自己把自己判红。
+      //    （`mini_sandbox_test.dart` 里那条"先剥注释"是同一个教训。）
+      final m = _read()
+          .replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
       expect(
         m.contains('RECORD_BACKGROUND_AUDIO'),
         isFalse,
         reason: '这是一票否决那条：拿着它可以在用户不知道的时候录音',
       );
-      // ⚠️ 注意：`RECORD_AUDIO` 本体**还没加** —— 语音是批 5，那时才加。
-      //    加了之后这一条要跟着改（手册 08-SPEC §13.3 的 V10 要求两个都要查）。
+      // ★ 2026-09-28：**这一条反过来了**（原来是"批 5 之前不该有"）——
+      //    原生那份录音做出来了（`NativeRecorder.kt`，主人："你帮我测试录音能力。"）⇒
+      //    手册 `08-SPEC.md` §13.3 的 **V10** 要求它**必须在**，否则按下去只会有
+      //    `SecurityException`（而界面上看起来就是"点了没反应"）。
+      expect(
+        m.contains('android.permission.RECORD_AUDIO'),
+        isTrue,
+        reason: '★ 录音那一份要用它；少了它，真机上按下去只会当场失败',
+      );
+      // ⚠️ **问权限那一下的落点也得在**（D5.11：第一次按下去才问，不是启动时问）
+      final kt = File('android/app/src/main/kotlin/chat/hupo/hupo_app/NativeRecorder.kt');
+      expect(kt.existsSync(), isTrue, reason: '★ 原生录音那一份不见了');
+      final src = kt.readAsStringSync();
+      expect(src.contains('requestPermissions'), isTrue, reason: '★ 第一次按下去要问权限（D5.11）');
+      expect(src.contains('AudioSource.MIC'), isTrue, reason: '★ 录的得是麦克风');
+      expect(src.contains('start()'), isTrue);
     });
+
   });
 }

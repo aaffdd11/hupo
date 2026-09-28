@@ -9,7 +9,7 @@
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -24,6 +24,7 @@ import 'models/space.dart';
 import 'screens/model_key_screen.dart';
 import 'screens/waiting_screen.dart';
 import 'services/chat_controller.dart';
+import 'services/recorder_native.dart';
 import 'widgets/mini_native_boot.dart';
 import 'services/token_store.dart';
 import 'widgets/soft_switch.dart';
@@ -68,6 +69,13 @@ void main() {
   //       ⇒ 按契约写的制品不会摆出 `ask` 那个入口（**不假装有**）。
   //   ⚠️ 必须在 `runApp` **之前**装好：`MiniAppFrame` 一建出来就要用这个钩子。
   installNativeMiniRuntime();
+  // ★ **原生录音那一份**（2026-09-28 · 主人：*"你帮我测试录音能力。"*）：
+  //   与小程序运行时同一处道理（**只在 Android**）—— iOS / 桌面保持"这里录不了"。
+  //   ⚠️ 它**不能**挪进 `widgets/mini_native_boot_io.dart`：那个文件在 `widgets/` 层，
+  //      而楼层闸不许 `widgets → services`（当场抓到过一次）。`main` 这一层谁都能指。
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    installNativeRecorder();
+  }
   runApp(const HupoApp());
 }
 

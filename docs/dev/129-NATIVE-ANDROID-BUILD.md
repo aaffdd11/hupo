@@ -174,7 +174,7 @@ $ bash scripts/build-apk.sh
 |---|---|
 | 1 | 🔴 **没在真机、也没在模拟器上跑过**：本机没有模拟器、没有系统镜像、也没有插着的设备（`adb devices` 空）。⇒ "装上去登录页能连上"这件事**只有他装上那一刻才算数** —— 那是这次改动的**唯一验收点** |
 | 2 | **原生那一层的画面不进 a11y 硬闸**：它是 `WebView`（一个 Flutter 控件都不是）⇒ 命中区/五档不溢出那两道闸在那儿量不到（VM 上更没有 WebView 插件）。**只有 §五 那些纯逻辑与源码级判据兜着** |
-| 3 | **原生上录音/话筒/朗读/外链仍然是桩**（`recorder_stub` / `hearing_stub` / `speech_stub` / `links_stub`：那份"只有网页可以"）⇒ 短信录不了音。真做是 **P1-23**（要先加 `RECORD_AUDIO`，`check-apk.sh` 那一条也要反过来） |
+| 3 | ~~**原生上录音/话筒/朗读/外链仍然是桩**~~ ⇒ **2026-09-28 录音那一件做了**（§十二：`NativeRecorder.kt` ＋ `RECORD_AUDIO`，`check-apk.sh` 那一条已经反过来）；**话筒（ASR）/朗读/外链仍然是桩**（P1-23 的剩下那几件） |
 | 4 | **`ask` 在原生上没有**（§4.1）：制品能打开、能玩，但"让它替我问一句"那条路在安卓上不存在 |
 | 5 | **启动图标还是 Flutter 模板那个**（`@mipmap/ic_launcher`）：桌面名字改了（琥珀），图标没做（那是画图那件事） |
 | 6 | ~~**网页上「安卓版还没上线」这句话没改**~~ ⇒ **2026-09-28 已改**（主人要挂到首页）：那一格现在写着「现在能下载」＋ 如实写明缺哪几样，见 §九 |
@@ -353,3 +353,64 @@ scripts/publish-apk.sh   打（正式签名）→ 拷进静态根 → **在线�
   （它是最强的"应该做壳"的理由）；剩下四条是代价。
   另外：真做壳的话，**今天的 `server_address` 那一层、原生 WebView 小程序层、安全区内缩
   大多用不上**（网页那份有自己的实现），图标/名字/权限留着。
+
+
+---
+
+## 十二、原生**录音 ＋ 回放**（2026-09-28 · 主人：*"你帮我测试录音能力。"*）
+
+### 12.1 先看清事实：那时包里编进去的是**桩**
+
+主人问"测录音"时，第一件事不是测，是**读包**（这一步现在也留在判据里）：
+
+```
+$ unzip -p app-release.apk lib/arm64-v8a/libapp.so | strings | grep hupo
+package:hupo_app/services/recorder_stub.dart      ← 🔴 桩（"这里录不了"）就是被编进去的那一份
+package:hupo_app/widgets/mini_runtime_native.dart
+…
+$ aapt2 dump permissions …    →  没有 RECORD_AUDIO
+$ strings classes.dex | grep -c MediaRecorder  →  0
+```
+
+⇒ **不是"录音坏了"，是原生这一份从来没做过**（`recorder.dart` 的条件导出只对
+`dart.library.html` 选网页那一份）。网页上那套（`#178`）是好的。
+
+### 12.2 做了什么
+
+| 落在哪 | 是什么 |
+|---|---|
+| `android/.../NativeRecorder.kt`（新） | `MediaRecorder`（`AudioSource.MIC` → **MPEG_4/AAC**，写在应用缓存目录）＋ `MediaPlayer` 放音；**第一次按下去才问权限**（`requestPermissions`，D5.11）· 一个原因一句话（`denied`/`unsupported`/`failed`）· 走开时把麦关掉、临时文件删掉 |
+| `android/.../MainActivity.kt` | 挂一条 MethodChannel **`hupo/recorder`** ＋ 转权限回执（`onRequestPermissionsResult`）＋ `onDestroy` 收干净 |
+| `lib/services/recorder_native.dart`（新） | Dart 那一侧：把 channel 翻成 `canRecord/start/stop/play/stopPlay/releaseAll`；放完那一下由 Kotlin 回调 `onPlayEnded` |
+| `lib/services/recorder.dart` ＋ `recorder_stub.dart` | **钩子**：没装 ⇒ 恒假＋"unsupported"（VM/iOS/桌面那一档）；装了 ⇒ 全转给原生那一份。⚠️ 为什么用钩子而**不是**第三个条件导出：`dart.library.io` 在 **VM 上也是真的** ⇒ 照它选会让所有"VM 上录不了"的判据一起翻车（与 `mini_runtime` 同一套做法） |
+| `lib/widgets/mini_native_boot_io.dart` | 启动时装钩子（**只在 Android**）—— 和小程序运行时同一处 |
+| `AndroidManifest.xml` | **加 `RECORD_AUDIO`**（手册 D5.11 早就定了）；**不申请后台录音**（V10 一票否决） |
+
+### 12.3 判据
+
+| 在哪 | 钉住了什么 |
+|---|---|
+| 新 `test/unit/recorder_native_test.dart` **8 条** | ① 没装钩子 ⇒ 恒假 ＋ 每一句都说实话（**一次都不碰**那条 channel）② 装了 ⇒ `start` 把 `null/denied/unsupported/failed` **原样带回来** ③ `stop` 把 `{ok,path,ms}` 变成本机那一段（`ok:false`/坏回执 ⇒ `null`，不抛）④ 🔴 **放完了收得到**（Kotlin 回调 `onPlayEnded` ⇒ 按钮回到"听一遍"）⑤ 🔴 **放不起来当场收场**（不许停在"别放了"—— 那个形状 2026-09-27 在网页上栽过）⑥ `stopPlay`/`releaseAll` 都打到 channel 上 ⑦ 源码级：**装钩子那一行只在 Android 分支**、Web 那一份不许提它、channel 名字两边逐字一致 |
+| `test/unit/android_manifest_test.dart` | **`RECORD_AUDIO` 必须在**（V10，这一条**反过来了**）＋ 后台录音一票否决 ＋ 原生那一份里 `requestPermissions`/`AudioSource.MIC` 都得在（⚠️ 先把 XML 注释剥掉再查 —— 注释里正写着"不许有后台录音"那个词） |
+| `scripts/check-apk.sh` ③ | **从包里核**：`RECORD_AUDIO` **必须在**（原来是"不该有"—— 做出来了就反过来）· 后台录音照旧一票否决 |
+
+### 12.4 读数（2026-09-28 打的那个包）
+
+```
+包里 strings：现在**两份都在**（`recorder_stub.dart` 是转交那一层、`recorder_native.dart` 是真那份）
+               还有 installNativeRecorder
+classes.dex：MediaRecorder / AudioSource 命中 2 ⇒ Kotlin 那一套**真进了包**
+check-apk：✓ INTERNET ✓ 没有后台录音 ✓ 有 RECORD_AUDIO ✓ 图标
+          51.7 MB · 正式签名 · 公网逐字节核过
+```
+
+### 12.5 还是没验到的（**只有他按一下才算数**）
+
+| # | 事 |
+|---|---|
+| 1 | 🔴 **真麦克风那一下**：本机没有设备也没有模拟器 ⇒ "按「开始录」→ 说一句话 → 按「停下」→ 点「听一遍」能不能听见自己"这件事**只能他装上去试** |
+| 2 | **权限那一趟弹窗**：第一次按下去手机上要弹"允许录音吗"；拒绝了要看到那句人话（`hearDenied`）—— 这也是形状，没在真机上走过 |
+| 3 | **放音与录音不叠在一起**：`start` 前会 `stopPlay()`，但真机上"放着的时候按开始录"没试过 |
+| 4 | **聊天里那颗话筒（说话 → 转文字）仍然是桩**：主人这次说的是**录音**（录一段／听一遍）—— 那一件做完了；**语音输入（ASR）**是另一份（`hearing_stub.dart`），还没做（P1-23 的另一半） |
+| 5 | **朗读 / 外链** 也还是桩（同上） |
+| 6 | **临时文件**：录的那一段写在应用缓存目录（`cacheDir`），走开时删；**手机上的缓存被系统清理**是另一回事（没做"存起来"） |
