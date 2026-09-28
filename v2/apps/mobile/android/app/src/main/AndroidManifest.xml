@@ -23,10 +23,15 @@
          就是**不合法的 XML** —— 2026-09-28 我自己这么写过一次，
          表现是 `flutter build apk` 当场报 "Please ensure that the android manifest
          is a valid XML document"（判据见那份测试里的"注释不许住进标签里"）。 -->
+    <!-- 🔴 **圆形那一个也指上**（2026-09-28）：`mipmap-*/ic_launcher_round.png`（每档一张）
+         与 `mipmap-anydpi-v26/ic_launcher_round.xml`（自适应那一套）都在；
+         不指的话，会要圆图标的那几个启动器只能拿方的去裁。
+         ⚠️ 属性写进标签里、**注释留在标签外** —— 写进标签中间就不是合法 XML 了（上面那条注释说的就是这件事）。 -->
     <application
         android:label="琥珀"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round">
         <activity
             android:name=".MainActivity"
             android:exported="true"

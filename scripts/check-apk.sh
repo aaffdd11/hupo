@@ -38,6 +38,7 @@ fi
 
 echo "▶ 核 $APK"
 echo "  用 $AAPT"
+BADGING="$("$AAPT" dump badging "$APK" 2>/dev/null)"
 PERMS="$("$AAPT" dump permissions "$APK" 2>/dev/null)"
 if [ -z "$PERMS" ]; then
   # ⚠️ 负向对照：读不到任何东西时**不能当成"通过"**——
@@ -75,6 +76,56 @@ if echo "$PERMS" | grep -q "android.permission.RECORD_AUDIO"; then
   echo "  ⚠️ 有 RECORD_AUDIO —— 说明原生录音已经做了，把这条断言反过来（V10 要求它必须在）"
 else
   echo "  · 没有 RECORD_AUDIO（原生录音还没做，P1-23；真做的那天 V10 要求它**必须**在）"
+fi
+
+# ④ **图标从包里核**（2026-09-28 主人："用这个做 app 的 icon"）。
+#
+# 为什么非要从包里核：release 构建里 **AAPT2 会把资源文件改名**（`res/o-.png` 这种），
+# 名字上看不出哪个是图标；而且**有了自适应图标之后**，`badging` 那条
+# `application-icon-*` 指的是一个**编译过的 XML**（`res/BW.xml`，二进制 AXML），
+# 解不出像素来。
+# ⇒ 走**资源表**：`aapt2 dump resources` 里资源**名字**还在 ⇒ 从
+#    `mipmap/ic_launcher`（xxxhdpi 那一档）拿到真正的 PNG 路径，再解出来数像素。
+#    琥珀那张暖色像素占一半上下，Flutter 模板那张是蓝的（≈0%）。
+# ⚠️ 实测负向对照（换图标**之前**那一个包）：`res/o-.png` · 192×192 · 暖色 **0.0%** ⇒ 这条闸会红。
+if command -v python3 >/dev/null 2>&1 && python3 -c "import PIL" >/dev/null 2>&1; then
+  RES_TABLE="$("$AAPT" dump resources "$APK" 2>/dev/null)"
+  # ⚠️ `mipmap/ic_launcher$`（行尾锚定）：不锚的话 `mipmap/ic_launcher_foreground` 也会被捞进来
+  ICON_PATH="$(echo "$RES_TABLE" | grep -A 8 'mipmap/ic_launcher$' | grep '(xxxhdpi)' | grep -oE 'res/[^ ]+\.png' | head -1)"
+  if [ -z "$ICON_PATH" ]; then
+    echo "  ✗ 包里找不出图标那一张 PNG（资源表里没有 mipmap/ic_launcher 的 xxxhdpi）"
+    bad=1
+  else
+    TMP_ICON="$(mktemp --suffix=.png)"
+    unzip -p "$APK" "$ICON_PATH" > "$TMP_ICON" 2>/dev/null
+    RATIO="$(python3 - "$TMP_ICON" <<'PY'
+import sys
+from PIL import Image
+im = Image.open(sys.argv[1]).convert('RGBA'); w,h = im.size; px = im.load()
+warm=0; tot=0
+for y in range(h):
+    for x in range(w):
+        r,g,b,a = px[x,y]; tot+=1
+        if r > b+40 and r > 120: warm+=1
+print(f'{warm/tot*100:.1f}')
+PY
+)" || RATIO=""
+    if [ -z "$RATIO" ]; then
+      echo "  ✗ 图标解不开（$ICON_PATH）—— 这一条没核成"
+      bad=1
+    else
+      echo "  图标    $ICON_PATH（暖色像素 $RATIO%）"
+      if [ "$(python3 -c "print(1 if $RATIO > 25 else 0)")" = "1" ]; then
+        echo "  ✓ 图标是主人给的那张（暖色的琥珀气泡，不是 Flutter 模板那张蓝的）"
+      else
+        echo "  ✗ 包里那张图标**不是**我们那张（暖色只占 $RATIO%）—— 桌面上会是模板的样子"
+        bad=1
+      fi
+    fi
+    rm -f "$TMP_ICON"
+  fi
+else
+  echo "  ⚠️ 这台机器没有 python3+PIL ⇒ 图标那一条没跑（没核）"
 fi
 
 echo

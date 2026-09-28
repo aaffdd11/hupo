@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标的底色：**从主人给的那张图里取的**（脚本取的左上角中位数）。
+     生成器：scripts/make-app-icons.py（契约 docs/dev/130-APP-ICON.md）。 -->
+<resources>
+    <color name="ic_launcher_background">#0E101F</color>
+</resources>
