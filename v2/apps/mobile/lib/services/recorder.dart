@@ -33,6 +33,8 @@ import '../models/voice_record.dart';
 ///    这里是"这台设备有没有能力"，那里是"界面把这个能力接到哪几个动作上"。
 typedef NativeRecorderApi = ({
   bool canRecord,
+  /// 录的时候那一串音量采样（0..1）。**没有就不报**（界面据此不画那条轴）。
+  Stream<double>? levels,
   Future<String?> Function() start,
   Future<RecordedClip?> Function() stop,
   void Function(String path, void Function() onEnded) play,

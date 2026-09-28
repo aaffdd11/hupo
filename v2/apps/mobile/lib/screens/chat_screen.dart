@@ -1022,6 +1022,9 @@ class _ChatScreenState extends State<ChatScreen> {
             stop: rec.recordStop,
             play: rec.play,
             stopPlay: rec.stopPlay,
+            // ★ 录的时候那条**音量轴**（主人 2026-09-28）：网页与安卓各报各的电平，
+            //   桩那一份是空流 ⇒ 界面**不画那条轴**（没有读数就不许编一个）。
+            levels: rec.levels,
           ),
           canHear: c.canHear,
           onCancel: widget.onCancelMe,

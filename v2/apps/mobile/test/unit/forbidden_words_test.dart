@@ -356,6 +356,10 @@ void main() {
       voiceRecPlay,
       voiceRecPlayStop,
       voiceRecEmpty,
+      // ★ 2026-09-28：录的时候那条音量轴的两句话 ＋ 走时那句（主人要的"时间轴语音bar"）
+      voiceRecHearing,
+      voiceRecQuiet,
+      voiceRecElapsed('3.4'),
       voiceTryTitle,
       voiceTryStart,
       voiceTryStop,

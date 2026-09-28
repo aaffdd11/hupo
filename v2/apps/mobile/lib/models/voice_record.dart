@@ -58,6 +58,7 @@ class VoiceRecordHandlers {
     required this.stop,
     required this.play,
     required this.stopPlay,
+    this.levels,
   });
 
   /// 这台设备/这个页面**录得了音吗**（`services/recorder.dart` 的 `canRecord`）。
@@ -77,6 +78,12 @@ class VoiceRecordHandlers {
 
   /// **别放了**。
   final void Function() stopPlay;
+
+  /// 录的时候那一串**音量采样**（0..1，最新在后）。
+  ///
+  /// ⚠️ `null` = 这一份实现不报电平（老注入点、桩那一份）⇒ 界面**不画那条轴**，
+  ///    也不说"听得到声音"（**没有读数就不许编一个**）。
+  final Stream<double>? levels;
 }
 
 /// 那颗大按钮上现在写什么（录中 ⇒ 停下；其余时候都是"开始录"）。

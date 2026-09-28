@@ -13,6 +13,8 @@
 //    这一份里那句 `installNativeRecorder()` 是**唯一**的入口 ——
 //    没装（VM 判据 / iOS / 桌面）⇒ `recorder_stub.dart` 照旧说"这里录不了"。
 
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 import '../models/voice_record.dart';
@@ -24,6 +26,19 @@ const String _channelName = 'hupo/recorder';
 /// 放完了那一下（Kotlin 主动叫回来）——一次只放一条，所以只留一个回调。
 void Function()? _onEnded;
 
+/// 录的时候那一串**音量采样**（0..1，最新在后）。
+///
+/// ⚠️ 广播流：界面走开/重进都能各订一份；**开录之前不发**（那种 0 会把
+///    "还没开始"说成"很安静"）。Kotlin 那边每 ~100ms 报一次 `onLevel`。
+final StreamController<double> _levels = StreamController<double>.broadcast();
+
+/// 录的时候那一串音量采样。**没在录的时候什么都不发**。
+Stream<double> get levels => _levels.stream;
+
+/// 电平原样是 `MediaRecorder.getMaxAmplitude()` 的 0..32767 ⇒ 归一化到 0..1。
+/// ⚠️ 开方压一下（轻声说话那一段在屏幕上才看得见）—— 与网页那一份同一个尺度。
+double normalizeAmplitude(num amp) => (amp / 32767.0).clamp(0.0, 1.0).toDouble();
+
 /// 装钩子。**只在 Android 上调**（`mini_native_boot_io.dart` 那道判断）。
 void installNativeRecorder() {
   final ch = const MethodChannel(_channelName);
@@ -32,11 +47,17 @@ void installNativeRecorder() {
       final cb = _onEnded;
       _onEnded = null;
       cb?.call();
+    } else if (call.method == 'onLevel') {
+      // Kotlin 每 ~100ms 报一次当前峰值（0..32767）
+      final amp = call.arguments;
+      if (amp is num) _levels.add(normalizeAmplitude(amp));
     }
     return null;
   });
   nativeRecorderApi = (
-    canRecord: true, // ⚠️ 真正的判定在 `start()` 那一下（没麦克风/没权限 ⇒ 各回各的原因）
+    // ⚠️ 真正的判定在 `start()` 那一下（没麦克风 / 没权限 ⇒ 各回各的原因）
+    canRecord: true,
+    levels: levels,
     start: () async {
       try {
         final why = await ch.invokeMethod<String?>('start');

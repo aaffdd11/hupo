@@ -26,6 +26,7 @@ import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
 import '../models/hearing_words.dart';
+import '../models/voice_level.dart';
 import '../models/voice_record.dart';
 
 class VoiceRecord extends StatefulWidget {
@@ -46,6 +47,36 @@ class _VoiceRecordState extends State<VoiceRecord> {
 
   /// 手里那一段（录完才有）。
   RecordedClip? _clip;
+
+  /// 录的时候那条**音量轴**（主人 2026-09-28：*"录音时，可以检测收到语音，
+  /// 并且给出一个录音时候的那种时间轴语音bar吗？"*）。
+  /// ⚠️ 只在录的时候订；**没读数就不画那条轴**（"没有读数就不许编一个"）。
+  final LevelMeter _meter = LevelMeter();
+  StreamSubscription<double>? _levels;
+  int _elapsedMs = 0;
+  int _startedAt = 0;
+
+  /// 订上电平那一串（**开录成功之后**才订）。
+  ///
+  /// 🔴 **走时也由它驱动**（每 ~100ms 一个采样 ⇒ 顺带把"已录 X.X 秒"往前推）。
+  ///    为什么不另起一个 `Timer.periodic`：**常驻定时器会让 `pumpAndSettle` 永远不返回**
+  ///    （判据里一点"开始录"就会挂在那儿）—— 而心跳本来就在，何必再要一个。
+  void _listenLevels() {
+    final lv = widget.handlers.levels;
+    if (lv == null) return; // 这一份实现不报电平 ⇒ 不画那条轴、也走不了时
+    _levels = lv.listen((v) {
+      if (!mounted) return;
+      setState(() {
+        _meter.push(v);
+        _elapsedMs = DateTime.now().millisecondsSinceEpoch - _startedAt;
+      });
+    });
+  }
+
+  void _stopLevels() {
+    unawaited(_levels?.cancel());
+    _levels = null;
+  }
 
   /// **开录**（第一次按下去）。
   Future<void> _start() async {
@@ -68,6 +99,13 @@ class _VoiceRecordState extends State<VoiceRecord> {
     });
     final why = await widget.handlers.start();
     if (!mounted) return;
+    if (why == null) {
+      // 真开起来了 ⇒ 才订电平（**开不起来就不该有那条轴，也不该有"已录"那一行**）
+      _meter.clear();
+      _startedAt = DateTime.now().millisecondsSinceEpoch;
+      _elapsedMs = 0;
+      _listenLevels();
+    }
     if (why != null) {
       // ⚠️ 开不起来 ⇒ **收场并说明白**（绝不假装在录）
       setState(() {
@@ -79,8 +117,10 @@ class _VoiceRecordState extends State<VoiceRecord> {
 
   /// **收手**（第二次按下去）⇒ 拿到那一段（或"这段是空的"）。
   Future<void> _stop() async {
+    _stopLevels();
     final got = await widget.handlers.stop();
     if (!mounted) return;
+    _meter.clear();
     setState(() {
       _phase = RecPhase.ready;
       if (got == null || !got.ok) {
@@ -124,6 +164,7 @@ class _VoiceRecordState extends State<VoiceRecord> {
 
   @override
   void dispose() {
+    _stopLevels();
     // 走开的时候：**把麦关掉、把声音停掉**（这一块没有一个"一直在"的位置提醒他）
     widget.handlers.stopPlay();
     if (_phase == RecPhase.recording) unawaited(widget.handlers.stop());
@@ -140,6 +181,9 @@ class _VoiceRecordState extends State<VoiceRecord> {
       canRecord: widget.handlers.canRecord,
     );
     final playLabel = voiceRecPlayButton(_phase, hasClip: _clip != null);
+    // ★ 录的时候那条轴 ＋ 走时（只在**真的在录**、**这一份实现报电平**、
+    //   而且**真采到了读数**时才画：没读数就不许编一个 0.0 秒出来）
+    final showMeter = recording && widget.handlers.levels != null && _meter.hasSignal;
     final lengthLine = voiceRecLengthLine(_phase, _clip);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -158,6 +202,23 @@ class _VoiceRecordState extends State<VoiceRecord> {
           style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
           child: Text(voiceRecButton(_phase)),
         ),
+        // ★ **录的时候**：走时 ＋ 那条音量轴 ＋ 一句实话（主人 2026-09-28 要的）
+        if (showMeter) ...[
+          const SizedBox(height: d.gapXs),
+          Text(
+            LevelMeter.elapsedLine(_elapsedMs),
+            textAlign: TextAlign.center,
+            style: t.textTheme.bodySmall?.copyWith(color: d.muted),
+          ),
+          const SizedBox(height: d.gapXs),
+          _LevelAxis(key: voiceLevelAxisKey, meter: _meter),
+          const SizedBox(height: d.gapXs),
+          Text(
+            _meter.line,
+            textAlign: TextAlign.center,
+            style: t.textTheme.bodySmall?.copyWith(color: d.muted),
+          ),
+        ],
         // 手里有一段 ⇒ 才画"听一遍 / 别放了"（**没有东西可放就不画**）
         if (playLabel != null) ...[
           const SizedBox(height: d.gapXs),
@@ -186,6 +247,55 @@ class _VoiceRecordState extends State<VoiceRecord> {
           ),
         ],
       ],
+    );
+  }
+}
+
+
+/// **那条音量轴**（主人 2026-09-28 要的"录音时候的那种时间轴语音bar"）。
+///
+/// 画法：一窗历史从左到右（最老在左、最新在右），每根条的**高度**由
+/// `LevelMeter.barHeight` 算（开方压过，轻声说话也看得见）；还没到根数的地方留白。
+///
+/// ⚠️ **不是按钮**（点了不做事）⇒ 不涉及 D3.6 的命中区；尺寸三个数住 `design.dart`。
+/// 🔴 它**只表示电平**，不表示"认出来了什么" —— 那句话由 `LevelMeter.line` 说，
+///    而且说的是"听得到声音 / 很安静"（振幅分不出人声与噪声）。
+/// 那条轴的 key（判据用它认"画没画"）。
+const Key voiceLevelAxisKey = ValueKey('voiceLevelAxis');
+
+class _LevelAxis extends StatelessWidget {
+  const _LevelAxis({super.key, required this.meter});
+
+  final LevelMeter meter;
+
+  @override
+  Widget build(BuildContext context) {
+    final samples = meter.samples;
+    final slots = meter.capacity;
+    final pad = slots - samples.length; // 左边留白（历史还没攒满）
+    return SizedBox(
+      height: d.levelBarMaxHeight,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          for (var i = 0; i < slots; i++)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: d.levelBarGap / 2),
+              child: Container(
+                width: d.levelBarWidth,
+                // 空的那些画一个"底噪"小点（看得见那条轴有多长），有读数的按比例
+                height: i < pad
+                    ? d.levelBarWidth
+                    : d.levelBarMaxHeight * LevelMeter.barHeight(samples[i - pad]),
+                decoration: BoxDecoration(
+                  color: i < pad ? d.line : d.accent,
+                  borderRadius: BorderRadius.circular(d.levelBarWidth / 2),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

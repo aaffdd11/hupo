@@ -20,6 +20,7 @@
 
 // ignore: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'dart:async';
+import 'dart:math' as math;
 // ignore: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'dart:html' as html;
 // ignore: avoid_web_libraries_in_flutter, deprecated_member_use
@@ -39,6 +40,16 @@ class _Live {
 }
 
 _Live? _live;
+
+/// 录的时候那一串**音量采样**（0..1，最新在后）。
+///
+/// 网页这一侧用 `AnalyserNode` 量**时域波形**的均方根（RMS）——
+/// 与安卓那边 `getMaxAmplitude()` 是两种量法，但两边都归一、都由
+/// `LevelMeter.barHeight` 开方压一下 ⇒ 屏幕上那条轴是一个尺度。
+final StreamController<double> _levels = StreamController<double>.broadcast();
+
+/// 录的时候那一串音量采样。**没在录的时候什么都不发。**
+Stream<double> get levels => _levels.stream;
 
 /// **上一次录下来那条本机地址**（换新的一段之前要 `revokeObjectURL` 放掉）。
 String? _lastUrl;
@@ -101,6 +112,11 @@ Future<String?> recordStart() async {
   );
   _live = live;
 
+  // ★ **那份电平**（主人 2026-09-28："录音时，可以检测收到语音，并且给出一个录音
+  //   时候的那种时间轴语音bar吗？"）：`AnalyserNode` 量 RMS，每 ~100ms 推一个进流。
+  //   ⚠️ 它**只是应答**（屏幕上那条轴），**不进录音数据** —— 音频还是原来那几块。
+  _startMeter(stream);
+
   // 每攒够一块就叫我们一声（`dataavailable`）—— 收手那一下才有东西可拼。
   try {
     jsu.setProperty(
@@ -131,6 +147,69 @@ Future<String?> recordStart() async {
   return null;
 }
 
+/// 正在采电平的那一套（`AudioContext` ＋ 定时器）—— **一次只有一套**。
+Object? _meterCtx;
+Timer? _meterTimer;
+
+/// 开始每 ~100ms 量一次电平。**这一台量不了就什么都不推** —— 界面那条轴就不画
+/// （"没有读数就不许编一个"）。
+void _startMeter(html.MediaStream stream) {
+  _stopMeter();
+  try {
+    final ctx = jsu.callConstructor(
+      jsu.getProperty<Object>(jsu.globalThis, 'AudioContext'),
+      <Object?>[],
+    );
+    // ⚠️ Safari 上新建的 `AudioContext` 可能是 **suspended** 的（它不处理 ⇒ 量出来全是 0）
+    //    ⇒ 叫它一声（已经在跑的话这是空操作）。我们是在**用户的点击**里建它的，
+    //      浏览器的自动播放策略不会拦。
+    try {
+      jsu.callMethod(ctx, 'resume', <Object?>[]);
+    } catch (_) {
+      /* 老实现没有 resume —— 那就照旧 */
+    }
+    final src = jsu.callMethod(ctx, 'createMediaStreamSource', <Object?>[stream]);
+    final an = jsu.callMethod(ctx, 'createAnalyser', <Object?>[]);
+    jsu.setProperty(an, 'fftSize', 1024);
+    jsu.callMethod(src, 'connect', <Object?>[an]);
+    _meterCtx = ctx;
+    _meterTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      try {
+        final n = jsu.getProperty<num>(an, 'frequencyBinCount').toInt();
+        final buf = jsu.callConstructor(
+          jsu.getProperty<Object>(jsu.globalThis, 'Float32Array'),
+          <Object?>[n],
+        );
+        jsu.callMethod(an, 'getFloatTimeDomainData', <Object?>[buf]);
+        var sum = 0.0;
+        for (var i = 0; i < n; i++) {
+          final v = jsu.getProperty<num>(buf, i).toDouble();
+          sum += v * v;
+        }
+        if (!_levels.isClosed) _levels.add(math.sqrt(sum / n));
+      } catch (_) {
+        // 量不到就算了（不是致命：那条轴画不出来而已）
+      }
+    });
+  } catch (_) {
+    _stopMeter();
+  }
+}
+
+void _stopMeter() {
+  _meterTimer?.cancel();
+  _meterTimer = null;
+  final c = _meterCtx;
+  _meterCtx = null;
+  if (c != null) {
+    try {
+      jsu.callMethod(c, 'close', <Object?>[]);
+    } catch (_) {
+      /* 已经没了 */
+    }
+  }
+}
+
 /// **收手**：停下那一台、把那几块拼成一个 `Blob`、换成一条**本机**地址。
 ///
 /// @returns 那一段；**空的那一段**（一毫秒都不到 / 一个字节都没有）⇒ `null`。
@@ -139,7 +218,8 @@ Future<RecordedClip?> recordStop() async {
   if (live == null) return null;
   _live = null;
 
-  // ① 先关麦（他按下"停"的那一刻就不该再采了）
+  // ① 先关麦（他按下"停"的那一刻就不该再采了）＋ 电平那一路也停掉
+  _stopMeter();
   _stopTracks(live.stream);
 
   // ② 让 `MediaRecorder` 把最后一块吐出来，然后停下
@@ -238,6 +318,7 @@ void stopPlay() {
 /// 离开这一屏时**把手里那一段也放掉**（本机临时地址不释放就一直挂着）。
 void releaseAll() {
   stopPlay();
+  _stopMeter();
   _closeLive();
   final old = _lastUrl;
   _lastUrl = null;
@@ -245,6 +326,7 @@ void releaseAll() {
 }
 
 void _closeLive() {
+  _stopMeter();
   final live = _live;
   _live = null;
   if (live == null) return;

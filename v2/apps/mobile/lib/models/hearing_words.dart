@@ -140,6 +140,20 @@ const String voiceRecPlayStop = '别放了';
 /// 录下来了但**一个声音都没有**（麦克风被别的程序占着 / 设备静音）⇒ 明说。
 const String voiceRecEmpty = '这一段里什么都没有 —— 再录一次试试。';
 
+/// ── 录的时候那条**音量轴**（主人 2026-09-28：*"录音时，可以检测收到语音，
+///    并且给出一个录音时候的那种时间轴语音bar吗？"*）────────────────────
+///
+/// 🔴 **我们手上只有电平，没有识别** ⇒ 这两句说的是"**听不听得到声音**"，
+///    而**不是**"听到你在说话了"（振幅分不出人声、音乐、关门声 —— 不许把电平
+///    说成"认出来了"）。判据：`test/unit/voice_level_test.dart`。
+const String voiceRecHearing = '在录 —— 听得到声音。';
+
+/// 连续一小会儿都没什么动静（原话是"安静"，不是"你没说话"）。
+const String voiceRecQuiet = '在录 —— 这边很安静。';
+
+/// 录了多久（秒 → 一句人话；**只在录的时候**每秒往上走）。
+String voiceRecElapsed(String seconds) => '已录 $seconds 秒';
+
 /// 时长那句（毫秒 → 一句人话）。**只在他真录到了东西之后才说**。
 String voiceRecLength(int ms) {
   final s = (ms / 1000);

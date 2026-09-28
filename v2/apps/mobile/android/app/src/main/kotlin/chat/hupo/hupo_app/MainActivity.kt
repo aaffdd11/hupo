@@ -20,6 +20,7 @@ class MainActivity : FlutterActivity() {
         val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         val r = NativeRecorder(this)
         r.bindPlayEnded(channel)
+        r.bindMeter(channel)
         channel.setMethodCallHandler(r)
         recorder = r
     }

@@ -14,12 +14,15 @@
 //   ⑤ 这里录不了 ⇒ **照样画那颗按钮**，点下去只说一句白话（**一次都不去开麦**）；
 //   ⑥ 命中区 ≥44（D3.6）· 字放到最大不溢出（D3.5 那一族，硬闸在 a11y 那份）。
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/voice_record.dart';
+import 'package:hupo_app/widgets/voice_record.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/services/api.dart';
 
@@ -44,6 +47,10 @@ class FakeRec {
 
   /// 这台"设备"录得了音吗（判据用它演"这里录不了"那一档）。
   bool canRecordValue = true;
+
+  /// **那串电平**（主人 2026-09-28 要的"时间轴语音bar"）：判据往里推采样。
+  /// `null` = 这一份实现不报电平（那种实现界面上**不许画那条轴**）。
+  StreamController<double>? levelOut;
 }
 
 Future<FakeRec> pumpRec(
@@ -57,6 +64,12 @@ Future<FakeRec> pumpRec(
     ..canRecordValue = canRecord
     ..startWhy = startWhy
     ..clip = clip;
+  await pumpRecWith(tester, f, wired: wired);
+  return f;
+}
+
+/// 用**已经造好的**那个假的泵一次（判据要先设好 `levelOut` 再泵）。
+Future<void> pumpRecWith(WidgetTester tester, FakeRec f, {bool wired = true}) async {
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
@@ -84,6 +97,7 @@ Future<FakeRec> pumpRec(
                     f.onEnded = onEnded;
                   },
                   stopPlay: () => f.stopPlays += 1,
+                  levels: f.levelOut?.stream,
                 )
               : null,
           canHear: false,
@@ -94,10 +108,17 @@ Future<FakeRec> pumpRec(
   );
   await tester.pumpAndSettle();
   await tapVisible(tester, find.text(credTabVoice));
-  return f;
 }
 
 const _clip = RecordedClip(url: 'blob:local-1', ms: 4200);
+
+/// 往那串电平里推一个采样，并把它**渲染出来**
+/// （⚠️ 流是异步的：一次 `pump` 只把事件送到、第二次才画出来 —— 少一次就会看到"没画"）。
+Future<void> pushLevel(WidgetTester tester, StreamController<double> c, double v) async {
+  c.add(v);
+  await tester.pump();
+  await tester.pump();
+}
 
 /// **先把它滚进视口再点**：设置那一屏是可滚的，而这一块在 800×600 的判据面上
 /// 会落到折叠线以下 —— 不滚就点，`tap()` 会"点了个空"（而且只给一条 warning，
@@ -209,6 +230,70 @@ void main() {
     await tapVisible(tester, find.text(voiceRecStop));
     final play = tester.getSize(find.widgetWithText(OutlinedButton, voiceRecPlay));
     expect(play.height, greaterThanOrEqualTo(44), reason: '★ 回放那颗（实测 $play）');
+  });
+
+  // ── ★ 2026-09-28：录的时候那条**音量轴**（主人："录音时，可以检测收到语音，
+  //    并且给出一个录音时候的那种时间轴语音bar吗？"）────────────────────
+
+  testWidgets('🔴 录着的时候：推电平 ⇒ 出现那条轴 ＋「听得到声音」＋ 走时', (tester) async {
+    final f = FakeRec()..levelOut = StreamController<double>.broadcast();
+    addTearDown(f.levelOut!.close);
+    await pumpRecWith(tester, f);
+    await tapVisible(tester, find.text(voiceRecStart));
+    expect(find.byKey(voiceLevelAxisKey), findsNothing, reason: '起点：还没采到读数 ⇒ **不画**（不许编一个 0.0 秒）');
+    await pushLevel(tester, f.levelOut!, 0.9);
+    expect(find.byKey(voiceLevelAxisKey), findsOneWidget, reason: '★ 采到读数才画那条轴');
+    expect(find.text(voiceRecHearing), findsOneWidget, reason: '★ 有声音就如实说"听得到声音"');
+    expect(find.textContaining('已录'), findsOneWidget, reason: '★ 走时那句');
+  });
+
+  testWidgets('★ 很安静 ⇒ 说"这边很安静"（不带迟滞的话会来回跳）', (tester) async {
+    final f = FakeRec()..levelOut = StreamController<double>.broadcast();
+    addTearDown(f.levelOut!.close);
+    await pumpRecWith(tester, f);
+    await tapVisible(tester, find.text(voiceRecStart));
+    for (var i = 0; i < 10; i++) {
+      await pushLevel(tester, f.levelOut!, 0.0);
+    }
+    expect(find.text(voiceRecQuiet), findsOneWidget);
+    expect(find.text(voiceRecHearing), findsNothing);
+  });
+
+  testWidgets('🔴 这一份实现**不报电平** ⇒ 那条轴与走时一个字都不出现', (tester) async {
+    // 负向对照（`levels: null`，就是桩那一档）：不许凭空画一条 0 的轴出来。
+    await pumpRec(tester, startWhy: null);
+    await tapVisible(tester, find.text(voiceRecStart));
+    expect(find.byKey(voiceLevelAxisKey), findsNothing);
+    expect(find.textContaining('已录'), findsNothing);
+    expect(find.text(voiceRecHearing), findsNothing);
+    expect(find.text(voiceRecQuiet), findsNothing);
+  });
+
+  testWidgets('★ 录完（按停下）⇒ 那条轴与走时都收干净', (tester) async {
+    final f = FakeRec()
+      ..levelOut = StreamController<double>.broadcast()
+      ..clip = _clip;
+    addTearDown(f.levelOut!.close);
+    await pumpRecWith(tester, f);
+    await tapVisible(tester, find.text(voiceRecStart));
+    await pushLevel(tester, f.levelOut!, 0.8);
+    expect(find.byKey(voiceLevelAxisKey), findsOneWidget);
+    await tapVisible(tester, find.text(voiceRecStop));
+    expect(find.byKey(voiceLevelAxisKey), findsNothing, reason: '★ 停了就不该还留着那条轴');
+    expect(find.textContaining('已录'), findsNothing);
+    expect(find.text(voiceRecPlay), findsOneWidget, reason: '★ 该出现的是"听一遍"');
+  });
+
+  testWidgets('★ 3.1 倍字号下：录着 ＋ 有那条轴，也不许溢出（D3.5）', (tester) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 3.1;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final f = FakeRec()..levelOut = StreamController<double>.broadcast();
+    addTearDown(f.levelOut!.close);
+    await pumpRecWith(tester, f);
+    await tapVisible(tester, find.text(voiceRecStart));
+    await pushLevel(tester, f.levelOut!, 0.7);
+    expect(find.byKey(voiceLevelAxisKey), findsOneWidget);
+    expect(tester.takeException(), isNull, reason: '★ 3.1 倍下不许溢出');
   });
 
   testWidgets('★ 走开（这一块被拆掉）⇒ 把声音停掉、正在录就收手（不给对面留个孤儿）', (tester) async {

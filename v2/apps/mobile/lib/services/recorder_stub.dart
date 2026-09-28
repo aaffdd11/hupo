@@ -14,6 +14,10 @@
 import '../models/voice_record.dart';
 import 'recorder.dart';
 
+/// 录的时候那一串音量采样。**这一档没有电平可报**（桩那一份不碰麦克风）⇒ 空流。
+/// ⚠️ 界面据此**不画那条轴**（"没有读数就不许编一个"）。
+Stream<double> get levels => const Stream<double>.empty();
+
 /// 这台设备录得了音吗。**没装原生钩子就是恒假**（那一份就是那个事实）。
 bool get canRecord => nativeRecorderApi?.canRecord ?? false;
 

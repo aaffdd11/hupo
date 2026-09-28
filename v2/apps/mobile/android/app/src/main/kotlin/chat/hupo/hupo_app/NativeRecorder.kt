@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.plugin.common.MethodCall
@@ -39,6 +41,13 @@ class NativeRecorder(private val activity: Activity) : MethodChannel.MethodCallH
     private var player: MediaPlayer? = null
     private var pendingResult: MethodChannel.Result? = null
     private var pendingPlayEnded: (() -> Unit)? = null
+
+    /// **录的时候那条电平轴**（主人 2026-09-28："可以检测收到语音，并且给出一个
+    /// 录音时候的那种时间轴语音bar吗？"）：每 ~100ms 取一次 `getMaxAmplitude()`
+    /// 报给 Dart 那一侧（0..32767，它自己归一）。
+    /// ⚠️ 它**只是应答**，不进录音数据；停录/走开都要把它停掉。
+    private val handler = Handler(Looper.getMainLooper())
+    private var meter: Runnable? = null
 
     /** 现在有没有一条在录。 */
     private val recording: Boolean get() = recorder != null
@@ -106,6 +115,7 @@ class NativeRecorder(private val activity: Activity) : MethodChannel.MethodCallH
             recorder = rec
             outFile = f
             startedAt = System.currentTimeMillis()
+            startMeter()
             null
         } catch (e: Exception) {
             closeRecorder()
@@ -194,9 +204,42 @@ class NativeRecorder(private val activity: Activity) : MethodChannel.MethodCallH
         outFile?.delete()
         closeRecorder()
         stopPlay()
+        stopMeter()
+    }
+
+    /// 每 ~100ms 报一次当前峰值（那台一停就没人取了 ⇒ 必须自己停）。
+    private fun startMeter() {
+        stopMeter()
+        val r = object : Runnable {
+            override fun run() {
+                val rec = recorder ?: return
+                val amp = try {
+                    rec.maxAmplitude
+                } catch (e: Exception) {
+                    return
+                }
+                meterChannel?.invokeMethod("onLevel", amp)
+                handler.postDelayed(this, 100)
+            }
+        }
+        meter = r
+        handler.postDelayed(r, 100)
+    }
+
+    private fun stopMeter() {
+        meter?.let { handler.removeCallbacks(it) }
+        meter = null
+    }
+
+    private var meterChannel: MethodChannel? = null
+
+    /// 电平往哪条 channel 报（与 `onPlayEnded` 同一条）。
+    fun bindMeter(channel: MethodChannel) {
+        meterChannel = channel
     }
 
     private fun closeRecorder() {
+        stopMeter()
         try {
             recorder?.reset()
             recorder?.release()
