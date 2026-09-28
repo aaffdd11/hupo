@@ -24,6 +24,7 @@ import 'models/space.dart';
 import 'screens/model_key_screen.dart';
 import 'screens/waiting_screen.dart';
 import 'services/chat_controller.dart';
+import 'services/hearing_native.dart';
 import 'services/recorder_native.dart';
 import 'widgets/mini_native_boot.dart';
 import 'services/token_store.dart';
@@ -75,6 +76,9 @@ void main() {
   //      而楼层闸不许 `widgets → services`（当场抓到过一次）。`main` 这一层谁都能指。
   if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
     installNativeRecorder();
+    // ★ **原生开麦**（2026-09-28 · 主人：*"是的，安卓也要支持转文字。开工吧。"*）：
+    //   采 16k PCM → 送我们自己的 `/api/asr`（签名只在服务端算）。
+    installNativeHearing();
   }
   runApp(const HupoApp());
 }

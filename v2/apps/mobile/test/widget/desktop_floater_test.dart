@@ -186,9 +186,13 @@ void main() {
 
     // ② 点桌面空白 ⇒ 收起。
     //    ⚠️ **得点浮窗盖不到的地方**：桌面现在是整页底图，浮窗贴底盖住了中间那一大块，
-    //       所以"空白"是左边那条 30px 的带子（这也正是 Z3 要留出边距的理由之一）。
+    //       所以"空白"是左边那条**留白带子**（这也正是 Z3 要留出边距的理由之一）。
+    //    🔴 **那一点要从常量算，不能写死 10**（2026-09-28 修）：主人把留白从 30 改成 10
+    //       之后，`left + 10` 正好落在浮窗**自己的左边缘上** ⇒ 这一条会红得莫名其妙
+    //       （它量的其实是"浮窗边距有多宽"，不是"点空白收不收得起"）。
+    //       ⇒ 取那条带子的**中间**：留白怎么变都还是空白。
     final screen = tester.getRect(find.byType(MaterialApp));
-    await tester.tapAt(Offset(screen.left + 10, screen.center.dy));
+    await tester.tapAt(Offset(screen.left + FloaterMetrics.margin / 2, screen.center.dy));
     await tester.pumpAndSettle();
     expect(find.byTooltip(chatCollapse), findsNothing, reason: '点桌面空白该收起');
   });

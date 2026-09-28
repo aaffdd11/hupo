@@ -466,3 +466,63 @@ check-apk：✓ INTERNET ✓ 没有后台录音 ✓ 有 RECORD_AUDIO ✓ 图标
 | 3 | **阈值是我定的**（`onLevel 0.18 / offLevel 0.08`）：安静房间里要多响才算"听得到"，得他在真机上听一遍才好调 —— 数只住在 `LevelMeter` 里，改它就是改一行 |
 | 4 | **它不进录音数据**：那条轴只是**应答**；音频还是原来那几块（网页）/`MediaRecorder` 那条（安卓） |
 | 5 | **不报电平的实现**（桩、以及将来别的平台）**不画那条轴**：宁可少画一个东西，也不画一条假的 0 |
+
+
+---
+
+## 十四、原生**开麦 → 转文字**（2026-09-28 · 主人：*"是的，安卓也要支持转文字。开工吧。"*）
+
+### 14.1 先看清事实（和录音那一件一样，先读包）
+
+```
+libapp.so 里 strings 出：package:hupo_app/services/hearing_stub.dart   ← 编进去的是桩
+                        （`canHear == false` ⇒ 界面**连那颗话筒都不画**）
+```
+⇒ 安卓上"说话转文字"**不是坏了，是从来没做**（网页那一份 `hearing_web.dart` 是好的）。
+
+### 14.2 做了什么
+
+| 落在哪 | 是什么 |
+|---|---|
+| `android/.../NativeMic.kt`（新） | `AudioRecord`（**16k / 单声道 / PCM16**，`VOICE_RECOGNITION` 音源，拿不到就退回 `MIC`）每 100ms 一块（3200 字节）交给 Dart；**第一次按下去才问权限**（D5.11）；一个原因一句话（`denied`/`unsupported`/`failed`）；**不落盘** |
+| `MainActivity.kt` | 多挂一条 channel **`hupo/hearing`** ＋ 把权限回执分给发起的那一个（录音那条是 `REQ_MIC`、这条是另一号） |
+| `lib/services/hearing_native.dart`（新） | Dart 那半：连我们那条 `/api/asr`（令牌走子协议）→ 把 PCM 帧发出去 → 把回帧翻成事件；收手**不立刻断**（留着等最后那句） |
+| `lib/services/hearing.dart` ＋ `hearing_stub.dart` | **钩子**（与 `recorder.dart` 同一套）：没装 ⇒ 恒假＋`unsupported`；装了 ⇒ 全转给原生 |
+| `lib/main.dart` | 启动时装（**只在 Android** —— 与录音、小程序运行时同一处） |
+
+🔴 **与网页那一份逐条对齐**（不然同一件事会有两种说法）：
+① **先连上、问对面"这台能不能听"，能听才去要麦克风**（没配钥匙的部署上先弹权限框
+是白打扰一次 —— 2026-09-23 线上实测到过）；② **只有 `asr/ready` 才算能听**，
+`asr/unavailable` ⇒ `not-configured`、`asr/error` ⇒ `engine`、握不上手 ⇒ `no-entry`
+（**与"开不了麦"不是一回事**）；③ 收手先停采集、说 `{type:'asr/stop'}`，
+**留着连接**等最后那几个字（8 秒兜底）；④ 一次只开一条。
+
+⚠️ **帧回主线程再送**（Flutter 的平台通道只许在平台线程上叫）：Kotlin 采集在后台线程，
+`invokeMethod` 用 `Handler(Looper.getMainLooper()).post` 兜一下。
+⚠️ **没开过麦克风就不碰那条 channel**（`session.micStarted`）：这样"没配钥匙那一档
+**一次都不碰麦克风**"才是一句能判的话。
+
+### 14.3 判据
+
+| 在哪 | 钉住了什么 |
+|---|---|
+| 新 `test/unit/hearing_native_test.dart` **9 条** | ① 没装钩子 ⇒ 恒假 ＋ `unsupported` ＋ **一次都不碰那条 channel** ② 🔴 **顺序**：先连上（令牌走子协议）→ 发 `asr/start` → **对面说"能听"之前不许碰麦克风** → `asr/ready` 之后才调 `start` ③ 🔴 `asr/unavailable` ⇒ `not-configured`，而且**一次都没要麦克风**（白打扰那条）＋ 事件转给界面 ④ 握不上手 ⇒ `no-entry` ⑤ `asr/error` ⇒ `engine` ⑥ 麦克风说"没权限" ⇒ `denied` ＋ 连接**收干净** ⑦ 🔴 帧**原样**送出去（3200 字节不加工）＋ **说过"结束"之后不再送** ⑧ 收手**不立刻断**（留着等 `asr/end`，之后收干净）⑨ 源码级：装在 `main.dart` 的 Android 分支、channel 名字两边逐字一致、Kotlin 那边 `16000/CHANNEL_IN_MONO/ENCODING_PCM_16BIT` 都在 |
+| `test/widget/desktop_floater_test.dart`（顺手修） | 那条"点桌面空白 ⇒ 收起"原来**写死**点在 `left + 10` —— 而留白 2026-09-28 从 30 改成 10，`+10` 正好落在浮窗**自己的左边缘**上 ⇒ 它红的其实是"边距有多宽"。改成从常量算（`margin / 2`）⇒ 留白怎么变都还是在点空白 |
+
+### 14.4 读数（2026-09-28 打的那个包）
+
+```
+check-apk：✓ RECORD_AUDIO（V10 要求在）· ✓ 没有后台录音 · ✓ 图标
+libapp.so：hearing_native.dart ＋ installNativeHearing 都在；hearing_stub.dart 也在（它是转交那一层）
+classes.dex：AudioRecord 命中 ✓
+```
+
+### 14.5 还是没验到的（**只有他按一下才算数**）
+
+| # | 事 |
+|---|---|
+| 1 | 🔴 **真麦克风那一下**：本机没有设备也没有模拟器 ⇒ "按话筒 → 说一句话 → 字长出来"只能他装上去试 |
+| 2 | 🔴 **手机那个账号的盒子里还没有语音三样**（`hupo-b`：只有模型 + 图片两把）⇒ 就算包对了，他的盒子会如实回 `asr/unavailable`（"这台还没接上"）。**要么他在 app 的 设置→语音 里填一次**（`#175` 修好的那条路），**要么**说一声我把中心那份推给他盒子 |
+| 3 | **权限弹窗那一趟**（第一次按话筒才弹）没在真机上走过 |
+| 4 | **采样质量**：`VOICE_RECOGNITION` 音源在真机上的效果（回声/噪声）没听过 —— 不行就退回 `MIC`（代码里已经有兜底，但没人试过哪一档更准） |
+| 5 | **朗读 / 外链** 仍然是桩（P1-23 剩下那两件，都很小） |
