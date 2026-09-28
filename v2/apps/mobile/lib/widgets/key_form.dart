@@ -20,6 +20,7 @@ import 'package:flutter/services.dart';
 
 import '../models/key_outcome.dart';
 import '../models/space_words.dart';
+import 'cancel_account.dart';
 
 class KeyForm extends StatefulWidget {
   const KeyForm({
@@ -77,54 +78,6 @@ class _KeyFormState extends State<KeyForm> {
     //    "有空格换行"的检查去说他 —— 在这儿替他改，是我们在猜他要粘什么。
     _c.text = text.trim();
     setState(() => _err = null);
-  }
-
-  /// 🔴 **取消注册**：先**列清单**、再问一次，然后才真调。
-  ///
-  /// ⚠️ 顺序是死的：**先说清删什么**（手册 X3 ②），**再动手**。
-  ///    反过来的话，用户是"点了才知道会删" —— 那不可逆。
-  Future<void> _cancel() async {
-    final go = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text(keyCancelTitle),
-        content: const Text(keyCancelWhat),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text(keyCancelNo)),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text(keyCancelYes)),
-        ],
-      ),
-    );
-    if (go != true || !mounted) return;
-    setState(() => _busy = true);
-    final r = await widget.onCancel!();
-    if (!mounted) return;
-    setState(() => _busy = false);
-    final msg = switch (r) {
-      CancelOutcome.ok => keyCancelOk,
-      CancelOutcome.noHelper => keyCancelNoHelper,
-      CancelOutcome.protectedOne => keyCancelProtected,
-      CancelOutcome.local => keyCancelLocal,
-      CancelOutcome.noTenant => keyCancelNone,
-      CancelOutcome.needsRelogin => keyCancelRelogin,
-      CancelOutcome.failed => keyCancelFailed,
-    };
-    // ★ **要重新登一次**（账 #39）：服务端在这一步**什么都没做** ⇒
-    //   把他的原话念给他听（"现在什么都没动"），然后**送他回登录那一屏** ——
-    //   因为下一步就是"重新登一次，再点一遍"。
-    if (r == CancelOutcome.needsRelogin) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-      widget.onCancelled?.call();
-      return;
-    }
-    if (r == CancelOutcome.ok) {
-      // ⚠️ **收掉了就回登录页**：令牌已经被服务端撤了，留在这儿只会到处 401。
-      //    先说一句"已经在收了"，再走 —— 不然用户不知道刚才那一下干了什么。
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-      widget.onCancelled?.call();
-      return;
-    }
-    setState(() => _err = msg);
   }
 
   Future<void> _submit() async {
@@ -186,16 +139,13 @@ class _KeyFormState extends State<KeyForm> {
         const SizedBox(height: 12),
         Text(keyPrivacy, style: t.textTheme.bodySmall, textAlign: TextAlign.center),
         // 🔴 **取消注册**（主人 2026-09-22："隐蔽一点"）。
-        //    ⚠️ "隐蔽"= **入口不抢眼**（小字 + 次要色 + 放在主流程**下面**），
-        //      **不是**"不告诉他就删" —— 点下去先弹一个把话列清楚的确认框。
+        //    ⚠️ 这一块（入口 + 确认框 + 六种结果话）住在 `widgets/cancel_account.dart`：
+        //      设置改成列表之后它**单独立了一项**（「注销账号」），
+        //      两处必须是同一个东西、同一套话。
         if (widget.onCancel != null && widget.onCancelled != null)
-          TextButton(
-            style: TextButton.styleFrom(
-              minimumSize: const Size(48, 44),
-              foregroundColor: t.colorScheme.onSurfaceVariant,
-            ),
-            onPressed: _busy ? null : _cancel,
-            child: Text(keyCancelEntry, style: t.textTheme.bodySmall),
+          CancelAccountEntry(
+            onCancel: widget.onCancel!,
+            onCancelled: widget.onCancelled!,
           ),
       ],
     );

@@ -212,8 +212,49 @@ const String settingsAboutSection = '这个助手';
 /// 「关于」那一条下面的小字说明（**不写内容概要的承诺**，只说这一页管什么）。
 const String aboutEntryHint = '它的能力、记忆和边界';
 
+// ── ★ 2026-09-29：设置改成**列表**（主人：*"现在帮我分类，选项有模型设置，
+//    点开才是设置模型。其他的也是列表中来做配置。包括壁纸。"*）────────
+//
+// 🔴 顶层就是一列**分类**，每一条点开才是它自己的配置；子页左上角一行「回到设置」。
+// ⚠️ 这一层只有名目，不含结论（每一页里的字仍住各自那一块）。
+
+/// 那一列的抬头（也是子页上"回哪儿去"那两个字）。
+const String settingsTitle = '设置';
+
+/// 子页左上角那一行（点了回列表）。
+const String settingsBack = '回到设置';
+
+/// 第一项：**模型设置**（就是原来「聊天」那一屏 —— 模型那把钥匙）。
+/// ⚠️ 顶层叫"模型设置"，而那一页里的字照旧（`credTabWhat(credTabChat)` 那些）。
+const String settingsRowModel = '模型设置';
+
+/// 「壁纸」那一项（行上的小字会显示"现在用的是哪一张"）。
+const String settingsRowWallpaper = '壁纸';
+
+/// 壁纸那一页怎么说。
+const String wallpaperHint = '点一张，桌面就换。第一格是原来那张纸。';
+
+/// 「不设」那一格上写的字。
+const String wallpaperDefaultLabel = '不设（默认那张纸）';
+
+/// 「第 N 张」的前缀（源图没有名字，**不许编一个**）。
+const String wallpaperLabelPrefix = '壁纸 ';
+
 /// 设置里那一条：退出登录（原来挂在聊天抓手行上）。
 const String settingsLogout = '退出登录';
+
+/// 它下面的小字：**退出 ≠ 注销**（两句分开说 —— 混成一句就是页面在说假话）。
+const String settingsLogoutHint = '这台设备上退出来，钥匙还留着。';
+
+/// 「关于」那一项的标题（原来那条呆在最下面，现在它是列表里的一项）。
+const String aboutEntryTitle = '关于';
+
+/// 「注销账号」那一项的标题。
+/// ⚠️ 与「退出登录」**必须分得开**：一个只是退出来，另一个把盒子里那一切收掉。
+const String settingsCancelAccount = '注销账号';
+
+/// 它下面的小字（**如实说不可逆** —— 与确认框里那几句同一条纪律）。
+const String settingsCancelAccountHint = '连盒子里的东西一起收掉，这一步没法撤销。';
 
 // ── ★ 批次 4：「这块窗口」那一组（外观 / 字号 · 契约 `docs/dev/119`）────────
 //

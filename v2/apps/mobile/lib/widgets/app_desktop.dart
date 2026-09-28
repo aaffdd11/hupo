@@ -29,6 +29,7 @@ import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
 import '../models/space_words.dart';
+import '../models/wallpaper.dart';
 import 'desktop_icon_menu.dart';
 
 /// **小程序没给图标时用的那个**（主人 2026-09-22：*"设置要给一个默认 icon"*）。
@@ -123,9 +124,19 @@ class AppDesktop extends StatelessWidget {
     // ★ 2026-09-24 主人：*"appicon 应该是动效结束后出现。所以打开的时候 appicon 应该是
     //   瞬间消失掉…退回到 app 的时候应该是动效结束的时候 appicon 出现。"*
     this.hideIconId,
+    // ★ 2026-09-29：桌面那张**壁纸**（契约 `docs/dev/131-WALLPAPER.md`）。
+    //   空串 = 不设（就是原来那张暖纸）；认不出来的 id 也走这一条。
+    this.wallpaper = wallpaperNone,
   });
 
   final List<DesktopApp> apps;
+
+  /// **桌面现在铺的是哪一张**（`''` = 不设 —— `models/wallpaper.dart`）。
+  ///
+  /// 🔴 它是**底图**，不是聊天窗口的背景：浮窗还是 `design.dart` 那张纸。
+  /// 🔴 Z5 那三个"不许"照旧：**不接输入**（`IgnorePointer`）· **不说话**（一个字都不画）·
+  ///    **不改排布**（图标墙的位置与命中区一毫米不动 —— 壁纸只在下面那一层）。
+  final String wallpaper;
 
   /// **点空白**（不是点图标）⇒ 上层拿它收起聊天浮窗。
   final VoidCallback onTapBlank;
@@ -153,9 +164,18 @@ class AppDesktop extends StatelessWidget {
       desktopIconBox + desktopTileSlack,
       desktopTileMax,
     );
-    return Material(
-      color: d.paper,
-      child: InkWell(
+    // ★ 2026-09-29：**壁纸在下面那一层**（`Stack` 底），图标墙与点击照旧在上面。
+    //   🔴 `IgnorePointer`：底图**不接任何输入**（Z5 第一条）—— 点空白仍然是
+    //      `InkWell` 那一条路，壁纸就算铺满了也抢不走一下点击。
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: IgnorePointer(child: _WallpaperBackdrop(wallpaper)),
+        ),
+        Material(
+          // 透明：底图那一层已经画了纸色（不设壁纸时就是原来那张暖纸）
+          color: Colors.transparent,
+          child: InkWell(
         // ⚠️ 点空白 = 收起聊天（§六 交互表）。splash 关掉：整屏闪一下不是反馈，是噪声。
         onTap: onTapBlank,
         splashColor: Colors.transparent,
@@ -219,6 +239,45 @@ class AppDesktop extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    ),
+      ],
+    );
+  }
+}
+
+/// **桌面那张底图**（用户挑的那一张；不设 = 原来那张暖纸）。
+///
+/// 三条纪律（`docs/dev/131-WALLPAPER.md` §一）：
+///   ① **不设 / 认不出来 / 图读不出来** ⇒ 一律回到那张暖纸 —— **桌面绝不打不开**；
+///   ② **上面罩一层纸色**（`d.wallpaperScrim`）：壁纸是用户自己挑的（深的、花的都有），
+///      而图标名是墨色画的 ⇒ 没这层罩字会掉进图里；
+///   ③ **一个字都不画**（Z5 第二条）：这一层只有图 ＋ 罩色。
+class _WallpaperBackdrop extends StatelessWidget {
+  const _WallpaperBackdrop(this.wallpaper);
+
+  final String wallpaper;
+
+  @override
+  Widget build(BuildContext context) {
+    final asset = wallpaperAssetOf(wallpaper);
+    if (asset == null) return const ColoredBox(color: d.paper);
+    return ColoredBox(
+      // 图还没解码出来 / 读坏了：底下那一层先顶上（不会闪白）
+      color: d.paper,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.asset(
+            asset,
+            // 换一张 ⇒ 建一个新的（否则 `Image` 会把上一张的帧留住）
+            key: ValueKey<String>(asset),
+            fit: BoxFit.cover,
+            // 读不出来 ⇒ 静默回默认底（这里**不弹**任何东西：桌面不该因为一张图报错）
+            errorBuilder: (_, _, _) => const ColoredBox(color: d.paper),
+          ),
+          const ColoredBox(color: d.wallpaperScrim),
+        ],
       ),
     );
   }

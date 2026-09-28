@@ -45,6 +45,7 @@ import '../models/timeline.dart';
 import '../models/trash_words.dart';
 import '../models/voice_try.dart';
 import '../models/voice_record.dart';
+import '../models/wallpaper.dart';
 import '../services/api.dart';
 // ★ **录一段（录音 ＋ 回放）**：本机那一套（`services/recorder.dart` 的条件导出）。
 //   ⚠️ 取一个前缀：`canRecord` / `play` 这种名字在这里太容易和其它含义撞。
@@ -56,6 +57,7 @@ import '../services/harness_client.dart';
 import '../services/links.dart';
 import '../services/hearing.dart';
 import '../services/speech.dart';
+import '../services/wallpaper_store.dart';
 import '../widgets/app_desktop.dart';
 import '../widgets/appearance_scope.dart';
 import '../widgets/dsh_look.dart';
@@ -409,7 +411,17 @@ class _ChatScreenState extends State<ChatScreen> {
   //    不靠重连、不靠刷新。
 
   /// 用户选的那两样（默认 = 跟随系统 ＋ 14 字）。
-  ChatAppearanceSettings _appearance = const ChatAppearanceSettings();
+  ///
+  /// 🔴 **2026-09-29 起它是一个 `ValueNotifier`**（外面包一个同名 getter）：
+  ///    设置里那些子页是 `push` 出来的**新路由** —— 它们**不在**这一屏 `setState`
+  ///    的那棵子树里，只拿到一份"推出去那一刻"的快照 ⇒ 在子页里连按两下步进器
+  ///    会**按着旧值算**（实测：14 →大一点→ 15，再按小一点 ⇒ **13**，
+  ///    而页面上那个数字还写着 14 —— 那是"页面在说假话"）。
+  ///    ⇒ 状态还是**只有这一份**，只是它现在**会通知**订阅者（子页订阅它）。
+  final ValueNotifier<ChatAppearanceSettings> _appearanceVN =
+      ValueNotifier<ChatAppearanceSettings>(const ChatAppearanceSettings());
+
+  ChatAppearanceSettings get _appearance => _appearanceVN.value;
 
   /// 它存在哪（**按设备**；照 `process_level_store.dart` 那一对）。
   final _appearanceStore = AppearanceStore();
@@ -422,14 +434,14 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _loadAppearance() async {
     final s = await _appearanceStore.read();
     if (!mounted || s == _appearance) return;
-    setState(() => _appearance = s);
+    setState(() => _appearanceVN.value = s);
   }
 
   /// 用户换了一档外观（设置页那三个之一）。
   void _setAppearance(ChatAppearance a) {
     if (a == _appearance.appearance) return; // 点当前那一档 = 空动作（切换器里不许有死键）
     final next = _appearance.copyWith(appearance: a);
-    setState(() => _appearance = next);
+    setState(() => _appearanceVN.value = next);
     // 存不上也得能用（这一次会话里屏幕上是对的）。
     unawaited(_appearanceStore.write(next));
   }
@@ -439,8 +451,41 @@ class _ChatScreenState extends State<ChatScreen> {
     final n = chatFontSizeOf(size);
     if (n == _appearance.fontSize) return;
     final next = _appearance.copyWith(fontSize: n);
-    setState(() => _appearance = next);
+    setState(() => _appearanceVN.value = next);
     unawaited(_appearanceStore.write(next));
+  }
+
+  // ── ★ 2026-09-29：桌面那张壁纸（契约 `docs/dev/131-WALLPAPER.md`）──────
+  //
+  // 形状与上面外观/字号**一模一样**（同一套纪律、同一对读写）：
+  //   · 状态住**这一屏**（`_wallpaper`）：设置页只是它的入口；
+  //   · **按设备**存（`WallpaperStore`，key `hupo_wallpaper`）；
+  //   · 换一下 ⇒ **同一个 `setState` 里既写盘又重建桌面**（不刷新、不重连）。
+
+  /// 桌面现在铺的是哪一张（`''` = 不设 —— 那张暖纸）。
+  ///
+  /// ⚠️ 与 `_appearance` 同一条：**`ValueNotifier` ＋ 同名 getter**，
+  ///    因为「壁纸」那一页也是 `push` 出来的新路由（订阅它才看得到当前那一张）。
+  final ValueNotifier<String> _wallpaperVN = ValueNotifier<String>(wallpaperNone);
+
+  String get _wallpaper => _wallpaperVN.value;
+
+  final _wallpaperStore = WallpaperStore();
+
+  /// 进来时读一次"上次挑的那张"（读不出来 / 认不出来 ⇒ 那张暖纸）。
+  /// ⚠️ 与 `_loadAppearance` 同一条取舍：**先画第一帧、读到了再换**。
+  Future<void> _loadWallpaper() async {
+    final s = await _wallpaperStore.read();
+    if (!mounted || s == _wallpaper) return;
+    setState(() => _wallpaperVN.value = s);
+  }
+
+  /// 用户挑了一张（设置里那一格）。**认不出来的一律当"不设"**（模型那一层兜底）。
+  void _setWallpaper(String id) {
+    final n = wallpaperOf(id);
+    if (n == _wallpaper) return; // 点当前那一张 = 空动作（不许有死键）
+    setState(() => _wallpaperVN.value = n);
+    unawaited(_wallpaperStore.write(n));
   }
 
   // ── 多选态（契约 `docs/dev/106-CHAT-SELECT.md` §一）──────────────
@@ -474,6 +519,8 @@ class _ChatScreenState extends State<ChatScreen> {
     FocusManager.instance.addListener(_onFocusChanged);
     // ★ 批次 4：进来先读一次"上次选的亮暗与字号"（读不出来 ⇒ 跟随系统 ＋ 14）。
     unawaited(_loadAppearance());
+    // ★ 2026-09-29：桌面那张壁纸（读不出来 ⇒ 那张暖纸）。
+    unawaited(_loadWallpaper());
   }
 
   @override
@@ -484,6 +531,9 @@ class _ChatScreenState extends State<ChatScreen> {
     _closeHarness();
     // ★ 那条浮窗的钟也要收（不然它到点会去动一棵已经没了的树）
     _homeHintTimer?.cancel();
+    // ★ 那两个"会通知订阅者"的状态也得收（子页订阅着它们）
+    _appearanceVN.dispose();
+    _wallpaperVN.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -799,6 +849,9 @@ class _ChatScreenState extends State<ChatScreen> {
               // ★ 2026-09-24：正在扩开/收回的那一格，**图标先消失**（打开那一瞬间就藏；
               //   收回时**藏到动画结束**才放回来 —— 主人原话："appicon 应该是动效结束后出现"）
               hideIconId: _openApp ?? (_appSettled ? null : _hideIdCache),
+              // ★ 2026-09-29：桌面那张**壁纸**（契约 `docs/dev/131-WALLPAPER.md`）。
+              //   ⚠️ 它只画在**桌面这一层**：聊天浮窗、图标墙、小程序都不受影响。
+              wallpaper: _wallpaper,
               onTapBlank: () => _floaterKey.currentState?.collapse(),
             ),
           ),
@@ -1037,6 +1090,13 @@ class _ChatScreenState extends State<ChatScreen> {
           appearance: _appearance,
           onAppearanceChanged: _setAppearance,
           onFontSizeChanged: _setFontSize,
+          // ★ 2026-09-29：子页是 `push` 出来的**新路由**（不在这一屏的子树里）
+          //   ⇒ 它们拿一份快照就会"按着旧值算" ⇒ 这两条路把**会通知的那一份**递下去。
+          appearanceLive: _appearanceVN,
+          // ★ 2026-09-29：**壁纸**那一项（状态住这一屏，同外观那两行）。
+          wallpaper: _wallpaper,
+          onWallpaperChanged: _setWallpaper,
+          wallpaperLive: _wallpaperVN,
         ),
         title: configTitle,
       );

@@ -66,10 +66,12 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+  # ★ 桌面壁纸（主人 2026-09-29 给的一包，28 张）：`scripts/prepare-wallpapers.py`
+  #   生成的那两份 —— 整图 ＋ 选图用的小图（缩略图另放一格，免得 28 格铺满时 OOM）。
+  #   契约 `docs/dev/131-WALLPAPER.md`。
+  assets:
+    - assets/wallpapers/
+    - assets/wallpapers/thumbs/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

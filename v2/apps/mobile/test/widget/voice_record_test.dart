@@ -107,7 +107,7 @@ Future<void> pumpRecWith(WidgetTester tester, FakeRec f, {bool wired = true}) as
     ),
   );
   await tester.pumpAndSettle();
-  await tapVisible(tester, find.text(credTabVoice));
+  await goTab(tester, credTabVoice);
 }
 
 const _clip = RecordedClip(url: 'blob:local-1', ms: 4200);
@@ -130,6 +130,31 @@ Future<void> tapVisible(WidgetTester tester, Finder f) async {
   await tester.pumpAndSettle();
 }
 
+/// **切到设置里某一页**（2026-09-29：顶层改成"一列分类"之后，子页要**先回来**才能换）。
+Future<void> goTab(WidgetTester tester, String tab) async {
+  final back = find.text(settingsBack);
+  if (back.evaluate().isNotEmpty) {
+    await tester.tap(back);
+    await tester.pumpAndSettle();
+  }
+  final row = find.text(tab == credTabChat ? settingsRowModel : tab);
+  if (row.evaluate().isEmpty) {
+    // ⚠️ 顶层那一列**是懒加载的**：滚过之后就找不到上面那几行了
+    //    ⇒ 像用户那样滚回去（`ensureVisible` 对"还没建出来"的东西会当场抛）。
+    await tester.scrollUntilVisible(
+      row,
+      200,
+      scrollable: find
+          .descendant(of: find.byKey(settingsListKey), matching: find.byType(Scrollable))
+          .first,
+    );
+    await tester.pumpAndSettle();
+  }
+  expect(row, findsOneWidget, reason: '★ 顶层那一列里找不到「$tab」⇒ 这一条量错了地方');
+  await tester.tap(row);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -142,7 +167,7 @@ void main() {
     expect(find.text(voiceRecPlay), findsNothing);
 
     // 换到"聊天"那一屏 ⇒ 那一块不在（它只属于语音那一屏）
-    await tapVisible(tester, find.text(credTabChat));
+    await goTab(tester, credTabChat);
     expect(find.text(voiceRecTitle), findsNothing, reason: '★ 别的屏上不许有它');
   });
 
@@ -300,7 +325,7 @@ void main() {
     final f = await pumpRec(tester, clip: _clip);
     await tapVisible(tester, find.text(voiceRecStart));
     // 换到别的 tab ⇒ 这一块被拆掉
-    await tapVisible(tester, find.text(credTabChat));
+    await goTab(tester, credTabChat);
     expect(f.stops, greaterThanOrEqualTo(1), reason: '★ 走开的时候麦要关掉');
   });
 }

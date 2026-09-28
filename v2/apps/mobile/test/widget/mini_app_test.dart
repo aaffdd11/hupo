@@ -107,12 +107,11 @@ void main() {
     await tester.scrollUntilVisible(
       find.text(settingsLogout),
       200,
-      // ⚠️ **2026-09-24 改**：配置页变成四个 tab 之后，`SettingsScreen` 里**第一个**
-      //    `Scrollable` 是 **TabBar 自己**那一行 ⇒ 滚它会滚错东西（"退出登录"永远滚不出来）。
-      //    ⇒ 指名到**那一屏的内容列**（`_tabBody` 那个 ListView，key 带着 tab 名）。
+      // ⚠️ **2026-09-29 改**：设置改成**一列分类**之后，顶层就是那一列
+      //    ⇒ 指名到它（`settingsListKey`）；原来那个 `credTab:聊天` 已经不存在了。
       scrollable: find
           .descendant(
-            of: find.byKey(const ValueKey('credTab:$credTabChat')),
+            of: find.byKey(settingsListKey),
             matching: find.byType(Scrollable),
           )
           .first,

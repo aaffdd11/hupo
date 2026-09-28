@@ -85,9 +85,33 @@ Future<FakeHear> pumpVoice(
     ),
   );
   await tester.pumpAndSettle();
-  await tester.tap(find.text(credTabVoice));
-  await tester.pumpAndSettle();
+  await goTab(tester, credTabVoice);
   return f;
+}
+
+/// **切到设置里某一页**（2026-09-29：顶层改成"一列分类"之后，子页要**先回来**才能换）。
+Future<void> goTab(WidgetTester tester, String tab) async {
+  final back = find.text(settingsBack);
+  if (back.evaluate().isNotEmpty) {
+    await tester.tap(back);
+    await tester.pumpAndSettle();
+  }
+  final row = find.text(tab == credTabChat ? settingsRowModel : tab);
+  if (row.evaluate().isEmpty) {
+    // ⚠️ 顶层那一列**是懒加载的**：滚过之后就找不到上面那几行了
+    //    ⇒ 像用户那样滚回去（`ensureVisible` 对"还没建出来"的东西会当场抛）。
+    await tester.scrollUntilVisible(
+      row,
+      200,
+      scrollable: find
+          .descendant(of: find.byKey(settingsListKey), matching: find.byType(Scrollable))
+          .first,
+    );
+    await tester.pumpAndSettle();
+  }
+  expect(row, findsOneWidget, reason: '★ 顶层那一列里找不到「$tab」⇒ 这一条量错了地方');
+  await tester.tap(row);
+  await tester.pumpAndSettle();
 }
 
 /// 那个文本框里现在是什么（**就是屏幕上那一份**）。
@@ -110,11 +134,9 @@ void main() {
     expect(find.text(voiceTryTitle), findsOneWidget);
     expect(find.text(voiceTryStart), findsOneWidget);
     // 负向对照：切到别的屏 ⇒ 那一块不在（免得它在哪儿都画）
-    await tester.tap(find.text(credTabImage));
-    await tester.pumpAndSettle();
+    await goTab(tester, credTabImage);
     expect(find.text(voiceTryTitle), findsNothing);
-    await tester.tap(find.text(credTabVideo));
-    await tester.pumpAndSettle();
+    await goTab(tester, credTabVideo);
     expect(find.text(voiceTryTitle), findsNothing);
   });
 
@@ -342,10 +364,23 @@ void main() {
     await tester.tap(find.text(voiceTryStart));
     await tester.pumpAndSettle();
     expect(f.started.length, 1);
-    // 像"切走 / 关掉这一屏"那样把这一棵树拆掉
-    await tester.pumpWidget(const MaterialApp(home: Scaffold(body: SizedBox())));
-    await tester.pumpAndSettle();
+    // ① **像"切走"那样**换一页（2026-09-29：顶层改成分类之后，这就是用户走开的方式）
+    await goTab(tester, credTabImage);
     expect(f.stops, 1, reason: '★ 走开时必须收手（不然麦克风留在手里）');
+
+    // ② 再回到这一页、再开一次，然后**把整棵树拆掉**（= 关掉这一屏）
+    //    ⚠️ 这一步原来是这样写的，但**光换一棵同类型的 `MaterialApp` 不会拆掉**
+    //       已经 push 出去的那条路由（`Navigator` 的 state 被复用了）——
+    //       所以这里给一个新的 `key`，逼它真的重建。
+    await goTab(tester, credTabVoice);
+    await tester.tap(find.text(voiceTryStart));
+    await tester.pumpAndSettle();
+    expect(f.started.length, 2);
+    await tester.pumpWidget(
+      MaterialApp(key: UniqueKey(), home: const Scaffold(body: SizedBox())),
+    );
+    await tester.pumpAndSettle();
+    expect(f.stops, 2, reason: '★ 关掉这一屏时麦也要交回');
   });
 
   testWidgets('命中区 ≥44（D3.6）', (tester) async {
@@ -378,8 +413,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text(credTabVoice));
-    await tester.pumpAndSettle();
+    await goTab(tester, credTabVoice);
     expect(tester.takeException(), isNull);
     expect(find.text(voiceTryStart), findsOneWidget);
   });

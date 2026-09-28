@@ -44,9 +44,33 @@ Future<List<String>> pumpImageTab(
     ),
   );
   await tester.pumpAndSettle();
-  await tester.tap(find.text(credTabImage));
-  await tester.pumpAndSettle();
+  await goTab(tester, credTabImage);
   return asked;
+}
+
+/// **切到设置里某一页**（2026-09-29：顶层改成"一列分类"之后，子页要**先回来**才能换）。
+Future<void> goTab(WidgetTester tester, String tab) async {
+  final back = find.text(settingsBack);
+  if (back.evaluate().isNotEmpty) {
+    await tester.tap(back);
+    await tester.pumpAndSettle();
+  }
+  final row = find.text(tab == credTabChat ? settingsRowModel : tab);
+  if (row.evaluate().isEmpty) {
+    // ⚠️ 顶层那一列**是懒加载的**：滚过之后就找不到上面那几行了
+    //    ⇒ 像用户那样滚回去（`ensureVisible` 对"还没建出来"的东西会当场抛）。
+    await tester.scrollUntilVisible(
+      row,
+      200,
+      scrollable: find
+          .descendant(of: find.byKey(settingsListKey), matching: find.byType(Scrollable))
+          .first,
+    );
+    await tester.pumpAndSettle();
+  }
+  expect(row, findsOneWidget, reason: '★ 顶层那一列里找不到「$tab」⇒ 这一条量错了地方');
+  await tester.tap(row);
+  await tester.pumpAndSettle();
 }
 
 void main() {

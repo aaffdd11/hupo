@@ -42,6 +42,7 @@ import 'package:hupo_app/models/tool_row.dart';
 import 'package:hupo_app/models/tool_row_words.dart';
 import 'package:hupo_app/models/voice_record.dart';
 import 'package:hupo_app/models/voice_try.dart';
+import 'package:hupo_app/models/wallpaper.dart';
 import 'package:hupo_app/models/queue_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
@@ -65,6 +66,7 @@ import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/notice.dart';
+import 'package:hupo_app/widgets/wallpaper_picker.dart';
 import 'package:hupo_app/widgets/queue_strip.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -482,26 +484,47 @@ Future<void> _openAbout(WidgetTester tester, double scale) async {
   //    大字号下它在**折叠线以下**，而 `ListView` **不会把屏幕外的孩子建出来**
   //    ⇒ 直接 `find.text('关于')` 会"一个都没找到"（而人是要滚一下的）。
   //    ⇒ 判据**像用户那样滚**（`scrollUntilVisible`），不是把那一行硬塞进屏幕。
-  // ⚠️ **2026-09-22 补**：桌面上了之后，树里**不止一个** `Scrollable`
-  //    （桌面图标墙自己也是）⇒ 原来那个 `find.byType(Scrollable).first` 会滚错东西。
-  //    ⇒ 指名道姓：**设置那一屏里的**那一个。
-  // ⚠️ **2026-09-24 改**：配置页变成**四个 tab**（主人定的四样）之后，
-  //    `SettingsScreen` 里**第一个** `Scrollable` 是 **TabBar 自己**那一行
-  //    （`isScrollable: true`）—— 滚它会滚错东西（"关于"永远不出现）。
-  //    ⇒ 指名到**那一屏的内容列**（`TabBarView` 里面那个）。
+  // ⚠️ **2026-09-29 改**：设置改成**一列分类**之后，这一行就是那一列里的一项
+  //    ⇒ 指名道姓到**顶层那一列**（`settingsListKey`）。原来那个
+  //    `credTab:聊天` 已经不存在了（那一页要**点开**才在）。
   await tester.scrollUntilVisible(
-    find.text('关于'),
+    find.text(aboutEntryTitle),
     240,
     scrollable: find
         .descendant(
-          of: find.byKey(const ValueKey('credTab:$credTabChat')),
+          of: find.byKey(settingsListKey),
           matching: find.byType(Scrollable),
         )
         .first,
   );
   await tester.pumpAndSettle();
-  await tester.tap(find.text('关于'));
+  await tester.tap(find.text(aboutEntryTitle));
   await tester.pumpAndSettle();
+}
+
+/// **像用户那样**走进「壁纸」那一页：设置那一列 →「壁纸」。
+///
+/// ⚠️ 2026-09-29 新加的界面**必须也过那两道硬闸**（五档不溢出 ＋ 命中区 ≥44），
+///    不然它们会随时间失效 —— 同关于页 / 空房间那几条的理由。
+/// ⚠️ **走真入口**：不直接 pump `WallpaperPicker`（那样它底下没有容器的顶栏，
+///    量的就不是用户真会看到的那棵树）。
+Future<void> _openWallpaper(WidgetTester tester, double scale) async {
+  await _openConfig(tester, scale);
+  await tester.scrollUntilVisible(
+    find.text(settingsRowWallpaper),
+    240,
+    scrollable: find
+        .descendant(
+          of: find.byKey(settingsListKey),
+          matching: find.byType(Scrollable),
+        )
+        .first,
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(settingsRowWallpaper));
+  await tester.pumpAndSettle();
+  // 负向对照：**真的到了那一页**才算数（不然下面扫的是设置列表）
+  expect(find.byType(WallpaperPicker), findsOneWidget, reason: '★ 没进壁纸那一页 ⇒ 这两条判据扫错了屏');
 }
 
 /// **像用户那样**打开「配置」：主界面顶栏那个齿轮。
@@ -1280,6 +1303,12 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '配置页在 ${s}x 溢出了');
       });
 
+      testWidgets('配置页·壁纸那一页（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-29 新加的那一页（28 格缩略图）也要过五档 —— 同上面那条的理由。
+        await _openWallpaper(tester, s);
+        expect(_drain(tester), isEmpty, reason: '壁纸那一页在 ${s}x 溢出了');
+      });
+
       testWidgets('配置页·图片那一屏（含「试一张」）@ ${s}x', (tester) async {
         // ⚠️ 2026-09-24（P1-27）：**新加的那一块**（P1-27 的「试一张」＋真图）也要过五档。
         //    真入口那一趟拿到的 `creds` 全是"没有" ⇒ 那一块**不画**（负向对照见 widget 判据），
@@ -1544,6 +1573,17 @@ void main() {
         //    它的命中区必须 ≥44。⚠️ 那一屏真入口进不去（见 `_pumpVoiceTab`）。
         await _pumpVoiceTab(tester, s);
         await sweep(tester, '语音「试一下」@${s}x');
+      });
+
+      testWidgets('配置页·壁纸那一页（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-29：那一页有 28 格**可点**的缩略图 ⇒ 每一格的命中区
+        //    （`wallpaperCell`）必须 ≥44，而格子是**写死的**尺寸 ⇒ 大字号下
+        //    最容易"字大了它却没大"的那一类。这一条就是守它的。
+        await _openWallpaper(tester, s);
+        // 负向对照：那 28 格真的在树上（不然这趟扫的是别的东西）
+        expect(find.bySemanticsLabel(wallpaperLabel('wp-01')), findsOneWidget,
+            reason: '★ 缩略图那一格没进这棵树');
+        await sweep(tester, '壁纸那一页 @${s}x');
       });
 
       testWidgets('发现（从真入口进）@ ${s}x', (tester) async {
@@ -1939,17 +1979,20 @@ void main() {
         await tester.tap(find.text(settingsAppLabel));
         await tester.pumpAndSettle();
         expect(find.byType(SettingsScreen), findsOneWidget, reason: '★ 没进设置那一屏');
-        // 滚到那两行（窄屏 + 3.1x 下它在折叠线以下 —— 用户也是滚过去的）
+        // ⚠️ 2026-09-29：那两行现在住在「这块窗口」**那一页**里（顶层只有名目）
+        //    ⇒ 像用户那样点开它，再量（用户也是这么走的）。
         await tester.scrollUntilVisible(
-          find.text(settingsFontSizeLabel),
+          find.text(settingsAppearanceSection),
           200,
           scrollable: find
               .descendant(
-                of: find.byKey(const ValueKey('credTab:$credTabChat')),
+                of: find.byKey(settingsListKey),
                 matching: find.byType(Scrollable),
               )
               .first,
         );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(settingsAppearanceSection));
         await tester.pumpAndSettle();
         // 负向对照：那两行**真的画出来了**
         expect(find.text(settingsAppearanceLabel), findsOneWidget, reason: '★「外观」那一行没进这棵树');

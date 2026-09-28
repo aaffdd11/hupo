@@ -159,19 +159,35 @@ Future<void> _openSettings(WidgetTester tester) async {
       reason: '★ 没进设置那一屏 ⇒ 这道判据扫错了屏');
 }
 
-/// 把「这块窗口」那张卡滚进视野（窄屏 + 大字号下它在折叠线以下）。
+/// 走进「这块窗口」那一页，并把要量的那一行滚进视野。
+///
+/// ⚠️ 2026-09-29 改：设置改成**一列分类**之后，那两行**不在顶层**了 ——
+///    它们住在「这块窗口」那一页里 ⇒ 判据必须**像用户那样点开它**
+///    （不点开就找不到 —— 那正是"点开才是配置"这件事在屏幕上的样子）。
 Future<void> _scrollTo(WidgetTester tester, String label) async {
   await tester.scrollUntilVisible(
-    find.text(label),
+    find.text(settingsAppearanceSection),
     200,
     scrollable: find
         .descendant(
-          of: find.byKey(const ValueKey('credTab:$credTabChat')),
+          of: find.byKey(settingsListKey),
           matching: find.byType(Scrollable),
         )
         .first,
   );
   await tester.pumpAndSettle();
+  await tester.tap(find.text(settingsAppearanceSection));
+  await tester.pumpAndSettle();
+  // ⚠️ 子页里那一行也可能在折叠线以下（大字号）⇒ 再滚一次（这次滚的是**子页那一列**）
+  if (find.text(label).evaluate().isEmpty) {
+    await tester.scrollUntilVisible(
+      find.text(label),
+      200,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.pumpAndSettle();
+  }
+  expect(find.text(label), findsOneWidget, reason: '★「$label」没进这棵树 ⇒ 这一条量错了地方');
 }
 
 /// 输入条那个框的字号（收起档也在树上 —— 它一样是"聊天里的字"）。

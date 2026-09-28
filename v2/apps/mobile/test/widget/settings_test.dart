@@ -1,26 +1,31 @@
-// **「配置」页**（主人 2026-09-24 定的**四个 tab**）· 契约 `docs/dev/79-CREDS-TABS.md`。
+// **「配置」页**（主人 2026-09-24 定的四样钥匙 ＋ 2026-09-29 改成的**一列分类**）
+// · 契约 `docs/dev/79-CREDS-TABS.md` · `docs/dev/131-WALLPAPER.md`。
 //
 // 主人原话：*"配置页用来配置模型，语言大模型apikey，语音大模型，图片生成，视频生成。"*
+// 2026-09-29 又定：*"现在帮我分类，选项有模型设置，点开才是设置模型。
+//   其他的也是列表中来做配置。包括壁纸。"*
 //
-// 这一份钉的是**形状与话**（`72-UI-PASS.md` 那几条继续有效，见下面 ⑦⑧）：
-//   ① 四个 tab 都在，而且**顺序就是主人说的那样**
-//   ② 🔴 **每一屏都要说清"这一样管什么"**
-//   ③ 🔴 **图片/视频/语音那一屏必须说清"收下了 ≠ 现在就生效"**（P1-1 的边界句）
-//   ④ 语音那一屏是**三样**（三样齐了才算有）；图片/视频是一串
-//   ⑤ 提交**一次把那一屏写完**（语音三样不许分三次写）
+// 这一份钉的是**形状与话**（`72-UI-PASS.md` 那几条继续有效）：
+//   ① 顶层是**一列分类**（九个名目都在），点开才是它自己的配置
+//   ② 🔴 **每一页都要说清"这一样管什么"**
+//   ③ 🔴 **图片/视频/语音那一页必须说清"收下了 ≠ 现在就生效"**（P1-1 的边界句）
+//   ④ 语音那一页是**三样**（三样齐了才算有）；图片/视频是一串
+//   ⑤ 提交**一次把那一页写完**（语音三样不许分三次写）
 //   ⑥ `localOnly`（主人自己那一份）**也能填**（2026-09-24 他选的那一档）
-//   ⑦ 关于 / 退出登录还在（第一屏底下）；退出登录**仍然是红的**
-//   ⑧ 分区标题是"黑 + 加粗"，不是强调色（原来像警告）
+//   ⑦ 关于 / 退出登录 / 注销账号各是一条；退出登录那一条**仍然是红的**
+//   ⑧ 子页左上角有「回到设置」，点了真的回到那一列
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/design.dart' as d;
+import 'package:hupo_app/models/key_outcome.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/widgets/cred_form.dart';
 import 'package:hupo_app/widgets/key_form.dart';
+import 'package:hupo_app/widgets/wallpaper_picker.dart';
 
 /// 记下"哪一屏被提交了什么"（判据只看这个 —— 不碰网络）。
 class Sent {
@@ -37,6 +42,7 @@ Future<Sent> pump(
   bool tenant = false,
   SpaceCreds creds = const SpaceCreds(),
   bool hasKey = false,
+  bool canCancel = false,
 }) async {
   final sent = Sent();
   await tester.pumpWidget(
@@ -55,6 +61,10 @@ Future<Sent> pump(
             return KeySend.ok;
           },
           onLogout: () {},
+          // ⚠️ 注销账号那一条**只有接线了才画**（"不给假按钮"那条纪律）
+          //    ⇒ 判据两档都要看：接线了在、没接线不在。
+          onCancel: canCancel ? () async => CancelOutcome.ok : null,
+          onCancelled: canCancel ? () {} : null,
         ),
       ),
     ),
@@ -63,28 +73,35 @@ Future<Sent> pump(
   return sent;
 }
 
-/// 切到某一屏（像用户那样**点那个 tab**）。
+/// 切到某一页（像用户那样：**先点那个名目**）。
+///
+/// ⚠️ 2026-09-29：顶层不再有 tab —— 是一列分类，**点开才是它自己的配置**。
+///    所以这个助手要先看"子页开着没有"（左上角那行「回到设置」）：开着就先退回来
+///    —— 判据连着走几页时，用户也是这么走的。
+/// ⚠️ 四项钥匙里**第一项的名字不是 `credTabChat`**（顶层叫「模型设置」，
+///    那一页里的字照旧）—— 映射只在这一处。
 Future<void> goTab(WidgetTester tester, String tab) async {
-  await tester.tap(find.text(tab));
+  final back = find.text(settingsBack);
+  if (back.evaluate().isNotEmpty) {
+    await tester.tap(back);
+    await tester.pumpAndSettle();
+  }
+  await tester.tap(find.text(tab == credTabChat ? settingsRowModel : tab));
   await tester.pumpAndSettle();
 }
 
-/// **像用户那样滚到「这个助手」那一块**（批次 4 起这一步是必须的）。
+/// **像用户那样滚到顶层那一列的某一行**（窄屏 / 大字号下它在折叠线以下）。
 ///
-/// ⚠️ 为什么：`lib/screens/settings_screen.dart` 的聊天那一屏上面多了
-///    **「这块窗口」那张卡**（外观 / 字号，契约 `docs/dev/119`）⇒
-///    「关于 / 退出登录」那一段落到了折叠线以下，而 `ListView`
-///    **不会把屏幕外的孩子建出来** ⇒ 不滚的话 `find.text(settingsAboutSection)`
-///    一个都找不到（这正是"用户得滚一下才看得见"）。
-/// ⚠️ 指名道姓到**那一屏的内容列**（`credTab:聊天` 里的那个 `Scrollable`）：
-///    `SettingsScreen` 里第一个 `Scrollable` 是 `TabBar` 自己那一行（横滚）。
-Future<void> scrollToAbout(WidgetTester tester) async {
+/// ⚠️ `ListView` **不会把屏幕外的孩子建出来** ⇒ 不滚的话 `find.text` 一个都找不到
+///    （这正是"用户得滚一下才看得见"）。⚠️ 指名道姓到**顶层那一列**
+///    （`settingsListKey`）：子页里各自也有 `Scrollable`，靠 `.first` 会滚错东西。
+Future<void> scrollToRow(WidgetTester tester, String label) async {
   await tester.scrollUntilVisible(
-    find.text(settingsAboutSection),
+    find.text(label),
     240,
     scrollable: find
         .descendant(
-          of: find.byKey(const ValueKey('credTab:$credTabChat')),
+          of: find.byKey(settingsListKey),
           matching: find.byType(Scrollable),
         )
         .first,
@@ -93,12 +110,41 @@ Future<void> scrollToAbout(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('① 四个 tab 都在，顺序＝主人说的那样', (tester) async {
-    await pump(tester);
-    for (final tab in credTabs) {
-      expect(find.text(tab), findsOneWidget, reason: '少了这一屏：$tab');
+  testWidgets('① 顶层是**一列分类**：四把钥匙分开 ＋ 壁纸 ＋ 这块窗口 ＋ 关于那三件', (tester) async {
+    await pump(tester, canCancel: true);
+    // ⚠️ 名目的顺序就是主人 2026-09-29 当场定的那样（四把钥匙分开、壁纸跟在后面）。
+    for (final row in [
+      settingsRowModel,
+      credTabVoice,
+      credTabImage,
+      credTabVideo,
+      settingsRowWallpaper,
+      settingsAppearanceSection,
+      aboutEntryTitle,
+      settingsLogout,
+      settingsCancelAccount,
+    ]) {
+      await scrollToRow(tester, row);
+      expect(find.text(row), findsOneWidget, reason: '顶层少了这一项：$row');
     }
-    expect(credTabs, [credTabChat, credTabVoice, credTabImage, credTabVideo]);
+    // 🔴 **负向对照：顶层只是"名目"** —— 子页里那些话一句都不许出现在这一列上
+    //    （主人要"点开才是设置模型"）。没这一条的话，"分类"可能只是换了个样子，
+    //    实际还是把每一页的正文全堆在一屏里。
+    expect(find.text(credTabWhat(credTabChat)), findsNothing,
+        reason: '★ 顶层把子页的正文也摆出来了 ⇒ 那不是"点开才是配置"');
+    expect(find.byType(WallpaperPicker), findsNothing);
+  });
+
+  testWidgets('①·补 子页左上角那一行「回到设置」**真的回得去**', (tester) async {
+    await pump(tester);
+    await goTab(tester, credTabVoice);
+    expect(find.text(settingsBack), findsOneWidget, reason: '子页少了回程那一行');
+    // 负向对照：**真到了子页**（不是还停在列表上）
+    expect(find.text(credTabWhat(credTabVoice)), findsOneWidget);
+    await tester.tap(find.text(settingsBack));
+    await tester.pumpAndSettle();
+    expect(find.text(credTabWhat(credTabVoice)), findsNothing, reason: '★ 没回去');
+    expect(find.text(settingsRowModel), findsOneWidget, reason: '★ 回到的不是那一列');
   });
 
   testWidgets('② 每一屏都说清"这一样管什么"', (tester) async {
@@ -210,30 +256,50 @@ void main() {
 
   testWidgets('⑥ 主人自己那一份（localOnly）**也能填**，而且说清写到哪', (tester) async {
     await pump(tester, localOnly: true);
-    // ⚠️ 2026-09-24 改口径：他选了"要真能改" ⇒ 这一屏**有**表单
+    // ⚠️ 2026-09-29：顶层是名目 ⇒ 表单在「模型设置」那一页里（判据走真路径点进去）
+    await goTab(tester, credTabChat);
+    // ⚠️ 2026-09-24 改口径：他选了"要真能改" ⇒ 这一页**有**表单
     expect(find.byType(KeyForm), findsOneWidget, reason: '他自己那一份现在也能在这页换钥匙');
     expect(find.text(configLocalOnly), findsOneWidget);
     expect(configLocalOnly.contains('本机'), true);
   });
 
-  testWidgets('⑦ 关于 / 退出登录还在（第一屏底下）；退出登录**仍然是红的**', (tester) async {
-    await pump(tester);
-    // ⚠️ 批次 4：这一块现在在这一屏的**下面**了 ⇒ 像用户那样先滚过去。
-    await scrollToAbout(tester);
-    expect(find.text(settingsAboutSection), findsOneWidget);
-    expect(find.text('关于'), findsOneWidget);
+  testWidgets('⑦ 关于 / 退出登录 / 注销账号都在；退出登录那一条**仍然是红的**', (tester) async {
+    await pump(tester, canCancel: true);
+    await scrollToRow(tester, aboutEntryTitle);
     expect(find.text(aboutEntryHint), findsOneWidget);
+    await scrollToRow(tester, settingsLogout);
+    expect(find.text(settingsLogoutHint), findsOneWidget);
     final icon = tester.widget<Icon>(find.byIcon(Icons.logout));
     expect(icon.color, d.accent, reason: '这一条才是真该醒目的');
+    // 注销账号那一格：图标也是红的（不可逆那件事不许画得跟普通项一样）
+    await scrollToRow(tester, settingsCancelAccount);
+    expect(find.text(settingsCancelAccountHint), findsOneWidget);
+    final del = tester.widget<Icon>(find.byIcon(Icons.delete_outline));
+    expect(del.color, d.accent);
   });
 
-  testWidgets('⑧ 分区标题是"黑 + 加粗"，**不是**强调色（那看着像警告）', (tester) async {
-    await pump(tester);
-    await scrollToAbout(tester);
-    final title = tester.widget<Text>(find.text(settingsAboutSection));
-    expect(title.style?.color, d.ink, reason: '分区名要稳 —— 红色的意思留给"退出登录"这类事');
-    expect(title.style?.color, isNot(d.accent));
-    expect(title.style?.fontWeight, FontWeight.w600);
+  testWidgets('⑦·补 没接线 ⇒ **不画**「注销账号」那一条（不给假入口）', (tester) async {
+    await pump(tester); // 默认不接线
+    expect(find.text(settingsCancelAccount), findsNothing,
+        reason: '★ 这条路没接上，就不许摆一个点了没用的入口');
+  });
+
+  testWidgets('⑧ 🔴 注销账号那一页：**先把会没掉什么写在页面上**，再是那颗按钮', (tester) async {
+    // 依据：手册 X3 ② —— **先说清删什么，再动手**；而且这句话不许只藏在确认框里
+    //（藏起来的话，用户是"点开这一页才知道"，而在这一页上他还没做任何决定）。
+    await pump(tester, canCancel: true);
+    await scrollToRow(tester, settingsCancelAccount);
+    await tester.tap(find.text(settingsCancelAccount));
+    await tester.pumpAndSettle();
+    expect(find.text(keyCancelWhat), findsOneWidget, reason: '★ 这一页没把"会没掉什么"说出来');
+    expect(find.text(keyCancelEntry), findsNothing,
+        reason: '★ 独立那一页上写的是「注销账号」，不是表单底下那一条小字');
+    await tester.tap(find.text(settingsCancelAccount).last);
+    await tester.pumpAndSettle();
+    // 点下去**先弹确认框**（这两句就是那个框，缺一句都算"没先问"）
+    expect(find.text(keyCancelTitle), findsOneWidget);
+    expect(find.text(keyCancelWhat), findsWidgets);
   });
 
   testWidgets('已经填过的那一屏说"已经有了"（而且提交按钮变成"换好了"）', (tester) async {

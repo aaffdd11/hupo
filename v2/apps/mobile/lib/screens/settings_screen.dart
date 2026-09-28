@@ -16,6 +16,7 @@
 //
 // ⚠️ 界面上**没有** `模型` / `工具` / `客户端` 这些词（词表硬闸会拦）。
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 
 import '../models/appearance.dart';
@@ -26,36 +27,23 @@ import '../models/space.dart';
 import '../models/space_words.dart';
 import '../models/voice_record.dart';
 import '../models/voice_try.dart';
+import '../models/wallpaper.dart' show wallpaperLabel;
 import '../services/api.dart';
+import '../widgets/cancel_account.dart';
 import '../widgets/cred_form.dart';
 import '../widgets/dsh_look.dart';
 import '../widgets/image_try.dart';
 import '../widgets/key_form.dart';
 import '../widgets/voice_record.dart';
 import '../widgets/voice_try.dart';
+import '../widgets/wallpaper_picker.dart';
 import 'about_screen.dart';
 
-/// **分区标题**（设置页这一层就两三个，形状只有一种）。
+/// 顶层那一列的 key（判据要"像用户那样滚这一列"，不许靠 `.first` 撞）。
 ///
-/// 🔴 为什么不用强调色：它原来用 `d.accent`，屏幕上读起来像**警告** ——
-///    而它只是"这一块叫什么"。分区名要**稳**，要让红色的意思留给"退出登录"这类事。
-/// ⚠️ 字号不写死（跟主题那一档走）；什么时候全站统一，见 `72-UI-PASS.md` 的 E。
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text);
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context);
-    return Text(
-      text,
-      style: t.textTheme.titleSmall?.copyWith(
-        color: d.ink,
-        fontWeight: FontWeight.w600,
-      ),
-    );
-  }
-}
+/// ⚠️ 设置改成列表之后，页面上**有不止一个** `Scrollable`（子页各自还有一列）
+///    ⇒ 判据必须指名道姓到**顶层这一列**。
+const ValueKey<String> settingsListKey = ValueKey('settings:list');
 
 /// 四个 tab 的名字（**顺序＝主人说的顺序** · `space_words.dart` 里那四个常量）。
 const List<String> credTabs = [credTabChat, credTabVoice, credTabImage, credTabVideo];
@@ -80,6 +68,10 @@ class SettingsScreen extends StatelessWidget {
     this.appearance = const ChatAppearanceSettings(),
     this.onAppearanceChanged,
     this.onFontSizeChanged,
+    this.wallpaper = '',
+    this.onWallpaperChanged,
+    this.appearanceLive,
+    this.wallpaperLive,
   });
 
   /// 现在有没有一串能用的钥匙（服务端说的）。
@@ -152,33 +144,322 @@ class SettingsScreen extends StatelessWidget {
   final ValueChanged<ChatAppearance>? onAppearanceChanged;
   final ValueChanged<int>? onFontSizeChanged;
 
+  /// 桌面现在用的是哪一张壁纸（`''` = 不设 —— `models/wallpaper.dart`）。
+  final String wallpaper;
+
+  /// 换了壁纸 ⇒ 交给上层（它写盘 ＋ 让桌面当场换）。
+  /// ⚠️ `null` = 这一条路没接上 ⇒ 壁纸那一页**照样画**（选不了才怪），
+  ///    但**不假装已经换了**（`onPick` 里只有接了线才回调）。
+  final ValueChanged<String>? onWallpaperChanged;
+
+  // ── ★ 2026-09-29：**子页要看"现在是多少"**（不是推出去那一刻的）──────────
+  //
+  // 🔴 子页是 `push` 出来的**新路由** —— 它们**不在**上层那个 `setState` 的子树里，
+  //    只拿一份快照的话会**按着旧值算**：实测「字号」那两步 14 →大一点→ 15，
+  //    再按小一点 ⇒ **13**（而页面上那个数字还写着 14）—— 那正是"页面在说假话"。
+  // ⇒ 这两条是可选的：接上了就**订阅**（`ValueListenableBuilder`），
+  //    没接上（判据直接泵这一屏）就照字段里那份画。
+
+  /// **会通知的那一份外观 ＋ 字号**（见上面那段）。
+  final ValueListenable<ChatAppearanceSettings>? appearanceLive;
+
+  /// **会通知的那一份壁纸**（同上）。
+  final ValueListenable<String>? wallpaperLive;
+
   @override
   Widget build(BuildContext context) {
     // ⚠️ **没有 `Scaffold` / `AppBar`**：顶上那一条由**小程序容器**给
     //    （`MiniAppHost`）—— 小程序自己画的话，"跳不出容器"这件事就没了保证。
+    // ★ 2026-09-29：**这一屏改成"一列分类"**（主人：*"现在帮我分类，选项有模型设置，
+    //   点开才是设置模型。其他的也是列表中来做配置。包括壁纸。"*）
+    //   顶层只有名目（每一项一行字 ＋ 一句小字），点开才是它自己的配置；
+    //   子页左上角一行「回到设置」把人送回来。
+    //   ⚠️ **没有 `Scaffold` / `AppBar`**（这一屏住在小程序容器里，同原来那条注释）；
+    //      sub-page 也一样 —— 返回那一行是这一屏**自己画**的（容器不画顶栏）。
     return Center(
       child: ConstrainedBox(
         // ⚠️ **和首页同一条窄列**（契约 `49-STYLE.md`）：一行太长没人读得下去
         constraints: const BoxConstraints(maxWidth: 640),
-        child: DefaultTabController(
-          length: credTabs.length,
-          child: Column(
-            children: [
-              // ── 四个 tab（主人 2026-09-24：*"配置页用来配置模型，语言大模型apikey，
-              //    语音大模型，图片生成，视频生成"*）──
-              // ⚠️ `isScrollable`：字放到最大时**横向能滚**，而不是挤成一团、更不是溢出
-              TabBar(
-                isScrollable: true,
-                tabAlignment: TabAlignment.start,
-                tabs: [for (final tab in credTabs) Tab(height: 48, text: tab)],
-              ),
-              Expanded(
-                child: TabBarView(
-                  children: [for (final tab in credTabs) _tabBody(context, tab)],
+        child: ListView(
+          key: settingsListKey,
+          padding: const EdgeInsets.symmetric(horizontal: d.gapL, vertical: d.gapL),
+          children: [
+            // ① 四把钥匙（**分开四项** —— 主人 2026-09-29 当场选的形状）
+            _row(
+              context,
+              icon: Icons.key_outlined,
+              label: settingsRowModel,
+              hint: credStateLine(tab: credTabChat, has: hasKey, bad: keyBad),
+              open: () => _open(context, credTabChat, settingsRowModel),
+            ),
+            _row(
+              context,
+              icon: Icons.mic_none_outlined,
+              label: credTabVoice,
+              hint: credStateLine(tab: credTabVoice, has: creds.voice, bad: false),
+              open: () => _open(context, credTabVoice, credTabVoice),
+            ),
+            _row(
+              context,
+              icon: Icons.image_outlined,
+              label: credTabImage,
+              hint: credStateLine(tab: credTabImage, has: creds.image, bad: false),
+              open: () => _open(context, credTabImage, credTabImage),
+            ),
+            _row(
+              context,
+              icon: Icons.movie_outlined,
+              label: credTabVideo,
+              hint: credStateLine(tab: credTabVideo, has: creds.video, bad: false),
+              open: () => _open(context, credTabVideo, credTabVideo),
+            ),
+            // ② 壁纸（行上小字就说"现在用的是哪一张"）
+            _row(
+              context,
+              icon: Icons.wallpaper_outlined,
+              label: settingsRowWallpaper,
+              hint: wallpaperLabel(wallpaper),
+              open: () => _openWallpaper(context),
+            ),
+            // ③ 这块窗口
+            _row(
+              context,
+              icon: Icons.tune,
+              label: settingsAppearanceSection,
+              hint: settingsAppearanceHint,
+              open: () => _openPlain(
+                context,
+                settingsAppearanceSection,
+                // 🔴 **订阅那一份"活的"**（子页不在上层 `setState` 的子树里）：
+                //    不然步进器会按旧值算、上面那个数字也不再变。
+                // ⚠️ `page` 是**这一条路由自己的** `context`（见 `_open` 那段批注）。
+                (page) => _live<ChatAppearanceSettings>(
+                  appearanceLive,
+                  appearance,
+                  (a) => _appearanceCard(page, a),
                 ),
               ),
-            ],
+            ),
+            const SizedBox(height: d.gapL),
+            // ④ 关于 / 退出登录 / 注销账号（各是一条 —— 同一次定的形状）
+            _row(
+              context,
+              icon: Icons.info_outline,
+              label: aboutEntryTitle,
+              hint: aboutEntryHint,
+              open: () => _openAbout(context),
+            ),
+            _row(
+              context,
+              icon: Icons.logout,
+              label: settingsLogout,
+              hint: settingsLogoutHint,
+              danger: true,
+              open: () {
+                onLogout?.call();
+                Navigator.of(context).popUntil((r) => r.isFirst);
+              },
+            ),
+            if (onCancel != null || onCancelled != null)
+              _row(
+                context,
+                icon: Icons.delete_outline,
+                label: settingsCancelAccount,
+                hint: settingsCancelAccountHint,
+                danger: true,
+                open: () => _openPlain(
+                  context,
+                  settingsCancelAccount,
+                  (page) => _cancelAccountCard(page),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 一列里的一行（**可点区域 ≥44**：整行都是热区 —— D3.6）。
+  Widget _row(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required String hint,
+    required VoidCallback open,
+    bool danger = false,
+  }) {
+    final t = Theme.of(context);
+    final color = danger ? d.accent : d.ink;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: d.gapS),
+      child: Card(
+        child: InkWell(
+          onTap: open,
+          borderRadius: BorderRadius.circular(d.radiusCard),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: d.gapM, vertical: d.gapM),
+            child: Row(
+              children: [
+                Icon(icon, color: color),
+                const SizedBox(width: d.gapM),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: t.textTheme.titleMedium?.copyWith(
+                          color: color,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        hint,
+                        style: t.textTheme.bodySmall?.copyWith(color: d.muted),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: d.muted),
+              ],
+            ),
           ),
+        ),
+      ),
+    );
+  }
+
+  /// 某个分类那一页（**左上角一行"回到设置"** —— 容器不画顶栏，所以这一行必须自己画）。
+  ///
+  /// ⚠️ **这一页自己带一层 `Material`**（透明那一种）：它是 `push` 出来的**一条新路由**，
+  ///    而路由是 `Navigator` 的孩子 —— **不在**原来那个 `Scaffold` 的 `Material` 里面
+  ///    （实测：壁纸那 28 格的 `InkWell` 在这里当场报 "No Material widget found"）。
+  ///    没有它，子页里所有按钮的水波都没了（debug 下还会直接断言失败）。
+  ///    透明：底还是容器那一层，这一层只为"按钮有纸可印"。
+  Widget _subPage(BuildContext context, String title, Widget body) {
+    final t = Theme.of(context);
+    return Material(
+      type: MaterialType.transparency,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(d.gapS, d.gapS, d.gapL, 0),
+            child: Row(
+              children: [
+                TextButton.icon(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.arrow_back, size: 20),
+                label: const Text(settingsBack),
+                style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
+              ),
+              const SizedBox(width: d.gapS),
+              Expanded(
+                child: Text(
+                  title,
+                  style: t.textTheme.titleSmall?.copyWith(color: d.muted),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              ],
+            ),
+          ),
+          Expanded(child: body),
+        ],
+      ),
+    );
+  }
+
+  /// **订阅一份"活的"值**（接上了订阅，没接上就用手里那份快照画）。
+  ///
+  /// ⚠️ 子页是新路由 —— 它们看不到上层 `setState` 的重建（见 [appearanceLive] 那段）。
+  Widget _live<T>(ValueListenable<T>? live, T snapshot, Widget Function(T) build) {
+    if (live == null) return build(snapshot);
+    return ValueListenableBuilder<T>(
+      valueListenable: live,
+      builder: (_, v, _) => build(v),
+    );
+  }
+
+  // 🔴 **子页一律用"这一条路由自己的 `context`"建**（`builder: (page) => ...`）。
+  //    原来传的是**列表那一页的** `context`：那一页被拆掉（小程序关掉 / 判据收尾）
+  //    之后路由还会重建一次，而 `Theme.of(那个已经失效的 context)` 会当场抛
+  //    "Looking up a deactivated widget's ancestor is unsafe"（实测抓到的）。
+  //    ⇒ 谁的孩子就用谁的 `context`，这是 Flutter 那条规矩本身。
+  void _open(BuildContext context, String tab, String title) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (page) => _subPage(page, title, _tabBody(page, tab)),
+    ));
+  }
+
+  void _openPlain(BuildContext context, String title, Widget Function(BuildContext) body) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (page) => _subPage(
+        page,
+        title,
+        ListView(
+          padding: const EdgeInsets.symmetric(horizontal: d.gapL, vertical: d.gapM),
+          children: [body(page)],
+        ),
+      ),
+    ));
+  }
+
+  void _openWallpaper(BuildContext context) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (page) => _subPage(
+        page,
+        settingsRowWallpaper,
+        // 🔴 同「这块窗口」：那一格"打勾的是哪一张"必须跟着**现在**那张走。
+        _live<String>(
+          wallpaperLive,
+          wallpaper,
+          (w) => WallpaperPicker(
+            wallpaper: w,
+            onPick: (id) {
+              onWallpaperChanged?.call(id);
+              // 选完就回去（他刚做完一件事；留在这一页反而要多按一次）
+              Navigator.of(page).pop();
+            },
+          ),
+        ),
+      ),
+    ));
+  }
+
+  void _openAbout(BuildContext context) {
+    // ⚠️ 「关于」那一页**自带** `Scaffold` ＋ 顶栏（它有自己的一列事实，
+    //    与这一列子页不是一种形状）—— 照旧整页 push，不套 `_subPage`。
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const AboutScreen(),
+    ));
+  }
+
+  /// **「注销账号」那一页**：先把"会没掉什么"写在这儿（不是只藏在确认框里），
+  /// 再摆那一个按钮 —— 它自己还带一次确认框（`widgets/cancel_account.dart`）。
+  Widget _cancelAccountCard(BuildContext context) {
+    final t = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(d.gapM),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              keyCancelWhat,
+              style: t.textTheme.bodyMedium?.copyWith(color: d.ink),
+            ),
+            const SizedBox(height: d.gapM),
+            CancelAccountEntry(
+              label: settingsCancelAccount,
+              danger: true,
+              onCancel: onCancel!,
+              onCancelled: onCancelled!,
+            ),
+          ],
         ),
       ),
     );
@@ -231,18 +512,9 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
         ),
-        // ⑤ **这个助手**（关于 / 退出登录）：只在**第一屏**（聊天）底下。
-        //    ⚠️ 为什么不放"四屏共用的固定页脚"：字放到 3.1 倍时那个页脚会把
-        //      上面挤爆（D3.5 那道硬闸当场判红）。放进可滚列里就永远滚得到。
-        //
-        // ★ 批次 4：这一组上面还有**「这块窗口」**（外观 / 字号）—— 同一条理由
-        //   （它是关于**聊天这一扇窗**的设置，不属于那四样钥匙）⇒ 也只在第一屏底下。
-        if (tab == credTabChat) ...[
-          const SizedBox(height: d.gapL),
-          _appearanceCard(context),
-          const SizedBox(height: d.gapL),
-          _aboutCard(context),
-        ],
+        // ⚠️ 2026-09-29：原来挂在这里的**「这块窗口」与「关于/退出登录」两张卡
+        //    搬去**顶层那一列**当独立的两项了（主人要"分类、点开才是配置"）。
+        //    ⇒ 这一页现在**只有这一样东西的配置**（它自己那几行 ＋ 表单）。
       ],
     );
   }
@@ -350,14 +622,17 @@ class SettingsScreen extends StatelessWidget {
   ///      夹住不许假装还能再小，也不许画一个按了没反应的键。
   ///      ⚠️ 这与"界面上不许出现按不动的东西"不冲突：那是"做不到的事不许摆出来"，
   ///      这里是**做得到但已经到头了**（发送键没字时也是灰的，同一条）。
-  Widget _appearanceCard(BuildContext context) {
+  Widget _appearanceCard(BuildContext context, ChatAppearanceSettings now) {
     final t = Theme.of(context);
-    final scale = appearance.scale;
+    final scale = now.scale;
+    // ⚠️ **这一页用的是传进来那一份**（订阅到的那份"活的"），不是字段里那份快照
+    //    —— 见 [appearanceLive] 那段（步进器连按两下会按错值就是那么来的）。
+    final shown = now.appearance == ChatAppearance.system ? ChatAppearance.light : now.appearance;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const _SectionTitle(settingsAppearanceSection),
-        const SizedBox(height: d.gapS + 2),
+        // ⚠️ 2026-09-29：这一页顶上已经有「这块窗口」那行标题了（子页自己的抬头）
+        //    ⇒ 这张卡里**不再重复一遍**分区名。
         Card(
           child: Padding(
             padding: const EdgeInsets.all(d.gapM),
@@ -397,9 +672,9 @@ class SettingsScreen extends StatelessWidget {
                   children: [
                     for (final a in <ChatAppearance>{
                       ChatAppearance.light,
-                      _shownAppearance,
+                      shown,
                     })
-                      _appearanceChoice(a, shown: _shownAppearance),
+                      _appearanceChoice(a, shown: shown),
                   ],
                 ),
                 const SizedBox(height: d.gapXs),
@@ -425,16 +700,16 @@ class SettingsScreen extends StatelessWidget {
                   children: [
                     IconButton(
                       // 12 时按不动（已经到头了）
-                      onPressed: appearance.fontSize > dshContentFontSizeMin &&
+                      onPressed: now.fontSize > dshContentFontSizeMin &&
                               onFontSizeChanged != null
-                          ? () => onFontSizeChanged!(appearance.fontSize - 1)
+                          ? () => onFontSizeChanged!(now.fontSize - 1)
                           : null,
                       tooltip: settingsFontSizeSmaller,
                       icon: const Icon(Icons.remove),
                     ),
                     // 现在是多少号字（**当前值**，不是"默认值"）
                     Text(
-                      '${appearance.fontSize}',
+                      '${now.fontSize}',
                       style: t.textTheme.titleMedium?.copyWith(
                         color: d.ink,
                         fontWeight: FontWeight.w600,
@@ -442,9 +717,9 @@ class SettingsScreen extends StatelessWidget {
                     ),
                     IconButton(
                       // 17 时按不动
-                      onPressed: appearance.fontSize < dshContentFontSizeMax &&
+                      onPressed: now.fontSize < dshContentFontSizeMax &&
                               onFontSizeChanged != null
-                          ? () => onFontSizeChanged!(appearance.fontSize + 1)
+                          ? () => onFontSizeChanged!(now.fontSize + 1)
                           : null,
                       tooltip: settingsFontSizeBigger,
                       icon: const Icon(Icons.add),
@@ -482,20 +757,10 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  /// **现在这一屏真的在用哪一档**（摆出来、打勾都用它 —— 不是盘上那个偏好）。
-  ///
-  /// 🔴 2026-09-26：`system` 现在**一律解成亮**（暗色那一套没做完，见
-  /// `models/appearance.dart` 顶上那段）⇒ 设置里就**不该**在「跟随系统」上打勾
-  /// （窗口明明是亮的）。盘上那份偏好**一个字都不动**（他没点过就不改他的盘）。
-  ChatAppearance get _shownAppearance =>
-      appearance.appearance == ChatAppearance.system
-      ? ChatAppearance.light
-      : appearance.appearance;
-
   /// 外观三档里的一颗（**选中带勾 ＋ 字更实**：不许只靠颜色）。
   ///
-  /// ⚠️ [shown] 是"屏幕上真的在用的那一档"（见 [_shownAppearance]）——
-  ///    打勾打的是它，不是盘上那个偏好。
+  /// ⚠️ [shown] 是"屏幕上真的在用的那一档"（`system` 现在一律解成亮 —— 见
+  ///    `models/appearance.dart` 顶上那段；打勾打的是它，不是盘上那个偏好）。
   Widget _appearanceChoice(ChatAppearance a, {required ChatAppearance shown}) {
     final on = a == shown;
     return TextButton(
@@ -525,54 +790,11 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  /// **这个助手**那张卡（关于 / 退出登录）。
+  /// **这个助手**那一组（关于 / 退出登录 / 注销账号）。
   ///
-  /// ⚠️ 主人 2026-09-24 定的四个 tab 全是**配钥匙**的；"关于/退出登录"不属于其中任何一样
-  ///    ⇒ 它挂在**第一屏**（聊天）的可滚内容底下，不做成固定页脚（理由见 `_tabBody` 第 ⑤ 条）。
-  Widget _aboutCard(BuildContext context) {
-    final t = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // ★ 2026-09-23：这两条原来**光秃秃挂在最下面**（一页三块读不出结构）
-        //   ⇒ 加分区标题，并把两条收进**同一张卡**（中间一条分隔线）。
-        const _SectionTitle(settingsAboutSection),
-        const SizedBox(height: d.gapS + 2),
-        Card(
-          child: Column(
-            children: [
-              // ⚠️ **关于搬进来了**（见 `space_words.dart` 那段）：
-              //    顶栏再加一个图标就是 7 个 —— 手机上那一条会挤成一团。
-              ListTile(
-                leading: const Icon(Icons.info_outline),
-                title: const Text('关于'),
-                // ★ 加一句小字：光"关于"两个字，读不出这一页管什么
-                subtitle: Text(
-                  aboutEntryHint,
-                  style: t.textTheme.bodySmall?.copyWith(color: d.muted),
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const AboutScreen()),
-                ),
-              ),
-              // ── **退出登录**（主人 2026-09-22：设置里管"退出登录 / 注销账号 / 改钥匙"）──
-              // ⚠️ 它原来挂在**聊天抓手行**上 —— 那一行是"聊天"的地方，退出登录不是聊天的事。
-              if (onLogout != null) ...[
-                Divider(height: 1, color: d.line),
-                ListTile(
-                  leading: Icon(Icons.logout, color: d.accent),
-                  title: Text(
-                    settingsLogout,
-                    style: t.textTheme.bodyLarge?.copyWith(color: d.ink),
-                  ),
-                  onTap: onLogout,
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+  /// ⚠️ 2026-09-29：这几条**各自成了顶层那一列的一项**（主人要"分类、点开才是配置"）
+  ///    ⇒ 原来那张把"关于 ＋ 退出登录"合在一起的卡没了。
+  ///    现在：「关于」是整页（自带顶栏）；「退出登录」点一下就走；
+  ///    「注销账号」是这一列里的一个子页（`_cancelAccountCard`）。
+
 }
