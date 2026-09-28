@@ -33,6 +33,7 @@ import 'process_level_store.dart';
 import 'stream.dart';
 import 'stream_uri.dart';
 import '../models/scope.dart';
+import '../models/server_address.dart';
 import '../models/token_sub.dart';
 import '../models/tool_row.dart';
 import 'timeline_store.dart';
@@ -815,7 +816,7 @@ class ChatController extends ChangeNotifier {
     final why = await _startHear(
       // ⚠️ 地址由 `stream_uri.dart` 那一个函数算（同源看页面协议）——
       //    语音这条**不许再拼一遍**（那条事故的第二个入口）。
-      url: asrUri(base: '', page: Uri.base),
+      url: asrUri(base: hupoApiBase, page: Uri.base),
       token: t,
       onEvent: _onHearingEvent,
     );
@@ -859,7 +860,7 @@ class ChatController extends ChangeNotifier {
   ) async {
     final t = _token;
     if (t == null) return 'failed';
-    return _startHear(url: asrUri(base: '', page: Uri.base), token: t, onEvent: onEvent);
+    return _startHear(url: asrUri(base: hupoApiBase, page: Uri.base), token: t, onEvent: onEvent);
   }
 
   /// **收手**（配置页那颗「试一下」按第二下）：这一场到此为止。
@@ -1014,12 +1015,12 @@ class ChatController extends ChangeNotifier {
     //   **初始焦点**（构造参数走 `?scope=`）；之后切房间靠 `focus()` 那一帧。
     final s =
         _newStream?.call(
-          base: '',
+          base: hupoApiBase,
           token: t,
           level: _level,
           scope: _scope,
         ) ??
-        StreamClient(base: '', token: t, api: api, level: _level, scope: _scope);
+        StreamClient(base: hupoApiBase, token: t, api: api, level: _level, scope: _scope);
     s.states.listen((st) {
       // ⚠️ 连接状态是**连接级**的（不再属于某间房）⇒ 不再按房间丢。
       _conn = st;

@@ -24,6 +24,7 @@ import 'models/space.dart';
 import 'screens/model_key_screen.dart';
 import 'screens/waiting_screen.dart';
 import 'services/chat_controller.dart';
+import 'widgets/mini_native_boot.dart';
 import 'services/token_store.dart';
 import 'widgets/soft_switch.dart';
 
@@ -55,6 +56,18 @@ void main() {
   if (kIsWeb) {
     unawaited(BrowserContextMenu.disableContextMenu());
   }
+  // ★ **原生（Android）那一侧的小程序运行时**：装钩子（2026-09-28，主人
+  //   *"原生 flutter。我不发布，只安装在自己的设备。"* ＋ 同意引 webview）。
+  //
+  //   🔴 三件说清（契约 `docs/dev/129-NATIVE-ANDROID-BUILD.md`）：
+  //     · **Web 那一份是空操作**（网页有自己的 `<iframe sandbox>`，
+  //       而且 `webview_flutter` **一个字节都不许进 Web 那条编译链**）；
+  //     · **iOS 不装**（Apple 4.7.4：商店版不许有"运行时生成的小程序"，
+  //       见 `widgets/mini_runtime.dart` 的 `kNativeMiniRuntimeIOS`）；
+  //     · **它不是桥**（`08-SPEC.md` §14.1 铁律 3）：不注入脚本、不发 `hupo-ready`
+  //       ⇒ 按契约写的制品不会摆出 `ask` 那个入口（**不假装有**）。
+  //   ⚠️ 必须在 `runApp` **之前**装好：`MiniAppFrame` 一建出来就要用这个钩子。
+  installNativeMiniRuntime();
   runApp(const HupoApp());
 }
 

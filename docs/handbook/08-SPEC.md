@@ -286,7 +286,7 @@ cwd: agentCwd
 | `widgets/app_desktop.dart` | 桌面（浮窗后面那层） | ✅ |
 | `widgets/mini_app_container.dart` | 容器壳（标题栏 / 返回栈 / 关闭） | ✅ |
 | `widgets/answer_bubble.dart` | 气泡（quick+deep / 来源） | ✅ |
-| `widgets/mini_runtime{,_web,_stub}.dart` | 沙箱运行时（Web：`sandbox` iframe；**原生侧仍然不建**） | ✅ **Web 侧已建**（2026-09-22，`59-USER-APPS.md`）· 原生 `kNativeMiniRuntime=false` |
+| `widgets/mini_runtime{,_web,_native,_stub}.dart` | 沙箱运行时（Web：`sandbox` iframe；**Android：普通 WebView，不装桥**；iOS 商店版不发布） | ✅ **Web 侧已建**（2026-09-22）· ✅ **Android 已建**（2026-09-28，`129`；`kNativeMiniRuntime=true`）· 🔴 **iOS `kNativeMiniRuntimeIOS=false`** |
 | `mini/manifest.dart` | 清单解析 + 校验（含 `minShellVersion` / `sha256`） | ❌ **【不建】** |
 | `mini/store.dart` | 本地安装 / 版本目录 / 回退 `last-known-good` | ❌ **【不建】** |
 | `mini/bridge.dart` | 容器代发、`postMessage` 校 `event.origin` | ❌ **【不建】** |
@@ -670,8 +670,8 @@ oom_kill > 0                              memory > 0.9×max 持续 5 分钟
 > | | 现在 |
 > |---|---|
 > | **Web 侧**（iframe 沙箱 + 制品管线） | ✅ **已建、已上线**：制品库 / 第二原点 / 签名 URL / CSP / 不可变版本 / 审计 / 发布 / 装上 / `ask` —— 契约 **[`59-USER-APPS.md`](../dev/59-USER-APPS.md)** |
-> | **原生侧**（受限 WebView） | ❌ **仍然不建**（没有安装包）· 判据钉在 `kNativeMiniRuntime=false`（`59` §九） |
-> | **iOS 商店版** | 🔴 **不发布小程序运行时**（§4.2 合规 / Apple 4.7.4）—— 今天"无处可关"（原生侧没有它），落成上面那个标记 |
+> | **原生侧**（受限 WebView） | ✅ **Android 已建**（2026-09-28，主人 *"原生 flutter。我不发布，只安装在自己的设备。"*）：**普通 WebView** ＋ **不装桥**（铁律 3）＋ 导航只许制品自己那个 origin ⇒ **`ask` 在原生上没有**（壳不发 `hupo-ready`，按契约写的制品就不会摆出那个入口）。契约 [`dev/129`](../dev/129-NATIVE-ANDROID-BUILD.md) |
+> | **iOS 商店版** | 🔴 **不发布小程序运行时**（§4.2 合规 / Apple 4.7.4）—— 落成恒假的标记 `kNativeMiniRuntimeIOS=false` ＋ "装钩子那一步只在 Android 上做" |
 >
 > ⚠️ **N1 / N2 从"将来的前提"变成了现在的判据**：
 > 独立原点已上线（`apps.stalkerai.cn` ≠ `w.stalkerai.cn`）· 沙箱不给 `allow-same-origin` ·
@@ -833,6 +833,22 @@ sudo certbot renew --dry-run --cert-name hupo.stalkerai.cn
 - **磁盘**：部署前检查剩余空间（Flutter 构建缓存增长快；**曾因磁盘 92% 触发 `No space left on device`**）
 - **清理构建缓存**：`cd apps/mobile && flutter clean`
 - **静态产物带 hash**，可长缓存；`index.html` 与 `flutter_service_worker.js` **不缓存**
+
+### 8.3 安卓（原生包）**【有效】**（2026-09-28）
+
+> 形态：**原生 Flutter 包**，主人拍板 *"我不发布，只安装在自己的设备。"*
+> ⇒ **不上架、不做自更新**；更新 = 覆盖安装（同包名 ＋ 同签名 ⇒ **保留数据**）。
+> 契约 [`dev/129-NATIVE-ANDROID-BUILD.md`](../dev/129-NATIVE-ANDROID-BUILD.md)。
+
+| 项 | 规定 |
+|---|---|
+| **打法（唯一入口）** | `scripts/build-apk.sh` —— 它 `source ~/sdk/env.sh`（不 source 就 `JAVA_HOME is not set`）→ `flutter build apk --release` → **从包里**核权限 → 核"地址真的进了包" |
+| 🔴 **必须带服务端地址** | `--dart-define=HUPO_API=<地址>`。**客户端没有"服务端地址"这个概念**（网页靠同源 ＋ 地址栏），原生上没有地址栏 ⇒ **不带地址打出来的包装上去连不上，而且不报错**（判据钉着那条命令这一行） |
+| **权限从包里核** | `scripts/check-apk.sh`（源文件对 ≠ 打出来的包对）：`INTERNET` **必须**在 · 后台录音**一票否决** · `RECORD_AUDIO` 只在原生录音做了之后才许有（那一刻手册 V10 要求它必须在） |
+| **签名** | 这台机器的 **debug keystore**（自己装够用）⇒ 🔴 **同一把签名才叠得上去**；它一丢/一换，老包只能卸载重装。⚠️ 不能给别人、不能上架（debug 签名是公开的） |
+| **桌面上的名字** | **琥珀**（模板默认 `hupo_app` 是残留，判据钉着） |
+| **小程序那一层** | Android 有（普通 WebView、**不装桥**，见 §14.1·补）；iOS 商店版**没有** |
+| **语音四件** | 原生侧**还是桩**（录音/话筒/朗读/外链 = "只有网页可以"）⇒ 真做是 P1-23 |
 
 ---
 
@@ -1359,7 +1375,7 @@ systemd
 
 > 🔴 **2026-09-22 起：这一节不再是"将来的口径"，它就是现在的契约**（主人拍板做"乙"，已上线）。
 > 落地结果与逐条判据在 **[`59-USER-APPS.md`](../dev/59-USER-APPS.md)**；下面这些铁律**一条都没放宽**。
-> ⚠️ 唯一被推翻的是 §7.3 那句"本轮不建"（原生侧仍然不建）。
+> ⚠️ 唯一被推翻的是 §7.3 那句"本轮不建"（**2026-09-28 起 Android 那一侧已建**，见 §14.1·补）。
 
 ### 14.1 沙箱（**三条铁律**）
 
@@ -1369,13 +1385,26 @@ systemd
 | 2 | 小程序**文档的 CSP 写 `connect-src 'none'`** ⇒ 它**自己发不出任何请求** |
 | 3 | **下载由壳发起**（不是小程序发起）；原生侧用**独立的数据存储**；**禁原生桥** |
 
-⚠️ **验收**：全库 `grep` 原生桥相关 API **命中 = 0**。
+⚠️ **验收**：全库 `grep` 原生桥相关 API **命中 = 0** —— 🔴 **2026-09-28 起它是自动判据**
+（`test/unit/mini_native_test.dart` 扫 `lib/` 的源码；含"把改坏的源码喂进去必须报"的负向对照），
+不再靠人肉 `grep`。
 
 **为什么"下载由壳发起"是必需的**：`allow-scripts` 给的 opaque origin 下，
 `localStorage` 会**抛 `SecurityError`** ⇒ 小程序**没有持久化能力**是**设计**，不是缺陷。
 
 > ⚠️ **opaque origin 带出的一个坑**：此时 `event.origin === "null"`，
 > **不能拿域名做校验** ⇒ 沙箱通信必须改用**一次性 nonce**（打开时下发，关闭即废）。
+
+### 14.1·补 **原生（Android）那一层是什么、不是什么**（2026-09-28）
+
+| 项 | 规定 |
+|---|---|
+| 它是 | **普通 `WebView`** 加载那条现签的 `entryUrl`（制品仍在**另一个原点** `apps.stalkerai.cn`）；铁律 1/2 管的是 Web 那份 iframe，原生这份靠"**另一个原点 ＋ 无桥 ＋ 导航只许自己 origin**"守 |
+| 🔴 它不是 | **不是桥**：**没有** `JavaScriptChannel` / `addJavascriptInterface` / `runJavaScript`（一个都没有，判据扫源码）⇒ **`ask` 在原生上没有**，而且**不假装有**（壳**不发** `hupo-ready`） |
+| 导航 | **只许在制品自己那个 origin 里走**（纯函数 `miniNavigationAllowed`：别的域名 / `javascript:` / `data:` / `file:` / 协议降级全拦）——它是"制品把我们带去钓鱼页"那道闸在原生侧的落点 |
+| 存储 | 原生用**独立的数据存储**（铁律 3）：那个 WebView 自己原点的 `localStorage` 能用，但**它读不到壳的令牌**（令牌在 Flutter 那一侧的 `TokenStore` 里） |
+| iOS | 🔴 **商店版不发布**（§4.2 / Apple 4.7.4）：装钩子那一步**只在 Android 上做**，`kNativeMiniRuntimeIOS` **恒假** |
+| 契约 | [`dev/129-NATIVE-ANDROID-BUILD.md`](../dev/129-NATIVE-ANDROID-BUILD.md) |
 
 ### 14.2 清单校验（**逐字段**）
 

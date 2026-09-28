@@ -50,6 +50,20 @@ void main() {
       }
     });
 
+    test('🔴 桌面上的名字是「琥珀」，不是模板默认的 `hupo_app`', () {
+      // ⚠️ 2026-09-28 加的：主人要"原生 flutter ＋ 装在自己的设备"⇒
+      //    装上去第一眼看到的就是这个名字。模板默认 `hupo_app` 是**残留**，
+      //    不是我们的名字（改之前打出来的那一个包里就是这么写的）。
+      final m = _read();
+      expect(m.contains('android:label="琥珀"'), isTrue,
+          reason: '★ 桌面上那一格该写「琥珀」；写成 hupo_app 就是模板残留');
+      expect(
+        RegExp(r'android:label="hupo_app"').hasMatch(m),
+        isFalse,
+        reason: '★ 模板默认那个名字不许回来',
+      );
+    });
+
     test('🔴 不许申请后台录音（批 5 的语音只做"按住说"）', () {
       final m = _read();
       expect(

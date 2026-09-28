@@ -19,6 +19,7 @@ import '../models/dev_harness.dart';
 import '../models/export.dart';
 import '../models/app_spec.dart';
 import '../models/scope.dart';
+import '../models/server_address.dart';
 import '../models/space.dart';
 import '../models/trash.dart';
 
@@ -112,15 +113,18 @@ class SayBusy extends SayOutcome {
 }
 
 class Api {
-  Api({this.base = '', http.Client? client}) : _c = client ?? http.Client();
+  Api({this.base = hupoApiBase, http.Client? client}) : _c = client ?? http.Client();
 
-  /// 空串 = 同源（我们的 web 就是同一个服务在服务）。
+  /// 空串 = 同源（网页就是同一个服务在服务）。
+  /// 🔴 **原生包必须给地址**（`--dart-define=HUPO_API=…`）：那边没有地址栏，
+  ///    空串算出来的相对地址**没有 host**，请求发不出去 ——
+  ///    出处与打法在 `models/server_address.dart`（判据 `test/unit/server_address_test.dart`）。
   final String base;
   final http.Client _c;
 
   static const _json = {'content-type': 'application/json'};
 
-  Uri _u(String path) => Uri.parse('$base$path');
+  Uri _u(String path) => apiUriFor(base, path);
 
   /// 还没设密码吗？登录页靠它决定显示什么。
   Future<bool> needsSetup() async {

@@ -52,3 +52,36 @@ class MiniViewLedger {
 
 /// 壳里**真实的那一本**（`widgets/mini_app_frame.dart` 与 Web 运行时共用它）。
 final MiniViewLedger miniViewLedger = MiniViewLedger();
+
+/// **原生那一层（WebView）只许在制品自己那个原点里走**（纯逻辑 ⇒ VM 上直接量）。
+///
+/// 允许：
+///   · 制品自己那个 origin（同 scheme ＋ host ＋ port）—— 它内部的路由/查询随便变；
+///   · 空串 与 `about:blank`（WebView 自己的空白起点）。
+/// 拦住：`javascript:` / `data:` / `file:` / 别的域名。
+///
+/// ── 为什么这条要住在 `models/` ─────────────────────────────
+/// 原生那一层在 `flutter test` 里**起不来**（VM 上没有 WebView 插件）⇒
+/// "它会放行什么、拦住什么"这件事只能做成**纯函数**才量得到。
+/// ⚠️ 它是"**制品把我们带去别处**"（钓鱼页 / 假登录）那道闸的落点：
+///    Web 那边靠的是 ``sandbox`` ＋ CSP，原生这边靠的就是这一条。
+bool miniNavigationAllowed({required String entryUrl, required String target}) {
+  final t = target.trim();
+  if (t.isEmpty || t == 'about:blank') return true;
+  final Uri u;
+  final Uri base;
+  try {
+    u = Uri.parse(t);
+    base = Uri.parse(entryUrl);
+  } catch (_) {
+    return false;
+  }
+  // 只认这两种协议：`javascript:`（能直接在我们这一层里执行）与
+  // `data:` / `file:`（本地内容）一个都不放。
+  if (u.scheme != 'http' && u.scheme != 'https') return false;
+  if (!base.hasAuthority) return false;
+  // ⚠️ 比的是 **origin**（scheme ＋ host ＋ port），不是"域名后缀像不像"——
+  //    `apps.stalkerai.cn.evil.com` 那种后缀像的东西必须拦住。
+  return u.scheme == base.scheme && u.host == base.host && u.port == base.port;
+}
+

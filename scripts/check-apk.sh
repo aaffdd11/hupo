@@ -67,11 +67,14 @@ else
   echo "  ✓ 没有后台录音权限"
 fi
 
-# ③ 批 5（语音）之前不该有 RECORD_AUDIO；做了语音之后这一条要反过来要求
+# ③ **原生包上还不该有 RECORD_AUDIO**：录音那一件在原生侧根本没做
+#    （`widgets/mini_runtime*` 之外，`services/recorder_stub.dart` 是桩，
+#      包里的 `dart.library.html` 是假的那一支 ⇒ 录音那条路在安卓上是"如实说录不了"）。
+#    ⇒ 真做原生录音（`76-PLAN.md` 的 P1-23）那天，这一条要**反过来要求**（手册 V10 要它必须在）。
 if echo "$PERMS" | grep -q "android.permission.RECORD_AUDIO"; then
-  echo "  ⚠️ 有 RECORD_AUDIO —— 说明语音那批已经做了，把这条断言反过来（V10 要求它必须在）"
+  echo "  ⚠️ 有 RECORD_AUDIO —— 说明原生录音已经做了，把这条断言反过来（V10 要求它必须在）"
 else
-  echo "  · 没有 RECORD_AUDIO（语音是批 5；到那时 V10 要求它**必须**在）"
+  echo "  · 没有 RECORD_AUDIO（原生录音还没做，P1-23；真做的那天 V10 要求它**必须**在）"
 fi
 
 echo
