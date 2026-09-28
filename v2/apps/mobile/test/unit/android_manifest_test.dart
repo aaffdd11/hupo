@@ -23,6 +23,31 @@ String _read() {
   return f.readAsStringSync();
 }
 
+/// 扫出"注释住进了标签里"的那些标签（合法 XML 里**一个都不该有**）。
+///
+/// 判法：从每个 `<` 走到它那个 `>`，路上撞见 `<!--` ⇒ 那一段就是坏形状。
+/// ⚠️ 抽成函数是为了能拿"改坏的源码"喂它（负向对照）。
+List<String> tagsWithComments(String src) {
+  final bad = <String>[];
+  var i = 0;
+  while (i < src.length) {
+    final lt = src.indexOf('<', i);
+    if (lt < 0) break;
+    if (src.startsWith('<!--', lt)) {
+      // 跳过整段注释（注释里的 `<` 不算标签）
+      final end = src.indexOf('-->', lt);
+      i = end < 0 ? src.length : end + 3;
+      continue;
+    }
+    final gt = src.indexOf('>', lt);
+    if (gt < 0) break;
+    final inside = src.substring(lt, gt);
+    if (inside.contains('<!--')) bad.add(inside.trim());
+    i = gt + 1;
+  }
+  return bad;
+}
+
 void main() {
   group('安卓清单', () {
     test('🔴 main 里必须有 INTERNET —— 否则 release 装上去**没有网**', () {
@@ -48,6 +73,26 @@ void main() {
       for (final tag in ['<manifest', '</manifest>', '<application']) {
         expect(m.contains(tag), isTrue, reason: '缺 $tag');
       }
+    });
+
+    test('🔴 注释不许住进标签里（那样就不是合法 XML —— 打包当场失败）', () {
+      // ⚠️ **2026-09-28 我自己栽的**：把一段注释写在 `<application` 与它的属性之间
+      //    （想解释 `android:label`），XML **不允许**这种形状。上面那条"能被解析"
+      //    是正则级的、看不见它；真正抓到它的是 `flutter build apk`：
+      //    *"Please ensure that the android manifest is a valid XML document"*。
+      //    ⇒ 这条扫描补上那个盲区（且在几秒内跑完，不用等 Gradle）。
+      final m = _read();
+      expect(
+        tagsWithComments(m),
+        isEmpty,
+        reason: '★ 注释要写在标签**外面**（`<application>` 之前或之后）',
+      );
+      // 负向对照：把"坏的那一段"喂进去必须报（不然这条扫描就是空转的）。
+      expect(
+        tagsWithComments('<application\n  <!-- 解释 -->\n  android:label="x">'),
+        isNotEmpty,
+      );
+      expect(tagsWithComments('<application\n  android:label="x">\n  <!-- 外面 -->'), isEmpty);
     });
 
     test('🔴 桌面上的名字是「琥珀」，不是模板默认的 `hupo_app`', () {

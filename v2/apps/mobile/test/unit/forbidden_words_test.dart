@@ -59,7 +59,9 @@ void main() {
       landingStart,
       landingDownload,
       landingStartHint,
-      landingAndroidNotYet,
+      landingAndroidStarted,
+      landingAndroidOnIt,
+      landingAndroidCantHere,
       landingDownloadTitle,
       // ⚠️ 首页重排（主人 2026-09-22）：**新加的句子必须列在这里**，
       //    没进这份清单的句子 = 没验过。

@@ -36,3 +36,25 @@ bool apiBaseConfigured(String base) => base.trim().isNotEmpty;
 ///    "空 base 会拼出一条**没有 host** 的地址"这件事就能被**量**出来
 ///    （那就是原生包连不上的形状 —— 见 `test/unit/server_address_test.dart`）。
 Uri apiUriFor(String base, String path) => Uri.parse('$base$path');
+
+/// **安卓安装包**在同一个站点上的路径（首页那颗「下载安卓版」指向它）。
+///
+/// ⚠️ 它是**稳定名字**（不带指纹）：服务端那边对不带指纹的路径一律 `no-cache`，
+///    所以换包之后访客拿到的一定是新的那一个（`08-SPEC.md` §8.3）。
+const String hupoApkPath = '/hupo.apk';
+
+/// 把安装包那条路径变成一条**绝对**地址。
+///
+/// 🔴 非做成绝对不可（2026-09-28）：`openExternal`（`services/links.dart`）
+///    **只认 http(s)** —— 相对路径它当场回 `false`（"什么都没开"），
+///    而这颗按钮**必须真的把包下下来**（判据钉着"交出去的是一条绝对地址"）。
+/// * [base] 非空（原生包带着地址）⇒ 用它的原点；
+/// * 空（网页 = 同源）⇒ 用**页面自己**那条地址去解析（`Uri.base` 就是地址栏那个）。
+Uri apkDownloadUri({required String base, required Uri page}) {
+  final raw = base.trim();
+  if (raw.isEmpty) return page.resolve(hupoApkPath);
+  final origin = raw.contains('://')
+      ? Uri.parse(raw)
+      : Uri.parse('http://${raw.replaceAll(RegExp(r'/+$'), '')}');
+  return origin.resolve(hupoApkPath);
+}

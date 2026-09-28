@@ -12,10 +12,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/landing_words.dart';
+import 'package:hupo_app/models/server_address.dart';
 import 'package:hupo_app/screens/landing_screen.dart';
 
-Future<void> _pump(WidgetTester tester, {VoidCallback? onStart}) async {
-  await tester.pumpWidget(MaterialApp(home: LandingScreen(onStart: onStart ?? () {})));
+Future<void> _pump(
+  WidgetTester tester, {
+  VoidCallback? onStart,
+  bool Function(String url)? onDownload,
+}) async {
+  await tester.pumpWidget(MaterialApp(
+    home: LandingScreen(onStart: onStart ?? () {}, onDownload: onDownload),
+  ));
   await tester.pumpAndSettle();
 }
 
@@ -48,18 +55,43 @@ void main() {
     expect(seen.length, wanted.length, reason: '这些没被画出来过：${wanted.difference(seen).toList()}');
   });
 
-  testWidgets('🔴 点"下载安卓版" ⇒ **如实说没上线**，而且不许装出"正在下载"', (tester) async {
-    await _pump(tester);
+  testWidgets('🔴 点"下载安卓版" ⇒ **真把那条绝对地址交出去**（2026-09-28 起不再是"还没上线"）', (tester) async {
+    // ⚠️ 判据**必须注入**：VM 上 `canOpenLinks` 恒假（那一份是桩）⇒
+    //    不注入就只能量到"你正在用的就是这个安卓版"那一句。
+    final asked = <String>[];
+    await _pump(tester, onDownload: (u) { asked.add(u); return true; });
     await tester.tap(find.text(landingDownload));
     await tester.pump();
 
-    expect(find.text(landingAndroidNotYet), findsOneWidget, reason: '★ 必须说没上线');
-    // 负向对照：屏上**不许**出现任何"在下载/正在准备"这一类假动作的字
-    for (final fake in ['正在下载', '下载中', '正在准备', '请稍候', '即将开始']) {
+    expect(asked, hasLength(1), reason: '★ 点了没反应 = 用户那边就是"坏了"');
+    final uri = Uri.parse(asked.single);
+    expect(uri.hasAuthority, isTrue, reason: '★ `openExternal` 只认 http(s)：相对路径当场回 false ⇒ 什么都下不下来');
+    expect(uri.path, hupoApkPath, reason: '★ 交出去的那条路必须正是安装包那条');
+    expect(find.text(landingAndroidStarted), findsOneWidget, reason: '★ 真开了才说"开始下载"');
+
+    // 负向对照：屏上**不许**出现任何"还在准备"这一类假动作的字（真下载也不例外）
+    for (final fake in ['下载中', '正在准备', '请稍候', '即将开始']) {
       expect(find.textContaining(fake), findsNothing, reason: '★ 没有的东西不许装：$fake');
     }
-    // 而且 Promise 之外不许编一个进度条出来
     expect(find.byType(LinearProgressIndicator), findsNothing);
+    // 负向对照之二：那句旧的"还没上线"**必须已经不在**了（它就是这次改掉的假话）
+    expect(find.textContaining('还没上线'), findsNothing, reason: '★ 安卓已经能下载了 ⇒ 那句是假话');
+  });
+
+  testWidgets('🔴 没开成 ⇒ 说清怎么办（**不是**"正在准备"）', (tester) async {
+    await _pump(tester, onDownload: (_) => false);
+    await tester.tap(find.text(landingDownload));
+    await tester.pump();
+    expect(find.text(landingAndroidCantHere), findsOneWidget);
+    expect(find.text(landingAndroidStarted), findsNothing, reason: '★ 没开成就不许说"开始下载了"');
+  });
+
+  testWidgets('★ 站在安卓包里点它 ⇒ 如实说"你正在用的就是这个安卓版"', (tester) async {
+    // 不注入 ⇒ VM 那一侧 `canOpenLinks` 恒假，就是"原生那一档"的形状。
+    await _pump(tester);
+    await tester.tap(find.text(landingDownload));
+    await tester.pump();
+    expect(find.text(landingAndroidOnIt), findsOneWidget);
   });
 
   testWidgets('🔴 点"开始用" ⇒ 真的往下走（回调被调用一次）', (tester) async {

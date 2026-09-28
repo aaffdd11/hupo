@@ -8,8 +8,9 @@
 //   ① ⚠️ **主入口必须第一眼就看得见**：2026-09-21 无障碍硬闸抓过一次 ——
 //      原来"三句支撑"排在按钮前面，字体放到 **3.1 倍**时两个按钮被挤出屏幕，
 //      闸的话是「**一个能点的都没扫到**」。⇒ 现在按钮紧跟标题，细节一律往后放。
-//   ② ⚠️ **不许假装**：三个平台入口今天都没有安装包 ⇒ 卡上**直接写着"还没上线"**，
-//      点了也**只说这一句**（不转圈、不"正在准备"）。
+//   ② ⚠️ **不许假装**：安卓那个入口**今天真能下载了**（2026-09-28）⇒ 点它就把 `/hupo.apk`
+//      交出去；苹果与"还没上线"那两格照旧**如实标着**。点了没开成 ⇒ **说清怎么办**
+//      （不转圈、不"正在准备"—— 那条纪律一个字没松）。
 //   ③ ⚠️ 不写死尺寸（D3.5）：字号全部来自 `theme.textTheme`，容器跟着字走；
 //      整页是 `ListView`（能滚）⇒ 五档字体下**不溢出**（`accessibility_test.dart` 硬闸）。
 //      命中区 ≥44（D3.6）。
@@ -19,6 +20,8 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import '../models/server_address.dart';
+import '../services/links.dart';
 import '../widgets/page_header.dart';
 
 import '../models/landing_words.dart';
@@ -36,10 +39,17 @@ const Color _card = d.card;
 const Color _line = d.line;
 
 class LandingScreen extends StatelessWidget {
-  const LandingScreen({super.key, required this.onStart});
+  const LandingScreen({super.key, required this.onStart, this.onDownload});
 
   /// 点"开始用"之后干什么（上层决定：进登录页）。
   final VoidCallback onStart;
+
+  /// 点「下载安卓版」时**把那条绝对地址交出去**（返回"真开了没有"）。
+  ///
+  /// ⚠️ 不传就用真的那一份（`services/links.dart` 的 `openExternal`）。
+  /// 🔴 判据**必须能注入**：VM 上 `canOpenLinks` 恒假（那一份是桩），
+  ///    不注入的话"网页上点它真的把包下下来"这件事在判据里量不到。
+  final bool Function(String url)? onDownload;
 
   @override
   Widget build(BuildContext context) {
@@ -254,7 +264,7 @@ class LandingScreen extends StatelessWidget {
             child: const Text(landingStart),
           ),
           OutlinedButton(
-            onPressed: () => _notYet(context),
+            onPressed: () => _download(context),
             style: OutlinedButton.styleFrom(
               minimumSize: const Size(48, 52),
               foregroundColor: _ink,
@@ -335,9 +345,23 @@ class LandingScreen extends StatelessWidget {
         style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
       );
 
-  /// ⚠️ **如实说**：现在没有安装包。**不许假装开始下载**（不转圈、不"正在准备"）。
-  void _notYet(BuildContext context) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text(landingAndroidNotYet)));
+  /// 点「下载安卓版」：**真的把那个包装下来**（2026-09-28 起它不再是"还没上线"）。
+  ///
+  /// 三条边界：
+  ///   · 交出去的必须是**绝对地址**（`openExternal` 只认 http(s)；相对路径它当场回 false）；
+  ///   · 站在**安卓包里**点它 ⇒ 如实说"你正在用的就是这个安卓版"（不装出"正在下载"）；
+  ///   · 没开成 ⇒ 说清怎么办（**绝不**转圈说"正在准备"）。
+  void _download(BuildContext context) {
+    final messenger = ScaffoldMessenger.of(context);
+    final open = onDownload;
+    if (open == null && !canOpenLinks) {
+      messenger.showSnackBar(const SnackBar(content: Text(landingAndroidOnIt)));
+      return;
+    }
+    final url = apkDownloadUri(base: hupoApiBase, page: Uri.base).toString();
+    final ok = (open ?? openExternal)(url);
+    messenger.showSnackBar(
+      SnackBar(content: Text(ok ? landingAndroidStarted : landingAndroidCantHere)),
+    );
   }
 }

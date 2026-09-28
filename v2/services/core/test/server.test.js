@@ -442,6 +442,36 @@ test('★ P1-14：像文件的路径 ⇒ 404；真资源仍 200；页面路由�
   await s.close();
 });
 
+// ── 安卓包那条下载路（2026-09-28：首页那颗「下载安卓版」指向 /hupo.apk）────
+
+test('★ 安卓包：200 + 安卓那个 MIME + attachment；**没了就 404**（不许回 index.html）', async () => {
+  const s = await boot();
+  // ① 没有这个文件时：必须如实 404 —— 否则用户会把**一段 HTML 存成 .apk** 去装
+  const missing = await fetch(`${s.origin}/hupo.apk`);
+  assert.equal(missing.status, 404, 'apk 不在时回了 200 ⇒ 存下来的是 HTML（同一个坑的第二种形态）');
+  assert.match(missing.headers.get('content-type') ?? '', /json/);
+  // ② 放一个进去（内容随便，这里只核那三个头）
+  const apkBody = Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4, 5]); // zip 魔数起头
+  nodeFs.writeFileSync(nodePath.join(s.webRoot, 'hupo.apk'), apkBody);
+  const got = await fetch(`${s.origin}/hupo.apk`);
+  assert.equal(got.status, 200);
+  assert.equal(
+    got.headers.get('content-type'),
+    'application/vnd.android.package-archive',
+    'MIME 写错的话有些浏览器会把它当**文本**打开',
+  );
+  assert.match(
+    got.headers.get('content-disposition') ?? '',
+    /^attachment; filename="hupo\.apk"$/,
+    '少了它，有的浏览器会就地打开那一串二进制 —— 而那颗按钮要的是"存下来去装"',
+  );
+  assert.equal(Buffer.from(await got.arrayBuffer()).length, apkBody.length, '字节数必须一模一样');
+  // ③ 负向对照：别的静态文件**不许**被加上 attachment（不然网页自己就下载了）
+  const idx = await fetch(`${s.origin}/`);
+  assert.equal(idx.headers.get('content-disposition'), null);
+  await s.close();
+});
+
 // ── P1-11（2026-09-24）：公开面常量与真实路由必须对上 ──────────────
 
 test('★ P1-11：PUBLIC_ROUTES 与"不带令牌真够得着的那几条"必须一致', async () => {

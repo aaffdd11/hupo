@@ -39,6 +39,24 @@ void main() {
     expect(abs.toString(), 'https://w.stalkerai.cn/api/version');
   });
 
+  test('③ 安装包那条地址必须是**绝对**的（`openExternal` 只认 http(s)）', () {
+    // 负向对照先摆着：那条路径本身**不是**一条能交出去的地址（没有 host）。
+    expect(Uri.parse(hupoApkPath).hasAuthority, false,
+        reason: '★ 相对路径交给 `openExternal` ⇒ 它当场回 false ⇒ 点了什么都不发生');
+    // 网页那一档：拿**页面自己**那条地址解析（地址栏就是它）。
+    final web = apkDownloadUri(base: '', page: Uri.parse('https://w.stalkerai.cn/'));
+    expect(web.toString(), 'https://w.stalkerai.cn$hupoApkPath');
+    expect(web.hasAuthority, true);
+    // 原生那一档：用包里带着的那个地址（`--dart-define=HUPO_API=…`）。
+    final native = apkDownloadUri(base: 'https://w.stalkerai.cn', page: Uri.base);
+    expect(native.toString(), 'https://w.stalkerai.cn$hupoApkPath');
+    // 只写主机名那种（本机调试常见）：当作明文，路径照旧接得上。
+    expect(
+      apkDownloadUri(base: '127.0.0.1:8020/', page: Uri.base).toString(),
+      'http://127.0.0.1:8020$hupoApkPath',
+    );
+  });
+
   test('③ 打包脚本必须带 `$_definePrefix…`（打法只有一个入口）', () {
     final f = File('../../../scripts/build-apk.sh');
     expect(f.existsSync(), true,

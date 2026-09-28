@@ -138,6 +138,18 @@ cp -r "$BUILD_WEB/." "$WEB/"
 cp -f "$PREV_ENTRIES"/main.*.dart.js "$PREV_ENTRIES"/flutter_bootstrap.*.js "$WEB/" 2>/dev/null || true
 rm -rf "$PREV_ENTRIES"
 
+# ★ **安卓包也要放回来**（2026-09-28）：上面那句 `rm -rf "$WEB"` 会把它一起删掉，
+#   而首页那颗「下载安卓版」指向的正是 `/hupo.apk`（`scripts/publish-apk.sh` 放进去的）。
+#   ⇒ 只要构建产物还在就再拷一次（不发新包也照旧发那一个），并如实报一句。
+APK_BUILT="$APP/build/app/outputs/flutter-apk/app-release.apk"
+if [ -f "$APK_BUILT" ]; then
+  cp -f "$APK_BUILT" "$WEB/hupo.apk"
+  echo "  ✓ 安卓包也放回来了：web/hupo.apk（$(du -h "$WEB/hupo.apk" | cut -f1)）"
+else
+  echo "  ⚠️ 没有现成的安卓包（$APK_BUILT）⇒ 这次首页那颗「下载安卓版」会 404。"
+  echo "     要发就补一句：scripts/publish-apk.sh --no-build（或 build-apk.sh 重新打一个）"
+fi
+
 mv "$WEB/main.dart.js" "$WEB/main.$STAMP.dart.js"
 mv "$WEB/flutter_bootstrap.js" "$WEB/flutter_bootstrap.$STAMP.js"
 # 入口文件只留最近 KEEP_ENTRIES 份（再多就没意义了：更老的访客只会拿到更老的资源）

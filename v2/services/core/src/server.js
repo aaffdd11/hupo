@@ -76,8 +76,10 @@ import { isCredField } from './creds.mjs';
 
 /// **看起来像"一个文件"的路径**（P1-14）：这些后缀一律**不回 SPA 兜底**，
 /// 而是如实 404 —— 拿 HTML 冒充 JS/CSS/字体/wasm，是把"缺文件"变成"白屏"。
+/// ⚠️ **`apk` 也算**（2026-09-28 加）：安卓包放在 `web/` 里由这条路发出去；
+///    它要是没了而回了 index.html，用户会把一段 HTML **存成 .apk** 去装 —— 那是同一个坑的第二种形态。
 const LOOKS_LIKE_ASSET =
-  /\.(js|mjs|css|json|wasm|map|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|txt|webmanifest)$/i;
+  /\.(js|mjs|css|json|wasm|map|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|txt|webmanifest|apk)$/i;
 
 /**
  * 内部写入口**一条请求最大多少字节**（B15 迁移那条）。
@@ -106,6 +108,9 @@ const MIME = {
   '.woff2': 'font/woff2',
   '.bin': 'application/octet-stream',
   '.map': 'application/json; charset=utf-8',
+  // 安卓包（`web/hupo.apk`，首页那颗「下载安卓版」指向它）。
+  // ⚠️ 这个 MIME 是安卓那边认的正式名字 —— 写错的话有些浏览器会把它当**文本**打开。
+  '.apk': 'application/vnd.android.package-archive',
 };
 
 // ── 过程档位（决策 D7 / 契约 `docs/dev/122-TWO-PROCESS-LEVELS.md`）────────
@@ -1933,6 +1938,11 @@ const TENANT_ROUTES = [
       'content-length': sendStat.size,
       ...(encoding ? { 'content-encoding': encoding } : {}),
       'x-content-type-options': 'nosniff',
+      // 🔴 **安装包一律当附件发**（2026-09-28）：不带这一行的话，有的浏览器会**就地打开**
+      //    那一串二进制（或者把它当页面）—— 而那颗按钮要的是"存下来去装"。
+      ...(ext === '.apk'
+        ? { 'content-disposition': `attachment; filename="${nodePath.basename(file)}"` }
+        : {}),
     });
     if (req.method === 'HEAD') return res.end();
     nodeFs.createReadStream(sendFile).pipe(res);
