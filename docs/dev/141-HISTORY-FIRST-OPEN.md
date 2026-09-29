@@ -106,10 +106,12 @@ HUPO_TOKEN=<现发的 owner 令牌> node scripts/check-web-browser.mjs \
 ## 五、没做的（**明说**）
 
 * **没动客户端**：它的"往上翻取更早的"那条路本来就够用（H7 量过）。
-  ⚠️ 但客户端**每帧 O(N) 那件事没改**（`Timeline.items` 每次 `where + sort`、
-  `_findMessage` 线性找）—— 首屏封顶之后 N 是个常数（上限 ＋ 最多十页），
-  所以**今天不会撞上**；真正撞上要等"一个页面连着开很久、自己攒到几万条"。
-  这一条**记在账上**（下一批做"长开页面"那件事时一起收）。
+  ✅ **2026-09-30 还了这一笔的一半**（`docs/dev/143-DEBT-PAYDOWN.md` §四）：
+  `Timeline.items` 那份视图**按版本缓存**了（原来每次访问都 `where + sort` 一遍，
+  一次 build 读十几次）—— 版本号做进容器自己（`_VersionedList`/`_VersionedSet`），
+  **结构上不可能漏作废**（5 条判据在 `test/unit/timeline_test.dart`）。
+  ⚠️ **还剩一半**：`ChatController.items`（三个列表一拼）**每调一次仍新建一份**；
+  `_findMessage` 仍是线性找。
 * **没给客户端加"上面还有更早的"这种**新字段**（协议冻结；往上翻就是那条出口）。
 * **没截断线重连那条补发**（理由见 §二）。
 * **没动 `/api/export`**（导出本来就是"把整份给我"，与首屏不是一回事）。

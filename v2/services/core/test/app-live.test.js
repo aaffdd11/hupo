@@ -26,7 +26,7 @@ import test, { after } from 'node:test';
 import { WebSocket } from 'ws';
 
 import { APP_WORKSPACE_CHANGED, LIVE_VERSION, appWorkspaceChangeOf, appWorkspaceChangedEvent, checkLiveRel, createLiveWatcher, liveEntryOf, liveRelOk, parseLivePath } from '../src/app-live.js';
-import { Apps } from '../src/apps.js';
+import { Apps, AppsError } from '../src/apps.js';
 import { Auth } from '../src/auth.js';
 import { createAppServer, entryUrl, liveEntryUrl, verifyEntry } from '../src/app-serve.js';
 import { BoxError } from '../src/apps-box.js';
@@ -609,6 +609,98 @@ test('活地址·盒子不通 ⇒ 503（**绝不**拿宿主那份旧的顶上）
   const r = await get(base, live.slice(base.length));
   assert.equal(r.status, 503, '★ 盒子不通就如实说"等会儿再试" —— 不许回宿主那份，也不许说"没这个文件"');
   assert.equal((await r.text()).includes('宿主的假货'), false);
+});
+
+// 🔴 **B27（2026-09-30 还的账）**：**盒子不通**这一档要**三处一个口径** ——
+//    `/api/apps` / `/api/app-ask` 的预闸是 503 `tenant-not-ready`（既有判据钉着），
+//    而**制品口**（`/a/`，那一版快照）以前落到 **404 = 页面在说假话**
+//    （"这里没有这个文件"，而他明明有，只是那台没应）、取库那一步落到 403。
+test('🔴 制品口·盒子不通 ⇒ 503（与 `/api/apps` 那个预闸**一个口径**）', async (t) => {
+  const origin = createAppServer({
+    // 取库那一步就抛（盒子连不上 —— 隧道没通）
+    resolveApps: () => {
+      throw new BoxError('你那台现在连不上（隧道没通）', 'unreachable');
+    },
+    key: KEY,
+    frameAncestors: "'self'",
+    now: () => NOW,
+    log: () => {},
+  });
+  await new Promise((res, rej) => {
+    origin.once('error', rej);
+    origin.listen(0, '127.0.0.1', res);
+  });
+  t.after(guard(() => new Promise((r) => origin.close(() => r()))));
+  const base = `http://127.0.0.1:${origin.address().port}`;
+  const art = entryUrl({ base, key: KEY, sub: 'u2', id: 'dice', version: 1, entry: 'index.html', now: NOW });
+  const r = await get(base, art.slice(base.length));
+  assert.equal(r.status, 503, '★ 盒子不通报 404/403 都是**归错原因**：他就是"那台没应"');
+  assert.equal((await r.text()).includes('等会儿'), true);
+});
+
+test('🔴 制品口·**读**的时候盒子不通 ⇒ 也是 503（不是"没这个文件"）', async (t) => {
+  const origin = createAppServer({
+    resolveApps: () => ({
+      read: () => {
+        throw new BoxError('盒子那边取不到这个文件（HTTP 502）', 'bad-status');
+      },
+    }),
+    key: KEY,
+    frameAncestors: "'self'",
+    now: () => NOW,
+    log: () => {},
+  });
+  await new Promise((res, rej) => {
+    origin.once('error', rej);
+    origin.listen(0, '127.0.0.1', res);
+  });
+  t.after(guard(() => new Promise((r) => origin.close(() => r()))));
+  const base = `http://127.0.0.1:${origin.address().port}`;
+  const art = entryUrl({ base, key: KEY, sub: 'u2', id: 'dice', version: 1, entry: 'index.html', now: NOW });
+  const r = await get(base, art.slice(base.length));
+  assert.equal(r.status, 503, '★ 2026-09-30 之前这里是 404 —— 那是页面在说假话');
+});
+
+test('🔴 反向对照：**不是**盒子不通的抛错，口径一个字都不许变', async (t) => {
+  // ① 取库那一步抛的不是 `BoxError`（例如这个身份怪）⇒ 照旧 403
+  const origin = createAppServer({
+    resolveApps: () => {
+      throw new Error('身份怪');
+    },
+    key: KEY,
+    frameAncestors: "'self'",
+    now: () => NOW,
+    log: () => {},
+  });
+  await new Promise((res, rej) => {
+    origin.once('error', rej);
+    origin.listen(0, '127.0.0.1', res);
+  });
+  t.after(guard(() => new Promise((r) => origin.close(() => r()))));
+  const base = `http://127.0.0.1:${origin.address().port}`;
+  const art = entryUrl({ base, key: KEY, sub: 'u2', id: 'dice', version: 1, entry: 'index.html', now: NOW });
+  assert.equal((await get(base, art.slice(base.length))).status, 403, '★ 别把"没权限"也说成"那台没应"');
+
+  // ② 制品里**真没有**这个文件（`AppsError`）⇒ 照旧 404
+  const origin2 = createAppServer({
+    resolveApps: () => ({
+      read: () => {
+        throw new AppsError('制品里没有这个文件');
+      },
+    }),
+    key: KEY,
+    frameAncestors: "'self'",
+    now: () => NOW,
+    log: () => {},
+  });
+  await new Promise((res, rej) => {
+    origin2.once('error', rej);
+    origin2.listen(0, '127.0.0.1', res);
+  });
+  t.after(guard(() => new Promise((r) => origin2.close(() => r()))));
+  const base2 = `http://127.0.0.1:${origin2.address().port}`;
+  const art2 = entryUrl({ base: base2, key: KEY, sub: 'u2', id: 'dice', version: 1, entry: 'index.html', now: NOW });
+  assert.equal((await get(base2, art2.slice(base2.length))).status, 404, '★ "真没有"仍然是 404');
 });
 
 // 那些纯函数的形状（一帧认法两处共用，漂了就靠这几条）

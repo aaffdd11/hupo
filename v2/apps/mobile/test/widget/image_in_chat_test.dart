@@ -38,6 +38,16 @@ void main() {
 
   });
 
+  testWidgets('🔴 整条消息就是一张图 ⇒ 屏幕上**只有图**，一个字的正文都不画（`B37`）', (tester) async {
+    // 2026-09-30 还的那笔账：这种回复原来是"图片上方还挂着一串 https://…"。
+    await pumpAnswer(tester, 'https://x.example/only-this.png');
+    final img = tester.widget<Image>(find.byType(Image));
+    expect((img.image as NetworkImage).url, 'https://x.example/only-this.png');
+    expect(find.textContaining('only-this.png'), findsNothing, reason: '★ 地址不许当正文画出来');
+    // 图那一句实话照旧（它不是正文）
+    expect(find.text(imageTempWords), findsOneWidget);
+  });
+
   testWidgets('★ 负向对照：话里没有图片地址 ⇒ **一个 Image 都不许有**', (tester) async {
     await pumpAnswer(tester, '看这个 https://x.example/page 里面有说明。');
     expect(find.byType(Image), findsNothing, reason: '★ 普通网址不许当成图片去取');

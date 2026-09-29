@@ -345,6 +345,70 @@ void _cacheGroup() {
       expect(t.agentLine, isNull, reason: '收口了就是收口了');
     });
 
+
+  // ── 视图缓存（契约 `docs/dev/143-TIMELINE-VIEW-CACHE.md` · `#201` 那笔账的后续）──
+  //
+  // 🔴 为什么值得一组判据：`items` 那份"该画哪几条"的视图原来**每次访问都重排一遍**
+  //    （O(N log N)），而一次 build 里它会被读十几次。缓存它就得知道"条目动过没有"——
+  //    而"忘了作废缓存"的表现是**屏幕上是旧内容**（最忌的那一类）。
+  //    ⇒ 版本号做进容器自己（`_VersionedList`），这组判据钉两件事：
+  //      ① 没动 ⇒ **同一份**（`identical`）；② 每一种"动"都**必须**让视图跟上。
+  group('视图缓存：没动就是同一份，一动就换一份', () {
+    test('① 没动过 ⇒ 两次读到的是**同一个对象**（不再每次重排）', () {
+      final t = Timeline()
+        ..apply(start(1, 'm1'))
+        ..apply(text(2, 'm1', '一'));
+      final a = t.items;
+      final b = t.items;
+      expect(identical(a, b), isTrue, reason: '★ 没动过就该复用 —— 不然每一帧都在白排一次');
+    });
+
+    test('② 新增一条 ⇒ 视图必须跟上（换了内容，也换了对象）', () {
+      final t = Timeline()
+        ..apply(start(1, 'm1'))
+        ..apply(text(2, 'm1', '一'));
+      final a = t.items;
+      t.apply(start(3, 'm2'));
+      final b = t.items;
+      expect(b.length, a.length + 1, reason: '★ 加了东西视图还是旧的 —— 屏幕会说假话');
+      expect(identical(a, b), isFalse);
+    });
+
+    test('③ **原地改**一条（状态变了、字长了）⇒ 视图也必须跟上', () {
+      final t = Timeline();
+      t.addLocalUtterance('在吗', 'u1');
+      final before = t.items.single as UserUtterance;
+      expect(before.state, MessageState.queued);
+      t.setLocalState('u1', MessageState.failed);
+      final after = t.items.single as UserUtterance;
+      expect(after.state, MessageState.failed, reason: '★ 原地改没认出来 = 屏幕上还是"发送中"');
+      // ⚠️ 这一条正是"只在 add/remove 上作废缓存"会漏掉的那一格。
+    });
+
+    test('④ 藏起来（回收站）与恢复 ⇒ 视图跟着变', () {
+      final t = Timeline()
+        ..apply(start(1, 'm1'))
+        ..apply(text(2, 'm1', '一'));
+      expect(t.items.length, 1);
+      t.hideMessages(['m1']);
+      expect(t.items, isEmpty, reason: '★ 删了还在屏幕上 = 它没真被藏起来');
+      t.showMessages(['m1']);
+      expect(t.items.length, 1, reason: '★ 恢复了却看不见 = 恢复是假的');
+    });
+
+    test('⑤ 清空重建（reset）⇒ 视图跟着变，而且**用户自己的字留着**', () {
+      final t = Timeline()
+        ..apply(start(1, 'm1'))
+        ..apply(text(2, 'm1', '服务端那句'));
+      t.addLocalUtterance('我说的', 'u1');
+      t.reset();
+      final body = t.items.whereType<UserUtterance>().toList();
+      expect(body.length, 1, reason: '★ 用户打好的字不许被清掉');
+      expect(body.single.text, '我说的');
+      expect(t.items.whereType<AssistantMessage>(), isEmpty);
+    });
+  });
+
     test('缓存画出来的条目和实时那条走**同一条渲染路径**（不是两套）', () {
       final cached = Timeline()..seedFromCache([start(1, 'm1'), text(2, 'm1', '一样')]);
       final live = Timeline()

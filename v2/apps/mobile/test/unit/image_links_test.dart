@@ -40,7 +40,12 @@ void main() {
     final kept = textWithoutImageLines('给你这张 https://x.example/a.png 好看吗');
     expect(kept.contains('好看吗'), true);
     expect(kept.contains('https://x.example/a.png'), true);
-    // 全是地址（没有别的话）⇒ **不许变成空**（宁可留着）
-    expect(textWithoutImageLines('https://x.example/a.png').isNotEmpty, true);
+    // 🔴 全是地址（没有别的话）⇒ **正文就是空的**（2026-09-30 还账 · `B37`）
+    //    原来这条钉的是"不许变成空（宁可留着）" —— 那条把**整条消息就是一张图**的回复
+    //    变成了"图片上方还挂着一串 https://…"，与这个函数自己的注释自相矛盾。
+    expect(textWithoutImageLines('https://x.example/a.png'), '');
+    expect(textWithoutImageLines('- https://x.example/a.png\n- https://x.example/b.png'), '');
+    // 负向对照：**还有一句人话**就不许清空（那会改了他看到的字）
+    expect(textWithoutImageLines('画好了\nhttps://x.example/a.png'), '画好了');
   });
 }

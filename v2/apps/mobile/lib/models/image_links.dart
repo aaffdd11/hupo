@@ -54,5 +54,11 @@ String textWithoutImageLines(String text) {
     keep.add(line);
   }
   final out = keep.join('\n').trim();
-  return out.isEmpty ? text : out;
+  // 🔴 **全是地址 ⇒ 正文就是空的**（2026-09-30 还账 · `77-BLOCKERS.md` **B37**）。
+  //    原来这里是 `out.isEmpty ? text : out`（理由是"宁可留着"）—— 那会让
+  //    **整条消息就是一张图**的回复**把那串地址当正文画在图片上方**（屏幕上一串 `https://…`，
+  //    看着像坏了），而它自己那句注释明明写着"画出来的图那一行地址不重复显示"（自相矛盾）。
+  //    ⇒ 空串是**有意思**的：气泡只画图、不画正文；复制那条路会**如实说"复制不了"**
+  //      （`chat_select.dart` 的 `bubbleBodyOf` 与 `test/unit/chat_select_test.dart` 早就钉着那一档）。
+  return out;
 }

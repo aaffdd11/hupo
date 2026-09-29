@@ -339,8 +339,12 @@ class AnswerBubble extends StatelessWidget {
                     Text('在处理…', style: smallStyle)
                   else ...[
                     // ⚠️ **画出来的图那一行地址不重复显示**（图就在下面）——
-                    //    但**只有整行都是地址**时才去掉（句子里的地址留着）
-                    Text(textWithoutImageLines(text), style: bodyStyle),
+                    //    但**只有整行都是地址**时才去掉（句子里的地址留着）。
+                    //    🔴 **整条消息就是一张图 ⇒ 正文是空串**（`B37` 还的那笔账）：
+                    //      那就**一个字的正文都不画**（不是画一个空的 `Text`）——
+                    //      屏幕上只剩那张图，复制那条路照旧"如实说复制不了"。
+                    if (textWithoutImageLines(text).isNotEmpty)
+                      Text(textWithoutImageLines(text), style: bodyStyle),
                     // ★ **画好的图**（P1-27 后半）：回话里带着图片地址 ⇒ **画在聊天里**
                     ..._imageRows(look, text),
                   ],

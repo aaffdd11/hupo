@@ -275,6 +275,15 @@ export function createAppServer({
       // ⚠️ **取库那一步不许把进程带走**（`worldFor` / `tenantOf` 都可能对一个怪身份抛）：
       //    这里拒掉这一条请求就够了 —— 一个未捕获异常会让整个服务下去。
       log(`${live ? '活地址' : '制品口'}：取库那一步出错（${sub}）${e?.message ?? e}`);
+      // 🔴 **B27（2026-09-30 还的账）**：**盒子不通**这一档要**三处一个口径** ——
+      //    `/api/apps` 与 `/api/app-ask` 的预闸都是 **503 `tenant-not-ready`**，
+      //    而这里原来落到 **403**（"取不到这个文件"）⇒ 同一个病三种说法，
+      //    读的人会以为它们坏的原因不同。⇒ 只认 `BoxError`（那不是"没权限"，
+      //    是"他那台没应"）；别的抛错照旧 403（fail-closed，一个字不改）。
+      if (e instanceof BoxError) {
+        denyBox(res);
+        return;
+      }
       deny(res, 403);
       return;
     }
@@ -290,8 +299,10 @@ export function createAppServer({
       pending = live ? apps.readLive(live.id, live.rel) : apps.read(hit.id, hit.version, hit.rel);
     } catch (e) {
       log(`${live ? '活地址' : '制品口'}：读不出来（${id}）${e instanceof AppsError ? e.message : '未知错'}`);
-      // ★ **盒子不通 ⇒ 503**（只在活地址这条路上分；制品那条一个字没动）
-      if (live && e instanceof BoxError) {
+      // ★ **盒子不通 ⇒ 503**（`B27`：这一条**两条路都适用** —— 在制品那条路上，
+      //   以前落到 404 = 页面在说假话（"这里没有这个文件"，而他明明有，只是那台没应）；
+      //   而 `/api/apps` 那个预闸对同一个病说的是 503 ⇒ 三处要一个口径，见上面那段）。
+      if (e instanceof BoxError) {
         denyBox(res);
         return;
       }

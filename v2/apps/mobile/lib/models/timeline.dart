@@ -11,6 +11,8 @@
 //
 // ⚠️ 纯逻辑，**不许 import flutter/material**（禁令 1）。要进 `test/unit` 硬闸。
 
+import 'dart:collection';
+
 import 'chat_queue.dart';
 import 'message_state.dart';
 import 'notice.dart';
@@ -366,11 +368,126 @@ TurnGroup? turnGroupOf(Iterable<TimelineItem> items, String messageId) {
   return null;
 }
 
+/// **带版本号的列表**：任何**写**操作都会把 [version] +1。
+///
+/// 🔴 为什么要有它（契约 `docs/dev/143-TIMELINE-VIEW-CACHE.md` · `#201` 那笔账的后续）：
+///    `items` 那份"该画哪几条"的视图**每次访问都要 `where + sort` 一遍**（O(N log N)），
+///    而它**一次 build 里会被读十几次**（`grep 'c\.items' screens/chat_screen.dart`）。
+///    想按版本缓存它，就得知道"那些条目动过没有"—— 而 `_items` 有十几处写点，
+///    在每一处手写一句"作废缓存"**迟早会漏一处**，而漏一处的表现是
+///    **屏幕上是旧内容**（这个项目最忌的那一类：页面在说假话）。
+///    ⇒ 把版本号做进**容器自己**：`ListBase` 的 `add` / `removeWhere` / `sort` / `[]=`
+///      全都经由 `length=` 与 `[]=`（Dart 的 `ListBase` 就是这么实现的）
+///      ⇒ 两个 setter 各 +1，**结构上不可能漏**。
+class _VersionedList<E> with ListMixin<E> {
+  _VersionedList(this._inner);
+
+  final List<E> _inner;
+  int version = 0;
+
+  @override
+  int get length => _inner.length;
+
+  /// ⚠️ **只许缩短**：`ListMixin` 的 `add` 默认实现是 `length = length + 1`，
+  ///    而 `List<T>` 用 `length=` 变长会往里塞 `null`（`T` 非空 ⇒ 当场抛
+  ///    `type 'Null' is not a subtype`）。⇒ 增长的几条路**自己实现**（下面那四个），
+  ///    而这里对"变长"直接**大声拒绝**（好过留一个看不懂的空指针）。
+  @override
+  set length(int v) {
+    if (v > _inner.length) {
+      throw UnsupportedError('_VersionedList 只支持缩短长度 —— 要加请用 add / insert');
+    }
+    _inner.length = v;
+    version += 1;
+  }
+
+  @override
+  E operator [](int i) => _inner[i];
+
+  @override
+  void operator []=(int i, E v) {
+    _inner[i] = v;
+    version += 1;
+  }
+
+  @override
+  void add(E v) {
+    _inner.add(v);
+    version += 1;
+  }
+
+  @override
+  void addAll(Iterable<E> it) {
+    _inner.addAll(it);
+    version += 1;
+  }
+
+  @override
+  void insert(int i, E v) {
+    _inner.insert(i, v);
+    version += 1;
+  }
+
+  @override
+  void insertAll(int i, Iterable<E> it) {
+    _inner.insertAll(i, it);
+    version += 1;
+  }
+
+  @override
+  void clear() {
+    _inner.clear();
+    version += 1;
+  }
+}
+
+/// **带版本号的集合**（同一个道理，见 [_VersionedList]）。
+class _VersionedSet<E> with SetMixin<E> {
+  _VersionedSet(this._inner);
+
+  final Set<E> _inner;
+  int version = 0;
+
+  @override
+  bool add(E v) {
+    final added = _inner.add(v);
+    version += 1;
+    return added;
+  }
+
+  @override
+  bool contains(Object? v) => _inner.contains(v);
+
+  @override
+  E? lookup(Object? v) => _inner.lookup(v);
+
+  @override
+  bool remove(Object? v) {
+    final gone = _inner.remove(v);
+    version += 1;
+    return gone;
+  }
+
+  @override
+  Iterator<E> get iterator => _inner.iterator;
+
+  @override
+  int get length => _inner.length;
+
+  @override
+  Set<E> toSet() => _inner.toSet();
+}
+
 /// 时间线本体。
 class Timeline {
-  final List<TimelineItem> _items = [];
+  final _VersionedList<TimelineItem> _items = _VersionedList(<TimelineItem>[]);
   final Set<int> _seenSeq = {};
   int _lastSeq = 0;
+
+  /// `items` 那份视图的缓存（键 = 两个容器的版本号 —— 见 [_VersionedList]）。
+  List<TimelineItem>? _viewCache;
+  int _viewCacheListV = -1;
+  int _viewCacheSetV = -1;
 
   /// 被删掉（进了回收站）的那些 id —— **藏起来，不销毁**（契约 §8.3）。
   ///
@@ -379,7 +496,7 @@ class Timeline {
   ///      挂布尔的话那时无处可挂，后到的条目会照样画出来（屏幕说假话）；
   ///    · 恢复只是把这几个 id 从集合里拿掉，**一个字节都不用重建**（契约 §8.3：
   ///      恢复要立刻、且不许再要一次网络）。
-  final Set<String> _hiddenIds = {};
+  final _VersionedSet<String> _hiddenIds = _VersionedSet(<String>{});
 
   /// 服务端说"这一轮开始了"——**内部状态名**（`process_words.dart` 负责翻成人话）。
   ///
@@ -536,11 +653,21 @@ class Timeline {
   ///    于是"藏起来"这件事**只有一处**，不可能某条路漏了它。
   ///    （被藏起来的条目仍然在 `_items` 里：恢复要立刻、不许再要一次网络。）
   List<TimelineItem> get items {
+    // ★ **按版本缓存**（见 `_VersionedList` 那段）：两个容器的版本号都没变 ⇒
+    //   上一次算出来的那一份**原样返回**（`identical` 为真）。
+    //   ⚠️ 返回的是**同一份列表** ⇒ 调用方**不许改它**（要改请自己 `toList()`）：
+    //   这一份是"这一刻该画什么"的快照，不是谁的私有工作区。
+    if (_viewCache != null && _viewCacheListV == _items.version && _viewCacheSetV == _hiddenIds.version) {
+      return _viewCache!;
+    }
     final list = _items.where(_visible).toList()
       ..sort((a, b) {
         final c = a.seq.compareTo(b.seq);
         return c != 0 ? c : a.tie.compareTo(b.tie);
       });
+    _viewCache = list;
+    _viewCacheListV = _items.version;
+    _viewCacheSetV = _hiddenIds.version;
     return list;
   }
 
