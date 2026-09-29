@@ -9,6 +9,7 @@
 //    ⚠️ 唯一钉死的"不同"是**桌面第一眼那三个内置的**（设置/发现/我自己那台）：
 //       它们永远同时在屏幕上，撞色了就是一眼看得见的毛病。
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/app_spec.dart';
 import 'package:hupo_app/models/app_tint.dart';
@@ -52,6 +53,17 @@ void main() {
         greaterThan(0.3),
         reason: '$c 与墨色的对比不够',
       );
+    }
+  });
+
+  test('④·补 🔴 **够鲜**（主人 2026-09-29："app颜色我想用明亮一点的色系"）', () {
+    // ⚠️ 这是**棘轮**：第一版那一族是"暖、浅、低饱和"（饱和度只有 0.10–0.30，看着发灰），
+    //    主人看过真机之后要"明亮一点" ⇒ 下限钉在这儿，别悄悄滑回"灰扑扑"。
+    //    门槛住这一份（判据不是产品参数）；**字体色仍是墨色**（上面那条亮度判据管着）。
+    for (final c in appTints) {
+      final sat = HSVColor.fromColor(c).saturation;
+      expect(sat, greaterThanOrEqualTo(0.40),
+          reason: '$c 的饱和度只有 ${sat.toStringAsFixed(2)} —— 又滑回"发灰"那一族了');
     }
   });
 
