@@ -230,6 +230,12 @@ await db('run', 'CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body T
   用行尾 `\` 把这两半写在**两行**（脚本是对的）⇒ 它量的是续行语法，不是它声明的那件事。
   `#207` 那一批把它改坏之后**没人再跑客户端闸**（那一批没动 Dart）⇒ 这条红躺了一整轮。
   ⇒ 判据改成"先把逻辑行拼起来再查"（守的东西一个字没变：拿掉那个 define 照样红）。
+* 客户端（那张卡）：`lib/models/app_grants.dart`（新：注册制的纯逻辑与回执词汇）·
+  `lib/models/app_spec.dart`（`granted` **可空**：`null`＝老服务端没回＝**不知道**）·
+  `lib/models/space_words.dart`（文案唯一出处）· `lib/services/api.dart`（`appGrant`）·
+  `lib/widgets/app_grants_card.dart`（新：那张卡）· `lib/screens/settings_screen.dart` ＋
+  `lib/screens/chat_screen.dart`（接线）· 判据 `test/unit/app_grants_test.dart`（16）＋
+  `test/widget/settings_grants_test.dart`（11）＋ `test/widget/accessibility_test.dart`（+10）。
 * `docs/handbook/08-SPEC.md` §14 与 `CHANGELOG.md` 同步（手册那两处原来写着
   `connect-src 'none'`）。
 * **上线读数（非侵入那三条 · 2026-09-30）**：`POST /api/app-grant` 没令牌 ⇒ **401**；
