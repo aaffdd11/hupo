@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CATCHUP_RENDER, markCatchUp, planBackfill, planResume } from '../src/resume.js';
+import { CATCHUP_RENDER, FIRST_OPEN_MAX, markCatchUp, planBackfill, planResume } from '../src/resume.js';
 
 const log = [
   { type: 'user/echo', seq: 1 },
@@ -13,11 +13,44 @@ const log = [
 ];
 
 test('sinceSeq = 0（第一次打开）⇒ 全量历史，但**不标** catchUp', () => {
+  // ⚠️ 2026-09-29 补一句：这一条现在管的是"**不超过上限**时是全量"。
+  //    超过上限时只给**最近一段** —— 见下面那条（契约 `docs/dev/141-HISTORY-FIRST-OPEN.md`）。
   const r = planResume({ events: log, sinceSeq: 0 });
   assert.equal(r.frames.length, 4);
   assert.equal(r.catchUp, false, '★ 首次打开不是"断线补发"——那是历史本身');
   assert.equal(r.reset, false);
   assert.equal(r.maxSeq, 4);
+});
+
+test('🔴 首次打开只给**最近一段**（存量历史不许整条推过来 · 2026-09-29 真缺陷）', () => {
+  const big = Array.from({ length: 5000 }, (_, i) => ({ type: 'message/text', seq: i + 1 }));
+  const r = planResume({ events: big, sinceSeq: 0 });
+  assert.equal(r.frames.length, FIRST_OPEN_MAX, '首屏的条数必须是个常数（与账龄无关）');
+  assert.equal(r.truncated, true);
+  assert.equal(r.frames[r.frames.length - 1].seq, 5000, '给的必须是**最近**那一段（最后一条 = 最新的）');
+  assert.equal(
+    r.frames[0].seq,
+    5000 - FIRST_OPEN_MAX + 1,
+    '而且是**连续**的一段（不是抽稀 —— 抽稀会让界面上少几句而看不出来）',
+  );
+  assert.equal(r.catchUp, false, '首次打开仍然不是补发（P-h 一个字没改）');
+  assert.equal(r.maxSeq, 5000, 'maxSeq 还是真的最新那条（客户端游标要靠它）');
+});
+
+test('🔴 断线重连那条补发**不截**（截了中间那一段会看起来是连着的 —— 那是说假话）', () => {
+  const big = Array.from({ length: 5000 }, (_, i) => ({ type: 'message/text', seq: i + 1 }));
+  const r = planResume({ events: big, sinceSeq: 100 });
+  assert.equal(r.frames.length, 4900);
+  assert.equal(r.truncated, false);
+  assert.equal(r.catchUp, true);
+});
+
+test('恰好等于上限 ⇒ 原样给（不动它、也不标截断）', () => {
+  const exact = Array.from({ length: FIRST_OPEN_MAX }, (_, i) => ({ type: 'message/text', seq: i + 1 }));
+  const r = planResume({ events: exact, sinceSeq: 0 });
+  assert.equal(r.frames.length, FIRST_OPEN_MAX);
+  assert.equal(r.truncated, false);
+  assert.equal(r.frames[0].seq, 1, '不多不少时**第一条就是最老的**（别把能给的也丢了）');
 });
 
 test('★ sinceSeq > 0（断线重连）⇒ 才标 catchUp', () => {

@@ -14,12 +14,44 @@
 // 这两条都是纯函数，故意不碰 IO：好测，也容易进硬闸。
 
 /**
+ * **首次打开最多推多少条**（契约 `docs/dev/141-HISTORY-FIRST-OPEN.md`）。
+ *
+ * 🔴 **2026-09-29 主人报的真缺陷**：*「加载历史聊天记录出现过载。应该是只抓取一部分存量历史记录。」*
+ *    真机读数（同一台机器、同一个客户端、只有历史长度不同）——
+ *
+ * | 存量历史 | 首屏主线程的帧间隔（真浏览器 rAF 量的） | 堆 |
+ * |---|---|---|
+ * | 131 条 | 中位 **16.7ms**（60fps） | 27MB |
+ * | 15000 条 | 中位 **128.5ms**（≈8fps，最差 139ms） | 74MB |
+ *
+ * ⇒ 卡的不是网络（3MB 一会儿就传完了），是**客户端要一条一条地建、一帧一帧地画**：
+ *    它每收一条就 `notifyListeners()`，而那一屏要按"整条时间线"重排一次
+ *    ⇒ 收 N 条的代价是 **O(N²)** 那一档。
+ *
+ * ⇒ 规矩：**首次打开只给最近这一段的"存量"**（`FIRST_OPEN_MAX`），
+ *    更早的等他**往上翻**时按页取（`planBackfill` ＋ 客户端那条"翻页"路，
+ *    两条都已经在了）。这样首屏的 N 是个常数，与账龄无关。
+ *
+ * ⚠️ **只截"首次打开"**（`sinceSeq === 0`）：那条的路是"这是历史"。
+ *    **断线重连那条补发（`sinceSeq > 0`）不截** —— 它带着"你不在的时候发生了什么"
+ *    的语义，截了会让中间那一段**看起来是连着的**（那是说假话，比慢更坏）。
+ *
+ * ⚠️ 数值住代码（手册纪律 1）。取这个量级的理由：它与客户端本地那份缓存上限、
+ *    以及服务端一页（`planBackfill` 的默认页）同一个量级 —— 首屏够翻好几屏，
+ *    而"再往前的"本来就该按需取。
+ */
+export const FIRST_OPEN_MAX = 200;
+
+/**
  * @param {object} o
  * @param {Array<{seq?: number, type: string}>} o.events  已落盘的事件（顺序：seq 升序）
  * @param {number} o.sinceSeq  客户端上次收到的号（0 = 第一次打开）
- * @returns {{frames: Array<object>, catchUp: boolean, reset: boolean, maxSeq: number}}
+ * @param {number} [o.firstOpenMax] 首次打开最多给几条（默认 `FIRST_OPEN_MAX`）
+ * @returns {{frames: Array<object>, catchUp: boolean, reset: boolean, maxSeq: number, truncated: boolean}}
+ *   ⚠️ `truncated` 只是**给服务端自己看/记**的（协议字段冻结：不给客户端加字段）——
+ *      客户端那边"上面还有更早的"本来就有出口（往上翻 ⇒ `?before=` 取一页）。
  */
-export function planResume({ events, sinceSeq = 0 }) {
+export function planResume({ events, sinceSeq = 0, firstOpenMax = FIRST_OPEN_MAX }) {
   if (!Number.isInteger(sinceSeq) || sinceSeq < 0) {
     throw new Error(`sinceSeq 必须是非负整数，收到 ${sinceSeq}`);
   }
@@ -29,16 +61,24 @@ export function planResume({ events, sinceSeq = 0 }) {
   // 客户端的号跑到我们前面去了 ⇒ 它的世界和我们的不是同一个。
   // 明确要求它重置，**不能**当作"没有新东西"。
   if (sinceSeq > maxSeq) {
-    return { frames: [], catchUp: false, reset: true, maxSeq };
+    return { frames: [], catchUp: false, reset: true, maxSeq, truncated: false };
   }
 
-  const frames = persisted.filter((e) => e.seq > sinceSeq);
+  let frames = persisted.filter((e) => e.seq > sinceSeq);
+
+  // ★ **首次打开只给最近一段**（见 `FIRST_OPEN_MAX` 那段）。**重连那条不截**。
+  let truncated = false;
+  const cap = Number.isInteger(firstOpenMax) && firstOpenMax > 0 ? firstOpenMax : null;
+  if (sinceSeq === 0 && cap !== null && frames.length > cap) {
+    frames = frames.slice(frames.length - cap);
+    truncated = true;
+  }
 
   // ⚠️ P-h：只有"曾经连过、断线后重连"才算补发。
   //    sinceSeq === 0 表示"第一次打开"——那是历史，不是"你不在的时候"。
   const catchUp = sinceSeq > 0;
 
-  return { frames, catchUp, reset: false, maxSeq };
+  return { frames, catchUp, reset: false, maxSeq, truncated };
 }
 
 /**
