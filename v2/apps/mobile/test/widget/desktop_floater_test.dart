@@ -144,12 +144,18 @@ void main() {
     await _pump(tester);
     final p = DshPalette.light;
 
-    // ① 输入框：实底（`filled` + `fillColor`），不是透的
+    // ① **消息框**：实底 ＋ 圆角（2026-09-29 起"那一圈 + 实底"归外面那层容器，
+    //    输入框自己 `border: none` —— 理由见 `composer.dart` 的 `_messageBox`：
+    //    网页的输入法 DOM 会盖住**整个 `TextField` 的矩形**，所以按钮必须住在它外面）。
+    final box = tester.widget<Container>(find.byKey(chatMessageBoxKey));
+    final dec = box.decoration! as BoxDecoration;
+    expect(dec.color, p.bgLayer2, reason: '★ 消息框没实底 —— bar 透了它也跟着透');
+    expect(dec.borderRadius, isNotNull);
+    // 输入框自己**不许**再有底（有的话就是"两层底"，而且那个矩形又会把按钮圈进去）
     final field = tester.widget<TextField>(
       find.descendant(of: find.byType(Composer), matching: find.byType(TextField)),
     );
-    expect(field.decoration!.filled, true, reason: '★ 输入框没实底 —— bar 透了它也跟着透');
-    expect(field.decoration!.fillColor, p.bgLayer2);
+    expect(field.decoration!.filled, isNot(true), reason: '★ 输入框又自己上底了');
 
     // ② 话筒：**正方形圆角框 + 实底**（2026-09-29 主人：*"右边的录音按钮也要改成
     //    正方形圆角框……做大一些"*）。⚠️ 它现在不是 `IconButton` 了（是 Material + InkWell，

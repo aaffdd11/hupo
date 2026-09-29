@@ -115,6 +115,9 @@ class Composer extends StatefulWidget {
   State<Composer> createState() => _ComposerState();
 }
 
+/// **消息框**那个圆角容器的 key（判据用它量"发送/读出来在不在框里、在不在输入框里"）。
+const Key chatMessageBoxKey = ValueKey('chat-message-box');
+
 /// 「发送」那颗按钮的 key（判据认它；它只在"有话要说"时出现在最右那一格）。
 const Key chatSendKey = ValueKey('chat-send');
 
@@ -303,7 +306,7 @@ class _ComposerState extends State<Composer> {
               //   右侧是语音按钮。这些按钮就不是透明的了。"*）：
               //   ⇒ 这一行现在是**三段**：`[home] [框（发送在框里）] [话筒]`，
               //     话筒在**这一行的最右**（不在框里面了），而且三样都是**不透明**的。
-              Expanded(child: _field(look)),
+              Expanded(child: _messageBox(theme, look)),
               const SizedBox(width: d.gapS),
               // 🔴 2026-09-29 **主人当场更正**：*"录音按钮一直在右侧，点击结束指示便会继续录音。
               //   发送按钮在消息框里面。"*
@@ -400,7 +403,57 @@ class _ComposerState extends State<Composer> {
     ),
   );
 
-  /// **框**（主人 2026-09-24：*"语音按钮放在聊天框内部的右侧"*）。
+  /// 🔴 **"消息框"是一层圆角容器，输入框只是它里面的一段**（2026-09-29 修一个真缺陷）。
+  ///
+  /// ── 为什么非要这么分（**别改回去**）──────────────────────────
+  /// 上一版把「发送」放进 `TextField` 的 `suffixIcon`（那是最省事的写法），
+  /// **在网页上那颗按钮点不到** —— 真机读数（线上 1280 宽）：
+  /// ```
+  ///   发送钮的矩形      [900, 554, 52×36]
+  ///   Flutter web 盖的那个 <textarea>  [328, 550, 630×50]   ← 把按钮整个盖住
+  ///   document.elementFromPoint(按钮中心) ⇒ TEXTAREA（pointer-events: all）
+  /// ```
+  /// ⇒ **浏览器**的输入法那一层是**真的 DOM 元素**，位置正好是**整个 `TextField` 的矩形**
+  ///   （含 suffix ⇒ 含里面那两颗按钮）⇒ 手指落在上面的那一下**根本到不了 Flutter**。
+  ///   ⚠️ 手机上没有这层 DOM ⇒ 同一份代码在安卓上是好的（这就是它一直没被发现的原因）。
+  ///   ⚠️ **判据也测不出来**（widget 测试里没有那层 DOM）⇒ 这一条只能靠**结构**钉住：
+  ///      界面里的判据写着"发送/读出来**不许**是 `TextField` 的后代"。
+  ///
+  /// ⇒ 现在：**外面一圈圆角容器**（看起来就是那个"消息框"）＋ 里面 `Row[输入框, 读出来, 发送]`。
+  ///   视觉上发送**还在消息框里面**（主人 2026-09-29：*"发送按钮在消息框里面。"*），
+  ///   而它在 DOM 那一层**不在输入框的矩形里** ⇒ 点得到。
+  Widget _messageBox(ThemeData theme, DshLook look) {
+    final p = look.palette;
+    return Container(
+      key: chatMessageBoxKey,
+      decoration: BoxDecoration(
+        // ★ 实底（bar 是半透明的；框要是也透，字就压在桌面/壁纸上）
+        color: p.bgLayer2,
+        borderRadius: BorderRadius.circular(d.radiusField),
+        border: Border.all(color: p.borderL2),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(child: _field(look)),
+          // ★ **读出来**（主人 2026-09-23 定案：替掉原来演示用的「听筒 / 扬声器」）。
+          //   契约 `docs/dev/68-SPEAK.md`。**念不了就不画**（界面上不许有按不动的东西）。
+          //   ⚠️ 它原来也住在 `TextField` 的 suffix 里 —— **同一个病**（网页上点不到）⇒ 一起搬出来。
+          if (widget.canSpeak) _speakerButton(p),
+          // 🔴 「发送」（主人 2026-09-29：*"发送按钮缩小一点，用琥珀色。文字写发送。"* ＋
+          //   *"发送按钮在消息框里面。"*）：**一直在**（没话要说 ⇒ 灰的、按不动），
+          //   有话要说 ⇒ 琥珀 ＋ 两个字。位置固定 ⇒ 界面不跳（D4.8）。
+          Padding(
+            padding: const EdgeInsets.only(right: 4, bottom: 4),
+            child: _sendButton(theme, p),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// **输入框那一格**（主人 2026-09-24：*"语音按钮放在聊天框内部的右侧"* ——
+  ///   2026-09-29 起那两颗按钮**搬到了外面那层容器里**，见 [_messageBox]）。
   ///
   /// 🔴 两条老规矩照旧：
   ///   ① **永远不锁**（D5.14）—— 网不好、断线、在重连，都不该让人打不了字；
@@ -431,29 +484,11 @@ class _ComposerState extends State<Composer> {
     decoration: InputDecoration(
       hintText: widget.hint ?? '说点什么',
       hintStyle: dshTextStyle(look.scale.at(DshTypes.base), look.palette.labelTertiary),
-      border: const OutlineInputBorder(),
+      // ⚠️ **没有边框、没有底**：那一圈与实底归外面那层 `_messageBox` 的容器
+      //    （这样"消息框"是一整块，而输入框自己的矩形里**没有按钮** —— 见那边那段批注）。
+      border: InputBorder.none,
       isDense: true,
-      // ★ 2026-09-29：**框自己是实底**（主人："这些按钮就不是透明的了"）——
-      //   底下那条 bar 是半透明的，框要是也透，字就压在桌面/壁纸上。
-      filled: true,
-      fillColor: look.palette.bgLayer2,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-      // ⚠️ 框里那两颗按钮的**下限**：命中区 ≥44（D3.6）。
-      //    不写这一条，`isDense` 的框会把它们压小 —— a11y 那道硬闸当场会抓。
-      suffixIconConstraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-      suffixIcon: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // ★ **读出来**（主人 2026-09-23 定案：替掉原来演示用的「听筒 / 扬声器」）。
-          //   契约 `docs/dev/68-SPEAK.md`。**念不了就不画**（界面上不许有按不动的东西）。
-          if (widget.canSpeak) _speakerButton(look.palette),
-          // 🔴 2026-09-29 主人：*"发送按钮在消息框里面。"* ⇒ 它住**框里的最右**。
-          //   · **一直在**（2026-09-24 那条原话：*"一开始是灰色的"*）：没话要说时是灰的、按不动
-          //     ⇒ 位置固定，界面不跳（D4.8）；
-          //   · 有话要说 ⇒ **琥珀色** ＋ 两个字（`sendWords`）。
-          _sendButton(Theme.of(context), look.palette),
-        ],
-      ),
     ),
   );
 

@@ -31,6 +31,28 @@ double _fieldLeft(WidgetTester tester) =>
 double _fieldWidth(WidgetTester tester) =>
     tester.getSize(find.byType(TextField)).width;
 
+/// 🔴 **那条真缺陷的结构级判据**（2026-09-29 主人报"文字已经写好了，但是无法发送"）。
+///
+/// **根因**：发送钮原来住在 `TextField` 的 `suffixIcon` 里。**网页上点不到** ——
+/// Flutter web 的输入法那一层是**真的 `<textarea>`**，位置正好是**整个 `TextField` 的矩形**
+/// （线上 1280 宽实测：发送钮 `[900,554,52×36]`、那个 textarea `[328,550,630×50]` —— 整个盖住，
+/// `document.elementFromPoint(按钮中心)` 回的是 `TEXTAREA`）。
+/// ⚠️ 手机上**没有**那层 DOM ⇒ 同一份代码在安卓上是好的；widget 判据里也没有那层 DOM
+/// ⇒ **只有这条"结构"判据钉得住它**（别再把它放回 `TextField` 里面）。
+void expectButtonsOutsideField(WidgetTester tester) {
+  expect(
+    find.descendant(of: find.byType(TextField), matching: find.byKey(chatSendKey)),
+    findsNothing,
+    reason: '★ 发送钮回到 `TextField` 里面了 —— 网页上它会被输入法那层 DOM 盖住、点不到',
+  );
+  expect(find.byKey(chatMessageBoxKey), findsOneWidget, reason: '消息框那层容器不在了');
+  expect(
+    find.descendant(of: find.byKey(chatMessageBoxKey), matching: find.byKey(chatSendKey)),
+    findsOneWidget,
+    reason: '发送钮**还在消息框里**（主人 2026-09-29：*"发送按钮在消息框里面。"*）',
+  );
+}
+
 /// **发送钮此刻按不按得动**（灰 = `onPressed == null`）。
 /// ⚠️ 它**一直在**（在消息框里面）：没话要说时是**灰的**，不是"不见了"。
 bool _sendReady(WidgetTester tester) =>
@@ -43,11 +65,8 @@ void main() {
     expect(find.byKey(chatMicButtonKey), findsOneWidget, reason: '★ 最右该一直是录音');
     // 发送：在**框里**（是那个 `TextField` 的后代），而且一开始就在（灰的）
     expect(find.byKey(chatSendKey), findsOneWidget, reason: '★ 发送该一直在框里（一开始是灰的）');
-    expect(
-      find.descendant(of: find.byType(TextField), matching: find.byKey(chatSendKey)),
-      findsOneWidget,
-      reason: '★ 发送不在消息框里面（主人：*"发送按钮在消息框里面。"*）',
-    );
+    // 🔴 结构：**在消息框里**，但**不在输入框里**（后者在网页上点不到 —— 见上面那段）
+    expectButtonsOutsideField(tester);
     expect(_sendReady(tester), false, reason: '★ 一开始是灰的、按不动');
 
     await tester.enterText(find.byType(TextField), '在吗');
