@@ -112,7 +112,7 @@
 ### 2.2 服务端
 
 ```
-起法        = scripts/restart-core.sh   （**不用 systemd**；默认**保留日志**）
+起法        = scripts/restart-core.sh   （默认**保留日志**；它认单元，见下面那条）
 入口        = v2/services/core/src/serve.js
 端口        = 127.0.0.1:8020（HUPO_PORT；只监听本机）
 对外        = https://w.stalkerai.cn —— frp 隧道（~/.local/frp/frpc-w.toml）
@@ -123,7 +123,20 @@
 ```
 
 ⚠️ **`restart-core.sh` 自带只读预检**：新的一版**起不来就不停旧的**（服务留在 200，而不是整站 502）。
-⚠️ **它不在 systemd 监管下**（见本文开头那条）⇒ **别用 `systemctl --user stop` 去清 scope**。
+⚠️ **它现在归 systemd 管**（用户单元 `hupo-core.service`，模板在 `deploy/systemd/`）——
+本文开头那句"不在 systemd 监管下"**已经过时**。⇒ **别用 `systemctl --user stop` 去清 scope**（那条禁令照旧）。
+
+🔴 **归 systemd 之后有一条最容易咬人的事实**：**服务自己的 `PATH` 很短**
+（用户单元那份，**没有 nvm 那个 `bin`**），而本机 `node` 与 `dsh` 只住在那里。
+⇒ **服务 spawn 出去的任何东西**：要么给**绝对路径**，要么**自己把 `PATH` 补齐**。
+⚠️ 这条**不是洁癖**：2026-09-29 的事故就是它 —— `dsh` 用裸名 ⇒ `spawn ENOENT`；
+改用绝对路径之后**还是**起不来，因为 `dsh` 的 shebang 是 `#!/usr/bin/env node`，
+而孩子的 `PATH` 里没有 `node`（`/usr/bin/env: 'node': No such file or directory`）。
+**两层的症状一模一样**（用户只看到"接不上活"）。⇒ 现在：`dshBin` 默认取
+**`node` 同目录那个**，开机的 `preflight` **找不到就拒绝启动**，孩子的 `PATH` 由
+`agent-runtime.js` 补上 `node` 与 `dsh` 那两格。契约与真机读数：`docs/dev/140-AGENT-BIN.md`。
+⚠️ **从 shell 手动起服务是测不出这条的**（你的 shell 有 nvm 的 `PATH`）——
+判据必须**拿服务那一份环境**跑（`/proc/<pid>/environ`）。
 
 
 ### 2.3 客户端

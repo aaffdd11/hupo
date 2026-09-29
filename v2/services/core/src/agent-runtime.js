@@ -34,6 +34,7 @@
 
 import { spawn as nodeSpawn } from 'node:child_process';
 import nodeFs from 'node:fs';
+import nodePath from 'node:path';
 import { EventEmitter } from 'node:events';
 
 // ★ **"它是不是被挤掉的"要有证据**（账 #33 的后半）：拿内核那个 cgroup 计数当证据，
@@ -62,27 +63,37 @@ export function resolveDshBin() {
  *    ——那比"没设"更难查（能力层会拿到一个字面量 "undefined" 的路径）。
  */
 export function agentEnv(cfg = {}) {
-  return childEnv({
-    home: cfg.dshHome,
-    // ★ 能力层那三个变量（`hupo-capabilities.yml` 用 `!!js process.env.…` 读它们）。
-    extra: {
-      HUPO_NODE_BIN: process.execPath,
-      ...(cfg.ledgerServerPath ? { HUPO_LEDGER_SERVER: cfg.ledgerServerPath } : {}),
-      ...(cfg.ledgerSocketPath ? { HUPO_LEDGER_SOCKET: cfg.ledgerSocketPath } : {}),
-      // ★ 小程序那几条工具（乙-2）：脚本路径 + 那条域套接字。**都不是秘密**。
-      ...(cfg.appsServerPath ? { HUPO_APPS_SERVER: cfg.appsServerPath } : {}),
-      ...(cfg.appsSocketPath ? { HUPO_APPS_SOCKET: cfg.appsSocketPath } : {}),
-      // ★ **画图那一支**（P1-27 后半）：它自己那个文件 ＋ **同一条**通道
-      ...(cfg.imageServerPath ? { HUPO_IMAGE_SERVER: cfg.imageServerPath } : {}),
-      // ★ **这一间是哪一间**（`scope`）：那几条工具把它原样带回来 ⇒ 用量账
-      //   才知道"这一张图是哪个 app 叫的"（P2-3 一个账本三个计数器）。
-      //   ⚠️ 它**不是秘密**（就是房间名，客户端也看得到）⇒ 走 env 不破纪律。
-      // ★ **`HUPO_SCOPE` 是同一件事的通用名字**（2026-09-25 加）：账本那支工具
-      //   也要知道"我这一轮是在哪一间里跑的"。
-      ...(cfg.scope ? { HUPO_APPS_SCOPE: String(cfg.scope) } : {}),
-      HUPO_SCOPE: String(cfg.scope ?? 'main'),
-    },
-  });
+  const extra = {
+    HUPO_NODE_BIN: process.execPath,
+    ...(cfg.ledgerServerPath ? { HUPO_LEDGER_SERVER: cfg.ledgerServerPath } : {}),
+    ...(cfg.ledgerSocketPath ? { HUPO_LEDGER_SOCKET: cfg.ledgerSocketPath } : {}),
+    // ★ 小程序那几条工具（乙-2）：脚本路径 + 那条域套接字。**都不是秘密**。
+    ...(cfg.appsServerPath ? { HUPO_APPS_SERVER: cfg.appsServerPath } : {}),
+    ...(cfg.appsSocketPath ? { HUPO_APPS_SOCKET: cfg.appsSocketPath } : {}),
+    // ★ **画图那一支**（P1-27 后半）：它自己那个文件 ＋ **同一条**通道
+    ...(cfg.imageServerPath ? { HUPO_IMAGE_SERVER: cfg.imageServerPath } : {}),
+    // ★ **这一间是哪一间**（`scope`）：那几条工具把它原样带回来 ⇒ 用量账
+    //   才知道"这一张图是哪个 app 叫的"（P2-3 一个账本三个计数器）。
+    //   ⚠️ 它**不是秘密**（就是房间名，客户端也看得到）⇒ 走 env 不破纪律。
+    // ★ **`HUPO_SCOPE` 是同一件事的通用名字**（2026-09-25 加）：账本那支工具
+    //   也要知道"我这一轮是在哪一间里跑的"。
+    ...(cfg.scope ? { HUPO_APPS_SCOPE: String(cfg.scope) } : {}),
+    HUPO_SCOPE: String(cfg.scope ?? 'main'),
+  };
+  const env = childEnv({ home: cfg.dshHome, extra });
+  // 🔴 `dsh` 自己那一格也放最前面（契约 `140`）：
+  //    它是 **node CLI**（`#!/usr/bin/env node`），而它内部还会按名字起东西
+  //    ⇒ `PATH` 里得有它自己那一格。`childEnv` 已经补了 `node` 那一格，
+  //    这里补的是"哪一份 `dsh`"那一格。
+  let dshDir = '';
+  try {
+    const bin = String(cfg.dshBin ?? '');
+    if (bin.includes(nodePath.sep)) dshDir = nodePath.dirname(bin);
+  } catch {
+    dshDir = '';
+  }
+  if (dshDir) env.PATH = withNodeDirOnPath(env.PATH, [dshDir]);
+  return env;
 }
 
 /**
@@ -129,12 +140,46 @@ export function agentArgs(cfg = {}) {
 }
 
 /**
+ * **给子进程的 `PATH` 补上"我们自己的 `node`"那一格**（契约 `docs/dev/140-AGENT-BIN.md`）。
+ *
+ * 🔴 2026-09-29 真机事故的**第二层**：`dsh` 的第一行是 `#!/usr/bin/env node`。
+ *    服务归 **systemd** 管之后，用户单元那份 `PATH` 里**没有 nvm 那个 `bin`**
+ *    ⇒ 就算 `dsh` 用**绝对路径**找到了，内核也会按 shebang 再去 `PATH` 里找 `node`，
+ *    找不到就 `/usr/bin/env: 'node': No such file or directory`（**退出码 127**）。
+ *    ⚠️ 现象与"找不到 dsh"**一模一样**（都是 agent 起不来 ⇒ 用户看到"接不上活"）
+ *      ⇒ 这两层必须一起修，只修一层会在真机上看起来"没修好"。
+ *
+ * ⇒ 规则：**凡是我们要 spawn 的东西，它的 `PATH` 里必须能看见跑我们那个 `node`。**
+ *
+ * @param {string} pathValue 原来的 `PATH`
+ * @param {string[]} [dirs] 额外要放最前面的目录（例如 `dshBin` 那一格）
+ * @returns {string}
+ */
+export function withNodeDirOnPath(pathValue, dirs = []) {
+  let nodeDir = '';
+  try {
+    nodeDir = nodePath.dirname(process.execPath);
+  } catch {
+    nodeDir = '';
+  }
+  const out = [];
+  for (const d of [...dirs, nodeDir, ...String(pathValue ?? '').split(nodePath.delimiter)]) {
+    if (typeof d === 'string' && d !== '' && !out.includes(d)) out.push(d);
+  }
+  return out.join(nodePath.delimiter);
+}
+
+/**
  * 该给子进程哪些环境变量。
  *
  * 手册 §4.4：**先做减法**——先传全部，只删密钥类。
  * 为什么不能直接列白名单：`dsh` 是 node CLI，
  * **丢 `PATH` 就回到 ENOENT**（而那个 ENOENT 还和二义的 cwd 混在一起，很难查）。
  * 严格白名单要先把生产机上的变量盘一遍再做。
+ *
+ * 🔴 但**只传不改是不够的**（2026-09-29）：`PATH` 照抄过来，而服务自己的 `PATH`
+ *    可能**短得看不见 `node`**（systemd 用户单元就是这样）⇒ 孩子按 shebang 找不到 `node`。
+ *    ⇒ 这里**至少把它自己那一格补上**（`withNodeDirOnPath`）。
  */
 export function childEnv({ home, extra = {} } = {}) {
   const env = { ...process.env };
@@ -142,6 +187,7 @@ export function childEnv({ home, extra = {} } = {}) {
     if (/(_API_KEY|_TOKEN|_SECRET)$/i.test(k)) delete env[k];
   }
   if (home) env.DSH_HOME = home;
+  env.PATH = withNodeDirOnPath(env.PATH);
   return { ...env, ...extra };
 }
 

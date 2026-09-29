@@ -309,7 +309,25 @@ test('★ env 先做减法：只删密钥类，**PATH/HOME 一定留着**', () =
     assert.equal(env.HUPO_TEST_SECRET, undefined);
     assert.equal(env.HUPO_TEST_PLAIN, 'keep-me');
     // ★ 丢 PATH 就回到 ENOENT —— 而那是最难查的一种
-    assert.equal(env.PATH, prev.PATH);
+    //
+    // 🔴 2026-09-29 改了这句断言（契约 `docs/dev/140-AGENT-BIN.md`）：
+    //    它原来写的是 `env.PATH === prev.PATH`（**逐字节相等**）。
+    //    那条"相等"把一件**必需的事**也一起禁掉了：孩子的 `PATH` 里必须看得见
+    //    **我们那个 `node`** —— 因为 `dsh` 的 shebang 是 `#!/usr/bin/env node`，
+    //    而服务归 systemd 管时那份 `PATH` 里没有 nvm 那个 `bin`
+    //    （真机读数：`code=127 /usr/bin/env: 'node': No such file or directory`）。
+    //    ⇒ 规矩改成：**外面那份一格都不许丢**，而 `node` 那一格要**补在最前面**
+    //      （`withNodeDirOnPath` 自己那几条判据在 `test/agent-bin.test.js`）。
+    //    ⚠️ 断言写成"性质"而不是"逐字节相等"：`npm test` 自己那份 `PATH` 里
+    //      **本来就有** nvm 那个 `bin`（在中间）⇒ 补最前 ＋ 去重之后，
+    //      结果**不等于** `nodeDir + prev.PATH`（我第一版就是这么写错的）。
+    const nodeDir = nodePath.dirname(process.execPath);
+    const parts = String(env.PATH).split(nodePath.delimiter);
+    assert.equal(parts[0], nodeDir, '我们那个 node 那一格要在最前面');
+    for (const d of String(prev.PATH).split(nodePath.delimiter)) {
+      assert.ok(d === '' || parts.includes(d), `外面那份 PATH 丢了这一格：${d}`);
+    }
+    assert.equal(new Set(parts).size, parts.length, '不许有重复项');
     assert.equal(env.HOME, prev.HOME);
     assert.equal(env.DSH_HOME, '/tmp/dshhome');
   } finally {

@@ -1,0 +1,39 @@
+# 探针：**在服务那一份环境里真起一次 agent**（`docs/dev/140-AGENT-BIN.md` §三）
+#
+# 跑法（关键：用**服务进程自己的 environ**，不是我的 shell）：
+#   PID=$(systemctl --user show hupo-core.service -p MainPID --value)
+#   node -e "const fs=require('fs');const env={};
+#     for(const kv of fs.readFileSync('/proc/$PID/environ','utf8').split('\0')){const i=kv.indexOf('=');if(i>0)env[kv.slice(0,i)]=kv.slice(i+1);}
+#     require('child_process').spawnSync('/home/deploy/.nvm/versions/node/v24.15.0/bin/node',
+#       ['docs/dev/140-raw/probe-agent.mjs'],{env,cwd:'v2/services/core',stdio:'inherit'});"
+#
+# ── ① 修前（`dshBin` 还是裸名） ────────────────────────────────
+# PATH 里有 nvm bin 吗： 没有
+# dshBin = dsh
+# agentCwd = /home/deploy/hupo-workspace 存在= true
+# agentBootTimeoutMs = 90000
+# ❌ 起不来： spawn dsh ENOENT
+#
+# ── ② 只修第一层（`dshBin` 取 `node` 同目录那个） ──────────────
+# PATH 里有 nvm bin 吗： 没有
+# dshBin = /home/deploy/.nvm/versions/node/v24.15.0/bin/dsh
+# agentCwd = /home/deploy/hupo-workspace 存在= true
+# agentBootTimeoutMs = 90000
+# 退出事件： {"code":127,"signal":null,"wasReady":false,"oom":false,
+#            "reason":"进程退出 code=127；它最后说的话：/usr/bin/env: ‘node’: No such file or directory"}
+# ❌ 起不来： agent 进程退出了
+#
+# ── ③ 两层都修之后（当前那一版） ──────────────────────────────
+# PATH 里有 nvm bin 吗： 没有          ← PATH 还是服务那份短的（这是故意的：证明代码不看它）
+# dshBin = /home/deploy/.nvm/versions/node/v24.15.0/bin/dsh
+# agentCwd = /home/deploy/hupo-workspace 存在= true
+# agentBootTimeoutMs = 90000
+# ✅ agent 起来了：ready = true        ← `DshAgent.start()` 那个 initialize 过完了
+#
+# ── ④ 重启之后（新 PID=2161819）拿新服务的 environ 再验一次 ──
+# ✅ agent 起来了：ready = true
+#
+# 开机横幅（同一件事的"人话"读数）：
+#   改前：  agent    dsh --profile sdk（最多 4 个）
+#   改后：  agent    /home/deploy/.nvm/versions/node/v24.15.0/bin/dsh --profile sdk（最多 4 个）
+#   重启后：完整性   对上了（按 /home/deploy 算）

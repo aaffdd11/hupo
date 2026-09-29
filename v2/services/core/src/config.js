@@ -47,6 +47,85 @@ export function parseTenantMap(raw) {
   return out;
 }
 
+/**
+ * **`dsh` 在哪**（契约 `docs/dev/140-AGENT-BIN.md`）。
+ *
+ * 🔴 **2026-09-29 真机事故**：主人 17:57 那句话得到的答复是
+ *    *「我现在接不上活。你这句话我记下了，等我缓过来再说。」* ——
+ *    根因就一行：服务归 **systemd** 管之后，用户单元的 `PATH` 很短
+ *    （`/home/deploy/.local/bin:/usr/local/sbin:…:/snap/bin`），**没有 nvm 那个 `bin`**；
+ *    而这里的默认值是**裸名** `'dsh'` ⇒ `spawn` 当场 `ENOENT`
+ *    ⇒ 每句话都换来一句"接不上活"（`dispatcher` 那条 `AGENT_UNAVAILABLE_LINE`）。
+ *    ⚠️ 它与"工作目录不存在"在 `spawn` 里报的是**同一句** `ENOENT`，
+ *      所以现场极难认；`DshAgent` 只好把两种可能都念出来。
+ *
+ * ⇒ 规则：**不靠 `PATH`**。`dsh` 是 npm 全局装的（`node_modules/.bin` 软链到
+ *    `<prefix>/bin/dsh`），而跑我们的那个 `node` 就在同一个 `<prefix>/bin` 里
+ *    （本机 `only` 那一份 nvm node）。⇒ **先找 `node` 的同目录那个**，
+ *    找不到才退回裸名（那时 `PATH` 里得有它 —— 容器里就是这样）。
+ *
+ * 顺序：`HUPO_DSH_BIN`（显式给的，最优先）→ `node` 同目录 → 裸名 `dsh`。
+ *
+ * @param {object} [o]
+ * @param {string|null} [o.explicit] `HUPO_DSH_BIN`
+ * @param {string} [o.execPath] 跑我们的那个 node（默认 `process.execPath`）
+ * @param {(p:string)=>boolean} [o.exists] 注入用（判据里换掉）
+ * @returns {string}
+ */
+export function resolveDshBin({
+  explicit = null,
+  execPath = process.execPath,
+  exists = nodeFs.existsSync,
+} = {}) {
+  if (typeof explicit === 'string' && explicit !== '') return explicit;
+  try {
+    const beside = nodePath.join(nodePath.dirname(execPath), 'dsh');
+    if (exists(beside)) return beside;
+  } catch {
+    /* 算不出来就退回裸名（下面那条 preflight 会说话） */
+  }
+  return 'dsh';
+}
+
+/**
+ * **`dsh` 在这份环境里找不找得到**（找不到 ⇒ agent 永远起不来 ⇒ 开机就该拦）。
+ *
+ * ⚠️ 三态分清楚，**不许把"没找到"说成"没装"**：
+ *    · 带路径的（含 `/`）⇒ 就看那个文件在不在；
+ *    · 裸名 ⇒ 逐个 `PATH` 目录找（`fs.existsSync` 就够 —— 我们只要"能不能被找到"，
+ *      不查它可不可执行：真的不可执行时 `spawn` 会报 `EACCES`，那是另一件事）。
+ *
+ * @returns {string|null} 没问题就是 `null`
+ */
+export function dshBinProblem(cfg, { env = process.env, exists = nodeFs.existsSync } = {}) {
+  const bin = String(cfg?.dshBin ?? '');
+  if (bin === '') return '`dshBin` 是空的 ⇒ agent 起不来（设 HUPO_DSH_BIN）';
+  if (bin.includes('/')) {
+    return exists(bin)
+      ? null
+      : `找不到 dsh：${bin}（这个文件不在）\n` +
+          '    ⇒ agent 会以"起不来"告终（用户看到的是"接不上活"）。\n' +
+          '    ⇒ 修：装它，或者设 HUPO_DSH_BIN 指到真的那个';
+  }
+  const dirs = String(env.PATH ?? '')
+    .split(nodePath.delimiter)
+    .filter((d) => d !== '');
+  for (const dir of dirs) {
+    try {
+      if (exists(nodePath.join(dir, bin))) return null;
+    } catch {
+      /* 某个 PATH 项读不了：跳过它，继续找 */
+    }
+  }
+  return (
+    `PATH 里找不到 ${bin}（这份 PATH 是：${dirs.join(':') || '（空的）'}）\n` +
+    '    ⇒ agent 会以"起不来"告终（用户看到的是"接不上活"）。\n' +
+    '    ⚠️ 服务归 systemd 管时用户单元的 PATH 很短（**没有 nvm 那个 bin**）——\n' +
+    '      所以这一条在"手动跑的时候好好的、装上单元就坏"的场合最容易撞上。\n' +
+    '    ⇒ 修：设 HUPO_DSH_BIN=/绝对路径/dsh（或者把它的目录加进那份 PATH）'
+  );
+}
+
 function parseIdOrNull(raw) {
   if (raw === undefined || raw === null || raw === '') return null;
   const n = Number(raw);
@@ -76,8 +155,15 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     buildId: env.HUPO_BUILD_ID ?? 'dev',
 
     // ── agent ──
-    /** `dsh` 可执行文件。**这台机器上是 nvm 里那个软链。** */
-    dshBin: env.HUPO_DSH_BIN ?? 'dsh',
+    /**
+     * `dsh` 可执行文件。**这台机器上是 nvm 里那个软链。**
+     *
+     * 🔴 **不许写成裸名 `'dsh'`**（2026-09-29 真机事故的根因）：服务归 systemd 管之后
+     *    它的 `PATH` 没有 nvm 那个 `bin` ⇒ `spawn dsh` 当场 `ENOENT`
+     *    ⇒ 用户每一句话换来的都是"我现在接不上活"。
+     *    取值顺序与理由见 `resolveDshBin()`；开机还有 `preflight` 拦一道。
+     */
+    dshBin: resolveDshBin({ explicit: env.HUPO_DSH_BIN ?? null }),
 
     /**
      * profile 名。`sdk` 是 **dsh 内置模板**（不需要在 `$DSH_HOME/profiles` 下有目录）。
@@ -365,6 +451,12 @@ export function preflight(cfg) {
         `（或设 HUPO_AGENT_CWD）`,
     );
   }
+  // ★ **`dsh` 本体**（契约 `140`）。它与上面那条是**同一个 `ENOENT` 的两半** ——
+  //   而 2026-09-29 的事故就是这一半：裸名 + systemd 那份短 PATH ⇒
+  //   agent 每轮都起不来，用户只看到"接不上活"（盘上像没发生过）。
+  //   ⇒ 开机就问一次"这份环境里找得到它吗"，找不到**拒绝启动**（同 persona/SDK server 那一档）。
+  const dshProblem = dshBinProblem(cfg);
+  if (dshProblem) problems.push(dshProblem);
   if (!cfg.personaPath) {
     problems.push(
       'personaPath 是空的 ⇒ 人格挂不上，agent 会退化成一个通用编码助手，而且**不会有任何报错**。\n' +
