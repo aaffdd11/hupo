@@ -816,26 +816,73 @@ export class Apps {
   }
 
   /**
-   * **他授予了哪些权限**（乙-4）。**没授予过 ⇒ 空数组**（fail-closed）。
+   * **他关掉了哪几样**（`grant.json` · ★ **2026-09-30 语义翻了，见下**）。
    *
-   * ⚠️ 存在**他自己那一格**里（`<id>/grant.json`）：授予是**他**的决定，
-   *    不是作者写进清单就能生效的东西。
+   * ── 🔴 为什么是"关掉清单"而不是"允许清单"（主人 2026-09-30）──────────
+   *   *「我希望是傻瓜式的，用户需求做 app 小程序，那就尽量理解并给全套。」*
+   *   ⇒ 一个**他自己**让助手做出来的小程序，声明了要存东西就**该当场能用** ——
+   *     不该让他先去设置里点一下开关（那是把"作者"的活推给了用户）。
+   *   ⇒ 所以落盘的语义是 **`{denied: [...]}`**：**没关过的 = 给的**；
+   *     他在设置页把某一样关掉 ⇒ 那一样进 `denied`。
+   *
+   * ⚠️ **老文件照旧认**（`{permissions: [...]}` 是当年那份"允许清单"）：
+   *    读的时候现算 `denied = 制品声明的 − 老文件里允许的` ——
+   *    ⇒ **当年被他关掉的那一样，翻新语义之后仍然是关着的**（不许"悄悄给他打开"）。
+   *    下次写入时自然变成新格式（**不偷偷改写他的文件**）。
+   *
+   * @returns {string[]} 关掉的那几样（只认白名单里的名字）
    */
-  grants(id) {
-    checkAppId(id);
+  #denied(id) {
+    let j = null;
     try {
-      const j = JSON.parse(this.fs.readFileSync(nodePath.join(this.appDir(id), 'grant.json'), 'utf8'));
-      const out = [];
-      for (const p of j?.permissions ?? []) {
-        if (PERMISSIONS.includes(p)) out.push(p);
-      }
-      return out;
+      j = JSON.parse(this.fs.readFileSync(nodePath.join(this.appDir(id), 'grant.json'), 'utf8'));
+    } catch {
+      return []; // 没关过（也没这份文件）
+    }
+    if (Array.isArray(j?.denied)) {
+      return j.denied.filter((p) => PERMISSIONS.includes(p));
+    }
+    if (Array.isArray(j?.permissions)) {
+      // ★ **老格式（允许清单）现算成"关掉清单"** —— 逐字保住当年的行为
+      const allowed = j.permissions.filter((p) => PERMISSIONS.includes(p));
+      return this.#declaredOf(id).filter((p) => !allowed.includes(p));
+    }
+    return [];
+  }
+
+  /** **制品声明了哪几样**（`permissions`；读不出来 ⇒ 空数组）。 */
+  #declaredOf(id) {
+    try {
+      const m = this.meta(id);
+      const list = Array.isArray(m?.permissions) ? m.permissions : [];
+      return list.filter((p) => PERMISSIONS.includes(p));
     } catch {
       return [];
     }
   }
 
-  /** **授予 / 撤销**（只认白名单里的名字；不是白名单的一律丢掉）。 */
+  /**
+   * **他现在能用哪几样** = **制品声明的 − 他关掉的**。
+   *
+   * 🔴 含义（★ 2026-09-30 起）：**没关过的就是给的** ——
+   *    他自己那个小程序声明了 `db` ⇒ **当场就能存**，不用他去设置里点任何东西。
+   *    ⚠️ 这**不是**"谁写进清单就自动生效"：清单是**他让助手做的那个 app** 的清单，
+   *    而把某一样关掉的那一下**永远在他手里**（设置页那张卡）。
+   */
+  grants(id) {
+    checkAppId(id);
+    const denied = this.#denied(id);
+    return this.#declaredOf(id).filter((p) => !denied.includes(p));
+  }
+
+  /**
+   * **他点的那一下**（设置页的开关）：入参仍是"**他要的允许清单**"
+   * （**线上协议一个字没改** —— 客户端与新老盒子都照旧传 `permissions`），
+   * 内部翻译成 `denied` 落盘。
+   *
+   * @param {string[]} permissions 他要允许的那几样（白名单外的名字 ⇒ 抛）
+   * @returns {string[]} 落盘之后**实际**能用的那几样
+   */
   setGrants(id, permissions) {
     checkAppId(id);
     if (!this.has(id)) throw new AppsError('这个小程序不在你这儿');
@@ -844,14 +891,18 @@ export class Apps {
       if (!PERMISSIONS.includes(p)) throw new AppsError(`这个权限不认识：${String(p).slice(0, 20)}`);
       if (!keep.includes(p)) keep.push(p);
     }
+    const declared = this.#declaredOf(id);
+    // ★ **只有"制品声明了的"才有资格进 `denied`**（没声明的本来就用不了，不用记）
+    const denied = declared.filter((p) => !keep.includes(p));
     writeAtomic(
       this.fs,
       nodePath.join(this.appDir(id), 'grant.json'),
-      `${JSON.stringify({ permissions: keep, at: this.now() })}\n`,
+      `${JSON.stringify({ denied, at: this.now() })}\n`,
       0o644,
     );
     this.#audit({ what: 'grant', id, permissions: keep });
-    return keep;
+    // ⚠️ 回的是**实际生效**的那几样（制品**没声明**的名字给了也不算数 —— 那是"声明"那道闸）
+    return declared.filter((p) => keep.includes(p));
   }
 
   /**

@@ -331,16 +331,17 @@ test('制品口：405 / 404 / HEAD', async () => {
   await close();
 });
 
-test('乙-4：授予要落盘、只认白名单、撤了就空；卸载是**软删**（能拿回来）', () => {
+test('乙-4：★ **声明了就是给的**；他关掉要落盘、只认白名单；卸载是**软删**（能拿回来）', () => {
   const dir = tmp();
   const apps = new Apps({ dir, sub: 'u1' });
   apps.create({ ...OK, permissions: ['ask'] });
-  assert.deepEqual(apps.grants('dice'), [], '没授予过 ⇒ 空（fail-closed）');
-  assert.deepEqual(apps.setGrants('dice', ['ask']), ['ask']);
-  assert.deepEqual(apps.grants('dice'), ['ask'], '授予要落盘（重启之后还在）');
+  // 🔴 **2026-09-30 语义翻了**（主人："我希望是傻瓜式的"）：**声明了就默认能用**
+  assert.deepEqual(apps.grants('dice'), ['ask'], '声明了就是给的（不用任何人点）');
+  assert.deepEqual(apps.setGrants('dice', []), [], '他关掉 ⇒ 一样都不给');
+  assert.deepEqual(apps.grants('dice'), [], '关掉要落盘（重启之后还是关着）');
   assert.throws(() => apps.setGrants('dice', ['root']), /不认识/);
-  assert.deepEqual(apps.setGrants('dice', []), [], '撤了就空');
-  assert.deepEqual(apps.grants('dice'), []);
+  assert.deepEqual(apps.setGrants('dice', ['ask']), ['ask'], '他再打开 ⇒ 又给了');
+  assert.deepEqual(apps.grants('dice'), ['ask']);
   assert.throws(() => apps.setGrants('nope', ['ask']), /不在你这儿/);
 
   // 卸载：清单里没了，但盘上还在（软删）

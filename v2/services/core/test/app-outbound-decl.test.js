@@ -226,9 +226,11 @@ test('🔴 A16-7 只写申报（`kind:"ask"`）而没声明 `permissions:["ask"]
     'outbound.js': '<script>ask("问一句")</script>',
   });
   const man = w.apps.manifest('news', 1);
-  assert.deepEqual(man.permissions, [], '🔴 申报**不构成**授权：清单里没有 ask');
-  assert.deepEqual(w.apps.grants('news'), [], '没授予 ⇒ fail-closed');
-  // 反着验：授权是**另一件事**（要清单里声明 + 他授予），申报一个字也帮不上
+  assert.deepEqual(man.permissions, [], '🔴 申报**不构成**声明：清单里没有 ask');
+  // 🔴 **申报更不构成"能用"**：他自己那个 app 是"声明了就默认给"，
+  //    可**申报（那份声明文件）连声明都不算** ⇒ 一样都用不了（fail-closed）
+  assert.deepEqual(w.apps.grants('news'), [], '没声明 ⇒ 一样都不给（申报帮不上）');
+  // 反着验：要能用，**必须清单里声明**（＋他关掉才是不给），申报一个字也帮不上
   const before = JSON.stringify(man.permissions);
   assert.doesNotThrow(() => assertDeclarationAllowed({ files: { 'index.html': '<p>x</p>', [OUTBOUND_DECL_FILENAME]: asText(decl()) }, version: 1 }));
   assert.equal(JSON.stringify(w.apps.manifest('news', 1).permissions), before);

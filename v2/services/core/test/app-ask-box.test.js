@@ -261,7 +261,7 @@ test('B17-1 反例：盒子不通 ⇒ **如实 503**（绝不许拿宿主那份�
 // ════════════════════════════════════════════════════════════
 // B17-2 —— 四道闸仍在权威那份上生效
 // ════════════════════════════════════════════════════════════
-test('B17-2 盒里没声明 / 没授予 ⇒ 403，而且**一个字节都不转发**（授予之后才通）', async (t) => {
+test('B17-2 盒里没声明 / **他关掉了** ⇒ 403，而且**一个字节都不转发**（打开之后才通）', async (t) => {
   const proxy = await fakeProxy();
   t.after(() => proxy.close());
   process.env.HUPO_APP_ASK_BASE = proxy.base;
@@ -270,7 +270,9 @@ test('B17-2 盒里没声明 / 没授予 ⇒ 403，而且**一个字节都不转�
   const boxDir = tmp();
   const boxApps = new Apps({ dir: boxDir, sub: 'owner', now: () => NOW });
   boxApps.create(OK('quiet', '不说话的')); // 没声明 ask
-  boxApps.create({ ...OK('wenda', '问答小抄'), permissions: ['ask'] }); // 声明了、还没授予
+  boxApps.create({ ...OK('wenda', '问答小抄'), permissions: ['ask'] }); // 声明了
+  // ⚠️ 2026-09-30 语义翻了（"傻瓜式"）：声明了就默认能用 ⇒ "不给"这一档＝**他关掉了**
+  boxApps.setGrants('wenda', []);
 
   const box = await bootBox(t, { dir: boxDir });
   const host = await bootHost(t, { hostDirs: { u2: hostDir }, boxUds: { 'hupo-b': box.uds } });
@@ -286,7 +288,7 @@ test('B17-2 盒里没声明 / 没授予 ⇒ 403，而且**一个字节都不转�
 
   assert.equal(proxy.seen.length, 0, '★ 闸没过就**不许**碰到代理');
 
-  // ★ 正对照：在**盒里**授予 ⇒ 立刻通（说明上面那两条不是"恒拒"）
+  // ★ 正对照：在**盒里**把它打开 ⇒ 立刻通（说明上面那两条不是"恒拒"）
   boxApps.setGrants('wenda', ['ask']);
   const ok = await postAsk(host, token, { appId: 'wenda', prompt: '给我出一道题' });
   assert.equal(ok.status, 200);

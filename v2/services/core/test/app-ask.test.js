@@ -99,7 +99,7 @@ const post = (s, token, body) =>
     body: JSON.stringify(body),
   });
 
-test('🔴 四道闸：没这个 app / 没声明 / 没授予 ⇒ 各说各的（一个都不许放过去）', async (t) => {
+test('🔴 四道闸：没这个 app / 没声明 / **他关掉了** ⇒ 各说各的（一个都不许放过去）', async (t) => {
   const proxy = await fakeProxy();
   t.after(() => proxy.close());
 
@@ -108,9 +108,15 @@ test('🔴 四道闸：没这个 app / 没声明 / 没授予 ⇒ 各说各的（
   const tokenA = a.auth.issue({ sub: 'u1' }).token;
   assert.equal((await post(a, tokenA, { appId: a.appId, prompt: '你好' })).status, 403);
 
-  // ② 声明了、没授予
+  /**
+   * ② **声明了、但他关掉了** ⇒ 403。
+   *
+   * ⚠️ **2026-09-30 语义翻了**（主人："我希望是傻瓜式的"）：**声明了就是给的** ——
+   *    "没授予"这一档在今天的世界里叫"**他把它关掉了**"（`setGrants(id, [])`）。
+   */
   const b = await boot(t, { proxyBase: proxy.base, withAsk: true });
   const tokenB = b.auth.issue({ sub: 'u1' }).token;
+  b.apps.setGrants(b.appId, []);
   const r2 = await post(b, tokenB, { appId: b.appId, prompt: '你好' });
   assert.equal(r2.status, 403);
   assert.match((await r2.json()).error, /还没允许/, '★ 要说清是"你还没允许它用你的钥匙"');
@@ -241,7 +247,9 @@ test('🔴 租户那条路：闸在中心过（不过就**不转发**），过�
     body: JSON.stringify(body),
   });
 
-  // ① 没授予 ⇒ 403，而且**一个字节都不许转发**（匣子那边什么都没看见）
+  // ① **他关掉了** ⇒ 403，而且**一个字节都不许转发**（匣子那边什么都没看见）
+  //    ⚠️ 2026-09-30 语义翻了：声明了默认就是给的 ⇒ "不给"这一档由他关掉来演
+  apps.setGrants('wenda', []);
   const denied = await send({ appId: 'wenda', prompt: '你好' });
   assert.equal(denied.status, 403);
   assert.equal(box.got.length, 0, '★ 闸没过就不许转发 —— 不然就是拿别人的钥匙去花');

@@ -426,16 +426,59 @@ test('乙-4：卸载 ⇒ 清单里没了、盘上还在回收处（⚠️ **真�
   }
 });
 
+test('★ 傻瓜式：助手在 `app_create` 里声明 `db` ⇒ **它当场就能存**（不用任何人点开关）', async () => {
+  const s = setup();
+  const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
+  try {
+    await handshake(c);
+    /**
+     * 🔴 这一条钉的是**那个真洞**（2026-09-30 发现）：人格里写着"要存储就声明 `db`"，
+     *    而 `app_create` 这个工具**当时根本没有 `permissions` 参数** ——
+     *    也就是说那句话当年是**空话**，助手做不到。
+     * ⚠️ 它量的是**工具那一层**（真 MCP 子进程 → 真套接字 → 真制品库），不是纯函数。
+     */
+    const made = await c.call('tools/call', {
+      name: 'app_create',
+      arguments: { ...APP, id: 'jizhang', title: '记账', permissions: ['db'] },
+    });
+    assert.equal(made.result.isError, false, JSON.stringify(made.result));
+    // ① 清单里真声明了
+    assert.deepEqual(s.apps.manifest('jizhang', s.apps.current('jizhang')).permissions, ['db'], '声明要真的进清单');
+    // ② **而且当场就能用**（默认给：没人点过任何开关）
+    assert.deepEqual(s.apps.grants('jizhang'), ['db'], '声明了就是给的');
+    const w = await s.apps.dbExec('jizhang', { op: 'run', sql: 'CREATE TABLE IF NOT EXISTS t(a TEXT)' });
+    assert.equal(w.ok, true, `声明之后要能直接存（实际 ${JSON.stringify(w)}）`);
+    const w2 = await s.apps.dbExec('jizhang', { op: 'run', sql: 'INSERT INTO t VALUES (?)', params: ['甲'] });
+    assert.equal(w2.ok, true);
+    const w3 = await s.apps.dbExec('jizhang', { op: 'all', sql: 'SELECT a FROM t' });
+    assert.deepEqual(w3.rows, [{ a: '甲' }]);
+    // ③ 反例那一侧：**没声明**的照旧存不进去（默认给 ≠ 谁都能存）
+    const none = await c.call('tools/call', { name: 'app_create', arguments: { ...APP, id: 'pure', title: '纯页面' } });
+    assert.equal(none.result.isError, false);
+    assert.deepEqual(s.apps.grants('pure'), [], '没声明 ⇒ 一样都不给');
+    const bad = await s.apps.dbExec('pure', { op: 'run', sql: 'CREATE TABLE t(a)' });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.status, 403);
+  } finally {
+    c.child.kill();
+    await s.sock.close();
+  }
+});
+
 test('乙-4b：授予 / 撤销是真做的（`ask` 那条路已经通了）', async () => {
   const s = setup();
   const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
   try {
     await handshake(c);
     await c.call('tools/call', { name: 'app_create', arguments: { ...APP, permissions: ['ask'] } });
+    // ⚠️ 2026-09-30：声明了**默认就是给的** ⇒ 这一步先"撤销"（＝他关掉），再"授予"
+    const r0 = await c.call('tools/call', { name: 'app_revoke', arguments: { id: 'dice' } });
+    assert.equal(r0.result.isError, false, JSON.stringify(r0.result));
+    assert.deepEqual(s.apps.grants('dice'), [], '撤了就空（＝他关掉）');
     const g = await c.call('tools/call', { name: 'app_grant', arguments: { id: 'dice' } });
     assert.equal(g.result.isError, false, JSON.stringify(g.result));
     assert.match(g.result.content[0].text, /花你一次|可以了/);
-    assert.deepEqual(s.apps.grants('dice'), ['ask'], '授予要落盘');
+    assert.deepEqual(s.apps.grants('dice'), ['ask'], '再授予 ⇒ 又给了，而且要落盘');
     const r = await c.call('tools/call', { name: 'app_revoke', arguments: { id: 'dice' } });
     assert.equal(r.result.isError, false);
     assert.deepEqual(s.apps.grants('dice'), [], '撤了就空');
