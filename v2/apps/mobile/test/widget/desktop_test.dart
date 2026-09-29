@@ -101,6 +101,24 @@ void main() {
     expect(dec.color, Colors.transparent, reason: '加号那一格是"空位"，不是一个小程序 ⇒ 不许上色');
   });
 
+  testWidgets('🔴 图标格那圈阴影**够浓**（2026-09-29 主人："appicon的阴影加浓一些"）', (tester) async {
+    await pump(tester, [app('设置')]);
+    final box = find.ancestor(of: find.text('设置'), matching: find.byType(Column)).first;
+    final c = find.descendant(of: box, matching: find.byType(Container)).first;
+    final dec = tester.widget<Container>(c).decoration! as BoxDecoration;
+    final sh = dec.boxShadow!.first;
+    // ⚠️ 这一条是**棘轮**（同"格子够大"那条）：只许更浓，不许悄悄缩回去 ——
+    //    门槛住这一份（它是判据，不是产品参数）。
+    expect(sh.color.a, greaterThanOrEqualTo(0.20),
+        reason: '★ 阴影淡回去了（α=${sh.color.a}）—— 主人 2026-09-29 明确要"加浓"');
+    expect(sh.color.r, closeTo(d.ink.r, 0.01), reason: '阴影色还是从 ink 来的');
+    expect(sh.blurRadius, greaterThanOrEqualTo(14), reason: '★ 只加浓度不加模糊 ⇒ 一圈硬边');
+    // 负向对照：**两处共用同一组数**（打开/收回那一层的起点）
+    expect(sh.color.a, d.tileShadowAlpha);
+    expect(sh.blurRadius, d.tileShadowBlur);
+    expect(sh.offset.dy, d.tileShadowDy);
+  });
+
   testWidgets('★ 桌子上有一句引导（原来一句都没有）', (tester) async {
     await pump(tester, [app('设置')]);
     expect(find.text(desktopHint), findsOneWidget);

@@ -121,9 +121,14 @@ const double radiusCard = 18; // 卡片 / 大块
 /// 🔴 2026-09-23 提成 token：小程序**打开 / 收回**那一层要**从图标那儿长出来**
 ///    ⇒ 它的起点必须和图标格**逐字相同**（主人：*"那一层效果没有阴影，所以开启和打开的
 ///    效果并不如意。"*）。两处各写一份数 ⇒ 迟早漂（本项目第一条纪律）。
-const double tileShadowAlpha = 0.12;
-const double tileShadowBlur = 12;
-const double tileShadowDy = 4;
+///
+/// ★ 2026-09-29 主人：*"appicon的阴影加浓一些。"* ⇒ **0.12 → 0.26**（模糊 12 → 16、
+///   下移 4 → 5 一起跟上：光加 α 会变成"一圈硬边"，看着脏）。
+///   ⚠️ 这一组数**两处共用**（图标格 ＋ 打开/收回那一层的起点），改一处就够 ——
+///      改完那条"起点逐字等于图标那一格"的判据照旧绿（它认的就是这三个 token）。
+const double tileShadowAlpha = 0.26;
+const double tileShadowBlur = 16;
+const double tileShadowDy = 5;
 
 /// **小程序那一层在"扩开 / 收回"途中的样子**（纯函数，判据在 `test/unit`）。
 ///
