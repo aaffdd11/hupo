@@ -136,7 +136,8 @@ void main() {
     expect(find.text('主线那句话'), findsNothing);
 
     // 收起聊天（把屏幕还给小程序），然后按聊天条最前面那颗 home 关掉它
-    await tester.tap(find.byKey(chatHandleKey));
+    // ⚠️ 2026-09-29：展开态**没有抓手那一行**了 ⇒ 收起走右上角那颗「收起」。
+    await tester.tap(find.byTooltip(chatCollapse));
     await tester.pumpAndSettle();
     expect(find.byType(DiscoverScreen), findsNothing, reason: '（负向对照：这一屏不是发现那一屏）');
     await tester.tap(find.byKey(chatHomeButtonKey));

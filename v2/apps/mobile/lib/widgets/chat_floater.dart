@@ -405,19 +405,33 @@ class ChatFloaterState extends State<ChatFloater> {
                       //      字改挂在 tooltip 与无障碍名上（`展开` / `收起`）。
                       //   ⚠️ 手势**只绑在这一行**（§6.3）：绑在整块浮窗上会把时间线的滚动吃掉
                       //      —— 那正是上一版没暴露的 bug。
-                      Listener(
-                        behavior: HitTestBehavior.opaque,
-                        onPointerDown: _onDown,
-                        onPointerMove: _onMove,
-                        onPointerUp: _onUp,
-                        child: Padding(
-                          padding: const EdgeInsets.only(top: 2),
-                          child: _handle(collapsed, p),
+                      // 🔴 2026-09-29 主人：*"展开对话那一小排的占地空间太大。我不要那根杠了。"*
+                      //   ＋ 他点的办法：*"展开后右上角有个收起按钮。"*
+                      //   ⇒ ① **展开态不再单独占一行**（那一行整条撤掉 —— 收起来的出口
+                      //        是标题行右端那颗「收起」）；
+                      //     ② **收起态仍然留着**（那是唯一的展开入口），但里面**只剩那颗平箭头**
+                      //        （那根 44×4 的杠删掉）。
+                      //   ⚠️ 拖动（§6.3：竖向拖 = 改高度）跟着这一行走：
+                      //      收起态绑在抓手这一行、**展开态绑在标题行**（下面那个 `Listener`）。
+                      if (collapsed)
+                        Listener(
+                          behavior: HitTestBehavior.opaque,
+                          onPointerDown: _onDown,
+                          onPointerMove: _onMove,
+                          onPointerUp: _onUp,
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: _handle(p),
+                          ),
                         ),
-                      ),
                       // ── 展开态：标题行（**收起态不画它** —— 那一档就是"一行"）──
                       if (!collapsed)
-                        Padding(
+                        Listener(
+                          behavior: HitTestBehavior.opaque,
+                          onPointerDown: _onDown,
+                          onPointerMove: _onMove,
+                          onPointerUp: _onUp,
+                          child: Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: d.gapS,
                             vertical: 2,
@@ -502,6 +516,7 @@ class ChatFloaterState extends State<ChatFloater> {
                             ],
                           ),
                         ),
+                        ),
                       // 收起态：**只画输入条**（时间线不画 —— 免得它被压成一条时还在偷偷布局，
                       // 那正是上一版溢出的来源）。主人 2026-09-22："收缩的时候也有一个输入框。"
                       if (collapsed)
@@ -537,46 +552,34 @@ class ChatFloaterState extends State<ChatFloater> {
   /// ⚠️ **单击 = 收起 ⇄ 展开**（不再有双击：两次单击会互相抵消 ⇒ "点了没反应"）。
   /// ⚠️ 字挂在 `Tooltip`（web 上悬停看得见）+ 无障碍名上（D3.8 的"带字"由 2026-09-24 改掉）。
   /// ★ 批次 4：那一笔与那条杠的颜色跟色板走（`label-tertiary` / `border-l3`）。
-  Widget _handle(bool collapsed, DshPalette p) {
+  Widget _handle(DshPalette p) {
+    // ⚠️ 它**只出现在收起态**（展开态那一行整条不画 —— 见上面那段）。
+    const collapsed = true;
     final button = TextButton(
       key: chatHandleKey,
-      onPressed: () =>
-          _setTier(collapsed ? _lastOpen : FloaterTier.collapsed, auto: false),
+      onPressed: () => _setTier(_lastOpen, auto: false),
       style: TextButton.styleFrom(
+        // 命中区 ≥44（D3.6，硬闸）：图形只有 26×7，外面这一圈是"好点"的保证
         minimumSize: const Size(96, 44),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
         foregroundColor: p.labelTertiary,
       ),
-      child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CustomPaint(
-              size: const Size(26, 7),
-              painter: _FlatChevron(color: p.labelTertiary, up: collapsed),
-            ),
-            const SizedBox(height: 3),
-          Container(
-            width: 44,
-            height: 4,
-            decoration: BoxDecoration(
-              color: p.borderL3,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-        ],
+      // 🔴 2026-09-29：**那根杠删掉了**（主人：*"我不要那根杠了。"*）——
+      //   只剩那颗"平"的小箭头。
+      child: CustomPaint(
+        size: const Size(26, 7),
+        painter: _FlatChevron(color: p.labelTertiary, up: collapsed),
       ),
     );
     // ⚠️ tooltip 只在**收起态**挂（那会儿它是唯一的展开入口）。
     //    展开态**不挂** —— 标题行已经有一个「收起」按钮，两个控件挂同一句话
     //    会让"屏幕上到底有几个收起"这种判据（和读屏）分不清。
     //    无障碍名两种状态都给（`Semantics` 那句在下面）。
-    final named = Semantics(
-      button: true,
-      label: collapsed ? '展开' : '收起',
-      child: button,
-    );
     return Center(
-      child: collapsed ? Tooltip(message: '展开', child: named) : named,
+      child: Tooltip(
+        message: '展开',
+        child: Semantics(button: true, label: '展开', child: button),
+      ),
     );
   }
 }

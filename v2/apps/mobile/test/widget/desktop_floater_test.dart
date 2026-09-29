@@ -247,10 +247,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '开了之后该有「收起」');
     expect(find.byKey(chatBodyKey), findsOneWidget, reason: '开了之后状态条 + 时间线该在');
-    // ⚠️ 抓手**仍然在**（它在上边框正中，收起/展开都在同一个位置）——
-    //    变的是它的朝向与那句 tooltip。
-    expect(find.byKey(chatHandleKey), findsOneWidget, reason: '抓手不该消失');
-    expect(find.byTooltip('展开'), findsNothing, reason: '展开之后它不再是「展开」');
+    // 🔴 2026-09-29 主人：*"展开对话那一小排的占地空间太大……展开后右上角有个收起按钮。"*
+    //    ⇒ **展开态那一行整条不画了**（收起来的出口 = 标题行右端那颗「收起」）。
+    expect(find.byKey(chatHandleKey), findsNothing,
+        reason: '★ 展开态还占着一整行抓手 ⇒ 那一行的空间又白花了');
+    // 而它带来的代价要如实钉住：**滑动改高度**在展开态改绑在**标题行**上（§6.3）
+    expect(find.byTooltip(chatCollapse), findsOneWidget);
   });
 
   testWidgets('🔴 点桌面空白 ⇒ 收起；点浮窗**内部** ⇒ 无反应（负向对照）', (tester) async {
@@ -356,15 +358,63 @@ void main() {
     );
   });
 
-  testWidgets('🔴 **单击**抓手 ⇒ 收起（§6.3 的手势表 · 2026-09-24 改）', (tester) async {
+  testWidgets('🔴 收起 ⇄ 展开各有一颗看得见的东西负责（2026-09-29 换过形状）', (tester) async {
+    // ⚠️ 原来是"双击 = 收起 ⇄ 展开"；2026-09-24 改成"单击抓手"。
+    //    ★ 2026-09-29 主人：*"展开后右上角有个收起按钮。"* ⇒
+    //      **收起态**：点那颗平箭头（抓手）= 展开；
+    //      **展开态**：点标题行右端那颗「收起」= 收起（抓手那一行不再画）。
     await _pump(tester, tier: FloaterTier.full);
     expect(find.byType(Composer), findsOneWidget);
-    // ⚠️ 原来是"双击 = 收起 ⇄ 展开"。2026-09-24 抓手变成**能点的那个展开入口**之后，
-    //    双击 = 两次单击 = 展开又收起（屏幕上就是"点了没反应"）⇒ **双击这套拿掉**。
+    await tester.tap(find.byTooltip(chatCollapse));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip(chatCollapse), findsNothing, reason: '点「收起」该收起');
+    // 收起之后：平箭头回来了（它就是"再展开"的入口）
+    expect(find.byKey(chatHandleKey), findsOneWidget, reason: '收起态该有那颗平箭头');
     await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
-    expect(find.byTooltip(chatCollapse), findsNothing, reason: '单击抓手该收起');
-    expect(find.byKey(chatHandleKey), findsOneWidget, reason: '抓手还在（收起态它就是展开入口）');
+    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '点平箭头该再展开');
+  });
+
+  // ── ★ 2026-09-29：**展开态不再单独占一行**（主人："展开对话那一小排的占地空间太大。
+  //    我不要那根杠了。" ＋ "展开后右上角有个收起按钮。"）────────────────────
+
+  testWidgets('🔴 展开态**没有**那一行抓手；收起态**只剩箭头**（那根杠没了）', (tester) async {
+    await _pump(tester, tier: FloaterTier.full);
+    expect(find.byKey(chatHandleKey), findsNothing,
+        reason: '★ 展开态还占着一整行抓手 —— 那一行的空间白花了');
+
+    // 省下来的空间**要能量得出来**：标题行上沿离浮窗上沿只有那一点点内边距
+    final floater = _floaterRect(tester);
+    final title = tester.getRect(find.byKey(chatActionsStripKey));
+    expect(title.top - floater.top, lessThan(12),
+        reason: '★ 标题行上面还压着一块（差 ${title.top - floater.top}）—— 那一行没真的省掉');
+
+    // 收起态：抓手在，而且**里面没有那根 44×4 的杠**（它的子树里一个方块都没有）
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await _pump(tester);
+    expect(find.byKey(chatHandleKey), findsOneWidget, reason: '收起态留着那颗平箭头（展开入口）');
+    expect(
+      find.descendant(of: find.byKey(chatHandleKey), matching: find.byType(Container)),
+      findsNothing,
+      reason: '★ 那根杠还在（主人：*"我不要那根杠了。"*）',
+    );
+    // 负向对照：那颗箭头**还在**（不是把整个抓手都删了）
+    expect(
+      find.descendant(of: find.byKey(chatHandleKey), matching: find.byType(CustomPaint)),
+      findsWidgets,
+    );
+  });
+
+  testWidgets('🔴 展开态：拖**标题行**照样能改高度（手势跟着那一行走）', (tester) async {
+    // ⚠️ 抓手那一行撤掉之后，§6.3 那条"竖向拖 = 改高度"**不能跟着一起消失** ——
+    //    改绑到标题行上（§6.3 原文就是"抓手 / 标题行"）。
+    await _pump(tester, tier: FloaterTier.half);
+    final before = _floaterRect(tester).height;
+    await tester.drag(find.byKey(chatActionsStripKey), const Offset(0, -200));
+    await tester.pumpAndSettle();
+    expect(_floaterRect(tester).height > before, true,
+        reason: '★ 展开态拖标题行改不了高度了（$before → ${_floaterRect(tester).height}）');
   });
 
   testWidgets('🔴 拖抓手行向上 ⇒ 跟手变高，松手吸附到更大的一档', (tester) async {
