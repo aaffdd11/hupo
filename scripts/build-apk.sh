@@ -107,6 +107,26 @@ if [ "$rc" != "0" ]; then
 fi
 
 APK="$APP/build/app/outputs/flutter-apk/app-release.apk"
+
+# 🔴 **强制三样签名（v1+v2+v3）**（2026-09-30）：
+#    AGP 在 `minSdk >= 24` 时会**跳过 v1（JAR 签名）** —— 而 v1 正是
+#    "老一点的解析器 / 某些厂商安装器"唯一认得的那一份（我们把
+#    `enableV1Signing = true` 写进 Gradle 里，实测**没生效**）。
+#    ⇒ 打完再用 apksigner 补签一次：三样都开。代价是包大几百 KB。
+APKSIGNER="${APKSIGNER:-$(ls -1 "${ANDROID_HOME:-$HOME/sdk/android-sdk}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)}"
+export JAVA_HOME="${JAVA_HOME:-$HOME/sdk/jdk17}"
+export PATH="$JAVA_HOME/bin:$PATH"
+if [ -n "$APKSIGNER" ]; then
+  echo
+  echo "▶ 补签：v1+v2+v3 三样都开（AGP 在 minSdk>=24 时只给 v2/v3）"
+  "$APKSIGNER" sign \
+    --ks "$HUPO_STORE_FILE" --ks-pass "pass:$HUPO_STORE_PASSWORD" \
+    --ks-key-alias "$HUPO_KEY_ALIAS" --key-pass "pass:$HUPO_KEY_PASSWORD" \
+    --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+    "$APK" || { echo "  ✗ 补签失败"; exit 1; }
+  "$APKSIGNER" verify --verbose "$APK" 2>/dev/null | grep -E "Verified using v[123]" | sed 's/^/    /'
+fi
+
 echo
 echo "✅ 出包：$APK"
 echo "   大小    $(du -h "$APK" | cut -f1)"

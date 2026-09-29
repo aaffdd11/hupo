@@ -46,6 +46,17 @@ android {
         versionName = flutter.versionName
     }
 
+    // 🔴 **经典打包布局**（2026-09-30 · 真机装不上时试的那一档）：
+    //    默认（`useLegacyPackaging = false`）是把 `.so` **不压缩**放进包里、
+    //    装着页对齐（`extractNativeLibs="false"`）—— 这是新版 AGP 的推荐做法，
+    //    但**有些厂商的安装器只认经典布局**（`.so` 压缩在包里、安装时解出来）。
+    //    ⇒ 用 `HUPO_LEGACY_PACKAGING=1` 打一个对照包来分这一刀（默认不动）。
+    packaging {
+        jniLibs {
+            useLegacyPackaging = System.getenv("HUPO_LEGACY_PACKAGING") == "1"
+        }
+    }
+
     signingConfigs {
         if (storeFilePath != null) {
             create("release") {
