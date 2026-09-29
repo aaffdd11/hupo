@@ -13,6 +13,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/widgets/composer.dart';
 
 Future<void> _pump(WidgetTester tester) async {
@@ -30,25 +31,30 @@ double _fieldLeft(WidgetTester tester) =>
 double _fieldWidth(WidgetTester tester) =>
     tester.getSize(find.byType(TextField)).width;
 
-/// **发送钮此刻按不按得动**（灰 = `onPressed == null`）。
-bool _sendReady(WidgetTester tester) => tester
-    .widget<IconButton>(
-      find.ancestor(
-        of: find.byIcon(Icons.arrow_upward),
-        matching: find.byType(IconButton),
-      ),
-    )
-    .onPressed !=
-    null;
+/// **发送钮此刻按不按得动**。
+/// ⚠️ 2026-09-29 起它**不是永远在**了（主人：*"替换掉录音按钮。"*）——
+///    最右那一格是**录音 ⇄ 发送**：没话要说时那儿是话筒，有话要说时才是这颗。
+bool _sendReady(WidgetTester tester) {
+  // ⚠️ 那一格是"录音 ⇄ 发送"：**没话要说时发送根本不在**（主人 2026-09-29 的原话
+  //    就是"替换掉录音按钮"）⇒ 不在了就当"按不动"，别让判据去 `single` 一个空的。
+  final f = find.byKey(chatSendKey);
+  if (f.evaluate().isEmpty) return false;
+  return tester.widget<FilledButton>(f).onPressed != null;
+}
 
 void main() {
-  testWidgets('🔴 发送钮**一直在**：没字 ⇒ 灰的、按不动；有字 ⇒ 亮起来', (tester) async {
+  testWidgets('🔴 最右那一格：没字 ⇒ 录音；有字 ⇒ **琥珀色「发送」**（他说"替换掉录音按钮"）', (tester) async {
     await _pump(tester);
-    expect(find.byIcon(Icons.arrow_upward), findsOneWidget, reason: '★ 一开始它就在（主人 2026-09-24）');
-    expect(_sendReady(tester), false, reason: '★ 一开始是灰的、按不动');
+    // 没话要说 ⇒ 那一格是**录音**，发送**不在**
+    expect(find.byKey(chatMicButtonKey), findsOneWidget, reason: '★ 一开始那一格该是录音');
+    expect(find.byKey(chatSendKey), findsNothing,
+        reason: '★ 没话要说时不该有发送（2026-09-29 主人：*"替换掉录音按钮。"*）');
 
     await tester.enterText(find.byType(TextField), '在吗');
     await tester.pump();
+    // 有话要说 ⇒ 换成**发送**（而且那一格只剩它一颗）
+    expect(find.byKey(chatSendKey), findsOneWidget, reason: '有字了 ⇒ 该换成发送');
+    expect(find.byKey(chatMicButtonKey), findsNothing, reason: '★ 两颗同时在 ⇒ 不是"替换"');
     expect(_sendReady(tester), true, reason: '有字了 ⇒ 能按');
 
     // 打的全是空格 ⇒ **也不算**有话要说（发送要 trim 过）
@@ -71,10 +77,13 @@ void main() {
     expect(_fieldLeft(tester), left0, reason: '★ 输入框左边不许动');
     expect(_fieldWidth(tester), width0, reason: '★ 输入框宽度不许动');
 
-    // 发出去（框清空）⇒ 发送钮**变灰**，位置照旧
-    await tester.tap(find.byTooltip('发送'));
+    // 发出去（框清空）⇒ 那一格**换回录音**（发送没了），而输入框**一个像素都没动**
+    await tester.tap(find.text(sendWords));
     await tester.pump();
-    expect(_sendReady(tester), false, reason: '发完框空了 ⇒ 它该变灰');
+    expect(find.byKey(chatSendKey), findsNothing, reason: '发完框空了 ⇒ 那一格该换回录音');
+    expect(find.byKey(chatMicButtonKey), findsOneWidget);
+    expect(_fieldLeft(tester), left0, reason: '★ 换回去的时候输入框左边动了');
+    expect(_fieldWidth(tester), width0, reason: '★ 换回去的时候输入框宽度动了');
     expect(_fieldLeft(tester), left0, reason: '★ 变灰也不许把输入框挤动');
     expect(_fieldWidth(tester), width0);
   });

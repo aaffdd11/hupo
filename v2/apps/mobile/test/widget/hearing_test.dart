@@ -28,6 +28,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/hearing_session.dart';
 import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/widgets/composer.dart';
+import 'package:hupo_app/widgets/rec_pulse.dart';
 
 /// 把 Composer 绑在一个会变的 `Hearing` 上（＝真实那条路：状态从外面来）。
 class _Harness extends StatelessWidget {
@@ -84,18 +85,15 @@ Future<ValueNotifier<Hearing>> pump(
 
 /// **话筒**（框里右边那颗）：闲的时候是 `mic_none`，在听的时候是"停"。
 Finder micIdle() => find.byIcon(Icons.mic_none);
-Finder micLive() => find.byIcon(Icons.stop_circle_outlined);
 
 /// **发送钮此刻按不按得动**（主人 2026-09-24：它**一直在**，没字时是灰的）。
 /// ⚠️ 判据要看"能不能按"，不是"在不在"—— 在不在已经永远是"在"。
 bool sendReady(WidgetTester tester) {
-  final b = tester.widget<IconButton>(
-    find.ancestor(
-      of: find.byIcon(Icons.arrow_upward),
-      matching: find.byType(IconButton),
-    ),
-  );
-  return b.onPressed != null;
+  // ⚠️ 2026-09-29：发送那颗只在"有话要说"时出现在最右那一格，
+  //    而且它是 `FilledButton`（不是 `IconButton`，也没有箭头图形了）。
+  final f = find.byKey(chatSendKey);
+  if (f.evaluate().isEmpty) return false;
+  return tester.widget<FilledButton>(f).onPressed != null;
 }
 
 void main() {
@@ -126,8 +124,10 @@ void main() {
       start: const Hearing(phase: HearingPhase.listening, segments: {0: '今天天气'}),
       onMicToggle: () => tapped += 1,
     );
-    expect(find.text(hearListening), findsOneWidget); // ● 正在听（录音标记）
-    expect(micLive(), findsOneWidget); // 话筒变成"停"
+    // ★ 2026-09-29：**"正在录"画在话筒那颗按钮自己身上** ——
+    //   框里换成那几根脉动的 bar（话筒那个图形这时**不画**了）。
+    expect(find.byKey(recPulseKey), findsOneWidget); // 正在录（按钮上那几根 bar）
+    expect(micIdle(), findsNothing, reason: '★ 正在录时还画着话筒图形 = 两个状态叠在一起');
     expect(find.text('今天天气'), findsOneWidget); // 实时那几个字**在框里**
     // 🔴 **正在听的时候按不动发送**（半句话不许被发出去）
     expect(sendReady(tester), false, reason: '半句话不许发出去');
@@ -135,7 +135,7 @@ void main() {
     n.value = const Hearing(phase: HearingPhase.listening, segments: {0: '今天天气怎么样'});
     await tester.pumpAndSettle();
     expect(find.text('今天天气怎么样'), findsOneWidget);
-    await tester.tap(micLive());
+    await tester.tap(find.byKey(chatMicButtonKey));
     await tester.pumpAndSettle();
     expect(tapped, 1);
   });
@@ -166,7 +166,7 @@ void main() {
     expect(sendReady(tester), false, reason: '一开始：没字 ⇒ 灰的、按不动');
     n.value = const Hearing().tapped();
     await tester.pumpAndSettle();
-    expect(find.text(hearListening), findsOneWidget);
+    expect(find.byKey(recPulseKey), findsOneWidget);
     // 一句一句来字（实时那一段）
     n.value = n.value.partial('今天天气', index: 0);
     await tester.pumpAndSettle();
@@ -184,7 +184,7 @@ void main() {
     final n = await pump(tester);
     n.value = const Hearing().tapped();
     await tester.pumpAndSettle();
-    expect(find.text(hearListening), findsOneWidget);
+    expect(find.byKey(recPulseKey), findsOneWidget);
     // 对面说"整段完了"，可一个字都没有
     n.value = n.value.done();
     await tester.pumpAndSettle();
@@ -192,23 +192,19 @@ void main() {
     expect(micIdle(), findsOneWidget); // 话筒还在（他能再按一次）
   });
 
-  testWidgets('★ 话筒的命中区 ≥44（D3.6）', (tester) async {
+  testWidgets('★ 录音那颗的命中区 ≥44（D3.6）', (tester) async {
     await pump(tester);
-    final size = tester.getSize(
-      find.ancestor(of: micIdle(), matching: find.byType(IconButton)),
-    );
-    expect(size.height >= 44, true, reason: '话筒命中区只有 ${size.height}');
-    expect(size.width >= 44, true, reason: '话筒命中区只有 ${size.width}');
+    final size = tester.getSize(find.byKey(chatMicButtonKey));
+    expect(size.height >= 44, true, reason: '录音命中区只有 ${size.height}');
+    expect(size.width >= 44, true, reason: '录音命中区只有 ${size.width}');
   });
 
-  testWidgets('★ 发送钮的命中区 ≥44（它是常驻的，更要够大）', (tester) async {
-    await pump(tester);
-    final size = tester.getSize(
-      find.ancestor(
-        of: find.byIcon(Icons.arrow_upward),
-        matching: find.byType(IconButton),
-      ),
-    );
+  testWidgets('★ 发送那颗的命中区 ≥44（"缩小一点"不许缩到 44 以下）', (tester) async {
+    final n = await pump(tester);
+    // 有话要说 ⇒ 那一格才换成发送
+    n.value = const Hearing().tapped().finalText('一句话').done();
+    await tester.pumpAndSettle();
+    final size = tester.getSize(find.byKey(chatSendKey));
     expect(size.height >= 44, true, reason: '发送命中区只有 ${size.height}');
     expect(size.width >= 44, true, reason: '发送命中区只有 ${size.width}');
   });

@@ -68,6 +68,32 @@ const Color wallpaperScrim = Color(0x73F8F5EE);
 ///    各自是**不透明**的（`bgLayer2` 实底）⇒ 按钮永远清楚。
 const double barVeilAlpha = 0.72;
 
+/// ★ 2026-09-29：**底部那条 bar 上那两颗方块按钮**（home / 录音）。
+///
+/// 主人：*"左边home按钮变成正方形圆角框，右边的录音按钮也要改成正方形圆角框……
+///   整体高度提高一些，也就是home按钮，录音按钮都要做大一些。"*
+/// ⇒ 边长与圆角各住一个常量（两处必须是同一个数 —— 不然两颗按钮会长得不一样）。
+const double barButtonBox = 52;
+
+/// 那颗方块按钮的圆角（**正方形圆角框**，不是圆）。
+const double barButtonRadius = 14;
+
+/// 「发送」那颗（琥珀色 + 两个字）的最小尺寸。
+/// ⚠️ **命中区仍 ≥44**（D3.6 那道硬闸）：视觉上"小一点"由**宽度**体现，高度不许缩到 44 以下。
+const double barSendWidth = 60;
+const double barSendHeight = 44;
+
+/// ★ **琥珀**（主人：*"用琥珀色"*）—— **从 app 那个图标里取的**那一支
+/// （`web/favicon.png` 里暖色像素的众数 ≈ #E0A030）。
+/// ⚠️ 上面写的是**墨色**的字/图形（对比度 ≈ 7:1；白字只有 ≈ 2:1，过不了手册 §8.3 那条）。
+const Color amber = Color(0xFFE0A030);
+
+/// 录音时那颗话筒上那几根 bar：画几根 / 最矮最高 / 一个来回多久。
+const int recPulseBars = 3;
+const double recPulseBarMin = 6;
+const double recPulseBarMax = 22;
+const Duration recPulsePeriod = Duration(milliseconds: 900);
+
 /// ── 一条规矩（2026-09-23 整理 UI 时定下来）──────────────────
 ///
 /// **平面用描边，浮起来用阴影，两样不许同时上。**

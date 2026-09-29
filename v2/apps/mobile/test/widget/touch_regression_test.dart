@@ -45,6 +45,7 @@ import 'package:hupo_app/widgets/bubble_menu.dart';
 import 'package:hupo_app/widgets/bubble_select_bar.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:hupo_app/widgets/composer.dart';
 
 http.Response _json(String body, [int status = 200]) => http.Response(
   body,
@@ -122,12 +123,12 @@ ScrollPosition _transcript(WidgetTester tester) => tester
     .position;
 
 /// 发送钮此刻按不按得动（灰 = `onPressed == null`）。
-bool _sendReady(WidgetTester tester) => tester
-    .widget<IconButton>(
-      find.ancestor(of: find.byIcon(Icons.arrow_upward), matching: find.byType(IconButton)),
-    )
-    .onPressed !=
-    null;
+bool _sendReady(WidgetTester tester) {
+  // ⚠️ 2026-09-29：发送那颗只在"有话要说"时出现，而且是 `FilledButton`。
+  final f = find.byKey(chatSendKey);
+  if (f.evaluate().isEmpty) return false;
+  return tester.widget<FilledButton>(f).onPressed != null;
+}
 
 /// 真手指那一下：**按住 600ms**（> `kLongPressTimeout`）。
 ///
@@ -184,7 +185,7 @@ void main() {
     await tester.enterText(find.byType(TextField), '在吗');
     await tester.pump();
     expect(_sendReady(tester), isTrue, reason: '★ 有字了发送钮还是灰的');
-    await tester.tap(find.byTooltip('发送'), warnIfMissed: true);
+    await tester.tap(find.text(sendWords), warnIfMissed: true);
     await tester.pumpAndSettle();
     expect(r.says.length, 1, reason: '★ 那一条摆着的时候点发送没反应（真机上就是"收起才能发送"）');
     expect(r.says.single, contains('在吗'));
@@ -212,7 +213,7 @@ void main() {
 
     await tester.enterText(find.byType(TextField), '在吗');
     await tester.pump();
-    await tester.tap(find.byTooltip('发送'), warnIfMissed: true);
+    await tester.tap(find.text(sendWords), warnIfMissed: true);
     await tester.pumpAndSettle();
     expect(r.says.length, 1, reason: '★ 对照组：没摆那条的时候发送本来就是好的');
   });

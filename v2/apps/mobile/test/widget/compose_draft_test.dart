@@ -105,7 +105,7 @@ void main() {
     expect(c.composeDraft, '帮我把这周的工时记一下', reason: '★ 每敲一下就存一次');
 
     // 发出去 ⇒ 上面那条草稿该消失（它已经是"说过的话"了，不是草稿）
-    await tester.tap(find.byTooltip('发送'));
+    await tester.tap(find.text(sendWords));
     await tester.pump();
     expect(c.composeDraft, isNull, reason: '★ 发出去了就不是草稿了');
   });

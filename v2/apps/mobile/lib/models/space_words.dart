@@ -240,6 +240,11 @@ const String wallpaperDefaultLabel = '不设（默认那张纸）';
 /// 「第 N 张」的前缀（源图没有名字，**不许编一个**）。
 const String wallpaperLabelPrefix = '壁纸 ';
 
+/// ★ 2026-09-29：那颗**琥珀色的发送**上写的两个字（主人：*"文字写发送。"*）。
+/// ⚠️ 原来是"一个箭头图形 + `'发送'` 那个字面量"，现在这句是**唯一出处**
+///    （词表那一层才进得了禁用词扫描 —— 同别的界面用词）。
+const String sendWords = '发送';
+
 /// 设置里那一条：退出登录（原来挂在聊天抓手行上）。
 const String settingsLogout = '退出登录';
 

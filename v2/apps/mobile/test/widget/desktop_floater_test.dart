@@ -115,25 +115,32 @@ void main() {
     expect(field.decoration!.filled, true, reason: '★ 输入框没实底 —— bar 透了它也跟着透');
     expect(field.decoration!.fillColor, p.bgLayer2);
 
-    // ② 话筒：它的 IconButton 带实底
-    // ⚠️ `IconButton(tooltip:)` 把 `Tooltip` 建在**按钮里面** ⇒ 要往上找
-    //    （往下找是 0 个 —— 这一条判据第一版就是这么假的）。
-    final mic = tester.widget<IconButton>(
-      find.ancestor(of: find.byTooltip(hearStart), matching: find.byType(IconButton)).first,
-    );
-    expect(mic.style?.backgroundColor?.resolve(<WidgetState>{}), p.bgLayer2,
-        reason: '★ 话筒没有实底');
-
-    // ③ home 那颗：圆片（`homeButtonFace`）带实底
-    final face = find
-        .descendant(of: find.byKey(chatHomeButtonKey), matching: find.byType(Container))
+    // ② 话筒：**正方形圆角框 + 实底**（2026-09-29 主人：*"右边的录音按钮也要改成
+    //    正方形圆角框……做大一些"*）。⚠️ 它现在不是 `IconButton` 了（是 Material + InkWell，
+    //    因为框里要能画那几根 bar）⇒ 判据认**那一框自己的 Material**。
+    final micFace = find
+        .ancestor(of: find.byKey(chatMicButtonKey), matching: find.byType(Material))
         .first;
-    final dec = tester.widget<Container>(face).decoration! as BoxDecoration;
-    expect(dec.color, p.bgLayer2, reason: '★ home 那颗没有实底');
-    expect(tester.getSize(face).width, homeButtonFace);
-    // 负向对照：可点区**比那个圆片大**（D3.6 —— 命中区不许缩成看得见的那一圈）
-    expect(tester.getSize(find.byKey(chatHomeButtonKey)).width,
-        greaterThan(homeButtonFace));
+    final mm = tester.widget<Material>(micFace);
+    expect(mm.color, p.bgLayer2, reason: '★ 话筒没有实底');
+    expect(mm.shape, isNot(isA<CircleBorder>()), reason: '★ 录音那颗还是圆的');
+    expect(tester.getSize(find.byKey(chatMicButtonKey)).width, d.barButtonBox);
+    expect(tester.getSize(find.byKey(chatMicButtonKey)).height, d.barButtonBox);
+
+    // ③ home 那颗：**正方形圆角框**（2026-09-29 主人：*"变成正方形圆角框……做大一些"*）
+    final face = find
+        .descendant(of: find.byKey(chatHomeButtonKey), matching: find.byType(Material))
+        .first;
+    final fm = tester.widget<Material>(face);
+    expect(fm.color, p.bgLayer2, reason: '★ home 那颗没有实底');
+    expect(fm.shape, isNot(isA<CircleBorder>()),
+        reason: '★ 还是圆的 —— 主人要的是"正方形圆角框"');
+    final size = tester.getSize(face);
+    expect(size.width, d.barButtonBox, reason: '★ 那一框没有做大');
+    expect(size.height, d.barButtonBox);
+    // 负向对照：**两颗同尺寸**（home 与录音 —— 他说的是"都要做大一些"）
+    expect(tester.getSize(find.byKey(chatMicButtonKey)), size,
+        reason: '★ home 与录音那颗不一样大');
   });
 
   testWidgets('🔴 话筒在**这一行的最右**（不在输入框里面了）', (tester) async {
@@ -225,7 +232,7 @@ void main() {
 
     await tester.enterText(find.byType(TextField), '在吗');
     await tester.pump();
-    await tester.tap(find.byTooltip('发送'));
+    await tester.tap(find.text(sendWords));
     await tester.pump();
 
     expect(_floaterRect(tester).height > before, true,
@@ -285,7 +292,7 @@ void main() {
     final half = _floaterRect(tester).height;
     await tester.enterText(find.byType(TextField), '在吗');
     await tester.pump();
-    await tester.tap(find.byTooltip('发送'));
+    await tester.tap(find.text(sendWords));
     await tester.pump();
     expect(_floaterRect(tester).height > half, true, reason: '发送之后该拉满（$half → ${_floaterRect(tester).height}）');
   });

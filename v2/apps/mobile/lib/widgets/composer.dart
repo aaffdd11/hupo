@@ -31,6 +31,7 @@ import '../models/hearing_words.dart';
 import '../models/speak_words.dart';
 import '../models/space_words.dart';
 import 'dsh_look.dart';
+import 'rec_pulse.dart';
 
 class Composer extends StatefulWidget {
   /// ⚠️ **刻意没有 `enabled` 参数**——手册 D5.14 说"打字框永远不许锁"。
@@ -113,6 +114,14 @@ class Composer extends StatefulWidget {
   @override
   State<Composer> createState() => _ComposerState();
 }
+
+/// 「发送」那颗按钮的 key（判据认它；它只在"有话要说"时出现在最右那一格）。
+const Key chatSendKey = ValueKey('chat-send');
+
+/// 录音那颗按钮的 key（判据/"这一格现在是不是录音"用它认）。
+/// ⚠️ 它不是"那一格的 key"：那一格（`_rightSlot`）在**有话要说时换成发送** ——
+///    这个 key 只在**录音那颗**上，所以"发送替换了录音"这件事判据看得出来。
+const Key chatMicButtonKey = ValueKey('chat-mic');
 
 class _ComposerState extends State<Composer> {
   final _controller = TextEditingController();
@@ -266,9 +275,12 @@ class _ComposerState extends State<Composer> {
           if (showDraft) _draftStrip(theme, look),
           // 一句白话（有才画）——例如"这里开不了麦"
           if (_notice.isNotEmpty) _noticeStrip(theme, look),
-          // ★ **正在听 / 为什么停了**（2026-09-24：只剩这一行 —— 字直接落进框里）
-          if (widget.hearing.busy || widget.hearing.notice.isNotEmpty)
-            _hearingStrip(theme, look),
+          // ★ **"为什么停了"**（2026-09-29：**只在真有那句话时才画**）。
+          //   🔴 原来这里是 `busy || notice.isNotEmpty` —— 而"正在听"那三个字
+          //      已经搬到**话筒那颗按钮上**（框里那几根脉动的 bar）⇒ busy 为真、
+          //      notice 为空时，这里会画出一块**什么都没有的白板子**
+          //      （真浏览器截图当场看到的）。判据 R5 钉着这一条。
+          if (widget.hearing.notice.isNotEmpty) _hearingStrip(theme, look),
           // ★ 2026-09-24：**这一条现在只有一行**（主人：*"我们做成一行"*）——
           //   `[在哪儿说话] [框（右边里头是话筒）] [发送]`
           // ★ 2026-09-27：外面包一层 `Stack` —— 只为让 `hintAbove`（那条说明）
@@ -293,8 +305,13 @@ class _ComposerState extends State<Composer> {
               //   ⇒ 这一行现在是**三段**：`[home] [框（发送在框里）] [话筒]`，
               //     话筒在**这一行的最右**（不在框里面了），而且三样都是**不透明**的。
               Expanded(child: _field(look)),
-              const SizedBox(width: 4),
-              _micButton(p),
+              const SizedBox(width: d.gapS),
+              // ★ 2026-09-29：**最右这一格是两个状态共用的一格**（主人：*"替换掉录音按钮。"*）：
+              //   · 没话要说 ⇒ **录音**那颗（正方形圆角框；正在录时框里是那几根脉动的 bar）；
+              //   · 有话要说（而且不在录）⇒ 换成**琥珀色的「发送」**（小一点、带两个字）。
+              //   ⚠️ 两颗的**外框尺寸同一个**（`barButtonBox` 那个方块那一列）⇒ 换的时候
+              //      这一行不跳（D4.8：界面自己抖是缺陷）。
+              _rightSlot(theme, p, look),
             ],
           ),
               if (widget.hintAbove != null)
@@ -431,40 +448,68 @@ class _ComposerState extends State<Composer> {
           // ★ **读出来**（主人 2026-09-23 定案：替掉原来演示用的「听筒 / 扬声器」）。
           //   契约 `docs/dev/68-SPEAK.md`。**念不了就不画**（界面上不许有按不动的东西）。
           if (widget.canSpeak) _speakerButton(look.palette),
-          // ★ **发送**（主人 2026-09-24：*"聊天框右侧应该是一个发送按钮。一开始是灰色的。"*）
-          //   ⚠️ 2026-09-23 那个"有字才画"被它推翻了：现在它**一直在**，
-          //      没字时是灰的、按不动 —— 位置固定，界面不跳（D4.8）。
-          //   ★ 2026-09-29：它从"框外面"搬进**框里的最右**（这样这一行的最右
-          //      才是**话筒** —— 主人那句"右侧是语音按钮"）。
-          _sendButton(Theme.of(context), look.palette),
         ],
       ),
     ),
   );
 
-  /// **话筒**（2026-09-24：它在框里，不在左边）。
+  /// **最右那一格**：录音 ⇄ 发送（主人 2026-09-29：*"替换掉录音按钮。"*）。
   ///
-  /// 按一下**开始听**、再按一下**结束**；正在听时它是红的、图形换成"停"。
+  /// * 有话要说（而且不在录）⇒ **琥珀色的「发送」**（两个字，`barSendWidth × barSendHeight`）；
+  /// * 其余时候 ⇒ **录音**那颗（正方形圆角框，`barButtonBox` 见方）。
+  /// ⚠️ 两颗的外框**一样高**（`barButtonBox`）⇒ 换状态时这一行不跳。
+  /// ⚠️ 判据要靠**文字**认得出"现在这一格是哪一颗"：发送那颗写着「发送」。
+  Widget _rightSlot(ThemeData theme, DshPalette p, DshLook look) => SizedBox(
+    height: d.barButtonBox,
+    width: d.barButtonBox,
+    child: ValueListenableBuilder<TextEditingValue>(
+      valueListenable: _controller,
+      builder: (context, value, _) {
+        final canSend = value.text.trim().isNotEmpty && !widget.hearing.busy;
+        return Center(child: canSend ? _sendButton(theme, p) : _micButton(p));
+      },
+    ),
+  );
+
+  /// **话筒**（正方形圆角框；正在录时框里是那几根**脉动的 bar** —— 主人 2026-09-29）。
+  ///
+  /// 按一下**开始听**、再按一下**结束**。
+  /// 🔴 **"正在录"这个状态画在按钮自己身上**（原来是上面那行小字 `● 正在听`）：
+  ///    那行小字因此撤掉（`_hearingStrip` 只剩"为什么停了"）；"正在听"那句话
+  ///    仍挂在 tooltip / 无障碍名上（读屏照样听得到，D5.13 那条纪律不变）。
   /// ⚠️ `canHear` 假 ⇒ **照样画**，点下去说一句白话（`hearCantHere`）——
   ///    不装开麦、不进语音档、不出假字。
   Widget _micButton(DshPalette p) {
     final busy = widget.hearing.busy;
-    return IconButton(
-      // ★ 2026-09-29：**实底**（bar 是半透明的，它不许跟着透）
-      style: IconButton.styleFrom(backgroundColor: p.bgLayer2),
-      tooltip: busy ? hearStop : hearStart,
-      onPressed: () {
-        if (!widget.canHear) {
-          setState(() => _notice = hearCantHere);
-          return;
-        }
-        setState(() => _notice = '');
-        _toggleMic();
-      },
-      icon: Icon(
-        busy ? Icons.stop_circle_outlined : Icons.mic_none,
-        // ★ 批次 4：暗色下 `d.accent` / `d.muted` 压在新底上读不出来 ⇒ 走色板。
-        color: busy ? p.stateError : p.labelTertiary,
+    return Tooltip(
+      message: busy ? hearStop : hearStart,
+      child: Material(
+        // ★ 2026-09-29：**实底**（bar 是半透明的，它不许跟着透）＋ **正方形圆角框**
+        color: p.bgLayer2,
+        borderRadius: BorderRadius.circular(d.barButtonRadius),
+        child: InkWell(
+          onTap: () {
+            if (!widget.canHear) {
+              setState(() => _notice = hearCantHere);
+              return;
+            }
+            setState(() => _notice = '');
+            _toggleMic();
+          },
+          borderRadius: BorderRadius.circular(d.barButtonRadius),
+          child: SizedBox(
+            key: chatMicButtonKey,
+            // 命中区 ≥44（D3.6）：方块本身就是 `barButtonBox`（比 44 大）
+            width: d.barButtonBox,
+            height: d.barButtonBox,
+            child: Center(
+              // 正在录 ⇒ **脉动的 bar**（不画话筒那个图形了）；否则画话筒
+              child: busy
+                  ? const RecPulse()
+                  : Icon(Icons.mic_none, color: p.labelTertiary),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -485,54 +530,56 @@ class _ComposerState extends State<Composer> {
   ///    ⚠️ 位置与大小**固定 48×48**：它要是一会儿有一会儿没有，框的宽度就会跳
   ///      —— 那是 D4.8 一种病（界面自己抖）。
   /// ⚠️ 只有这一小块跟着输入变（`ValueListenableBuilder`）—— **框本身不重建**。
-  Widget _sendButton(ThemeData theme, DshPalette p) => SizedBox(
-    width: 48,
-    height: 48,
-    child: ValueListenableBuilder<TextEditingValue>(
-      valueListenable: _controller,
-      builder: (context, value, _) {
-        // ⚠️ **正在听/收尾中按不动**：那会儿框里的字是"还在长"的半句，
-        //    发出去就是替他做了决定（主人要的是"停下之后再决定发不发"）。
-        final canSend = value.text.trim().isNotEmpty && !widget.hearing.busy;
-        return Semantics(
-          button: true,
-          label: '发送',
-          enabled: canSend,
-          child: IconButton.filled(
-            // 触控目标 ≥44
-            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-            onPressed: canSend ? _submit : null,
-            icon: const Icon(Icons.arrow_upward),
-            tooltip: '发送',
-            style: IconButton.styleFrom(
-              minimumSize: const Size(48, 48),
-              // ★ 批次 4：主按钮色走 DSH 的 brand（近黑/近白），不是 Material 那个蓝。
-              //   前景色跟着**这一档主题的** `onPrimary`（亮=白 / 暗=近黑）——
-              //   两处各写一份迟早会漂，所以只认主题那一个（`appearance_scope` 拼的）。
-              backgroundColor: canSend ? p.brandPrimary : p.borderL1,
-              disabledBackgroundColor: p.borderL1,
-              foregroundColor: canSend ? theme.colorScheme.onPrimary : p.labelCaption,
-              disabledForegroundColor: p.labelCaption,
-            ),
-          ),
-        );
-      },
+  /// **「发送」**（主人 2026-09-29：*"发送按钮缩小一点，用琥珀色。文字写发送。"*）。
+  ///
+  /// 🔴 三条：
+  ///   · **琥珀色**（`d.amber` —— 从 app 那个图标里取的那一支）＋ **墨色**的字
+  ///     （白字在琥珀上只有 ≈2:1，过不了手册 §8.3 那条 4.5:1）；
+  ///   · **文字写「发送」**（不再是一个箭头图形）；
+  ///   · **小一点**（`barSendWidth × barSendHeight`）—— ⚠️ 但**命中区仍 ≥44**（D3.6 硬闸）。
+  ///
+  /// ⚠️ 只有这一小块跟着输入变（`_rightSlot` 里那个 `ValueListenableBuilder`）—— **框本身不重建**。
+  Widget _sendButton(ThemeData theme, DshPalette p) => Semantics(
+    button: true,
+    label: sendWords,
+    enabled: true,
+    child: FilledButton(
+      key: chatSendKey,
+      onPressed: _submit,
+      style: FilledButton.styleFrom(
+        // 触控目标 ≥44（D3.6）：**高度不许低于 44**，"小一点"由宽度体现
+        minimumSize: const Size(d.barSendWidth, d.barSendHeight),
+        padding: const EdgeInsets.symmetric(horizontal: d.gapS),
+        backgroundColor: d.amber,
+        // ⚠️ 墨色的字（不是白字 —— 对比度，见上）
+        foregroundColor: d.ink,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(d.barButtonRadius),
+        ),
+      ),
+      child: const Text(sendWords),
     ),
   );
 
-  /// **正在听 / 收尾中**那一行（一行、淡色）。
+  /// **"为什么停了"那一行**（2026-09-29 起只剩这一件事）。
   ///
-  /// 🔴 2026-09-24：原来它是一大块（"语音档"里那个卡片 + 大按钮），现在**只剩这一行** ——
-  ///    识别出来的字**直接落进框里**（`_pushMirror`），屏幕上的字只有一份。
-  /// ⚠️ **"正在听"这三个字只在真的在听时出现**（D5.13：不录音时禁用"听"字）。
+  /// 🔴 2026-09-24：原来它是一大块（"语音档"里那个卡片 + 大按钮），后来只剩一行；
+  ///    **2026-09-29 起连"● 正在听"也没有了** —— 那个状态搬到**话筒那颗按钮上**
+  ///    （框里那几根脉动的 bar，见 `_micButton` / `widgets/rec_pulse.dart`）。
+  /// ⚠️ D5.13（"不录音时禁用『听』字"）一个字都没放宽：`hearListening`/`hearFinishing`
+  ///    仍然只有那一个出处，而且只在 `hearing.listening` 为真时才挂到按钮上。
   Widget _hearingStrip(ThemeData theme, DshLook look) {
     final h = widget.hearing;
-    final live = h.listening;
     final p = look.palette;
     // ★ 2026-09-29：**这一行自己也带一块实底** —— bar 现在是半透明的，
     //   而这行字是直接画在 bar 上的（红点 + "正在听" + 为什么停了）。
     //   不给它实底的话，它的对比度会**随着底下那张壁纸变**（手册 §8.3 那条
     //   "正文与底色 ≥ 4.5:1"就成了看运气）⇒ 与上面那条 `_noticeStrip` 同一种形状。
+    // ★ 2026-09-29：**"正在听"那三个字撤掉了** —— 主人：*"正在录音，就放到录音按钮上"*
+    //   ⇒ 那个状态现在画在**话筒那颗按钮自己身上**（框里那几根脉动的 bar）。
+    //   ⚠️ 这一行剩下的只有**"为什么停了"**那句话（它是一句白话，不是状态指示）。
+    //   ⚠️ `hearListening` / `hearFinishing` 这两个常量仍然有用（tooltip / 无障碍名），
+    //      D5.13 那条"只在真的在听时才可以说在听"一个字都没放宽。
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Container(
@@ -546,22 +593,6 @@ class _ComposerState extends State<Composer> {
         ),
         child: Row(
         children: [
-          if (h.busy) ...[
-            Text(
-              '●',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: live ? p.stateError : p.labelTertiary,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              live ? hearListening : hearFinishing,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: live ? p.stateError : p.labelTertiary,
-              ),
-            ),
-            const SizedBox(width: 8),
-          ],
           // **为什么停了**（原话，不再翻译一遍）
           Expanded(
             child: Text(

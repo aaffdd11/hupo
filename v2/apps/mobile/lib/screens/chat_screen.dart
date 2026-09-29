@@ -100,9 +100,6 @@ const Key chatHomeHintKey = Key('chat-home-hint');
 /// 那颗 home 的**图形**多大（原来 18 —— 主人 2026-09-27：*"扩大一些"*）。
 const double homeButtonIcon = 22;
 
-/// 那颗 home **实底圆片**的直径（2026-09-29：bar 半透明之后，它得有个不透明的底）。
-/// ⚠️ 比命中区小：**量的是看得见的那一圈**，可点区由 `homeButtonHit` 管（D3.6）。
-const double homeButtonFace = 34;
 
 /// 那颗 home 的**命中区**（D3.6：≥44；图形摆在中间，四周透明）。
 const double homeButtonHit = 44;
@@ -1201,18 +1198,25 @@ class _ChatScreenState extends State<ChatScreen> {
         onTap: () => _backToDesktop(c),
         customBorder: const CircleBorder(),
         child: SizedBox(
-          width: homeButtonHit,
-          height: homeButtonHit,
+          // ⚠️ 可点区**不许小于那一框**（`barButtonBox` 52）—— 原来这里写死 `homeButtonHit`
+          //    （44）⇒ 里面那个 52 的方块被**挤成 44**（"做大一些"当场没做成）。
+          //    取两者的大者：既满足 D3.6（≥44），又放得下那一框。
+          width: math.max(homeButtonHit, d.barButtonBox),
+          height: math.max(homeButtonHit, d.barButtonBox),
           child: Center(
-            child: Container(
-              width: homeButtonFace,
-              height: homeButtonFace,
-              decoration: BoxDecoration(
-                color: look.palette.bgLayer2,
-                shape: BoxShape.circle,
-              ),
-              child: Center(
-                child: Icon(_scopeIcon(c), size: homeButtonIcon, color: d.ink),
+            // ★ 2026-09-29 主人：*"左边home按钮变成正方形圆角框……整体高度提高一些，
+            //   也就是home按钮，录音按钮都要做大一些。"*
+            //   ⇒ 圆片 → **正方形圆角框**（`barButtonBox` 见方 / `barButtonRadius` 圆角），
+            //     与录音那颗**同一套尺寸**（两颗长得一样大，只是图形不同）。
+            child: Material(
+              color: look.palette.bgLayer2,
+              borderRadius: BorderRadius.circular(d.barButtonRadius),
+              child: SizedBox(
+                width: d.barButtonBox,
+                height: d.barButtonBox,
+                child: Center(
+                  child: Icon(_scopeIcon(c), size: homeButtonIcon, color: d.ink),
+                ),
               ),
             ),
           ),

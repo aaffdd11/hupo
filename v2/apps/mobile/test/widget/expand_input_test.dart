@@ -65,6 +65,8 @@ import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/widgets/file_panel.dart';
 import 'package:hupo_app/widgets/tool_row_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:hupo_app/widgets/composer.dart';
+import 'package:hupo_app/models/space_words.dart';
 
 http.Response _json(String body, [int status = 200]) => http.Response(
   body,
@@ -195,13 +197,14 @@ Future<void> _wheelUp(WidgetTester tester, {double by = 600}) async {
   await tester.pumpAndSettle();
 }
 
-/// 发送钮此刻按不按得动（灰 = `onPressed == null`）。
-bool _sendReady(WidgetTester tester) => tester
-    .widget<IconButton>(
-      find.ancestor(of: find.byIcon(Icons.arrow_upward), matching: find.byType(IconButton)),
-    )
-    .onPressed !=
-    null;
+/// 发送钮此刻按不按得动。
+/// ⚠️ 2026-09-29：那一格是"录音 ⇄ 发送"（主人：*"替换掉录音按钮。"*）——
+///    没话要说时**发送根本不在**（那儿是话筒）⇒ 不在了就当"按不动"。
+bool _sendReady(WidgetTester tester) {
+  final f = find.byKey(chatSendKey);
+  if (f.evaluate().isEmpty) return false;
+  return tester.widget<FilledButton>(f).onPressed != null;
+}
 
 /// **一条新事件进来**（流式回答里的每一条 `message/text` 都会走这条路）。
 void _newText(ChatController c) => c.ingest({
@@ -248,7 +251,7 @@ void main() {
       expect(_sendReady(tester), isTrue, reason: '★ 有字了发送钮还是灰的');
 
       // ⚠️ `warnIfMissed`：点歪了（被别的东西盖住 / 落在视口外）会报出来
-      await tester.tap(find.byTooltip('发送'), warnIfMissed: true);
+      await tester.tap(find.text(sendWords), warnIfMissed: true);
       await tester.pumpAndSettle();
 
       // 负向对照（"恰好一次"）：再等几帧也不许多交一句
@@ -267,7 +270,7 @@ void main() {
     await tester.enterText(find.byType(TextField), '在吗');
     await tester.pump();
     expect(_sendReady(tester), isTrue);
-    await tester.tap(find.byTooltip('发送'), warnIfMissed: true);
+    await tester.tap(find.text(sendWords), warnIfMissed: true);
     await tester.pumpAndSettle();
     expect(r.says.length, 1, reason: '★ 暗色/大字号下发送钮点不动');
   });
@@ -365,7 +368,9 @@ void main() {
 
     final floater = tester.getRect(find.byType(ChatFloater));
     final transcript = tester.getRect(find.byType(ListView).first);
-    final send = tester.getRect(find.byTooltip('发送'));
+    // ⚠️ 这一刻框是空的 ⇒ 最右那一格是**录音**（2026-09-29："录音 ⇄ 发送"共用一格）
+    //    —— 量的就是它（两颗同一个外框，量哪颗都一样）。
+    final send = tester.getRect(find.byKey(chatMicButtonKey));
 
     expect(
       transcript.height,
@@ -383,7 +388,7 @@ void main() {
     // 顺手核一句：这个状态下还是发得出去
     await tester.enterText(find.byType(TextField), '在吗');
     await tester.pump();
-    await tester.tap(find.byTooltip('发送'), warnIfMissed: true);
+    await tester.tap(find.text(sendWords), warnIfMissed: true);
     await tester.pumpAndSettle();
     expect(r.says.length, 1, reason: '★ 键盘开着时发送钮点不动');
   });
