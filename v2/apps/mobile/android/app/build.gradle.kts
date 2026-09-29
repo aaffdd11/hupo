@@ -53,6 +53,17 @@ android {
                 storePassword = storePw
                 keyAlias = keyAliasName
                 keyPassword = keyPw
+                // 🔴 **三种签名方案全开**（2026-09-30）：
+                //    AGP 在 `minSdk >= 24` 时**默认只签 v2**（v1 是给 Android 6 及以下的），
+                //    而真机上"**解析包时出现问题**"有一类就出在这儿 ——
+                //    **第三方安装器 / 文件管理器**用老的 JAR 校验去看那个包时，
+                //    只看得到"没有 v1 签名"。⇒ 三样都签上，代价是包大几百 KB，
+                //    换来的是"谁来看都认得出这是一个合法的包"。
+                //    ⚠️ v3 是 Android 9+ 的密钥轮换那条路（留着不碍事）；
+                //       v2 才是 Android 7+ 真正生效的那一个。
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
