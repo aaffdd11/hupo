@@ -213,9 +213,16 @@ void main() {
     final s = shadows.first;
     expect(s.blurRadius, 32);
     expect(s.offset.dy, -6);
-    // 阴影颜色是从 ink 来的（不是随手一个黑）
+    // 🔴 2026-09-29 主人：*"……我想用白色透明，不用黑色透明。"*
+    //    ⇒ 影的颜色是**白**（`floaterShadowColor`），**不是**墨色那个黑。
     expect(s.color.a > 0, true);
-    expect(s.color.r, closeTo(d.ink.r, 0.01));
+    expect(s.color, d.floaterShadowColor);
+    expect(s.color.r, closeTo(1.0, 0.001), reason: '★ 阴影不是白的（还是黑的那一支）');
+    expect(s.color.g, closeTo(1.0, 0.001));
+    expect(s.color.b, closeTo(1.0, 0.001));
+    // 负向对照：**不许**再用 ink 当影色（那是改前那一版）
+    expect(s.color.r, isNot(closeTo(d.ink.r, 0.01)),
+        reason: '★ 又用回"墨色黑影"了 —— 主人明确说不要黑');
   });
 
   testWidgets('🔴 点收起态那个「说点什么」⇒ **窗口自动打开**（而且字不丢）', (tester) async {

@@ -360,7 +360,10 @@ class ChatFloaterState extends State<ChatFloater> {
               borderRadius: BorderRadius.circular(d.radiusCard),
               boxShadow: [
                 BoxShadow(
-                  color: d.ink.withValues(alpha: 0.45),
+                  // ★ 2026-09-29 主人：*"……我想用白色透明，不用黑色透明。"*
+                  //   ⇒ 影的颜色从"墨色 α.45 的黑"换成**白**（`floaterShadowColor`）。
+                  //   ⚠️ 模糊与下移照旧（手册 §10.1 那两个数没动）。
+                  color: d.floaterShadowColor,
                   blurRadius: 32,
                   offset: const Offset(0, -6),
                 ),
