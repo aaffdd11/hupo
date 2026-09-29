@@ -388,6 +388,72 @@ void main() {
     expect(r.says.length, 1, reason: '★ 键盘开着时发送钮点不动');
   });
 
+  // ── ③·补 键盘弹起 ⇒ **最新那条仍然看得见**（主人 2026-09-30 报的）──────
+  //
+  // 主人原话：*「输入法打开的时候，页面被覆盖，无法显示最新消息。」*
+  // 真浏览器读数（手机 UA · 390 宽 · 键盘 300）：浮窗**是对的**（输入条让开键盘），
+  // 可**时间线没跟到底** —— 视口变矮时 Flutter 不会替我们把滚动位置收到底
+  // ⇒ 刚才贴着底那条"最新的话"被挤到看得见的地方之外。
+  testWidgets('🔴 手机 + 键盘弹起 ⇒ 最新那条仍贴着底（视口变了要重新对一次）', (tester) async {
+    const size = Size(390, 844);
+    const keyboard = 300.0;
+    final r = _controller();
+    _feed(r.c, 40);
+    tester.view.physicalSize = size;
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await _pump(tester, r.c);
+    await _expand(tester);
+    await _drainFrames(tester);
+
+    final before = _transcript(tester);
+    expect(
+      before.pixels,
+      closeTo(before.maxScrollExtent, 1),
+      reason: '前提：键盘还没弹起来时，时间线本来就该贴着底',
+    );
+    final oldMax = before.maxScrollExtent;
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: keyboard);
+    await tester.pumpAndSettle();
+    await _drainFrames(tester);
+
+    final after = _transcript(tester);
+    expect(
+      after.maxScrollExtent,
+      greaterThan(oldMax),
+      reason: '前提：键盘确实把那块地方弄矮了（视口变矮 ⇒ 内容超出得更多、maxScrollExtent 变大）',
+    );
+    expect(
+      after.pixels,
+      closeTo(after.maxScrollExtent, 1),
+      reason: '★ 键盘弹起来之后最新那条被挤到看不见的地方了（视口变了没重新对底）',
+    );
+  });
+
+  testWidgets('对照组：用户自己翻上去了 ⇒ 键盘弹起**不许**把他拽回底部', (tester) async {
+    const keyboard = 300.0;
+    final r = _controller();
+    _feed(r.c, 40);
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await _pump(tester, r.c);
+    await _expand(tester);
+    await _drainFrames(tester);
+    await _wheelUp(tester);
+    final away = _transcript(tester).pixels;
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: keyboard);
+    await tester.pumpAndSettle();
+    await _drainFrames(tester);
+    expect(
+      _transcript(tester).pixels,
+      away,
+      reason: '★ 他正看着老话，键盘一起来就把他拽回底部了（那是"打断他"）',
+    );
+  });
+
   testWidgets('对照组：没有键盘 ⇒ 时间线本来就该有一大块（这条一直是对的）', (tester) async {
     final r = _controller();
     _feed(r.c, 40);

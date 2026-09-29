@@ -245,6 +245,16 @@ class _ChatScreenState extends State<ChatScreen> {
   ///    ⇒ **打开就停在最老那一条**。判据本身搬去了 `models/scroll_follow.dart`。
   bool _userScrolledAway = false;
 
+  /// **上一次"看得见的那块地方"有多高**（屏高 − 键盘）。
+  ///
+  /// 🔴 2026-09-30 主人报的真缺陷：*「输入法打开的时候，页面被覆盖，无法显示最新消息。」*
+  ///    现场（真浏览器 · 手机 UA · 390 宽 · 键盘 300）：浮窗**正确地**让开了键盘，
+  ///    可**时间线自己没跟到底** —— 视口变矮时 Flutter **不会**替我们把滚动位置收到底，
+  ///    于是刚才在最下面那条"最新的话"被挤到**看得见的那块地方之外**
+  ///    （前后两张截图：键盘弹起前最下面是「我现在接不上活…」，弹起后变成更早的一条）。
+  ///    ⇒ 记着这个高度，**一变就拿既有那条规则重新对一次**（见 [didChangeDependencies]）。
+  double? _lastVisibleH;
+
   // ── ★ `116`：过程折叠（DSH 的 `turn-process` 控件 · 主人 2026-09-26）────
 
   /// **时间线那一块**（自动折叠要问它"键盘焦点在不在里面"，见 [_focusInTranscript]）。
@@ -522,6 +532,37 @@ class _ChatScreenState extends State<ChatScreen> {
     unawaited(_loadAppearance());
     // ★ 2026-09-29：桌面那张壁纸（读不出来 ⇒ 那张暖纸）。
     unawaited(_loadWallpaper());
+  }
+
+  /// 🔴 **"看得见的那块地方"变了 ⇒ 时间线重新对一次底**（2026-09-30 主人报的真缺陷）。
+  ///
+  /// 现场：*「输入法打开的时候，页面被覆盖，无法显示最新消息。」*
+  /// 真浏览器读数（手机 UA · 390 宽 · 键盘 300，见 `docs/dev/142-IME-LATEST-MESSAGE.md`）：
+  ///   · 浮窗**是对的** —— 输入条让开键盘（编辑元素 `y 648 → 348`，正好 300）；
+  ///   · 时间线**没跟** —— 键盘弹起前最下面是「我现在接不上活…」（最新那条），
+  ///     弹起后最下面变成更早的一句 ⇒ **最新的话被挤到看得见的地方之外**。
+  ///
+  /// 为什么：视口变矮时 Flutter **不会**替我们把滚动位置收到底
+  /// （`maxScrollExtent` 小了 300，而 `pixels` 还是原来那个数）
+  /// ⇒ 原来贴着底的那一屏，露出来的就只剩上半截。
+  /// 而"跟不跟到底"这件事**只在控制器有变化时**才算（`_onChanged` → `_followBottom`），
+  /// 键盘弹起**不产生新事件** ⇒ 那条路一次都不走。
+  ///
+  /// ⇒ 拿**既有那条规则**重新对一次（`models/scroll_follow.dart` 的纯函数）：
+  ///   他**自己往上翻过**就不动（`userScrolledAway` ⇒ 只在贴底附近才跟），
+  ///   从没翻过 ⇒ 钉回最新（`FollowAction.jump`，不带动画）。
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // ⚠️ `MediaQuery` 一变（键盘 / 窗口尺寸 / 系统那条手势条）这里就会跑一次；
+    //    别的继承变化（主题、字号）也会进来 ⇒ **只认高度这个数**。
+    final mq = MediaQuery.of(context);
+    final visibleH = mq.size.height - mq.viewInsets.bottom;
+    final was = _lastVisibleH;
+    _lastVisibleH = visibleH;
+    if (was == null || (visibleH - was).abs() < 0.5) return;
+    // 下一帧再对：这一刻布局还没按新高度算过（`maxScrollExtent` 还是旧的）。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _followBottom());
   }
 
   @override
