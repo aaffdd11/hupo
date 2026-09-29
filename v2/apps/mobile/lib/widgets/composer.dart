@@ -118,9 +118,8 @@ class Composer extends StatefulWidget {
 /// 「发送」那颗按钮的 key（判据认它；它只在"有话要说"时出现在最右那一格）。
 const Key chatSendKey = ValueKey('chat-send');
 
-/// 录音那颗按钮的 key（判据/"这一格现在是不是录音"用它认）。
-/// ⚠️ 它不是"那一格的 key"：那一格（`_rightSlot`）在**有话要说时换成发送** ——
-///    这个 key 只在**录音那颗**上，所以"发送替换了录音"这件事判据看得出来。
+/// 录音那颗按钮的 key（判据认它）。
+/// ⚠️ 它**一直在**这一行的最右（主人 2026-09-29 更正）；「发送」在**消息框里面**。
 const Key chatMicButtonKey = ValueKey('chat-mic');
 
 class _ComposerState extends State<Composer> {
@@ -306,12 +305,12 @@ class _ComposerState extends State<Composer> {
               //     话筒在**这一行的最右**（不在框里面了），而且三样都是**不透明**的。
               Expanded(child: _field(look)),
               const SizedBox(width: d.gapS),
-              // ★ 2026-09-29：**最右这一格是两个状态共用的一格**（主人：*"替换掉录音按钮。"*）：
-              //   · 没话要说 ⇒ **录音**那颗（正方形圆角框；正在录时框里是那几根脉动的 bar）；
-              //   · 有话要说（而且不在录）⇒ 换成**琥珀色的「发送」**（小一点、带两个字）。
-              //   ⚠️ 两颗的**外框尺寸同一个**（`barButtonBox` 那个方块那一列）⇒ 换的时候
-              //      这一行不跳（D4.8：界面自己抖是缺陷）。
-              _rightSlot(theme, p, look),
+              // 🔴 2026-09-29 **主人当场更正**：*"录音按钮一直在右侧，点击结束指示便会继续录音。
+              //   发送按钮在消息框里面。"*
+              //   ⇒ 最右这一格**永远是录音那颗**（不再跟发送换位置）；
+              //     「发送」回到**消息框里面**（`_field` 的 suffix，见下）。
+              //   ⚠️ 上一版我把它做成了"录音 ⇄ 发送 一格两态" —— 那是**读错了他的意思**。
+              _micButton(p),
             ],
           ),
               if (widget.hintAbove != null)
@@ -448,30 +447,18 @@ class _ComposerState extends State<Composer> {
           // ★ **读出来**（主人 2026-09-23 定案：替掉原来演示用的「听筒 / 扬声器」）。
           //   契约 `docs/dev/68-SPEAK.md`。**念不了就不画**（界面上不许有按不动的东西）。
           if (widget.canSpeak) _speakerButton(look.palette),
+          // 🔴 2026-09-29 主人：*"发送按钮在消息框里面。"* ⇒ 它住**框里的最右**。
+          //   · **一直在**（2026-09-24 那条原话：*"一开始是灰色的"*）：没话要说时是灰的、按不动
+          //     ⇒ 位置固定，界面不跳（D4.8）；
+          //   · 有话要说 ⇒ **琥珀色** ＋ 两个字（`sendWords`）。
+          _sendButton(Theme.of(context), look.palette),
         ],
       ),
     ),
   );
 
-  /// **最右那一格**：录音 ⇄ 发送（主人 2026-09-29：*"替换掉录音按钮。"*）。
-  ///
-  /// * 有话要说（而且不在录）⇒ **琥珀色的「发送」**（两个字，`barSendWidth × barSendHeight`）；
-  /// * 其余时候 ⇒ **录音**那颗（正方形圆角框，`barButtonBox` 见方）。
-  /// ⚠️ 两颗的外框**一样高**（`barButtonBox`）⇒ 换状态时这一行不跳。
-  /// ⚠️ 判据要靠**文字**认得出"现在这一格是哪一颗"：发送那颗写着「发送」。
-  Widget _rightSlot(ThemeData theme, DshPalette p, DshLook look) => SizedBox(
-    height: d.barButtonBox,
-    width: d.barButtonBox,
-    child: ValueListenableBuilder<TextEditingValue>(
-      valueListenable: _controller,
-      builder: (context, value, _) {
-        final canSend = value.text.trim().isNotEmpty && !widget.hearing.busy;
-        return Center(child: canSend ? _sendButton(theme, p) : _micButton(p));
-      },
-    ),
-  );
-
-  /// **话筒**（正方形圆角框；正在录时框里是那几根**脉动的 bar** —— 主人 2026-09-29）。
+  /// **话筒**（正方形圆角框；**一直在这一行的最右** —— 主人 2026-09-29 当场更正的那句；
+  ///   正在录时框里是那几根**脉动的 bar**）。
   ///
   /// 按一下**开始听**、再按一下**结束**。
   /// 🔴 **"正在录"这个状态画在按钮自己身上**（原来是上面那行小字 `● 正在听`）：
@@ -530,35 +517,48 @@ class _ComposerState extends State<Composer> {
   ///    ⚠️ 位置与大小**固定 48×48**：它要是一会儿有一会儿没有，框的宽度就会跳
   ///      —— 那是 D4.8 一种病（界面自己抖）。
   /// ⚠️ 只有这一小块跟着输入变（`ValueListenableBuilder`）—— **框本身不重建**。
-  /// **「发送」**（主人 2026-09-29：*"发送按钮缩小一点，用琥珀色。文字写发送。"*）。
+  /// **「发送」**（主人 2026-09-29：*"发送按钮缩小一点，用琥珀色。文字写发送。"*
+  ///   ＋ 同日更正 *"发送按钮在消息框里面。"*）。
   ///
-  /// 🔴 三条：
-  ///   · **琥珀色**（`d.amber` —— 从 app 那个图标里取的那一支）＋ **墨色**的字
+  /// 🔴 四条：
+  ///   · 它住**消息框里面**的最右（`_field` 的 suffix）；
+  ///   · **一直在**（2026-09-24 那条原话："一开始是灰色的"）：没话要说 ⇒ 灰的、按不动
+  ///     ⇒ 位置固定，界面不跳（D4.8）；
+  ///   · 有话要说 ⇒ **琥珀色**（`d.amber` —— 从 app 那个图标里取的那一支）＋ **墨色**的字
   ///     （白字在琥珀上只有 ≈2:1，过不了手册 §8.3 那条 4.5:1）；
-  ///   · **文字写「发送」**（不再是一个箭头图形）；
   ///   · **小一点**（`barSendWidth × barSendHeight`）—— ⚠️ 但**命中区仍 ≥44**（D3.6 硬闸）。
   ///
-  /// ⚠️ 只有这一小块跟着输入变（`_rightSlot` 里那个 `ValueListenableBuilder`）—— **框本身不重建**。
-  Widget _sendButton(ThemeData theme, DshPalette p) => Semantics(
-    button: true,
-    label: sendWords,
-    enabled: true,
-    child: FilledButton(
-      key: chatSendKey,
-      onPressed: _submit,
-      style: FilledButton.styleFrom(
-        // 触控目标 ≥44（D3.6）：**高度不许低于 44**，"小一点"由宽度体现
-        minimumSize: const Size(d.barSendWidth, d.barSendHeight),
-        padding: const EdgeInsets.symmetric(horizontal: d.gapS),
-        backgroundColor: d.amber,
-        // ⚠️ 墨色的字（不是白字 —— 对比度，见上）
-        foregroundColor: d.ink,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(d.barButtonRadius),
+  /// ⚠️ 只有这一小块跟着输入变（`ValueListenableBuilder`）—— **框本身不重建**。
+  Widget _sendButton(ThemeData theme, DshPalette p) => ValueListenableBuilder<TextEditingValue>(
+    valueListenable: _controller,
+    builder: (context, value, _) {
+      // ⚠️ **正在听/收尾中按不动**：那会儿框里的字是"还在长"的半句，
+      //    发出去就是替他做了决定（主人要的是"停下之后再决定发不发"）。
+      final canSend = value.text.trim().isNotEmpty && !widget.hearing.busy;
+      return Semantics(
+        button: true,
+        label: sendWords,
+        enabled: canSend,
+        child: FilledButton(
+          key: chatSendKey,
+          onPressed: canSend ? _submit : null,
+          style: FilledButton.styleFrom(
+            // 触控目标 ≥44（D3.6）：**高度不许低于 44**，"小一点"由宽度体现
+            minimumSize: const Size(d.barSendWidth, d.barSendHeight),
+            padding: const EdgeInsets.symmetric(horizontal: d.gapS),
+            backgroundColor: d.amber,
+            disabledBackgroundColor: p.borderL1,
+            // ⚠️ 墨色的字（不是白字 —— 对比度，见上）
+            foregroundColor: d.ink,
+            disabledForegroundColor: p.labelCaption,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(d.barButtonRadius),
+            ),
+          ),
+          child: const Text(sendWords),
         ),
-      ),
-      child: const Text(sendWords),
-    ),
+      );
+    },
   );
 
   /// **"为什么停了"那一行**（2026-09-29 起只剩这一件事）。

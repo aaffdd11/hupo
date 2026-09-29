@@ -197,14 +197,9 @@ Future<void> _wheelUp(WidgetTester tester, {double by = 600}) async {
   await tester.pumpAndSettle();
 }
 
-/// 发送钮此刻按不按得动。
-/// ⚠️ 2026-09-29：那一格是"录音 ⇄ 发送"（主人：*"替换掉录音按钮。"*）——
-///    没话要说时**发送根本不在**（那儿是话筒）⇒ 不在了就当"按不动"。
-bool _sendReady(WidgetTester tester) {
-  final f = find.byKey(chatSendKey);
-  if (f.evaluate().isEmpty) return false;
-  return tester.widget<FilledButton>(f).onPressed != null;
-}
+/// 发送钮此刻按不按得动（它在**消息框里面**，一直在；灰 = `onPressed == null`）。
+bool _sendReady(WidgetTester tester) =>
+    tester.widget<FilledButton>(find.byKey(chatSendKey)).onPressed != null;
 
 /// **一条新事件进来**（流式回答里的每一条 `message/text` 都会走这条路）。
 void _newText(ChatController c) => c.ingest({
@@ -368,8 +363,8 @@ void main() {
 
     final floater = tester.getRect(find.byType(ChatFloater));
     final transcript = tester.getRect(find.byType(ListView).first);
-    // ⚠️ 这一刻框是空的 ⇒ 最右那一格是**录音**（2026-09-29："录音 ⇄ 发送"共用一格）
-    //    —— 量的就是它（两颗同一个外框，量哪颗都一样）。
+    // ⚠️ 最右那一格**永远是录音**（主人 2026-09-29 更正）⇒ 量它；
+    //    而「发送」在**消息框里面**（它也在这一行里，量哪个都该没被键盘盖住）。
     final send = tester.getRect(find.byKey(chatMicButtonKey));
 
     expect(

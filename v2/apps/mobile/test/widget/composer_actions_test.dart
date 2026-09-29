@@ -31,31 +31,30 @@ double _fieldLeft(WidgetTester tester) =>
 double _fieldWidth(WidgetTester tester) =>
     tester.getSize(find.byType(TextField)).width;
 
-/// **发送钮此刻按不按得动**。
-/// ⚠️ 2026-09-29 起它**不是永远在**了（主人：*"替换掉录音按钮。"*）——
-///    最右那一格是**录音 ⇄ 发送**：没话要说时那儿是话筒，有话要说时才是这颗。
-bool _sendReady(WidgetTester tester) {
-  // ⚠️ 那一格是"录音 ⇄ 发送"：**没话要说时发送根本不在**（主人 2026-09-29 的原话
-  //    就是"替换掉录音按钮"）⇒ 不在了就当"按不动"，别让判据去 `single` 一个空的。
-  final f = find.byKey(chatSendKey);
-  if (f.evaluate().isEmpty) return false;
-  return tester.widget<FilledButton>(f).onPressed != null;
-}
+/// **发送钮此刻按不按得动**（灰 = `onPressed == null`）。
+/// ⚠️ 它**一直在**（在消息框里面）：没话要说时是**灰的**，不是"不见了"。
+bool _sendReady(WidgetTester tester) =>
+    tester.widget<FilledButton>(find.byKey(chatSendKey)).onPressed != null;
 
 void main() {
-  testWidgets('🔴 最右那一格：没字 ⇒ 录音；有字 ⇒ **琥珀色「发送」**（他说"替换掉录音按钮"）', (tester) async {
+  testWidgets('🔴 录音那颗**一直在最右**；「发送」**在消息框里面**（2026-09-29 主人更正）', (tester) async {
     await _pump(tester);
-    // 没话要说 ⇒ 那一格是**录音**，发送**不在**
-    expect(find.byKey(chatMicButtonKey), findsOneWidget, reason: '★ 一开始那一格该是录音');
-    expect(find.byKey(chatSendKey), findsNothing,
-        reason: '★ 没话要说时不该有发送（2026-09-29 主人：*"替换掉录音按钮。"*）');
+    // 录音那颗：**一点都不能少**（主人原话："录音按钮一直在右侧"）
+    expect(find.byKey(chatMicButtonKey), findsOneWidget, reason: '★ 最右该一直是录音');
+    // 发送：在**框里**（是那个 `TextField` 的后代），而且一开始就在（灰的）
+    expect(find.byKey(chatSendKey), findsOneWidget, reason: '★ 发送该一直在框里（一开始是灰的）');
+    expect(
+      find.descendant(of: find.byType(TextField), matching: find.byKey(chatSendKey)),
+      findsOneWidget,
+      reason: '★ 发送不在消息框里面（主人：*"发送按钮在消息框里面。"*）',
+    );
+    expect(_sendReady(tester), false, reason: '★ 一开始是灰的、按不动');
 
     await tester.enterText(find.byType(TextField), '在吗');
     await tester.pump();
-    // 有话要说 ⇒ 换成**发送**（而且那一格只剩它一颗）
-    expect(find.byKey(chatSendKey), findsOneWidget, reason: '有字了 ⇒ 该换成发送');
-    expect(find.byKey(chatMicButtonKey), findsNothing, reason: '★ 两颗同时在 ⇒ 不是"替换"');
     expect(_sendReady(tester), true, reason: '有字了 ⇒ 能按');
+    // 负向对照：**录音那颗照旧在**（上一版这里被"替换"掉了 —— 那是读错了他的意思）
+    expect(find.byKey(chatMicButtonKey), findsOneWidget, reason: '★ 有字也不能把录音那颗顶掉');
 
     // 打的全是空格 ⇒ **也不算**有话要说（发送要 trim 过）
     await tester.enterText(find.byType(TextField), '   ');
@@ -77,13 +76,13 @@ void main() {
     expect(_fieldLeft(tester), left0, reason: '★ 输入框左边不许动');
     expect(_fieldWidth(tester), width0, reason: '★ 输入框宽度不许动');
 
-    // 发出去（框清空）⇒ 那一格**换回录音**（发送没了），而输入框**一个像素都没动**
+    // 发出去（框清空）⇒ 发送**变灰**（它还在框里 —— 是灰的，不是没了）
     await tester.tap(find.text(sendWords));
     await tester.pump();
-    expect(find.byKey(chatSendKey), findsNothing, reason: '发完框空了 ⇒ 那一格该换回录音');
-    expect(find.byKey(chatMicButtonKey), findsOneWidget);
-    expect(_fieldLeft(tester), left0, reason: '★ 换回去的时候输入框左边动了');
-    expect(_fieldWidth(tester), width0, reason: '★ 换回去的时候输入框宽度动了');
+    expect(_sendReady(tester), false, reason: '发完框空了 ⇒ 它该变灰');
+    expect(find.byKey(chatSendKey), findsOneWidget, reason: '★ 变灰 ≠ 消失（位置要固定）');
+    expect(_fieldLeft(tester), left0, reason: '★ 变灰的时候输入框左边动了');
+    expect(_fieldWidth(tester), width0, reason: '★ 变灰的时候输入框宽度动了');
     expect(_fieldLeft(tester), left0, reason: '★ 变灰也不许把输入框挤动');
     expect(_fieldWidth(tester), width0);
   });

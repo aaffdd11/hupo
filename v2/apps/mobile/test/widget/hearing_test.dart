@@ -89,11 +89,9 @@ Finder micIdle() => find.byIcon(Icons.mic_none);
 /// **发送钮此刻按不按得动**（主人 2026-09-24：它**一直在**，没字时是灰的）。
 /// ⚠️ 判据要看"能不能按"，不是"在不在"—— 在不在已经永远是"在"。
 bool sendReady(WidgetTester tester) {
-  // ⚠️ 2026-09-29：发送那颗只在"有话要说"时出现在最右那一格，
-  //    而且它是 `FilledButton`（不是 `IconButton`，也没有箭头图形了）。
-  final f = find.byKey(chatSendKey);
-  if (f.evaluate().isEmpty) return false;
-  return tester.widget<FilledButton>(f).onPressed != null;
+  // ⚠️ 2026-09-29：发送那颗是 `FilledButton`（不是 `IconButton`、也没有箭头图形了），
+  //    而且它**一直在消息框里面**（没话要说时是灰的）。
+  return tester.widget<FilledButton>(find.byKey(chatSendKey)).onPressed != null;
 }
 
 void main() {
