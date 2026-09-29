@@ -9,6 +9,8 @@
 //
 // ⚠️ **默认是收起**（主人 2026-09-22 定：一进来看得见桌面）。
 
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/dsh_design.dart';
@@ -88,6 +90,40 @@ void main() {
   Material barMaterial(WidgetTester tester) => tester.widget<Material>(
     find.descendant(of: find.byType(ChatFloater), matching: find.byType(Material)).first,
   );
+
+  testWidgets('🔴 收起那条 bar 是**磨砂玻璃**（Mac 工具栏那种）；展开档**不糊**', (tester) async {
+    // 主人 2026-09-29：*"对话框底部透明度再次增加。模仿mac的工具栏。"*
+    await _pump(tester);
+    // ① 收起档：底下糊一层（`BackdropFilter`，半径 ＝ `barBlurSigma`）
+    final blur = tester.widget<BackdropFilter>(
+      find.descendant(of: find.byType(ChatFloater), matching: find.byType(BackdropFilter)).first,
+    );
+    final f = blur.filter;
+    expect(f, isA<ImageFilter>(), reason: '那一层不是模糊 ⇒ 不是磨砂玻璃');
+    // ⚠️ `ImageFilter` 没有公开的 sigma 读法 ⇒ 拿**同一个构造**比一次：
+    //    `ImageFilter.blur(sigma: barBlurSigma)` 与它的 `toString` 一致就说明半径用对了。
+    expect(
+      f.toString(),
+      ImageFilter.blur(sigmaX: d.barBlurSigma, sigmaY: d.barBlurSigma).toString(),
+      reason: '★ 模糊半径不是 `barBlurSigma`',
+    );
+    // ② 而那个"越来越透"的度数就是色板那层的不透明度（比一明显小）
+    expect(barMaterial(tester).color!.a, d.barVeilAlpha);
+    expect(d.barVeilAlpha, lessThan(0.6), reason: '★ 透明度没加（还是上一版那个数）');
+
+    // ③ 负向对照：展开档**不糊**（形状还在 —— 那是"输入条不被重建"的保证）
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await _pump(tester, tier: FloaterTier.full);
+    final blur2 = tester.widget<BackdropFilter>(
+      find.descendant(of: find.byType(ChatFloater), matching: find.byType(BackdropFilter)).first,
+    );
+    expect(
+      blur2.filter.toString(),
+      ImageFilter.blur(sigmaX: 0, sigmaY: 0).toString(),
+      reason: '★ 展开档在糊时间线（白算，而且没意义）',
+    );
+  });
 
   testWidgets('🔴 收起那条 bar 是**半透明**的；展开档**必须不透明**（时间线要读字）', (tester) async {
     await _pump(tester);

@@ -37,6 +37,7 @@
 //     "压在多亮的底上"那件事，不是窗口自己的面子。
 
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
@@ -324,7 +325,6 @@ class ChatFloaterState extends State<ChatFloater> {
 
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context);
     // ★ 批次 4：这一屏的面子（色板）从 `AppearanceScope` 来；没有 scope
     //   （单看这一块的判据）就退回"跟着 Theme 的亮暗"，与原来逐字一致。
     final scope = AppearanceScope.maybeOf(context);
@@ -368,7 +368,34 @@ class ChatFloaterState extends State<ChatFloater> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(d.radiusCard),
-              child: Listener(
+              // ★ 2026-09-29 主人：*"对话框底部透明度再次增加。模仿mac的工具栏。"*
+              //   ⇒ **收起档**那条 bar 是**磨砂玻璃**：底下先糊一层（`BackdropFilter`），
+              //     上面再压一层很淡的白（`barVeilAlpha`）。
+              //   🔴 **展开档不糊**：那一档里面是时间线 —— 糊它既没用（白底）又白算。
+              //   ⚠️ `ClipRRect` 在**外面**：模糊被圆角裁住（不然会糊到浮窗外那一圈）。
+              // 🔴 **两种档位都得是同一个 widget 形状**（`BackdropFilter` 常在）：
+              //    收起 ⇄ 展开时若整棵子树的**类型**变了，输入条会被**重建**
+              //    ⇒ 打了一半的字就没了（判据"字不丢"当场红，实测抓到的）。
+              //    ⇒ 展开档把 sigma 设成 **0**（等于没糊）—— 形状不变、状态就活着。
+              //    ⚠️ 展开档为什么本来就不该糊：那一档里面是时间线，糊它既没用（白底）又白算。
+              child: BackdropFilter(
+                filter: ImageFilter.blur(
+                  sigmaX: collapsed ? d.barBlurSigma : 0,
+                  sigmaY: collapsed ? d.barBlurSigma : 0,
+                ),
+                child: _barSurface(collapsed, p),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 浮窗那一层底 ＋ 它里面那一列（抽出来只因为上面那个 `BackdropFilter` 要包一层）。
+  Widget _barSurface(bool collapsed, DshPalette p) {
+    final t = Theme.of(context);
+    return Listener(
                 // 🔴 **点浮窗自己不许漏到下面**（§6.3）：opaque 吃掉所有指针事件。
                 // ⚠️ 这里**不接手势**（没有 onPointerXxx）—— 它只负责"挡住"。
                 //    手势绑在抓手那一行（见下），否则会把**时间线的滚动**吃掉：
@@ -534,12 +561,7 @@ class ChatFloaterState extends State<ChatFloater> {
                     ],
                   ),
                 ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+              );
   }
 
   /// **抓手**（主人 2026-09-24）：上边框正中央**一条杠 + 一个平的小箭头**。
