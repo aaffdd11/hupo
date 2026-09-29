@@ -285,7 +285,13 @@ test('V3 活地址与制品**同一条 CSP**（另一原点那一套没被放宽
   const r = await get(base, live.slice(base.length));
   const csp = String(r.headers.get('content-security-policy'));
   assert.match(csp, /default-src 'none'/);
-  assert.match(csp, /connect-src 'none'/);
+  // ⚠️ **2026-09-30 改的那一条**（契约 `147-APP-SQLITE.md`）：`connect-src` 从 `'none'`
+  //    变成 `'self'` —— 制品只许对**它自己那个原点**发请求（"替我存一笔"那条窄口，
+  //    网页与安卓吃同一个头 ⇒ 两端一致的地基）。
+  //    🔴 判据跟着改成**更严的写法**：只认 `'self'`；**不许**是 `'none'`（那这条能力就没了）、
+  //      也**不许**出现 `*`（那就成了"能上任何站"）。完整的 D7 判据在 `test/app-db.test.js`。
+  assert.match(csp, /connect-src 'self'/);
+  assert.ok(!/connect-src[^;]*\*/.test(csp), '不许放成"能上任何站"');
   assert.match(csp, /frame-ancestors 'self'/);
   assert.equal(r.headers.get('x-frame-options'), null, '🔴 发了它壳里就嵌不进去');
   assert.equal(r.headers.get('cache-control'), 'no-store');

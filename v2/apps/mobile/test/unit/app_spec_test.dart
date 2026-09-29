@@ -37,6 +37,32 @@ void main() {
     expect(app.permissions, isEmpty);
   });
 
+  // ★ 2026-09-30（契约 `docs/dev/147-APP-SQLITE.md` §四 G2）：
+  //   **"它想要什么"与"你给了没有"是两件事**，而老服务端可能**根本不回**后者。
+  //   ⇒ 解析层必须把"没回"（`null`）与"回了空的"（`[]`）**分开**：
+  //     混成一个就会在设置页画出一个假的开/关。
+  test('🔴 `granted`：没回是 `null`，回了空数组是 `[]`（两条路不许并成一条）', () {
+    final unknown = MiniApp.parse(ok()..remove('granted'));
+    final nothing = MiniApp.parse(ok()..['granted'] = <String>[]);
+    final some = MiniApp.parse(ok()..['granted'] = ['db', '', 7]);
+    expect(unknown!.granted, isNull, reason: '★ 老服务端不回这个字段 ⇒ 不知道（界面据此不画开关）');
+    expect(nothing!.granted, isEmpty);
+    expect(some!.granted, ['db'], reason: '认不出的那几项丢掉，别的照收');
+    // 字段在、但不是一串名字 ⇒ 按"不知道"处理（fail-closed）
+    expect(MiniApp.parse(ok()..['granted'] = 'db')!.granted, isNull);
+  });
+
+  test('`withGranted` 只换那一份（别的字段一个都不动）', () {
+    final a = MiniApp.parse(ok()..['granted'] = <String>[])!;
+    final b = a.withGranted(const ['db']);
+    expect(b.granted, ['db']);
+    expect(b.id, a.id);
+    expect(b.title, a.title);
+    expect(b.entryUrl, a.entryUrl);
+    expect(b.permissions, a.permissions);
+    expect(a.granted, isEmpty, reason: '★ 原来那一份不许被改（值类）');
+  });
+
   test('🔴 没有入口 URL / 过期 / 名字空 / id 空 ⇒ 一律不算数', () {
     final noUrl = ok()..remove('entryUrl');
     expect(MiniApp.parse(noUrl), isNull, reason: '没入口 URL 摆了也是点了没反应');

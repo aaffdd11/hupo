@@ -46,6 +46,7 @@ import 'package:hupo_app/models/wallpaper.dart';
 import 'package:hupo_app/models/queue_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
+import 'package:hupo_app/widgets/app_grants_card.dart';
 import 'package:hupo_app/widgets/bubbles.dart';
 import 'package:hupo_app/widgets/bubble_select_bar.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
@@ -526,6 +527,77 @@ Future<void> _openWallpaper(WidgetTester tester, double scale) async {
   await tester.pumpAndSettle();
   // 负向对照：**真的到了那一页**才算数（不然下面扫的是设置列表）
   expect(find.byType(WallpaperPicker), findsOneWidget, reason: '★ 没进壁纸那一页 ⇒ 这两条判据扫错了屏');
+}
+
+/// ★ 2026-09-30（契约 `docs/dev/147-APP-SQLITE.md` §二「册子」）：
+/// **注册制那张卡**用的假服务端 —— 那一条小程序**声明了两样**（`db` / `ask`）。
+///
+/// ⚠️ 为什么非要单独一份：一个都没声明时那张卡**一个像素都不画**
+///    （`_controller()` 那一份 `/api/apps` 是拉不到的 ⇒ 卡不在树上）——
+///    直接拿 `_openConfig` 量，这道闸扫的就还是那一列，而它照样绿。
+ChatController _grantsController() {
+  final api = Api(
+    client: MockClient((r) async {
+      if (r.url.path == '/api/apps') {
+        return _json(
+          jsonEncode({
+            'apps': [
+              {
+                'id': 'notes',
+                'title': '随手记',
+                'icon': 'book',
+                'version': 1,
+                'entryUrl': 'https://apps.example/notes/index.html?sig=x',
+                'expiresAt': 0,
+                'permissions': ['db', 'ask'],
+                'granted': <String>[],
+              },
+            ],
+          }),
+        );
+      }
+      return _json('{}');
+    }),
+  );
+  return ChatController(api: api, tokens: TokenStore(), token: 'tok');
+}
+
+/// **像用户那样**打开设置页、再滚到**注册制那张卡**（契约 `docs/dev/147`）。
+///
+/// ⚠️ 加一张卡会把折叠线推下去：大字号下那张卡在**屏幕外面**，
+///    而 `ListView` 不会把屏幕外的孩子建出来 ⇒ 必须**像用户那样滚**
+///    （同 `settings_test.dart` ⑦⑧ 那条：`scrollUntilVisible`，不是把行硬塞进屏幕）。
+/// ⚠️ 走真入口（桌面 → 设置）：不直接 pump `SettingsScreen` ——
+///    那样底下没有小程序容器，量的就不是用户真会看到的那棵树。
+Future<void> _openConfigWithGrants(WidgetTester tester, double scale) async {
+  await _pump(
+    tester,
+    ChatScreen(
+      controller: _grantsController(),
+      onLoggedOut: () {},
+      space: const SpaceInfo(kind: 'tenant', state: 'ready', hasKey: false),
+      onSendKey: (_) async => KeySend.ok,
+    ),
+    scale,
+  );
+  await tester.pumpAndSettle(); // 等 `/api/apps` 回来
+  await tester.tap(find.text(settingsAppLabel));
+  await tester.pumpAndSettle();
+  expect(find.byType(SettingsScreen), findsOneWidget, reason: '★ 没进设置那一屏 ⇒ 判据扫错了屏幕');
+  await tester.scrollUntilVisible(
+    find.byKey(appGrantsCardKey),
+    240,
+    scrollable: find
+        .descendant(
+          of: find.byKey(settingsListKey),
+          matching: find.byType(Scrollable),
+        )
+        .first,
+  );
+  await tester.pumpAndSettle();
+  // 负向对照：那张卡**真的进了树**才算数（不在的话下面量的是设置列表）
+  expect(find.byKey(appGrantsCardKey), findsOneWidget, reason: '★ 注册制那张卡没进这棵树');
+  expect(find.text(grantWantWords('db')), findsOneWidget, reason: '★ "它想要什么"没画出来');
 }
 
 /// **像用户那样**打开「配置」：主界面顶栏那个齿轮。
@@ -1324,6 +1396,16 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '壁纸那一页在 ${s}x 溢出了');
       });
 
+      testWidgets('配置页·注册制那张卡（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-30（契约 `docs/dev/147-APP-SQLITE.md`）：**新加的那张卡**
+        //    （一条小程序 ＋ 两样"它想要的东西" ＋ 两个开关）必须也过五档不溢出
+        //    —— 同关于页 / 壁纸那一页那条理由（不然"五档不溢出"会随时间失效）。
+        //    🔴 它把设置那一列的**折叠线推下去了**：所以这一条**像用户那样滚**过去
+        //    （`_openConfigWithGrants`），不是把行硬塞进屏幕。
+        await _openConfigWithGrants(tester, s);
+        expect(_drain(tester), isEmpty, reason: '注册制那张卡在 ${s}x 溢出了');
+      });
+
       testWidgets('配置页·图片那一屏（含「试一张」）@ ${s}x', (tester) async {
         // ⚠️ 2026-09-24（P1-27）：**新加的那一块**（P1-27 的「试一张」＋真图）也要过五档。
         //    真入口那一趟拿到的 `creds` 全是"没有" ⇒ 那一块**不画**（负向对照见 widget 判据），
@@ -1581,6 +1663,26 @@ void main() {
       testWidgets('配置页（从真入口进）@ ${s}x', (tester) async {
         await _openConfig(tester, s);
         await sweep(tester, '配置页 @${s}x');
+      });
+
+      testWidgets('配置页·注册制那张卡（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-09-30（契约 `docs/dev/147-APP-SQLITE.md`）：那张卡上的**开关**
+        //    正是"要真按下去"的那一下 ⇒ 命中区必须 ≥44（D3.6）。
+        //    🔴 `Switch` **不在** `sweep` 扫的那两类控件里（`IconButton` /
+        //    `ButtonStyleButton`）⇒ 它得**单独量**（同 `ListTile` 那几处的摆法）——
+        //    不量的话这个新控件就没有任何东西守着"≥44"。
+        await _openConfigWithGrants(tester, s);
+        await sweep(tester, '注册制那张卡 @${s}x');
+        final switches = find.byType(Switch).evaluate().toList();
+        expect(switches, isNotEmpty, reason: '★ 一个开关都没扫到 ⇒ 这条闸是空转的');
+        for (final e in switches) {
+          final size = tester.getSize(find.byWidget(e.widget));
+          expect(
+            size.width >= minTouch && size.height >= minTouch,
+            isTrue,
+            reason: '注册制那张卡 @${s}x：开关的命中区是 $size，小于 $minTouch×$minTouch',
+          );
+        }
       });
 
       testWidgets('配置页·语音那一屏那颗「试一下」（直接泵）@ ${s}x', (tester) async {

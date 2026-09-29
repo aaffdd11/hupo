@@ -23,6 +23,10 @@ import nodeUrl from 'node:url';
 
 import { LIVE_PREFIX, LIVE_VERSION, checkLiveRel, parseLivePath } from './app-live.js';
 import { AppsError } from './apps.js';
+// ★ **小程序自己那一格存储**（主人 2026-09-30 拍板 · 契约 `147-APP-SQLITE.md`）：
+//   这一份只做"验凭据 → 交给**那个人那个 app** 的库去跑 → 把结论带回去"，
+//   **自己不碰 SQLite、也不认路径**（执行在 `app-db.js`，路径在 `apps.js`）。
+import { DB_PATH, mintTicket, verifyTicket } from './app-db.js';
 // ⚠️ 只为了**认出"盒子不通"那一档**（它要回 503，不是"没这个文件"）——
 //    `apps-box.js` 不 import 这一份，所以没有环。
 import { BoxError } from './apps-box.js';
@@ -39,7 +43,15 @@ export const SIGNED_TTL_MS = 10 * 60 * 1000;
  * 🔴 逐条都是故意的：
  *   · `default-src 'none'` —— **默认什么都不许**（fail-closed）
  *   · `script-src 'unsafe-inline'` / `style-src 'unsafe-inline'` —— 制品是单文件 HTML（不引外部资源）
- *   · `connect-src 'none'` —— **制品不许自己出网**（它要问话只能走平台那条窄通道，乙-4）
+ *   · `connect-src 'self'` —— ★ **2026-09-30 改的**（原来是 `'none'`）：制品只许对它
+ *     **自己那个原点**发请求 —— 那一条就是"替我存一笔"那条窄口（`POST /db`，
+ *     契约 `147-APP-SQLITE.md`）。
+ *     🔴 **为什么必须是"它自己的源"**：网页那一侧是 `<iframe sandbox>`（不透明源）、
+ *     安卓那一侧是 WebView（顶层文档）—— **两边都从 `apps.stalkerai.cn` 加载制品**
+ *     ⇒ 白名单与取用方式**天生两端一致**，不用两边各写一套（这是"不给原生桥"那条铁律下
+ *     唯一能把能力给到两端的路）。
+ *     ⚠️ 它**仍然出不去**：别人的站一个都不在白名单里 ⇒ 想连也连不上（"访问网站"那条
+ *     能力要主人另外拍，见 `146-MINIAPP-REDESIGN.md`）。
  *   · `base-uri 'none'` / `form-action 'none'` —— 堵住"改 base 之后把请求发到别处"
  *   · `frame-ancestors <壳>` —— **只许壳嵌它**（别处嵌不了）
  */
@@ -49,11 +61,37 @@ export function cspFor(frameAncestors) {
     "script-src 'unsafe-inline'",
     "style-src 'unsafe-inline'",
     'img-src data: blob:',
-    "connect-src 'none'",
+    "connect-src 'self'",
     "base-uri 'none'",
     "form-action 'none'",
     `frame-ancestors ${frameAncestors}`,
   ].join('; ');
+}
+
+/**
+ * 这一条口**认两种凭据**（别的都不认）：
+ *   · 第一次：页面把它自己那条入口 URL 里的三样（`u`/`e`/`s`）＋ 它自己是谁（`id`/`v`）报上来
+ *     ⇒ **照入口签名那四道验一遍**（绑人 ＋ 绑 app ＋ 绑版本 ＋ 没过期）；
+ *   · 之后：上一次换来的**会话票**（`ticket`）。
+ *
+ * 🔴 **为什么要有票**：入口 URL 只有十分钟（`SIGNED_TTL_MS`）—— 而一个页面可能开着几小时。
+ *    票一次签发、绑同一个人同一个 app，**权限每次都重查**（撤销立刻生效）。
+ * ⚠️ **票只在内存里算**（HMAC，不落盘、不上账）⇒ 重启就让所有票失效（可接受，页面刷新即可）。
+ */
+export function dbTicketOf({ key, body, id, version, now = Date.now() }) {
+  const ticket = typeof body?.ticket === 'string' ? body.ticket : '';
+  if (ticket !== '') return verifyTicket({ key, ticket, id, now });
+  return verifyEntry({
+    key,
+    sig: typeof body?.s === 'string' ? body.s : '',
+    sub: typeof body?.u === 'string' ? body.u : '',
+    id,
+    version,
+    exp: typeof body?.e === 'string' ? body.e : '',
+    now,
+  })
+    ? { sub: body.u, id, version, exp: Number(body.e) }
+    : null;
 }
 
 /** 签名要覆盖的那串东西：**绑人 + 绑版本 + 绑到期**。 */
@@ -219,6 +257,140 @@ export function createAppServer({
   if (!frameAncestors) throw new AppsError('frameAncestors 必填（CSP 要它）');
   const csp = cspFor(frameAncestors);
 
+  /**
+   * ★ **"替我存一笔"那条口**（`POST /db` · 契约 `147-APP-SQLITE.md`）。
+   *
+   * 顺序（**一道都不许省**）：
+   *   ① 跨源预检（不透明源那一侧要它）→ ② 读 JSON → ③ **验凭据**（入口签名 / 会话票）
+   *   → ④ 取**那个人那个 app** 的库 → ⑤ 交给它跑（声明 / 授予 / 语句 / 上限都在那边）
+   *   → ⑥ 把结论 ＋ 一张新票带回去。
+   *
+   * 🔴 **这一份不碰 SQLite、不认路径、不认令牌**：它只把"这是谁、哪个 app"验出来。
+   * 🔴 **失败一律如实说**（盒子不通 ⇒ 503，不是"没这个 app"）—— 三处一个口径，见 `B27`。
+   */
+  async function handleDb(req, res) {
+    /**
+     * 跨源要的三样。**为什么这里能写 `*`**：这条口不吃 cookie、不吃登录态 ——
+     * 凭据是页面自己那条**绑人绑 app 的签名**（在正文里），所以"谁都能发这个请求"
+     * 不等于"谁都能读别人的数据"（验签那一步是硬的）。
+     */
+    const cors = {
+      'access-control-allow-origin': '*',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+    };
+    const send = (status, obj) => {
+      const buf = Buffer.from(`${JSON.stringify(obj)}\n`, 'utf8');
+      res.writeHead(status, { ...cors, 'content-type': 'application/json; charset=utf-8', 'content-length': buf.length });
+      res.end(buf);
+    };
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        ...cors,
+        'access-control-allow-methods': 'POST',
+        'access-control-allow-headers': 'content-type',
+        'access-control-max-age': '600',
+      });
+      res.end();
+      return;
+    }
+    if (req.method !== 'POST') {
+      res.writeHead(405, { ...cors, 'content-type': 'text/plain; charset=utf-8', allow: 'POST' });
+      res.end('只支持 POST。\n');
+      return;
+    }
+    const body = await readJsonBody(req, 64 * 1024);
+    if (!body) {
+      send(400, { ok: false, error: 'bad-body', text: '这一条看不懂。' });
+      return;
+    }
+    const id = typeof body.id === 'string' ? body.id : '';
+    const v = typeof body.v === 'string' || typeof body.v === 'number' ? String(body.v) : '';
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(id) || !(v === LIVE_VERSION || /^[1-9][0-9]*$/.test(v))) {
+      send(403, { ok: false, error: 'bad-target', text: '这一条不认。' });
+      return;
+    }
+    const who = dbTicketOf({ key, body, id, version: v, now: now() });
+    if (!who) {
+      log(`存储口：凭据不过（${id}）`);
+      send(403, { ok: false, error: 'bad-ticket', text: '这一条不认。' });
+      return;
+    }
+    let apps = null;
+    try {
+      apps = resolveApps(who.sub);
+    } catch (e) {
+      // ⚠️ 与制品那条路**同一个口径**：取库这一步不许把进程带走；盒子不通 ⇒ 503
+      log(`存储口：取库那一步出错（${who.sub}）${e?.message ?? e}`);
+      if (e instanceof BoxError) {
+        denyBox(res);
+        return;
+      }
+      send(403, { ok: false, error: 'no-store', text: '这一条不认。' });
+      return;
+    }
+    if (!apps || typeof apps.dbExec !== 'function') {
+      /**
+       * 🔴 **认不出来就如实说"还没跟上"**：盒子里那份代码可能是**还没换过去**的旧版
+       *    （产品层要重新发布才带上这条能力）⇒ 那**不是**"你这个 app 不许存"，
+       *    而是"这一台还没有这个能力"。混成 403 就是页面在说假话。
+       */
+      send(503, { ok: false, error: 'not-ready', text: '这一台还没跟上，等一会儿再试。' });
+      return;
+    }
+    let out = null;
+    try {
+      out = await apps.dbExec(id, { op: body.op, sql: body.sql, params: body.params });
+    } catch (e) {
+      if (e instanceof BoxError) {
+        denyBox(res);
+        return;
+      }
+      log(`存储口：跑不出来（${id}）${e instanceof AppsError ? e.message : (e?.message ?? '未知错')}`);
+      send(404, { ok: false, error: 'no-app', text: '这个小程序不在你这儿。' });
+      return;
+    }
+    if (!out || out.ok !== true) {
+      send(Number(out?.status) || 400, { ok: false, error: out?.error ?? 'db', text: out?.text ?? '这一条它没执行成功。' });
+      return;
+    }
+    send(200, {
+      ok: true,
+      rows: out.rows,
+      changes: out.changes,
+      lastInsertRowid: out.lastInsertRowid,
+      truncated: out.truncated === true,
+      // 页面把这张票留着，后面就不用反复出示入口签名了（入口 URL 只有十分钟）
+      ticket: mintTicket({ key, sub: who.sub, id, version: v, now: now() }),
+    });
+  }
+
+  /** 读一小段 JSON 正文（**超了就当读不懂**，不许把内存吃光）。 */
+  function readJsonBody(req, limit) {
+    return new Promise((resolve) => {
+      let size = 0;
+      const chunks = [];
+      req.on('data', (c) => {
+        size += c.length;
+        if (size > limit) {
+          req.destroy();
+          resolve(null);
+          return;
+        }
+        chunks.push(c);
+      });
+      req.on('end', () => {
+        try {
+          const j = JSON.parse(Buffer.concat(chunks).toString('utf8') || 'null');
+          resolve(j && typeof j === 'object' ? j : null);
+        } catch {
+          resolve(null);
+        }
+      });
+      req.on('error', () => resolve(null));
+    });
+  }
+
   return nodeHttp.createServer((req, res) => {
     let parsed;
     try {
@@ -228,6 +400,24 @@ export function createAppServer({
       return;
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') {
+      // ★ **唯一的那个 POST**：小程序存它自己的那一笔（`147-APP-SQLITE.md`）。
+      //   别的非 GET 一律照旧 405 —— 这一条口**只认这一条路**。
+      if ((parsed.pathname ?? '') === DB_PATH) {
+        handleDb(req, res).catch((e) => {
+          log(`存储口：这一条没答上来（${e?.message ?? e}）`);
+          try {
+            if (!res.headersSent) {
+              res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+              res.end('这一条它没执行成功。\n');
+            } else {
+              res.destroy();
+            }
+          } catch {
+            /* 已经断了 */
+          }
+        });
+        return;
+      }
       res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8', allow: 'GET, HEAD' });
       res.end('只支持 GET。\n');
       return;

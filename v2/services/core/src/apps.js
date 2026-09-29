@@ -16,6 +16,18 @@
 //    不认识令牌（调用方已经知道这是谁）。
 
 import { pickIcon, resolveIcon } from './app-icons.js';
+// ★ **一个小程序自己那一格存储**（主人 2026-09-30 拍板 · 契约 `147-APP-SQLITE.md`）。
+//   ⚠️ **执行那一步在 `app-db.js`**（子进程 + 硬超时）；这里只管"该不该跑"。
+import {
+  DB_CALLS_PER_MINUTE,
+  DB_ERROR_TEXT,
+  DB_FILE,
+  DB_FULL_TEXT,
+  DB_PERMISSION,
+  DB_TOO_MANY_TEXT,
+  checkAppDb,
+  runDbChild,
+} from './app-db.js';
 import { reclaimScope } from './reclaim.js';
 import nodeCrypto from 'node:crypto';
 import nodeFs from 'node:fs';
@@ -93,13 +105,15 @@ export const MAX_COPY_TRIES = 50;
 export { ICONS } from './app-icons.js';
 
 /**
- * **权限白名单**（乙-4 开门：`ask`）。
+ * **权限白名单**（乙-4 开门：`ask`；2026-09-30 加第二个门：`db`）。
  *
  * `ask` = 允许它请求「用**看的人**的钥匙问一句话」。
+ * `db`  = 允许它**存东西**（它自己那一格独立的 SQLite 文件，见 `147-APP-SQLITE.md`）。
  * ⚠️ **声明 ≠ 能用**：制品必须在清单里声明，**而且看的人明确授予**，两样都齐了才算（见 `grants`）。
  * ⚠️ **钥匙永远不进制品**：制品只拿得到"问一句"这个动作，拿不到钥匙本身，也拿不到别人的钥匙。
+ * ⚠️ **`db` 也拿不到文件**：它拿到的只是"替我执行这一条"这个动作（跨库那条路是堵死的）。
  */
-export const PERMISSIONS = Object.freeze(['ask']);
+export const PERMISSIONS = Object.freeze(['ask', DB_PERMISSION]);
 
 /**
  * **一次问话的配额**（数字只住这里）。
@@ -359,6 +373,14 @@ export class Apps {
     this.onVersion = onVersion;
     this.reclaim = reclaim;
     this.live = live;
+    /**
+     * **每个 app 最近这一分钟调了几次存储**（只在内存里）。
+     *
+     * ⚠️ 为什么频率闸住内存、不住盘：它是**防呆**，不是记账 ——
+     *    进程重启之后重新数就够了；而每调一次写一下盘，等于用 I/O 换一个不需要那么准的数。
+     *    （**"花了多少"那种要跨重启的账不走这儿**：那是 `ask.json` 那种。）
+     */
+    this.dbCalls = new Map();
   }
 
   /** 惰性取"活的那一份"要用的那两样（工作区）。取不到 ⇒ `null`（调用方如实说）。 */
@@ -872,6 +894,96 @@ export class Apps {
     const next = { day, n: st.n + 1, lastAt: at };
     writeAtomic(this.fs, nodePath.join(this.appDir(id), 'ask.json'), `${JSON.stringify(next)}\n`, 0o644);
     return next;
+  }
+
+  /**
+   * ★ **一个小程序那一格存储在哪**（主人 2026-09-30 拍板 · 契约 `147-APP-SQLITE.md`）。
+   *
+   * 🔴 **一个 app 一个文件**，而且落在 `appDir(id)` 里、**`versions/` 外面**：
+   *    · 发新版 ⇒ **不动它**（版本是快照，数据是活的）；
+   *    · 删那个 app ⇒ **跟着它一起走**（`appDir` 整个挪进 `.removed/`）；
+   *    · 按人分开 ⇒ 甲看不见乙的（`appDir` 本来就是按人的）。
+   *
+   * ⚠️ **路径只有这一处出处** —— 页面报的任何路径一个字节都不采信。
+   */
+  dbPath(id) {
+    return nodePath.join(this.appDir(id), DB_FILE);
+  }
+
+  /**
+   * **频率闸**（每个 app 每分钟一个数）：过了 ⇒ `true` 并**记一次**（先记再跑）。
+   *
+   * ⚠️ 先记再跑的理由和 `ask` 那条一样：**宁可少跑一次，也不许漏账** ——
+   *    漏账的那一侧是"页面自己写个死循环，把这个盒子拖垮"。
+   */
+  #takeDbSlot(id, at) {
+    const win = 60_000;
+    const seen = (this.dbCalls.get(id) ?? []).filter((t) => at - t < win);
+    if (seen.length >= DB_CALLS_PER_MINUTE) {
+      this.dbCalls.set(id, seen);
+      return false;
+    }
+    seen.push(at);
+    this.dbCalls.set(id, seen);
+    return true;
+  }
+
+  /**
+   * ★ **替它跑一条**（`run` / `get` / `all`）—— **一个小程序一个独立的 SQLite**。
+   *
+   * ── 顺序（一道都不许省）──────────────────────────────────
+   *   ① `checkAppId`（形状）→ ② 这个 app 在他的吗 → ③ **制品声明了吗** →
+   *   ④ **他允许了吗** → ⑤ 语句 / 参数过一遍 → ⑥ 频率 → ⑦ **子进程里跑，超时就杀**。
+   *
+   * 🔴 **它是 `async`**：执行那一步是**子进程**（还可能被杀），而且租户那一侧
+   *    这一条要过隧道（盒子里那份才是权威，见 `apps-box.js`）。
+   *
+   * ⚠️ **绝不抛业务错**：该拒的都回 `{ok:false,status,error,text}` —— 调用方（那条 HTTP 口）
+   *    只管照着回。**抛**只留给"这个 app 根本不在他这儿"这种接线错误。
+   *
+   * @param {string} id
+   * @param {{op?:string, sql?:unknown, params?:unknown}} req
+   * @returns {Promise<{ok:true, rows:any[], changes:number, lastInsertRowid:number, truncated:boolean}
+   *                   | {ok:false, status:number, error:string, text:string}>}
+   */
+  async dbExec(id, req = {}) {
+    checkAppId(id);
+    const m = this.meta(id);
+    if (m === null) throw new AppsError('这个小程序不在你这儿');
+    const permissions = Array.isArray(m.permissions) ? m.permissions : [];
+    const declared = permissions.includes(DB_PERMISSION);
+    const granted = this.grants(id).includes(DB_PERMISSION);
+    const verdict = checkAppDb({ declared, granted, op: req?.op, sql: req?.sql, params: req?.params });
+    if (verdict.ok !== true) {
+      // 拒的那几档**留痕**（"谁想干什么被拦了"要查得到；成了的不写，量太大）
+      this.#audit({ what: 'db-deny', id, error: verdict.error });
+      return { ok: false, status: verdict.status, error: verdict.error, text: verdict.text };
+    }
+    if (!this.#takeDbSlot(id, this.now())) {
+      this.#audit({ what: 'db-rate', id });
+      return { ok: false, status: 429, error: 'too-many', text: DB_TOO_MANY_TEXT };
+    }
+    try {
+      this.fs.mkdirSync(this.appDir(id), { recursive: true, mode: 0o755 });
+    } catch {
+      /* 建不出来 ⇒ 下面那一步会如实说取不到 */
+    }
+    const r = await runDbChild({
+      file: this.dbPath(id),
+      op: req?.op,
+      sql: verdict.sql,
+      params: verdict.params,
+      // ⚠️ 子进程的 cwd 就是这个 app 自己那一格：万一哪条语句里有相对路径，
+      //    也落不出它自己的地界（`ATTACH` 那一档另有 authorizer 拦）
+      cwd: this.appDir(id),
+    });
+    if (r.ok !== true) {
+      // 满了是**存储**那一档（507）；太久 / 太频繁是**等一下再试**那一档；其余是这一条 SQL 自己的问题
+      const status = r.error === 'full' ? 507 : r.error === 'timeout' ? 503 : 400;
+      if (r.error === 'full') this.#audit({ what: 'db-full', id });
+      return { ok: false, status, error: r.error, text: r.text === DB_FULL_TEXT ? DB_FULL_TEXT : r.text || DB_ERROR_TEXT };
+    }
+    return r;
   }
 
   /**

@@ -369,6 +369,18 @@ void main() {
       voiceTryBadFrame,
       voiceTryNoKeyEmpty,
       voiceTryNoKeyFilled,
+      // ★ 2026-09-30（契约 `docs/dev/147-APP-SQLITE.md` §二「册子」）：设置页那张
+      //    **注册制**的卡（它想要什么 / 你给了没有）—— **直接引数据源**（手抄会漂）。
+      //    ⚠️ 这一批最容易混进来的是"权限 / 数据库 / SQLite / db"那类技术词；
+      //       允许的是他说得懂的话："想把东西存下来"、"想用你的钥匙问一句"。
+      settingsGrantsTitle,
+      settingsGrantsHint,
+      settingsGrantsFailed,
+      // ⚠️ 拼出来的那句也要扫（`permission` 是协议名，**人话在映射表里**）
+      grantWantWords('db'),
+      grantWantWords('ask'),
+      // 认不出来的那一档也有一句人话（不许把协议名摆到屏幕上）
+      grantWantWords('something-new'),
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

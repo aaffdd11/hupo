@@ -89,6 +89,27 @@ export const BOX_APP_RENAME_PATH = '/internal/app-rename';
 export const BOX_APP_COPY_PATH = '/internal/app-copy';
 
 /**
+ * ★ **`147`：替小程序跑一条存储**（宿主 → 盒子）—— 让**盒子那份库**自己动。
+ *
+ * ⚠️ 与 `app-ask` / `app-remove` 同一个道理，而且更硬：**那个 SQLite 文件就住在盒子里**。
+ *    宿主这一侧既看不到它、也不该看到它 ⇒ 一条命令过一次隧道，在**授权那份**上跑。
+ * 🔴 失败就说失败：盒子不通 / 答的话认不出 ⇒ 抛 `BoxError`，调用方**如实 503**。
+ *    ⚠️ **绝不许**在宿主这一侧再建一个库（那会变成"两处库"：页面存进 A、助手读到 B）。
+ */
+export const BOX_APP_DB_PATH = '/internal/app-db';
+
+/**
+ * ★ **`147`：读/写"他允许了哪几样"**（`grant.json`）—— 租户的那份**在他盒子里**。
+ *
+ * ⚠️ 一个口两种用法（**按正文分岔，不按方法分**）：
+ *   · `{appId}`                    ⇒ **读**（界面要显示"它想要什么 / 你给了没有"）；
+ *   · `{appId, permission, allow}` ⇒ **写**（他在设置页点的那一下）。
+ * 🔴 为什么由盒子落：`grant.json` 是**看的人的决定**，它住在**他那一格**里；
+ *    宿主写一份"看着像"的，等到真跑起来（`/db` 那一步在盒里判）就会对不上 —— 那正是假话。
+ */
+export const BOX_APP_GRANT_PATH = '/internal/app-grant';
+
+/**
  * ★ **`126`/桌面上那颗加号：在这一台里"登记一个空的小程序"**
  *   （`registerBlankApp()`：建工作区 ＋ 登记，**不打成包**）。
  *
@@ -140,6 +161,8 @@ export function parseInternalPath(pathname) {
   if (pathname === BOX_APP_REMOVE_PATH) return { kind: 'app-remove' };
   if (pathname === BOX_APP_RENAME_PATH) return { kind: 'app-rename' };
   if (pathname === BOX_APP_COPY_PATH) return { kind: 'app-copy' };
+  if (pathname === BOX_APP_DB_PATH) return { kind: 'app-db' };
+  if (pathname === BOX_APP_GRANT_PATH) return { kind: 'app-grant' };
   if (pathname === BOX_APP_REGISTER_PATH) return { kind: 'app-register' };
   if (pathname === BOX_ROOM_REMOVE_PATH) return { kind: 'room-remove' };
   return null;
@@ -368,6 +391,87 @@ export function createBoxApps({ sub = 'owner', dial, log = () => {} } = {}) {
         ok: false,
         status: Number.isFinite(j.status) ? j.status : 403,
         error: typeof j.error === 'string' && j.error !== '' ? j.error : '这个小程序问不了',
+      };
+    },
+    /**
+     * ★ **`147`：他在设置页点的那一下**（允许 / 关掉）—— 落在**盒子那份**上。
+     *
+     * 🔴 **失败就说失败**：盒子不通 / 答的话认不出 ⇒ 抛 `BoxError`，调用方如实回 503
+     *    —— **绝不许**在宿主这一侧写一份"看着像"的（那一份永远轮不到它作数）。
+     *
+     * @returns {Promise<{ok:true, permissions:string[]} | {ok:false, status:number, error:string, text?:string}>}
+     */
+    async setGrants(appId, permission, allow) {
+      const payload = Buffer.from(
+        JSON.stringify({ appId: String(appId ?? ''), permission: String(permission ?? ''), allow: allow === true }),
+        'utf8',
+      );
+      const r = await requestOverSocket(dialOnce(dial), {
+        method: 'POST',
+        path: BOX_APP_GRANT_PATH,
+        headers: { 'content-type': 'application/json', 'content-length': String(payload.length) },
+        body: payload,
+      });
+      if (r.status !== 200) {
+        log(`盒子里那条"允许"没答（HTTP ${r.status}）`);
+        throw new BoxError(`盒子里那条"允许"没答（HTTP ${r.status}）`, 'bad-status');
+      }
+      const j = parseJson(r.body);
+      // ⚠️ 形状**逐字段核**：认不出就是认不出，不许当成"允许了"（fail-closed）。
+      if (!j || typeof j.ok !== 'boolean') throw new BoxError('盒子里那条"允许"答的话看不懂', 'bad-json');
+      if (j.ok === true) return { ok: true, permissions: Array.isArray(j.permissions) ? j.permissions : [] };
+      return {
+        ok: false,
+        status: Number.isFinite(j.status) ? j.status : 403,
+        error: typeof j.error === 'string' && j.error !== '' ? j.error : 'not-done',
+        text: typeof j.text === 'string' && j.text !== '' ? j.text : '没做成，等会儿再试。',
+      };
+    },
+    /**
+     * ★ **`147`：替小程序跑一条存储 —— 交给盒子那份权威来跑**。
+     *
+     * 盒子那侧调的是**同一个** `Apps.dbExec()`（声明 → 授予 → 语句 → 频率 → **子进程里跑**），
+     * 所以这里只做一件事：**把它的结论原样带回来**（成功的那几行、或者拒绝的理由）。
+     *
+     * 🔴 **失败就说失败**：盒子不通 / 答的话认不出 ⇒ **抛 `BoxError`**，调用方如实回 503
+     *    —— **绝不许**在宿主这一侧建一个"临时库"顶上（两处库 ＝ 页面存进 A、助手读到 B）。
+     *
+     * @param {string} appId
+     * @param {{op?:string, sql?:unknown, params?:unknown}} req
+     * @returns {Promise<object>}
+     */
+    async dbExec(appId, req = {}) {
+      const payload = Buffer.from(
+        JSON.stringify({ appId: String(appId ?? ''), op: req?.op, sql: req?.sql, params: req?.params }),
+        'utf8',
+      );
+      const r = await requestOverSocket(dialOnce(dial), {
+        method: 'POST',
+        path: BOX_APP_DB_PATH,
+        headers: { 'content-type': 'application/json', 'content-length': String(payload.length) },
+        body: payload,
+      });
+      if (r.status !== 200) {
+        log(`盒子里那条存储没答（HTTP ${r.status}）`);
+        throw new BoxError(`盒子里那条存储没答（HTTP ${r.status}）`, 'bad-status');
+      }
+      const j = parseJson(r.body);
+      // ⚠️ 形状**逐字段核**：认不出就是认不出，不许当成"跑成功了"（fail-closed）。
+      if (!j || typeof j.ok !== 'boolean') throw new BoxError('盒子里那条存储答的话看不懂', 'bad-json');
+      if (j.ok === true) {
+        return {
+          ok: true,
+          rows: Array.isArray(j.rows) ? j.rows : [],
+          changes: Number.isFinite(j.changes) ? j.changes : 0,
+          lastInsertRowid: Number.isFinite(j.lastInsertRowid) ? j.lastInsertRowid : 0,
+          truncated: j.truncated === true,
+        };
+      }
+      return {
+        ok: false,
+        status: Number.isFinite(j.status) ? j.status : 403,
+        error: typeof j.error === 'string' && j.error !== '' ? j.error : 'db',
+        text: typeof j.text === 'string' && j.text !== '' ? j.text : '这一条它没执行成功。',
       };
     },
     /**

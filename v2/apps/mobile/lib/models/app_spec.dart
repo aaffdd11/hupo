@@ -32,6 +32,7 @@ class MiniApp {
     required this.version,
     required this.entryUrl,
     this.permissions = const [],
+    this.granted,
     this.expiresAt = 0,
   });
 
@@ -51,8 +52,29 @@ class MiniApp {
   /// 它要什么权限（乙-1 一定是空的）。
   final List<String> permissions;
 
+  /// ★ **主人允许了的**（`/api/apps` 回的 `granted` · 契约 `docs/dev/147-APP-SQLITE.md`）。
+  ///
+  /// 🔴 **`null` 与空数组是两件事**：
+  ///    · `null` = **老服务端没回这个字段** ⇒ 我们**不知道**"你给了没有"
+  ///      ⇒ 设置页那张卡**不给开关**（画一个假的开/关就是让页面说假话）；
+  ///    · `[]` = 回话了，一样都没给。
+  /// ⚠️ 它是"允许了的那几样"；[permissions] 是"制品声明的那几样" —— **两件事**。
+  final List<String>? granted;
+
   /// 这条 URL 什么时候过期（毫秒）。
   final int expiresAt;
+
+  /// 复制一份、只换 [granted]（注册制那一下**成了之后**用它记账）。
+  MiniApp withGranted(List<String> next) => MiniApp(
+    id: id,
+    title: title,
+    icon: icon,
+    version: version,
+    entryUrl: entryUrl,
+    permissions: permissions,
+    granted: next,
+    expiresAt: expiresAt,
+  );
 
   /// 从 `/api/apps` 的一条记录里解析出来。**不合法就返回 `null`**（fail-closed）。
   ///
@@ -79,6 +101,16 @@ class MiniApp {
         if (p is String && p.isNotEmpty) perms.add(p);
       }
     }
+    // ★ **`granted` 缺了就是缺了**（老服务端）：`null` 走上去，界面据此**不画开关**。
+    //   ⚠️ 读到一半（字段在、但不是一串名字）也按"不知道"处理 —— fail-closed。
+    List<String>? granted;
+    final rawGranted = raw['granted'];
+    if (rawGranted is List) {
+      granted = <String>[
+        for (final p in rawGranted)
+          if (p is String && p.isNotEmpty) p,
+      ];
+    }
     return MiniApp(
       id: id,
       title: title,
@@ -86,6 +118,7 @@ class MiniApp {
       version: n,
       entryUrl: url,
       permissions: perms,
+      granted: granted,
       expiresAt: expires,
     );
   }

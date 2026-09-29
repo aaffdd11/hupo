@@ -10,6 +10,7 @@ import 'package:hupo_app/models/image_outcome.dart';
 import 'package:hupo_app/models/key_outcome.dart';
 
 export 'package:hupo_app/models/key_outcome.dart';
+export 'package:hupo_app/models/app_grants.dart';
 
 import 'dart:convert';
 
@@ -17,6 +18,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/dev_harness.dart';
 import '../models/export.dart';
+import '../models/app_grants.dart';
 import '../models/app_spec.dart';
 import '../models/scope.dart';
 import '../models/server_address.dart';
@@ -388,6 +390,35 @@ class Api {
       return appEditOutcomeOf(r.statusCode, r.body);
     } catch (_) {
       return const AppEditFailed();
+    }
+  }
+
+  /// ★ **注册制那一下：答应它 / 现在不给**（契约 `docs/dev/147-APP-SQLITE.md` §二）。
+  ///
+  /// 主人原话：*「注册制，在设置里可以看到也可以关闭」*。
+  /// ⚠️ 头照 [appRename] 那条走（`authorization: Bearer <token>`）—— 签字的是他（登录态），
+  ///    助手那条口碰不到这一条。
+  /// ⚠️ 回执**只有服务端明说 `{ok:true}` 才算成了**（同 [appRemove] 那条纪律）：
+  ///    非 200 / `ok` 不是 true ⇒ 带回 `{ok:false,text}` 里那句**人话**
+  ///    （界面照它说，**不许**先把开关拨过去再回滚，也不许静默）。
+  Future<GrantOutcome> appGrant({
+    required String token,
+    required String id,
+    required String permission,
+    required bool allow,
+  }) async {
+    try {
+      final r = await _c
+          .post(
+            _u('/api/app-grant'),
+            headers: {'content-type': 'application/json', 'authorization': 'Bearer $token'},
+            body: jsonEncode({'id': id, 'permission': permission, 'allow': allow}),
+          )
+          .timeout(const Duration(seconds: 20));
+      return grantOutcomeOf(r.statusCode, r.body);
+    } catch (_) {
+      // 网不通 / 超时 / 请求根本没发出去 ⇒ **什么都没发生**（界面不许当成功）
+      return const GrantFailed('');
     }
   }
 

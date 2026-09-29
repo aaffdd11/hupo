@@ -1129,6 +1129,11 @@ class _ChatScreenState extends State<ChatScreen> {
           wallpaper: _wallpaper,
           onWallpaperChanged: _setWallpaper,
           wallpaperLive: _wallpaperVN,
+          // ★ 2026-09-30：**注册制那张卡**（契约 `docs/dev/147-APP-SQLITE.md`）。
+          //   清单就是这一屏手上那份 `/api/apps`（桌面那一墙也是它）；
+          //   "答应它 / 现在不给"那一下由这一屏去说（见 `_grantMyApp`）。
+          apps: _myApps,
+          onGrant: _grantMyApp,
         ),
         title: configTitle,
       );
@@ -1531,6 +1536,52 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     if (v == null) return null;
     return (title: v.title.trim(), description: v.description.trim());
+  }
+
+  /// ★ **注册制那一下**（契约 `docs/dev/147-APP-SQLITE.md` §二 ·
+  /// 主人原话：*「注册制，在设置里可以看到也可以关闭」*）。
+  ///
+  /// 设置页那张卡把"他点了开关"交到这儿 ⇒ 去说一声（`POST /api/app-grant`）：
+  ///   · **服务端明说成了** ⇒ 把这一屏手上那份清单里那一条**改成新的一份**
+  ///     （界面照它画：桌面那一墙、下一次打开设置页，都是这一份）；
+  ///   · 令牌不行 ⇒ 走既有那条"该回登录页"的路（**不在这儿**说成"没给"）；
+  ///   · 其余（网 / 非 200 / `ok` 不是 true）⇒ **一个字节都不改**，
+  ///     把服务端那句人话**原样交回**给那张卡去说（**不许**先拨过去再回滚）。
+  ///
+  /// ⚠️ 返回的是**那个结果本身**（卡片拿它决定说什么）—— 这一层不替它编话。
+  Future<GrantOutcome> _grantMyApp(String id, String permission, bool allow) async {
+    final token = widget.controller.token;
+    if (token == null) {
+      _unauthorized();
+      return const GrantFailed('');
+    }
+    final out = await widget.controller.api.appGrant(
+      token: token,
+      id: id,
+      permission: permission,
+      allow: allow,
+    );
+    if (!mounted) return out;
+    switch (out) {
+      case GrantOk(:final permissions):
+        setState(() {
+          _myApps = [
+            for (final a in _myApps)
+              if (a.id == id)
+                a.withGranted(
+                  permissions ?? nextGranted(a.granted ?? const [], permission, allow),
+                )
+              else
+                a,
+          ];
+        });
+      case GrantUnauthorized():
+        _unauthorized();
+      case GrantFailed():
+        // 没成 ⇒ 清单**一个字都不动**（卡片那边也只说一句、不拨开关）。
+        break;
+    }
+    return out;
   }
 
   Future<void> _renameMyApp(String id, String currentTitle) async {

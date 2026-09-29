@@ -265,7 +265,10 @@ test('制品口：好消息 200 + 内容对 + 带 CSP + **没有 X-Frame-Options
   assert.match(r.body.toString(), /掷/);
   assert.match(r.headers['content-type'], /text\/html/);
   assert.match(r.headers['content-security-policy'], /default-src 'none'/);
-  assert.match(r.headers['content-security-policy'], /connect-src 'none'/);
+  // ⚠️ **2026-09-30 改的那一条**（契约 `147-APP-SQLITE.md`）：`connect-src 'none'` ⇒ `'self'`
+  //    （制品只许对**它自己那个原点**发请求 = "替我存一笔"那条窄口）。判据同时在
+  //    `test/app-live.test.js` V3 与 `test/app-db.test.js` D7 上（三处口径要一致）。
+  assert.match(r.headers['content-security-policy'], /connect-src 'self'/);
   assert.match(r.headers['content-security-policy'], /frame-ancestors http:\/\/127\.0\.0\.1:8020/);
   assert.equal(r.headers['x-frame-options'], undefined, '🔴 发了它壳里就嵌不进去');
   assert.equal(r.headers['cache-control'], 'no-store');

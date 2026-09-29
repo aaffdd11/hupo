@@ -62,11 +62,27 @@ void main() {
     expect(f.existsSync(), true,
         reason: '★ 找不到 `scripts/build-apk.sh`（cwd 不对？）—— 打 APK 只许从它走');
     final src = f.readAsStringSync();
-    final lines = src
-        .split('\n')
-        .map((l) => l.trim())
-        .where((l) => l.contains('build apk'))
-        .toList();
+    // 🔴 **2026-09-30 修这条判据自己的一处脆**（它当时在 HEAD 上一直红）：
+    //    一条命令**可以跨行写**（行尾 `\` 是 shell 的续行），实测 `build-apk.sh` 就是
+    //    `… build apk --release \` 与 `--dart-define=HUPO_API="$HUPO_API"` **分了两行**。
+    //    而原来这里先按行过滤、再逐行查 define ⇒ 它量到的其实是"续行语法"，
+    //    不是"那条命令有没有带地址"（判据自己在说一件与它声明无关的事）。
+    //    ⇒ 先把**逻辑行**（续行拼起来）再找那一条：**守的东西一个字没变**
+    //      （那条命令必须带 define —— 拿掉它、或者换成别的地址变量，都照样红）。
+    final logical = <String>[];
+    final buf = StringBuffer();
+    for (final raw in src.split('\n')) {
+      final l = raw.trim();
+      if (l.endsWith('\\')) {
+        buf.write('${l.substring(0, l.length - 1)} ');
+        continue;
+      }
+      buf.write(l);
+      logical.add(buf.toString());
+      buf.clear();
+    }
+    if (buf.isNotEmpty) logical.add(buf.toString());
+    final lines = logical.where((l) => l.contains('build apk')).toList();
     expect(lines, isNotEmpty, reason: '★ 脚本里得有那一条"build apk"（打法只有这一个入口）');
     expect(
       lines.every((l) => l.contains(_definePrefix)),

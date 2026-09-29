@@ -99,7 +99,7 @@
 
 | # | 出去的路 | 今天的事实（核过的行） | 制品能不能自己走 |
 |---|---|---|---|
-| **O1** | **制品页自己请求外网**（`fetch` / `XHR` / `WebSocket` / `<img src>` 到外域 / `<iframe>` / 表单提交） | CSP：`default-src 'none'` · `connect-src 'none'` · `img-src data: blob:` · `form-action 'none'` · `base-uri 'none'`（`app-serve.js:42-53`） | ❌ **今天发不出去**（**响应头是唯一机制**） |
+| **O1** | **制品页自己请求外网**（`fetch` / `XHR` / `WebSocket` / `<img src>` 到外域 / `<iframe>` / 表单提交） | 🔴 **2026-09-30 起这一格变了**（契约 `147-APP-SQLITE.md`）：CSP 现在是 `default-src 'none'` · **`connect-src 'self'`**（原来是 `'none'`）· `img-src data: blob:` · `form-action 'none'` · `base-uri 'none'` —— **它仍然出不去**（白名单里**只有它自己那个原点**，别人的站一个都没有），那一条口现在用来"**替它存一笔**"（`POST /db`）。改前读数：`connect-src 'none'` ⇒ ❌ **发不出去**（**响应头是唯一机制**） |
 | **O2** | **`ask` 那条窄通道**：制品 → 平台 → 本机代理 → **上游模型域名** | `app-ask.js:53-95`（`ASK_MODEL`＝`app-ask.js:34`；只带 `prompt`，上限 `MAX_ASK_CHARS`＝`app-ask.js:37`）· 四道闸 `apps.js:511-542` ＋ 中心那侧 `server.js:1895-1909` · `model-proxy.mjs:172-195`（**透明转发**） | ✅ **这是唯一给制品的出去口**（带的是**他明说那一句**，F7） |
 | **O3** | **这个 app 那个房间里的 agent（助手）**：`web_search` / `web_fetch` 等只读工具 | `tools.js:30-46`（`READ_ONLY_TOOLS` 里有 `web_search` `web_fetch`）· 房间的 cwd／agentKey 按 scope 分开（`worlds.js:288,602,615-663`） | ⚠️ **不是制品自己**，但**是"这个小程序引起的"那间房的能力** |
 | **O4** | **入口 URL 与响应头带出去的东西** | `entryUrl` 明文拼 **`u=<sub>`**（`app-serve.js:100-105`，`:103`）· `referrer-policy: no-referrer`（`app-serve.js:239`） | ⚠️ 这是**带出去**（给第三方制品读 `location.search`），**不是请求出去** |

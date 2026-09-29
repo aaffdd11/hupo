@@ -19,6 +19,7 @@
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 
+import '../models/app_spec.dart';
 import '../models/appearance.dart';
 import '../models/design.dart' as d;
 import '../models/dsh_design.dart';
@@ -29,6 +30,7 @@ import '../models/voice_record.dart';
 import '../models/voice_try.dart';
 import '../models/wallpaper.dart' show wallpaperLabel;
 import '../services/api.dart';
+import '../widgets/app_grants_card.dart';
 import '../widgets/cancel_account.dart';
 import '../widgets/cred_form.dart';
 import '../widgets/dsh_look.dart';
@@ -72,6 +74,8 @@ class SettingsScreen extends StatelessWidget {
     this.onWallpaperChanged,
     this.appearanceLive,
     this.wallpaperLive,
+    this.apps = const [],
+    this.onGrant,
   });
 
   /// 现在有没有一串能用的钥匙（服务端说的）。
@@ -166,6 +170,21 @@ class SettingsScreen extends StatelessWidget {
   /// **会通知的那一份壁纸**（同上）。
   final ValueListenable<String>? wallpaperLive;
 
+  // ── ★ 2026-09-30：**注册制那张卡**（契约 `docs/dev/147-APP-SQLITE.md`）────────
+  //
+  // 主人原话：*「注册制，在设置里可以看到也可以关闭」*。
+  // ⚠️ 清单就是 `/api/apps` 那一份（`permissions`＝它想要什么 · `granted`＝你给了没有）；
+  //    这一屏**不自己拉** —— 状态住上面（同外观 / 壁纸那条：两份状态迟早会漂）。
+  // ⚠️ 一个声明了东西的小程序都没有 ⇒ 那张卡**一个像素都不画**（`AppGrantsCard` 里判）。
+
+  /// 「我的小程序」那一份清单（空 = 没有 / 还没拿到）。
+  final List<MiniApp> apps;
+
+  /// **答应它 / 现在不给**那一下（`POST /api/app-grant`）。
+  /// ⚠️ `null` = 这条路没接上 ⇒ 卡上的开关**不给**（同"不给假按钮"那条纪律）。
+  final Future<GrantOutcome> Function(String id, String permission, bool allow)?
+  onGrant;
+
   @override
   Widget build(BuildContext context) {
     // ⚠️ **没有 `Scaffold` / `AppBar`**：顶上那一条由**小程序容器**给
@@ -240,8 +259,13 @@ class SettingsScreen extends StatelessWidget {
                 ),
               ),
             ),
+            // ④ ★ 2026-09-30：**注册制那张卡**（契约 `docs/dev/147-APP-SQLITE.md`）。
+            //    ⚠️ 位置在"这块窗口"之后、"这个助手"那一组之前 —— 它是**小程序那一类**
+            //       的配置，不是"关于/退出登录"那一类。
+            //    ⚠️ 一个声明了东西的小程序都没有时它自己画零个像素（卡片内部判）。
+            AppGrantsCard(apps: apps, onGrant: onGrant),
             const SizedBox(height: d.gapL),
-            // ④ 关于 / 退出登录 / 注销账号（各是一条 —— 同一次定的形状）
+            // ⑤ 关于 / 退出登录 / 注销账号（各是一条 —— 同一次定的形状）
             _row(
               context,
               icon: Icons.info_outline,

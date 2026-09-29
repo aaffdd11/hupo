@@ -62,7 +62,7 @@ import {
 } from './apps-box.js';
 // ⚠️ 只用它的**错误类型**（内部写入那条路要把"校验不过"如实回给宿主，而不是 500）
 //    与那个总量上限（内部口的身体上限由它推出来，**不另写一个数**）。
-import { AppsError, MAX_DESC_CHARS, MAX_TITLE_CHARS, MAX_TOTAL_BYTES, isAnAppRoom, newAppId } from './apps.js';
+import { AppsError, MAX_DESC_CHARS, MAX_TITLE_CHARS, MAX_TOTAL_BYTES, PERMISSIONS, isAnAppRoom, newAppId } from './apps.js';
 // ★ **"活的工作区"那一刀**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）：
 //   `/internal/workspace-live`（盒里那条口）读的就是它 —— **以盒子为准**。
 import { readLiveApp } from './workspace.js';
@@ -1110,6 +1110,57 @@ export function createServer({
         }
       }
 
+      /**
+       * ★ **`147`：他允许 / 关掉"这个小程序能存东西"**（主人 2026-09-30 拍的注册制：
+       * *"在设置里可以看到也可以关闭"*）。
+       *
+       * 🔴 **签字的是他**：声明（制品清单里的 `permissions`）只是"申请"；
+       *    这一条口是**看的人**点头那一下 —— 所以它和 `/api/app-*` 那几条一样，
+       *    走**登录态**（`claim.sub`），不是制品、也不是助手能调的。
+       *    助手那边那条口（`apps.sock` 的 `grant`）**只认它自己那两样**，不碰这一条。
+       */
+      if (path === '/api/app-grant' && req.method === 'POST') {
+        let body;
+        try {
+          body = await readJson(req, 16 * 1024);
+        } catch {
+          return sendJson(res, 400, { ok: false, error: 'bad-body', text: '这一条看不懂。' });
+        }
+        const appId = typeof body?.id === 'string' ? body.id : '';
+        const permission = typeof body?.permission === 'string' ? body.permission : '';
+        const allow = body?.allow === true;
+        if (appId === '') return sendJson(res, 404, { ok: false, error: 'not-found', text: '没说清是哪一个小程序。' });
+        if (!PERMISSIONS.includes(permission)) {
+          return sendJson(res, 400, { ok: false, error: 'bad-permission', text: '这个东西现在还不给。' });
+        }
+        const src = appsFor(claim.sub);
+        if (!src) {
+          return tenant
+            ? sendJson(res, 503, { ok: false, error: 'tenant-not-ready', text: '你那台还在准备，稍等一下再试。' })
+            : sendJson(res, 404, { ok: false, error: 'no-apps', text: '这台部署还没开小程序。' });
+        }
+        try {
+          // 🔴 两处同名方法语义不同（见 `apps-box.js` 的 `isBox` 那一段）：
+          //    盒代理 ⇒ 异步回 `{ok:false,status,error}`；本机那份 ⇒ 同步抛错、返回新清单。
+          if (src.isBox === true) {
+            if (typeof src.setGrants !== 'function') {
+              return sendJson(res, 503, { ok: false, error: 'not-ready', text: '你那台还没跟上，等一会儿再试。' });
+            }
+            const r = await src.setGrants(appId, permission, allow);
+            if (!r.ok) return sendJson(res, r.status, { ok: false, error: r.error, text: r.text ?? r.error });
+            return sendJson(res, 200, { ok: true, permissions: r.permissions });
+          }
+          const want = src.grants(appId);
+          const next = allow ? [...new Set([...want, permission])] : want.filter((p) => p !== permission);
+          const kept = src.setGrants(appId, next);
+          return sendJson(res, 200, { ok: true, permissions: kept });
+        } catch (err) {
+          const msg = err instanceof AppsError ? err.message : '没做成，等会儿再试。';
+          log(`[app-grant] 没做成（${String(appId).slice(0, 40)}）：${err?.message ?? err}`);
+          return sendJson(res, 400, { ok: false, error: 'not-done', text: msg });
+        }
+      }
+
       if (path === '/api/app-rename' && req.method === 'POST') {
         let body;
         try {
@@ -1235,9 +1286,27 @@ export function createServer({
         //   ⚠️ **入口只有一个**（`liveEntryOf`）：那一间清单里那个（默认 `index.html`）。
         //   ⚠️ **绑的仍然是"人"**（`sub`）＋ 哨兵 `live`（不是版本号）⇒ 版本一动
         //      这条 URL 不作废（他改了就该看到新的），而**别人拿到它也没用**。
+        /**
+         * ★ **`147`：每一格"你允许了哪几样"**（`grant.json`）——和 `permissions`
+         *   （**制品声明**的那几样）**是两件事**，界面要同时看得见："它想要" ＋ "你给了没有"。
+         * 🔴 **租户不再额外过一趟隧道**：盒子那份清单**已经把它带回来了**
+         *   （`/internal/apps` 顺手带上 `granted`）——这是 B15-5 那条判据量的那件事
+         *   （"这一趟开了几次隧道"）。宿主这一侧只有本机那份才现读。
+         * ⚠️ 读不出来一律 `[]`（fail-closed：宁可显示"没允许"，也不许显示成允许了）。
+         */
+        const grantedList = items.map((a) => {
+          if (Array.isArray(a.granted)) return a.granted;
+          if (src.isBox === true) return [];
+          try {
+            return src.grants(a.id);
+          } catch {
+            return [];
+          }
+        });
         return sendJson(res, 200, {
-          apps: items.map((a) => ({
+          apps: items.map((a, i) => ({
             ...a,
+            granted: Array.isArray(grantedList[i]) ? grantedList[i] : [],
             entryUrl: liveEntryUrl({
               base: apps.base,
               key: apps.key,
@@ -2652,6 +2721,68 @@ const TENANT_ROUTES = [
       return sendJson(res, 200, checkAppAsk(src, body?.appId));
     }
 
+    // ── ★ **`147`：读/写"他允许了哪几样"**（`grant.json` 在**这个盒子**里）────
+    // ⚠️ 与 `app-db` 同一个道理：**权威那份在盒里** ⇒ 读和写都在这一侧落。
+    if (hit.kind === 'app-grant') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method' });
+      if (src.isBox === true || typeof src.setGrants !== 'function' || typeof src.grants !== 'function') {
+        return sendJson(res, 500, { ok: false, status: 500, error: 'wrong-source', text: '这条"允许"的取值来源接错了' });
+      }
+      let body;
+      try {
+        body = await readJson(req, 16 * 1024);
+      } catch {
+        return sendJson(res, 400, { ok: false, status: 400, error: 'bad-body', text: '这一条看不懂。' });
+      }
+      const appId = String(body?.appId ?? '');
+      if (typeof body?.permission !== 'string' || body.permission === '') {
+        // ⚠️ **读那一半不在这儿**：他那一屏要的"现在允许了没有"是**清单那条口**
+        //    （`/internal/apps` 顺手带上 `granted`）一趟带回来的 —— 少一次隧道往返，
+        //    也少一个会漂的第二出处。
+        return sendJson(res, 400, { ok: false, status: 400, error: 'bad-permission', text: '这一条看不懂。' });
+      }
+      if (!PERMISSIONS.includes(body.permission)) {
+        return sendJson(res, 400, { ok: false, status: 400, error: 'bad-permission', text: '这个东西现在还不给。' });
+      }
+      try {
+        const want = src.grants(appId);
+        const allow = body.allow === true;
+        const next = allow ? [...new Set([...want, body.permission])] : want.filter((p) => p !== body.permission);
+        const kept = src.setGrants(appId, next);
+        return sendJson(res, 200, { ok: true, permissions: kept });
+      } catch (err) {
+        log(`[app-grant] 没写成：${err?.message ?? err}`);
+        const msg = err instanceof AppsError ? err.message : '没做成，等会儿再试。';
+        return sendJson(res, 200, { ok: false, status: 400, error: 'not-done', text: msg });
+      }
+    }
+
+    // ── ★ **`147`：替小程序跑一条存储**（在**权威那份**上落，见 `147-APP-SQLITE.md`）──
+    // ⚠️ 那条 SQLite 文件就住在**这个盒子**里 ⇒ 宿主把命令过一次隧道送到这儿，
+    //    这儿跑的是**同一个** `Apps.dbExec()`（声明 → 授予 → 语句 → 频率 → 子进程里跑）。
+    // 🔴 `isBox === true` ⇒ 取值来源接错了（盒里那份必须是**本机那格**）——
+    //    照 `app-ask-check` 那条一样的规矩：**说出来，别静默**。
+    if (hit.kind === 'app-db') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method' });
+      if (src.isBox === true || typeof src.dbExec !== 'function') {
+        return sendJson(res, 500, { ok: false, status: 500, error: 'wrong-source', text: '这条存储的取值来源接错了' });
+      }
+      let body;
+      try {
+        body = await readJson(req, 64 * 1024);
+      } catch {
+        return sendJson(res, 400, { ok: false, status: 400, error: 'bad-body', text: '这一条看不懂。' });
+      }
+      try {
+        const out = await src.dbExec(String(body?.appId ?? ''), { op: body?.op, sql: body?.sql, params: body?.params });
+        // ⚠️ **HTTP 200 是"这条口答上来了"**，裁决在正文里（和 `app-ask-check` 同一条规矩）
+        return sendJson(res, 200, out);
+      } catch (err) {
+        log(`[app-db] 跑不出来：${err?.message ?? err}`);
+        return sendJson(res, 200, { ok: false, status: 404, error: 'no-app', text: '这个小程序不在你这儿。' });
+      }
+    }
+
     // ── ★ **`103`：从桌面上删掉那个小程序**（在**权威那份**上落）────────────
     // ⚠️ 与上面那条同一个前缀、同一条隧道：**只在可信 UDS 上**（公网口在这之前就 404 了）。
     // ── ★ **登记一个空的小程序**（桌面上那颗加号；`registerBlankApp()`）────────
@@ -2805,7 +2936,25 @@ const TENANT_ROUTES = [
         log(`[internal] 清单读不出来：${err?.message ?? err}`);
         return sendJson(res, 500, { error: '清单读不出来' });
       }
-      return sendJson(res, 200, { apps: items });
+      /**
+       * ★ **`147`：顺手把"他允许了哪几样"带上**（`grant.json` 就在这一格里，读它是本机动作）。
+       *
+       * 🔴 **为什么在这一条里带上，而不是宿主再问一遍**：宿主那一屏要同时显示
+       *    "它想要什么"与"你给了没有" —— 若每个 app 各问一次隧道，
+       *    二十个 app 就是二十次往返（B15-5 那条判据量的就是"这一趟开了几次隧道"）。
+       *    ⇒ **一趟带回**（`granted`）。
+       */
+      return sendJson(res, 200, {
+        apps: items.map((a) => {
+          let granted = [];
+          try {
+            granted = typeof src.grants === 'function' ? src.grants(a.id) : [];
+          } catch {
+            granted = [];
+          }
+          return { ...a, granted };
+        }),
+      });
     }
 
     if (hit.kind === 'artifact') {
