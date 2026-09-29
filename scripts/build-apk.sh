@@ -70,9 +70,35 @@ if [ -z "${JAVA_HOME:-}" ]; then
 fi
 
 cd "$APP" || exit 2
+
+# ── 🔴 **版本号每次打包都要变**（主人 2026-09-30：*「每次打包要修改版本号」*）────
+#
+# 为什么非要自动算：靠记性手改 `pubspec.yaml` ⇒ 迟早连着两次打同一个号
+#   （安卓那边"同号覆盖"看着像成功，而**装的人分不清手上是哪一个包**）。
+# 取值三条规矩：
+#   ① **单调增**（安卓不许降级安装）：取 `git 提交数` 与"本机那份高水位"里**大的那个** ＋1
+#      —— 提交数让"换台机器/重新克隆"也不会倒退，高水位让"同一个提交打两次"也各是各的号；
+#   ② **版本名也带它**（`1.0.0+<N>`）：他能在 设置→应用→琥珀 里**看见**手上是哪一个包；
+#   ③ 记在 `data/apk-build.json`（gitignore 里，机器本地）—— 和签名那笔账同一个家。
+PKG_VER="$(grep -m1 '^version:' pubspec.yaml | awk '{print $2}')"
+BASE_NAME="${PKG_VER%%+*}"
+COMMITS="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 0)"
+STATE="$ROOT/v2/services/core/data/apk-build.json"
+PREV="$( grep -o '"buildNumber":[0-9]*' "$STATE" 2>/dev/null | cut -d: -f2 )"
+PREV="${PREV:-0}"
+HIGH=$(( COMMITS > PREV ? COMMITS : PREV ))
+BUILD_NUMBER=$(( HIGH + 1 ))
+BUILD_NAME="${BASE_NAME}+${BUILD_NUMBER}"
+echo "▶ 版本号（每次打包都变）"
+echo "    pubspec 里写着 $PKG_VER · git 提交数 $COMMITS · 本机高水位 $PREV"
+echo "    ⇒ **versionCode=$BUILD_NUMBER · versionName=$BUILD_NAME**"
+printf '{"buildNumber":%s,"versionName":"%s","at":"%s"}\n' "$BUILD_NUMBER" "$BUILD_NAME" "$(date -Is)" > "$STATE"
+
 start=$(date +%s)
 # 🔴 下面这一行**必须**带着 `--dart-define=HUPO_API=`（判据钉着它，见脚本抬头那段）。
-"${FLUTTER_BIN:-$HOME/sdk/flutter/bin/flutter}" build apk --release --dart-define=HUPO_API="$HUPO_API"
+"${FLUTTER_BIN:-$HOME/sdk/flutter/bin/flutter}" build apk --release \
+  --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" \
+  --dart-define=HUPO_API="$HUPO_API"
 rc=$?
 end=$(date +%s)
 if [ "$rc" != "0" ]; then
@@ -85,6 +111,22 @@ echo
 echo "✅ 出包：$APK"
 echo "   大小    $(du -h "$APK" | cut -f1)"
 echo "   耗时    $((end - start))s（热 build；冷 build 要先下 Gradle 那一坨）"
+
+echo
+echo "▶ 从**包里**核版本号（我们要的那个号，真的进了包没有）"
+AAPT="$(ls -1 "${ANDROID_HOME:-$HOME/sdk/android-sdk}"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)"
+if [ -n "$AAPT" ]; then
+  APK_VC="$( "$AAPT" dump badging "$APK" 2>/dev/null | sed -n "s/^package:.*versionCode='\([0-9]*\)'.*/\1/p" | head -1 )"
+  APK_VN="$( "$AAPT" dump badging "$APK" 2>/dev/null | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p" | head -1 )"
+  echo "    包里写着   versionCode=$APK_VC · versionName=$APK_VN"
+  if [ "$APK_VC" != "$BUILD_NUMBER" ]; then
+    echo "  ✗ **包里的号不是我们要的那个**（要 $BUILD_NUMBER）—— 这个包别发"
+    exit 1
+  fi
+  echo "  ✓ 与打包时算的那个号一致"
+else
+  echo "  ⚠️ 找不到 aapt2 ⇒ 这一步没跑（版本号没核）"
+fi
 
 echo
 echo "▶ 从**包里**核权限与地址（源文件对 ≠ 包对）"
