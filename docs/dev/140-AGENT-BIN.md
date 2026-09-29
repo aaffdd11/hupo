@@ -101,3 +101,11 @@ node -e "const fs=require('fs');const env={};
   ⇒ 那正是这次要补的账（A1–A4 就是补它的）。
 * **没有把"agent 起不来"这件事做成界面上的显式状态**（今天只有一句人话）。
   那是个产品决定，**要问主人**。
+* 🔴 **产品层漂了一格（这一轮没发，明说）**：这门修的两处（`src/config.js` ·
+  `src/agent-runtime.js`）**也在产品层里** ⇒ 仓库现在是 `d769341cc99c`，而租户那三台跑的
+  还是 `038f07f8ac08`（`bash scripts/check-tenant-code-drift.sh` 会红，直到发布一次）。
+  **为什么不发**：发布要重启租户容器（按 P1/P2 **是主人签字的事**），而**这一格对盒子
+  「行为无差异」**：盒里 `node` 与 `dsh` **同在 `/bin`**（`resolveDshBin` 解析到同一个
+  `/bin/dsh`），而 `PATH` 里本来就有 `/bin` ⇒ 新加的 `preflight` 照样过、
+  `withNodeDirOnPath` 只是把 `/bin` 又放到最前。⚠️ **账单记在这儿**：
+  **下次发布自动带上**（发布时跑 `--verify d769341cc99c` ＋ `--publish`）。

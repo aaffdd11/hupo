@@ -45,5 +45,8 @@ echo "  照这三步（顺序别换）："
 echo "    bash scripts/build-tenant-code.sh"
 echo "    bash scripts/build-tenant-code.sh --verify $REPO_FP"
 echo "    bash scripts/build-tenant-code.sh --publish $REPO_FP"
-echo "  （`--verify` 要 podman；发布本身不改任何运行中的容器 —— 它们会自己在空闲时重开）"
+# ⚠️ 这一段**不许用反引号**（2026-09-29 实测踩到）：它在**双引号里**会被 bash 当成
+#   **命令替换** ⇒ 屏幕上多出一行 `--verify: command not found`，而**判据本身是对的**
+#   （退出码仍是 1）—— 那种"工具在说胡话"的样子最容易让人怀疑读数。
+echo '  （--verify 要 podman；发布本身不改任何运行中的容器 —— 它们会自己在空闲时重开）'
 exit 1
