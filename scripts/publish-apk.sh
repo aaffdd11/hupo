@@ -46,6 +46,43 @@ LOCAL_BYTES="$(wc -c < "$APK_SRC")"
 LOCAL_SHA="$(sha256sum "$APK_SRC" | cut -d' ' -f1)"
 echo "  本地       $LOCAL_BYTES 字节 · sha256 ${LOCAL_SHA:0:12}…"
 
+# ── 🔴 **签名那一笔账**（2026-09-30 补的，起因是真事）────────────────
+#   主人那天报「安卓包显示 package is null」：包是好的、下载也是对的，
+#   **根因是他手机上装着换签名之前的那个版本**（release keystore 08-29… 见下），
+#   另一把签名**叠不上去**。⇒ 从那以后每次发布都记下这把签名的指纹，
+#   **变了就当场喊出来**（"已经装了旧版的人必须先卸载"），不再靠记性。
+# ⚠️ `apksigner` 是个 java 脚本 ⇒ **要把 JDK 放上 PATH**（本机 `java` 不在 PATH 里）
+export JAVA_HOME="${JAVA_HOME:-$HOME/sdk/jdk17}"
+export PATH="$JAVA_HOME/bin:$PATH"
+APKSIGNER="$(ls -1 "${ANDROID_HOME:-$HOME/sdk/android-sdk}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
+CERT_SHA=""
+if [ -n "$APKSIGNER" ]; then
+  CERT_SHA="$( "$APKSIGNER" verify --print-certs "$APK_SRC" 2>/dev/null | grep -m1 'Signer #1 certificate SHA-256' | awk '{print $NF}' )"
+fi
+STATE="$WEB/../data/apk-signing.json"
+PREV_CERT=""
+if [ -f "$STATE" ]; then
+  PREV_CERT="$( grep -o '"certSha256":"[0-9a-f]*"' "$STATE" 2>/dev/null | cut -d'"' -f4 )"
+fi
+if [ -n "$CERT_SHA" ]; then
+  echo "  签名指纹   ${CERT_SHA:0:16}…"
+  if [ -n "$PREV_CERT" ] && [ "$PREV_CERT" != "$CERT_SHA" ]; then
+    echo
+    echo "  🔴 **签名换了！** 上一次发出去那把是 ${PREV_CERT:0:16}…"
+    echo "     ⇒ **已经装了旧版的人，必须先卸载再装**（另一把签名叠不上去）——"
+    echo "       否则他们看到的就是「package is null」那一类提示（2026-09-30 真事）。"
+  fi
+  if [ -n "$CERT_SHA" ]; then
+    printf '{"sha256":"%s","certSha256":"%s","at":"%s"}\n' "$LOCAL_SHA" "$CERT_SHA" "$(date -Is)" > "$STATE"
+  fi
+else
+  echo "  ⚠️ 核不出签名指纹（没有 apksigner？）⇒ 这一笔没记账"
+fi
+
+# ⚠️ **换签名那一次之后，这一句必须说**（别只留在脚本的输出里）：
+#    同一个签名的包可以直接覆盖安装；**换过签名**的必须先卸载。
+echo "  装法       直接覆盖安装（同一把签名）；⚠️ 换签名那一版要**先卸载**再装"
+
 echo
 echo "▶ 在线核一遍：$PUBLIC/$APK_NAME"
 HDR="$(curl -sS -D - -o /tmp/hupo-apk-dl.bin "$PUBLIC/$APK_NAME" 2>&1)"
