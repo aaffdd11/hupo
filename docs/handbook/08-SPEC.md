@@ -1439,7 +1439,7 @@ systemd
 
 | # | 规定 |
 |---|---|
-| 1 | Web 端 iframe 用 **`sandbox="allow-scripts allow-forms"`** ⚠️ **绝不能同时给 `allow-same-origin`**——同时给等于**没有沙箱** |
+| 1 | Web 端 iframe 用 **`sandbox="allow-scripts"`**（🔴 **没有 `allow-forms`** —— 代码更严，而且 CSP 的 `form-action 'none'` 已经把表单提交堵死了；见 `dev/90-APP-CONTRACT.md` §三 那条订正）⚠️ **绝不能加 `allow-same-origin`**——加了等于**没有沙箱** |
 | 2 | 小程序**文档的 CSP 写 `connect-src 'none'`** ⇒ 它**自己发不出任何请求** |
 | 3 | **下载由壳发起**（不是小程序发起）；原生侧用**独立的数据存储**；**禁原生桥** |
 
@@ -1449,6 +1449,15 @@ systemd
 
 **为什么"下载由壳发起"是必需的**：`allow-scripts` 给的 opaque origin 下，
 `localStorage` 会**抛 `SecurityError`** ⇒ 小程序**没有持久化能力**是**设计**，不是缺陷。
+
+🔴 **由此有一条常被问到的形状**（2026-09-30 主人问"小程序生成的状态没有存储功能"）：
+**一个小程序就是"一份自包含的 HTML"** —— 因为 CSP 是
+`script-src 'unsafe-inline'`（**没有 `'self'`**）＋ `style-src 'unsafe-inline'` ＋
+`img-src data: blob:` ＋ `connect-src 'none'` ⇒ 它**引不了同原点的别的文件、也发不出请求**
+⇒ 数据（比如题库）只能**写在那一份 HTML 里面**（由助手写进工作区、随版本发布）。
+⚠️ 所以"小程序有存储"这句话要拆成两半：**内容**（写进文件 ✓ 有）与
+**运行时状态**（进度 / 历史 ✗ 没有 —— 网页上被沙箱禁掉；安卓那一层是 WebView 自己那份
+`localStorage`，只在那一台能用，见 §14.1·补）。
 
 > ⚠️ **opaque origin 带出的一个坑**：此时 `event.origin === "null"`，
 > **不能拿域名做校验** ⇒ 沙箱通信必须改用**一次性 nonce**（打开时下发，关闭即废）。
