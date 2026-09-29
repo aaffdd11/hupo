@@ -10,7 +10,7 @@
 //      第 4 条有一条源码级断言：`lib/models/notice.dart` 里
 //      **一个含中文的字符串字面量都不许有**。
 //
-// ⚠️ 界面那半边在 `test/widget/notice_overlay_test.dart`
+// ⚠️ 界面那半边在 `test/widget/notice_shape_test.dart（2026-09-30 改名）`
 //    （浮窗不挤内容 / 两处撤销 / 五档不溢出 + 命中区）。
 
 import 'dart:io';

@@ -786,7 +786,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // ⚠️ **浮窗（通知）与主界面是 `Stack` 的两层，不是 `Column` 的两行。**
     //    约束 1 的判据是 **D4.8：高度变化 = 0px** —— 塞进 `Column` 就当场破掉
     //    （下面整块内容会被那条通知往下推）。有闸钉着：
-    //    `test/widget/notice_overlay_test.dart` 量的是**下面内容前后同一个矩形**。
+    //    `test/widget/notice_shape_test.dart（2026-09-30 改名）` 量的是**下面内容前后同一个矩形**。
     // ⚠️ **桌面铺满整屏（底图），聊天浮窗贴在屏幕底部浮着、四边各留 30**
     //    （主人 2026-09-22 更正："桌面是全屏的，聊天窗口是在底部的"；
     //      契约 `52-DESKTOP.md`、手册 §六 Z4）。
@@ -980,11 +980,9 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
-    final n = c.notice;
-    // ⚠️ `Positioned(top/left/right)` **不给 bottom** ⇒ 浮窗只占它自己那么大，
-    //    而且**不参与 `Stack` 的尺寸计算**（`Stack` 的尺寸由非 positioned 的
-    //    那个孩子决定）。这就是"浮在上面、不挤动下面"的**结构**保证——
-    //    不是靠"看起来像浮着"。
+    // 🔴 **2026-09-30**：这里原来读 `c.notice` 去画那个顶部浮窗 —— 撤了（主人：
+    //    *「不要浮窗。」*）。今天带号的通知只进时间线，瞬态那条画在
+    //    `_composerBody` 的输入条上面（`NoticeStrip`，**参与布局**）。
     // ★ 批次 4：**这一棵子树**就是"聊天窗口"那两样的作用域。
     //   ⚠️ 解析发生在**这里**（`MediaQuery.platformBrightness`）：用户在系统里切了
     //      暗色，`MediaQuery` 一变这一屏就重建 ⇒ `system` 当场跟着变（不用重开）。
@@ -1006,18 +1004,10 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Stack(
           children: [
             sheet,
-            if (n != null)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: NoticeOverlay(
-                  notice: n,
-                  // ⚠️ 浮窗那个**不带 `from`**：它读浮窗手上那一条
-                  onUndo: () => _undoNotice(),
-                  onDismiss: c.dismissNotice,
-                ),
-              ),
+            // 🔴 **2026-09-30：这里原来挂着一个 `NoticeOverlay`（顶部浮窗）—— 撤了。**
+            //    主人原话：*「顶部会出来一个浮窗，叫我去做做完叫你。这个不对。不要浮窗。」*
+            //    ⇒ 带号的通知**只进时间线**（那一半是 2026-09-21 定的，没动）；
+            //      瞬态那条（写盘失败）改画在**浮窗里面**（`_composerBody` 里那一条）。
           ],
         ),
       ),
@@ -1960,6 +1950,14 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // ★ **窗口里面那一条**（2026-09-30）：原来它是顶部那个浮窗。
+            //   今天只剩**瞬态那一种**（写盘失败）—— 带号的通知只进时间线。
+            if (c.notice != null)
+              NoticeStrip(
+                notice: c.notice!,
+                onUndo: () => _undoNotice(),
+                onDismiss: c.dismissNotice,
+              ),
             QueueStrip(queue: c.queue, onCancel: c.unsay),
             Composer(
           // ★ **那条浮窗**（主人 2026-09-27）：挂在**这一行**上（锚点 = 那颗 home 的上面），

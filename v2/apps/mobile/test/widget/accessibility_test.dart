@@ -65,6 +65,7 @@ import 'package:hupo_app/models/job_words.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
+import 'package:hupo_app/models/notice_words.dart';
 import 'package:hupo_app/widgets/notice.dart';
 import 'package:hupo_app/widgets/wallpaper_picker.dart';
 import 'package:hupo_app/widgets/queue_strip.dart';
@@ -983,41 +984,46 @@ Future<void> _openSelectBar(WidgetTester tester, double scale) async {
 Future<void> _openNoticeIn(WidgetTester tester, ChatController c, double scale) async {
   // ⚠️ **先挂起来、再让通知到**：浮窗和主界面是 `Stack` 的两层，
   //    通知到时 `setState` 会把这一帧重画出来。
+  //    🔴 2026-09-30：那条通知**不再是浮窗**（`NoticeStrip`，画在浮窗里面、
+  //       输入条上面）——它是**瞬态那条**（写盘失败）今天唯一的形状。
   await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), scale);
   // ⚠️ **先补上"已连上、首屏那段历史读完了"**（真实路径上服务端一定会发 `client/hello`）：
   //    没有它，这条通知会被当成**历史**（见 `models/notice.dart` 的 `shouldPopNotice()`）
-  //    ⇒ 浮窗根本不弹 ⇒ 这道闸扫的是底下的页面，而它照样绿 —— 那就成了"闸变弱了"。
+  //    ⇒ 那一条根本不画 ⇒ 这道闸扫的是底下的页面，而它照样绿 —— 那就成了"闸变弱了"。
   c.ingest({'type': '__caught_up__'});
-  c.ingest(_noticeEvent());
+  c.ingest(_urgentNoticeEvent());
   await tester.pump();
-  // 负向对照：**浮窗真的画出来了**才算数（没画出来的话下面那道扫描
+  // 负向对照：**那一条真的画出来了**才算数（没画出来的话下面那道扫描
   // 扫的是底下的页面，而它照样绿 —— 那就是"闸变弱了"）
-  expect(find.byType(NoticeOverlay), findsOneWidget, reason: '★ 浮窗没画出来 ⇒ 这条闸漏了它');
-  // ⚠️ 范围必须**指到浮窗里**：同一句话在时间线那一条上也有一份
-  //    （两处撤销是同一份数据 —— 那正是约束 3）
+  expect(find.byType(NoticeStrip), findsOneWidget, reason: '★ 那条没画出来 ⇒ 这条闸漏了它');
+  // 🔴 **2026-09-30 改了这里**（契约 `docs/dev/144-NO-NOTICE-OVERLAY.md`）：
+  //    从前这道闸量的是"**浮窗里那个撤销**"—— 而带号的通知**不再弹**了，
+  //    于是"窗口里那条"今天只剩**瞬态那条**（盘满），它**没有 undo**（服务端不给）。
+  //    ⇒ 改量它**真有的那颗按钮**：「知道了」（`noticeDismissLabel`）。
+  //    ⚠️ 撤销那颗按钮**照样在硬闸里** —— 走 `_openNoticeLine`（时间线里那一条）。
   expect(
-    find.descendant(of: find.byType(NoticeOverlay), matching: find.text(noticeUndoLabel2)),
+    find.descendant(of: find.byType(NoticeStrip), matching: find.text(noticeDismissLabel)),
     findsOneWidget,
-    reason: '★ 浮窗里那个撤销按钮也得真在屏幕上（D3.6 要量它）',
+    reason: '★ 那一条上的按钮也得真在屏幕上（D3.6 要量它）',
   );
 }
 
-/// 收掉浮窗（**并让那一帧画出来**）：用例结尾用它清掉那个钟。
+/// 收掉那一条（**并让那一帧画出来**）：用例结尾用它清掉那个钟。
 Future<void> _closeNotice(WidgetTester tester, ChatController c) async {
   c.dismissNotice();
   await tester.pump();
 }
 
-/// **像用户那样**让浮窗自己走掉，屏幕上只剩**时间线里那一条通知**。
+/// 🔴 2026-09-30：带号的通知**本来就不弹**（直接进时间线）—— 这一条量的是
+/// **时间线里那一条**（撤销要在）。
 Future<void> _openNoticeLine(WidgetTester tester, double scale) async {
   final c = _controller();
   await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), scale);
   c.ingest({'type': '__caught_up__'}); // 同 `_openNoticeIn`：先把"已连上"补上
   c.ingest(_noticeEvent());
-  // ⚠️ 两拍：第一拍让那个钟到点，第二拍才把新的一帧画出来
-  await tester.pump(ChatController.noticeLinger);
   await tester.pump();
-  expect(find.byType(NoticeLine), findsOneWidget, reason: '★ 浮窗走了，时间线里那一条必须还在（约束 2）');
+  expect(find.byType(NoticeLine), findsOneWidget, reason: '★ 带号的通知必须进时间线（约束 2 没动）');
+  expect(find.byType(NoticeStrip), findsNothing, reason: '★ 它不许再浮一次');
   expect(
     find.descendant(of: find.byType(NoticeLine), matching: find.text(noticeUndoLabel2)),
     findsOneWidget,
@@ -1040,6 +1046,15 @@ Map<String, dynamic> _noticeEvent() => {
         'action': 'trash/restore',
         'messageIds': ['u_x', 'm_y'],
       },
+    };
+
+/// 🔴 2026-09-30：**只有瞬态那条**（写盘失败）会画在窗口里那一条上
+///    （带号的通知只进时间线 —— 主人：*「不要浮窗。」*，契约 `docs/dev/144`）。
+///    ⇒ 这道闸要扫那一条，就得从**真入口**灌这一条。
+Map<String, dynamic> _urgentNoticeEvent() => {
+      'type': 'notice/urgent',
+      'kind': 'disk-full',
+      'text': '盘满了，这条我没能记下来',
     };
 
 /// 服务端给的那个撤销按钮字。

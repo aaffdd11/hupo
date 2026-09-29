@@ -1231,22 +1231,18 @@ class ChatController extends ChangeNotifier {
     timeline.markFresh();
 
     // ★ 系统通知（契约 `29-NOTICE.md`）：
-    //   · `notice`（带号）⇒ ① 时间线里留一条（`timeline.apply`）
-    //                        ② 浮窗喊一声（**补发上来的不喊**，见下）
-    //   · `notice/urgent`（无号）⇒ **只在浮窗里**、绝不新增时间线条目。
-    //   ⚠️ 浮窗那一声必须**在 `timeline.apply` 之前**决定，理由只有一个：
-    //      补发的（`catchUp`）通知是**过去发生过的事**，而浮窗是"现在喊你"。
-    //      混起来的话，冷启动一屏历史通知会一条条往外弹（那是骚扰，也是假话）。
+    //   · `notice`（带号）⇒ **只进时间线**（`timeline.apply`）——
+    //     🔴 **2026-09-30 起它不再"喊一声"**（主人：*「不要浮窗。」*）。
+    //     从前那句"我去做，做完叫你"会同时弹一个顶部浮窗 —— 撤了。
+    //   · `notice/urgent`（无号）⇒ **窗口里面那一条**（`NoticeStrip`），
+    //     绝不新增时间线条目（时间线物理上写不进它）。
+    //   ⚠️ 那一句"现在喊你"必须**在 `timeline.apply` 之前**决定，理由只有一个：
+    //      补发的（`catchUp`）通知是**过去发生过的事**，而"喊一声"是"现在"。
+    //      混起来的话，冷启动一屏历史通知会一条条往外冒（那是骚扰，也是假话）。
+    //      ⚠️ 今天这条路上只剩瞬态那一档，而它**没有号、也不会被补发** ⇒
+    //      `shouldPopNotice()` 那条判据仍然留着（`notice` 带号那条路哪天回来还得靠它）。
     final type = event['type'];
     if (type == 'notice/urgent') {
-      _showNotice(Notice.fromEvent(event));
-    } else if (type == 'notice' &&
-        shouldPopNotice(
-          catchUp: event['catchUp'] == true,
-          readingHistory: _readingHistory,
-        )) {
-      // ⚠️ **浮窗里的撤销与时间线里那条是同一件事**（约束 3）⇒
-      //    两处都渲染 `notice.undo`，都由 `undoNotice()` 走同一条路。
       _showNotice(Notice.fromEvent(event));
     }
     timeline.apply(event);

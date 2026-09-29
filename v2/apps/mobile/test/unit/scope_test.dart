@@ -509,8 +509,20 @@ void main() {
         'scopeId': 'dice',
       });
       await Future<void>.delayed(Duration.zero);
-      expect(c.notice, isNotNull, reason: '★ 确认之后的通知该弹还是得弹（别修过头）');
-      expect(c.notice!.text, '刚刚那件事');
+      // 🔴 **2026-09-30 改了这一条**（契约 `docs/dev/144-NO-NOTICE-OVERLAY.md`）：
+      //    主人把"**通知不许浮**"定死了（原话：*「顶部会出来一个浮窗…这个不对。不要浮窗。」*）
+      //    ⇒ 带号的通知**只进时间线**、不再"喊一声"（`c.notice` 从此只装**瞬态那条**）。
+      //    ⚠️ 这一条要防的"修过头"**照旧**：确认之后的**必须送到**（只是送到对话里）。
+      final arrived = c.items.whereType<TimelineNotice>().where((it) => it.notice.text == '刚刚那件事');
+      expect(arrived.length, 1, reason: '★ 确认之后的通知还是得送到（送到时间线里）—— 别修过头');
+      expect(c.notice, isNull, reason: '★ 它不许再"浮"一次（主人 2026-09-30 的口径）');
+      // ⚠️ 而那一段"历史"通知**照样要在时间线里**（约束 2：通知经得起"你不在"）——
+      //    它不许的只是"被当成现在、弹一下"。
+      expect(
+        c.items.whereType<TimelineNotice>().where((it) => it.notice.text == '很久以前那件事').length,
+        1,
+        reason: '★ 历史通知也得留在时间线里（不许的只是"弹"）',
+      );
       c.dispose();
     });
   });

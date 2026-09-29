@@ -7,7 +7,7 @@
 //   · [NoticeOverlay] —— **浮窗**（约束 1）。它**浮在内容上面**，
 //     **一个像素都不许挤动下面的东西**。判据是 **D4.8：新增助手消息触发的
 //     高度变化必须 = 0px** —— 而浮窗比消息更容易犯这个错（它是个"条"），
-//     所以它有专门的闸（`test/widget/notice_overlay_test.dart`，量的是
+//     所以它有专门的闸（`test/widget/notice_shape_test.dart（2026-09-30 改名）`，量的是
 //     下面内容**变化前后同一个矩形**）。
 //
 // 两处都渲染撤销按钮（约束 3）：撤销窗口**不能随浮窗一起消失**。
@@ -43,17 +43,21 @@ class NoticeLine extends StatelessWidget {
       );
 }
 
-/// **浮窗**（约束 1）。
+/// **窗口里面那一条**（2026-09-30 起：**不再是浮窗**）。
 ///
-/// ⚠️ 它**必须**被一个"不参与布局"的东西包着（今天由 `chat_screen` 用
-///    `Stack` + `Positioned` 做到）。这一层里面**不许**出现会影响外面布局的
-///    东西——没有 `Overlay`、没有 `Scaffold`、没有 `MediaQuery` 改写。
+/// 🔴 **主人 2026-09-30 原话**：*「顶部会出来一个浮窗，叫我去做做完叫你。这个不对。**不要浮窗**。」*
+///    ⇒ 从前的 `NoticeOverlay`（`Stack` + `Positioned(top:0)` 浮在内容上面）**撤了**。
+///    现在它**参与布局**：画在**浮窗里面**、输入条**上面**（与排队那条同一种形状），
+///    收起档也看得见（输入条就在那一条里）—— 而**一个像素都不许盖在内容上**。
 ///
-/// ⚠️ **瞬态那条也必须说清它不在记录里**（契约 §三①）：写盘失败时时间线
-///    物理上写不进那一条，所以屏幕上**必须自己说清**（[noticeNotKeptLine]）。
-///    不说的后果是：用户以为"记录里有"，下次翻的时候没有 ⇒ 屏幕说假话。
-class NoticeOverlay extends StatelessWidget {
-  const NoticeOverlay({
+/// ⚠️ 这条只剩**瞬态那一种**（`notice/urgent`：写盘失败）。带号的通知
+///    （"我去做，做完叫你"/"做完了"…）**只进时间线**（那是主人 2026-09-21 定的
+///    "时间线留住"那一半，这一半**没动**）—— 不再"喊一声"。
+///
+/// ⚠️ **瞬态那条也要说清它不在记录里**（`29-NOTICE.md` §三①）：写盘失败时
+///    时间线物理上写不进那一条 ⇒ 屏幕上**必须自己说清**（[noticeNotKeptLine]）。
+class NoticeStrip extends StatelessWidget {
+  const NoticeStrip({
     super.key,
     required this.notice,
     this.onUndo,
@@ -66,28 +70,15 @@ class NoticeOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 顶栏那条（不是"居中弹窗"）：通知从上面来，而且它在安全区里面。
-    return Material(
-      color: Colors.transparent,
-      child: SafeArea(
-        bottom: false,
-        child: Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            // 同内容列限宽（平板上一行七十个字没人读）
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: NoticeCard(
-                notice: notice,
-                onUndo: onUndo,
-                onDismiss: onDismiss,
-                // ★ 瞬态那条：把"它不在记录里"说出来（契约 §三①）
-                footnote: notice.urgent ? noticeNotKeptLine : null,
-              ),
-            ),
-          ),
-        ),
+    // **在布局里**的一条（不是浮窗）：画在输入条上面，跟别的 strip 一样占位置。
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+      child: NoticeCard(
+        notice: notice,
+        onUndo: onUndo,
+        onDismiss: onDismiss,
+        // ★ 瞬态那条：把"它不在记录里"说出来
+        footnote: notice.urgent ? noticeNotKeptLine : null,
       ),
     );
   }
