@@ -72,6 +72,14 @@ Widget buildNativeMiniAppView({
   return WebViewWidget(controller: controller);
 }
 
+/// 让小程序那一层收 / 不收指针事件 —— **Android 这一侧是空操作**。
+///
+/// 🔴 2026-09-30 主人报的那个"点了聊天窗口整个界面没反应"**量在 Web 上**
+///    （Web 的平台视图是 DOM 元素、盖在画布上面）。Android 的平台视图
+///    走的是另一套合成 ⇒ **这次没复现**，所以这里**什么都不做** ——
+///    不许在这边假装做了（真在安卓上撞到再单说，见 `docs/dev/145`）。
+void setMiniAppsInteractive(bool on) {}
+
 /// **这一帧换掉了 / 关掉了 ⇒ 把它放掉**（由 `releaseMiniAppView` 转进来）。
 ///
 /// ⚠️ 幂等：没挂过也不算错（`MiniAppFrame` 的销号与这一本账不是一个东西）。

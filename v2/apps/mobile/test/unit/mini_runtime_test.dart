@@ -54,6 +54,33 @@ void main() {
     expect(kNativeMiniRuntimeIOS, false,
         reason: '★ iOS 商店版不许有它（Apple 4.7.4）—— 要开它得主人单独拍板，不是顺手改的');
   });
+  // ── 🔴 2026-09-30：**被盖住时，小程序那一层不许再收指针事件** ──────────
+  //
+  // 现场（主人报的）：*「打开小程序后，点击聊天窗口，聊天就卡死了……需要刷新才能恢复。」*
+  // 真浏览器读数：小程序一开，`document.elementFromPoint()` 在**时间线区/小程序区/左上角**
+  // 回的都是 `IFRAME` —— Web 上平台视图是**真的 DOM 元素**、盖在画布上面
+  // ⇒ 画在画布上的聊天浮窗**一个事件都收不到**（"整个界面点了没反应"）。
+  // 契约：`docs/dev/145-MINIAPP-EATS-POINTERS.md`。
+  //
+  // ⚠️ 这一条只能在**源码级**钉（VM 上走的是 stub，DOM 观察不到）——
+  //    与这一份顶上那两条（④⑤）同一个道理。
+  test('🔴 Web 那一份**真去改 `pointerEvents`**；别的两份是空操作（不许假装做了）', () {
+    final web = codeOf('lib/widgets/mini_runtime_web.dart');
+    expect(web.contains('pointerEvents'), isTrue, reason: '★ Web 那一份得真去改 DOM 的 pointer-events');
+    expect(web.contains('setMiniAppsInteractive'), isTrue);
+    // 它必须挂在**建 iframe 那一条路**上（新帧一建出来就该跟上当前那一档）
+    expect(web.contains('_frames[viewId] = f'), isTrue, reason: '★ 新帧没记账 ⇒ 切档时它漏掉');
+    for (final f in ['lib/widgets/mini_runtime_stub.dart', 'lib/widgets/mini_runtime_native.dart']) {
+      final code = codeOf(f);
+      expect(code.contains('void setMiniAppsInteractive(bool on) {}'), isTrue,
+          reason: '★ $f 这份今天该是**空操作** —— 要真做就写清为什么（见 145）');
+    }
+    // 宿主那一侧：档位一变就跟着切（不然它永远不会被叫）
+    final host = codeOf('lib/widgets/mini_app_host.dart');
+    expect(host.contains('setMiniAppsInteractive(!widget.covered)'), isTrue,
+        reason: '★ 宿主没接线 ⇒ 这一手是死的');
+  });
+
 
   testWidgets('🔴 没装钩子 ⇒ 拿到的还是**那句实话**（不是白屏）', (tester) async {
     // 负向对照：这一条必须**在钩子为空**的前提下成立（上面 setUp 刚清过）。

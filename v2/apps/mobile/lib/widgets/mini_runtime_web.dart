@@ -28,6 +28,80 @@ import '../models/mini_frame.dart';
 final Map<String, StreamSubscription<html.MessageEvent>> _subs =
     <String, StreamSubscription<html.MessageEvent>>{};
 
+/// **已经建出来的那些 iframe**（按 viewId 记）—— 只为了一件事：改它的 `pointer-events`。
+///
+/// 🔴 **2026-09-30 主人报的真缺陷**：*「打开小程序后，点击聊天窗口，聊天就卡死了，
+///    小程序我看后面也有影响。需要刷新才能恢复。」*
+///    真浏览器读数（手机尺寸）：小程序一开，`document.elementFromPoint()` 在
+///    **时间线区 / 小程序区 / 左上角**回的都是 **`IFRAME`** ——
+///    Web 上平台视图是**真的 DOM 元素**，它盖在 Flutter 的画布**上面**
+///    ⇒ **画在画布上的聊天浮窗一个事件都收不到**（看起来就是"整个界面点了没反应"）。
+///    修法就是下面 `setMiniAppsInteractive`。
+final Map<String, html.IFrameElement> _frames = <String, html.IFrameElement>{};
+
+/// **这一层现在收不收指针事件**（默认收）。
+///
+/// 🔴 **为什么必须能关掉**：被盖住那一档（聊天展开了）我们的规矩本来就是
+///    *"点可见的那一块 = 收起聊天，而且这一下**不许传给下面的 app**"*
+///    （`mini_app_host.dart` 里那个全屏 `Listener`）—— 可 Web 上那个 iframe
+///    在 DOM 里**盖在画布上面** ⇒ 那一下既到不了我们的 `Listener`、也到不了聊天浮窗。
+///    ⇒ 展开聊天时把它设成 `none`：事件穿过去落到画布上，两件事**一起**对了。
+/// ⚠️ **同一时刻壳里只开着一个页面**（本文件顶上那条纪律）⇒ 不必按 id 分。
+bool _interactive = true;
+
+/// 让小程序那一层收 / 不收指针事件（Web 专用；别的平台是空操作）。
+///
+/// 🔴 **真的那一手是一条 CSS 规则（带 `!important`）＋ 挂在 `<html>` 上的一个类名**。
+///    为什么不一个一个元素去写 `style`：**引擎会自己重建那一层**
+///    （2026-09-30 实测：写完 `flt-platform-view` 之后它又被盖回来 ——
+///      `elementFromPoint()` 有时回 `FLT-PLATFORM-VIEW-SLOT`、有时回玻璃板，
+///      取决于采样落在动画的哪一帧）⇒ 一次性写死 ＋ `!important` 才跟得上。
+void setMiniAppsInteractive(bool on) {
+  _interactive = on;
+  _ensurePointerStyle();
+  final cls = html.document.documentElement?.classes;
+  if (cls != null) {
+    if (on) {
+      cls.remove(coveredClass);
+    } else {
+      cls.add(coveredClass);
+    }
+  }
+  // ⚠️ 顺手把那几格直接也写一遍（两样都做，代价只是几次属性写）
+  final pe = on ? 'auto' : 'none';
+  for (final f in _frames.values) {
+    f.style.pointerEvents = pe;
+  }
+  for (final el in html.document.querySelectorAll(
+      'flt-platform-view-slot, flt-platform-view, flt-clip')) {
+    el.style.pointerEvents = pe;
+  }
+}
+
+/// 挂在 `<html>` 上那个类名（下面那条 CSS 规则靠它开关）。
+const coveredClass = 'hupo-chat-covered';
+
+const _styleId = 'hupo-mini-pointer-style';
+
+/// **一次性**把那条规则注进去（幂等）。
+///
+/// 🔴 **为什么要它**（契约 `docs/dev/145-MINIAPP-EATS-POINTERS.md`）：
+///    Web 上平台视图是**真的 DOM 元素**、盖在画布上面。小程序开着的时候，
+///    `document.elementFromPoint()` 在时间线区/小程序区/左上角回的都是那个
+///    `IFRAME` ⇒ **画在画布上的聊天浮窗一个事件都收不到**
+///    （主人 2026-09-30 报的"点了聊天窗口整个界面点了没反应，要刷新"）。
+///    被盖住那一档我们的规矩本来就是"这一下**不许传给下面的 app**"
+///    （`mini_app_host.dart` 里那个全屏 `Listener`）—— 这条规则让它成真。
+void _ensurePointerStyle() {
+  if (html.document.getElementById(_styleId) != null) return;
+  final st = html.StyleElement()..id = _styleId;
+  st.text = 'html.$coveredClass flt-platform-view-slot,'
+      'html.$coveredClass flt-platform-view,'
+      'html.$coveredClass flt-clip,'
+      'html.$coveredClass iframe { pointer-events: none !important; }';
+  html.document.head?.append(st);
+}
+
 /// 起一个沙箱 iframe。
 ///
 /// ⚠️ `entryUrl` 是**带签名**的（绑人 + 绑版本 + 短时效）—— 制品口只认签名，不认登录态。
@@ -58,6 +132,10 @@ Widget buildMiniAppView({
       f.style.width = '100%';
       f.style.height = '100%';
       f.style.background = 'transparent';
+      // ⚠️ 新建的这一帧也要立刻跟上当前那一档（展开着的时候它一建出来就该是 `none`）
+      _frames[viewId] = f;
+      // ⚠️ 槽可能**刚**建出来 ⇒ 建完这一帧再统一设一次（同一个函数，一处口径）
+      setMiniAppsInteractive(_interactive);
 
       if (onAsk != null && !_subs.containsKey(viewId)) {
         // ⚠️ **按 `source` 认人**，不是按 origin：沙箱页面是**不透明原点**（origin 是 "null"），
@@ -114,4 +192,5 @@ Widget buildMiniAppView({
 void releaseMiniAppView(String viewId) {
   final sub = _subs.remove(viewId);
   if (sub != null) sub.cancel();
+  _frames.remove(viewId);
 }

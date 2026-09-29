@@ -49,3 +49,11 @@ Widget buildMiniAppView({
 void releaseMiniAppView(String viewId) {
   nativeMiniAppRelease?.call(viewId);
 }
+
+/// 让小程序那一层收 / 不收指针事件。
+///
+/// 🔴 **只有 Web 需要这一手**（`mini_runtime_web.dart` 顶上那段）：
+///    那边平台视图是**真的 DOM 元素**、盖在画布上面；这边（VM 判据 / iOS）
+///    本来就没有那一层 ⇒ **空操作**。⚠️ Android 那一侧这次**没复现**（量在 Web 上），
+///    真要管再单说 —— 不许在这里假装做了。
+void setMiniAppsInteractive(bool on) {}

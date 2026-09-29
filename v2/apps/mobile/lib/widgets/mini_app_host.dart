@@ -27,6 +27,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import 'mini_runtime.dart';
 import 'motion.dart';
 import '../models/design.dart' show miniAppSurfaceAt;
 
@@ -115,6 +116,8 @@ class _MiniAppHostState extends State<MiniAppHost>
   @override
   void initState() {
     _inset = widget.bottomInset;
+    // 挂载这一刻那一档就要对（展开着开一个小程序 ⇒ 它一建出来就该"不收事件"）
+    setMiniAppsInteractive(!widget.covered);
 
     super.initState();
     if (widget.open) _c.value = 1;
@@ -142,10 +145,16 @@ class _MiniAppHostState extends State<MiniAppHost>
     if (!widget.open && old.open) _c.reverse();
     // ★ 内缩：**档位刚变的那一下不认**（那是上一档的量），也不在收放动画中间认
     if (widget.covered == old.covered && !_c.isAnimating) _inset = widget.bottomInset;
+    // 🔴 **被盖住 ⇄ 没被盖住：让不让这一层收指针事件**（2026-09-30 · 契约 `docs/dev/145`）。
+    //    Web 上那一层是**真的 DOM 元素**、盖在画布上面 ⇒ 不收起来的话，
+    //    画在画布上的聊天浮窗**一个事件都收不到**（主人报的"点了聊天窗口整个界面没反应"）。
+    if (widget.covered != old.covered) setMiniAppsInteractive(!widget.covered);
   }
 
   @override
   void dispose() {
+    // 这一层要走了 ⇒ 把"收不收事件"交回默认（不然下一帧小程序会莫名点不动）
+    setMiniAppsInteractive(true);
     _c.dispose();
     super.dispose();
   }
