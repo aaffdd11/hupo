@@ -27,7 +27,10 @@ import 'dart:async';
 import 'package:flutter/gestures.dart' show kPrimaryButton;
 import 'package:flutter/material.dart';
 
+import 'dart:math' as math;
+
 import '../models/app_tint.dart';
+import '../models/desktop_grid.dart';
 import '../models/design.dart' as d;
 import '../models/space_words.dart';
 import '../models/wallpaper.dart';
@@ -108,12 +111,18 @@ const double desktopIconBox = 64;
 /// ⚠️ 它量的是**图形**；命中区仍由整个图标格（`desktopIconBox` ≥44）撑着。
 const double desktopAddIconSize = 30;
 
-/// 一格**最多**多宽（名字更长就把字省略，格子不许跟着长胖）。
-/// ⚠️ 原来这个 88 是写死在 `clamp` 里的 —— 提出来，好让"格子和字"一起算。
-const double desktopTileMax = 96;
-
-/// 图标格两边给字留的余量（`tileWidth` 的下限 = 格子 + 它）。
-const double desktopTileSlack = 10;
+/// 🔴 **两格之间最小间距**（2026-09-29 主人：*"app排布要根据页面宽度等宽排列"*）。
+///
+/// 布局模型（一句话）：**每行铺满那一条的可用宽** ——
+///   · 一行的格数 = `min(放得下几格, 图标个数)`（放得下几格是按**这个最小间距**算的）；
+///   · 每一格**等宽** = `(可用宽 − 间距×(格数−1)) / 格数`；
+///   · 每格里那个方块**居中** ⇒ 一行从左边缘铺到右边缘，相邻两格之间一样宽。
+/// ⚠️ 原来这里是"一格最多 96、按 4 列算" —— 宽屏上六七个图标全挤在左边三分之一
+///    （1280 宽实测：右边空着一大半）。
+/// ⚠️ **为什么是 20 而不是更小**：这个数决定"一行放得下几格"。取 16 时，
+///    390 宽的手机上算出 **5 格**（每格只比图标格宽 1 像素 —— 挤）；
+///    取 20 ⇒ **4 格**（每格 ≈82，图标之间留得开），与"手机仍是四列左右"对得上。
+const double desktopTileMinGap = 20;
 
 class AppDesktop extends StatelessWidget {
   const AppDesktop({
@@ -121,7 +130,6 @@ class AppDesktop extends StatelessWidget {
     required this.apps,
     required this.onTapBlank,
     this.header,
-    this.columns = 4,
     // ★ 2026-09-24 主人：*"appicon 应该是动效结束后出现。所以打开的时候 appicon 应该是
     //   瞬间消失掉…退回到 app 的时候应该是动效结束的时候 appicon 出现。"*
     this.hideIconId,
@@ -145,26 +153,12 @@ class AppDesktop extends StatelessWidget {
   /// 顶上一行（不参与点击 —— 它也是"点空白"的安全区）。
   final Widget? header;
 
-  /// 一屏放几列。
-  final int columns;
-
   /// **哪一格的图标现在要藏起来**（`null` = 都正常画）。
   final String? hideIconId;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // ⚠️ 宽度从 `MediaQuery` 来（它在 `Stack` 里是 `Positioned.fill` ⇒ 就是屏宽）
-    final w = MediaQuery.sizeOf(context).width;
-    final spacing = d.gapL - 4;
-    // 🔴 **列宽要封顶**：宽屏上按 4 列算会得到 293px 一格（实测过），
-    //    而图标本该是**一个小方块**、列宽只决定它在哪儿 ⇒ 两端都夹住：
-    //    下限 = 图标格 + 一点余量（不然字挤成一列），上限 = 一个"图标格"该有的宽度。
-    final raw = (w - d.gapL * 2 - spacing * (columns - 1)) / columns;
-    final tileWidth = raw.clamp(
-      desktopIconBox + desktopTileSlack,
-      desktopTileMax,
-    );
     // ★ 2026-09-29：**壁纸在下面那一层**（`Stack` 底），图标墙与点击照旧在上面。
     //   🔴 `IgnorePointer`：底图**不接任何输入**（Z5 第一条）—— 点空白仍然是
     //      `InkWell` 那一条路，壁纸就算铺满了也抢不走一下点击。
@@ -207,33 +201,62 @@ class AppDesktop extends StatelessWidget {
                     d.gapL,
                     d.gapL,
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Wrap(
-                        spacing: spacing,
-                        runSpacing: d.gapL,
-                        children: [
-                          for (final a in apps)
-                            _DesktopIcon(
-                              app: a,
-                              width: tileWidth,
-                              // 正在扩开/收回的那一格：**图标先消失**（占位留着，界面不跳）
-                              hideIcon: a.id != null && a.id == hideIconId,
+                  // ★ 2026-09-29：**一行铺满那一条的可用宽**（见 `gridFor`）。
+                  //   `LayoutBuilder` 量的就是"padding 里面那一条"（横向两边各 `gapL`）。
+                  child: LayoutBuilder(
+                    builder: (context, cons) {
+                      // ⚠️ 规矩本身住 `models/desktop_grid.dart`（纯函数，VM 上直接量）
+                      final grid = desktopGridFor(
+                        width: cons.maxWidth,
+                        count: apps.length,
+                        iconBox: desktopIconBox,
+                        minGap: desktopTileMinGap,
+                      );
+                      final rows = <Widget>[];
+                      for (var i = 0; i < apps.length; i += grid.columns) {
+                        final end = math.min(i + grid.columns, apps.length);
+                        final row = apps.sublist(i, end);
+                        rows.add(
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: d.gapL),
+                            child: Row(
+                              // 满行 ⇒ 正好铺满（居中与铺满在这时是同一件事）；
+                              // 末行不满 ⇒ 那一组居中（间距照旧，不拉大）
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                for (var k = 0; k < row.length; k++) ...[
+                                  if (k > 0)
+                                    const SizedBox(width: desktopTileMinGap),
+                                  _DesktopIcon(
+                                    app: row[k],
+                                    width: grid.slot,
+                                    // 正在扩开/收回的那一格：**图标先消失**
+                                    //（占位留着，界面不跳）
+                                    hideIcon: row[k].id != null &&
+                                        row[k].id == hideIconId,
+                                  ),
+                                ],
+                              ],
                             ),
+                          ),
+                        );
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ...rows,
+                          // ★ 2026-09-23：桌面上原来**一句引导都没有** ——
+                          //   第一次进来的人看到的是几个陌生图标 + 一片空白。
+                          //   ⚠️ 只说"点一下会怎样"，**不许承诺任何做不到的事**。
+                          Text(
+                            desktopHint,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: d.muted,
+                            ),
+                          ),
                         ],
-                      ),
-                      // ★ 2026-09-23：桌面上原来**一句引导都没有** ——
-                      //   第一次进来的人看到的是几个陌生图标 + 一片空白。
-                      //   ⚠️ 只说"点一下会怎样"，**不许承诺任何做不到的事**。
-                      const SizedBox(height: d.gapL),
-                      Text(
-                        desktopHint,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: d.muted,
-                        ),
-                      ),
-                    ],
+                      );
+                    },
                   ),
                 ),
               ),

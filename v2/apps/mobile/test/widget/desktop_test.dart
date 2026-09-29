@@ -101,6 +101,46 @@ void main() {
     expect(dec.color, Colors.transparent, reason: '加号那一格是"空位"，不是一个小程序 ⇒ 不许上色');
   });
 
+  testWidgets('🔴 一行**铺满**那一条的宽（2026-09-29 主人："根据页面宽度等宽排列"）', (tester) async {
+    // 1280 宽（宽屏）＋ 7 个 —— 改前它们只占左边三分之一（右边空着一大半）
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await pump(tester, [
+      for (var i = 0; i < 7; i++)
+        app('应用$i', onOpen: () {}),
+    ]);
+
+    // 那 7 格的外框（`_DesktopIcon` 那个 SizedBox）—— 量它们的左右端
+    final boxes = find
+        .ancestor(of: find.text('应用0'), matching: find.byType(SizedBox))
+        .evaluate()
+        .map((e) => e.widget)
+        .toList();
+    expect(boxes.isNotEmpty, true);
+    Rect cell(String label) => tester.getRect(
+      find
+          .ancestor(of: find.text(label), matching: find.byType(SizedBox))
+          .first,
+    );
+    final first = cell('应用0');
+    final last = cell('应用6');
+    // ① **一行里**（高度一样 ⇒ 没换行）
+    expect(first.top, last.top, reason: '7 个该在一行里（1280 宽放得下）');
+    // ② 左端贴着左边留白、右端贴着右边留白 ⇒ **铺满**
+    expect(first.left, closeTo(d.gapL, 0.5), reason: '★ 没贴左边：${first.left}');
+    expect(last.right, closeTo(1280 - d.gapL, 0.5),
+        reason: '★ 右边空着（改前就是"全挤在左边"）：${1280 - last.right}');
+    // ③ 相邻两格的**间距一样**（等宽排列）
+    final gaps = <double>[];
+    for (var i = 0; i < 6; i++) {
+      gaps.add(cell('应用${i + 1}').left - cell('应用$i').right);
+    }
+    for (final g in gaps) {
+      expect(g, closeTo(gaps.first, 0.5), reason: '间距不齐：$gaps');
+    }
+  });
+
   testWidgets('🔴 图标格那圈阴影**够浓**（2026-09-29 主人："appicon的阴影加浓一些"）', (tester) async {
     await pump(tester, [app('设置')]);
     final box = find.ancestor(of: find.text('设置'), matching: find.byType(Column)).first;
@@ -154,7 +194,10 @@ void main() {
       ).first,
     );
     expect(long.width, short.width, reason: '一格的宽度不许跟着名字变');
-    expect(long.width, lessThanOrEqualTo(desktopTileMax));
+    // ★ 2026-09-29：一格的宽度**不再封顶 96**了 —— 它是"按页面宽度等宽排列"里那个槽宽
+    //   （宽屏上会比 96 大：那是主人要的"铺满"）。这里只钉**等宽**这一半；
+    //   "铺满"由 `test/unit/desktop_grid_test.dart` 与下面那条判据管。
+    expect(long.width > 0, true);
   });
 
   testWidgets('★ 正在动的那一格：**只藏图标**，格子和标签还在（位置一个像素不动）', (tester) async {
