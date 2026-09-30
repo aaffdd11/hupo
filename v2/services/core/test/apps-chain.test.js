@@ -535,6 +535,54 @@ test('乙-4：卸载 ⇒ 清单里没了、盘上还在回收处（⚠️ **真�
   }
 });
 
+test('★ 制品自查：`app_create` 的回执里**当场摊出"哪一条标准没对上"**（只报不拦）', async () => {
+  /**
+   * 🔴 主人 2026-10-01：*「给制作小程序环节的 agent，进行深度加工」* ——
+   *    那些错（引外部资源 / 用了存储没声明 / 连没声明的站）在 agent 那一侧**完全静默**
+   *    （它看不见浏览器）⇒ 这一条钉住"**回执里必须说出来**"（`149` §六）。
+   */
+  const s = setup();
+  const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
+  try {
+    await handshake(c);
+    // ① 用了 /db 却**没声明** ⇒ 回执里要出现"对不上"那一段（而且点名 db）
+    const bad = await c.call('tools/call', {
+      name: 'app_create',
+      arguments: {
+        id: 'kuazi',
+        title: '坏例子',
+        entry: 'index.html',
+        files: { 'index.html': '<!doctype html><title>x</title><script>fetch("/db",{method:"POST"})</script>' },
+      },
+    });
+    assert.equal(bad.result.isError, false, '这一条**只报不拦**（东西还是要做出来）');
+    const badText = bad.result.content[0].text;
+    assert.match(badText, /对不上/, '要有一段"跟标准对不上"');
+    assert.match(badText, /db/, '要点名是 db 那一条');
+    assert.match(badText, /149-APP-DEV-STANDARD/, '要指向标准那一份');
+
+    // ② 声明对了、页面自包含 ⇒ 回执里**一个字都不多**（不许天天喊狼来了）
+    const good = await c.call('tools/call', {
+      name: 'app_create',
+      arguments: {
+        id: 'haode',
+        title: '好例子',
+        entry: 'index.html',
+        permissions: ['db'],
+        files: {
+          'index.html':
+            '<!doctype html><title>好</title><script>const q=new URLSearchParams(location.search);fetch("/db",{method:"POST",body:JSON.stringify({u:q.get("u"),e:q.get("e"),s:q.get("s")})})</script>',
+        },
+      },
+    });
+    assert.equal(good.result.isError, false, JSON.stringify(good.result));
+    assert.equal(/对不上/.test(good.result.content[0].text), false, `干净的制品不该被报（实际：${good.result.content[0].text.slice(0, 200)}）`);
+  } finally {
+    c.child.kill();
+    await s.sock.close();
+  }
+});
+
 test('★ 傻瓜式：助手在 `app_create` 里声明 `db` ⇒ **它当场就能存**（不用任何人点开关）', async () => {
   const s = setup();
   const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });

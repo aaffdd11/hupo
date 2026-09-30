@@ -19,6 +19,7 @@
 //   ⇒ 那时**不摆这几个工具**（摆了而做不到，就是让他去承诺一件做不到的事）。
 
 import nodeNet from 'node:net';
+import { lintReport } from './app-lint.js';
 import nodeOs from 'node:os';
 import nodeReadline from 'node:readline';
 
@@ -360,8 +361,16 @@ async function callTool(name, args) {
     if (r.ok) {
       // ⚠️ 图标是**自动配**的时候要如实说一句：不然模型以为它挑的那个生效了
       const iconNote = icon && icon === r.icon ? '' : `（桌面上的图标我按名字配了一个：\`${r.icon}\`）`;
+      /**
+       * ★ **`149` §六：把自查结果摊在它眼前**（只报不拦）。
+       *   那些错在它那一侧**完全静默**（它看不见浏览器）⇒ 在这儿说，它才有机会当场改。
+       */
+      const lintNote = (() => {
+        const rep = lintReport(r.lint ?? { errors: [], warnings: [] });
+        return rep === '' ? '' : `\n\n${rep}`;
+      })();
       return textResult(
-        `做好了：**${r.title}**（短名 ${r.id}，第 ${r.version} 版）。它现在在他的桌面上，点开就能用。${iconNote}`,
+        `做好了：**${r.title}**（短名 ${r.id}，第 ${r.version} 版）。它现在在他的桌面上，点开就能用。${iconNote}${lintNote}`,
       );
     }
     return textResult(`这次没做成：${r.error}`, true);

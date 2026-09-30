@@ -17,6 +17,8 @@ import nodeFs from 'node:fs';
 import nodeNet from 'node:net';
 import nodePath from 'node:path';
 
+// ★ **制品自查**（`149` §六）：写完当场告诉它"哪一条标准没对上"（只报不拦）
+import { lintApp, lintReport } from './app-lint.js';
 import { AppsError, isAnAppRoom } from './apps.js';
 import { shouldTellAppFail } from './app-fail-words.js';
 import { INSIDE_APP_NO_CREATE, NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
@@ -202,10 +204,38 @@ async function runAppsOp(apps, req, ctx = {}) {
         } catch {
           /* 记账失败不影响制品 */
         }
+        /**
+         * ★ **`149` §六：制品的自查**（只报不拦）。
+         *
+         * 🔴 **为什么在这儿**：做小程序的那个 agent **看不见浏览器** —— 引外部资源、
+         *    用了存储没声明、去 fetch 一个没声明的站……在它那一侧**完全静默**，
+         *    到主人屏幕上才变成"点了没反应"。⇒ 写完当场摊在它眼前（它才有机会改）。
+         */
+        let lint = { errors: [], warnings: [] };
+        try {
+          const filesForLint = a.files && typeof a.files === 'object' ? a.files : {};
+          lint = lintApp({
+            files: filesForLint,
+            permissions: Array.isArray(a.permissions) ? a.permissions : [],
+            net: Array.isArray(a.net) ? a.net : [],
+            tasks: Array.isArray(a.tasks) ? a.tasks : [],
+            title: m.title,
+          });
+        } catch (err) {
+          ctx.log?.(`制品自查没跑成（${m.id}）：${err?.message ?? err}`);
+        }
         // ⚠️ **`icon` 要带回去**（2026-09-23）：造它的人可能**没给图标**（或者给错了），
         //    而服务端会自动配一个 —— 那边得知道**最后配的是哪个**，才说得出一句实话
         //    （第一版漏了这个字段 ⇒ 工具回执会把 `undefined` 念给模型听）。
-        return { ok: true, id: m.id, version: m.version, title: m.title, icon: m.icon, rootHash: m.rootHash };
+        return {
+          ok: true,
+          id: m.id,
+          version: m.version,
+          title: m.title,
+          icon: m.icon,
+          rootHash: m.rootHash,
+          lint: { errors: lint.errors, warnings: lint.warnings },
+        };
       }
       // ── **画一张图**（P1-27 后半 · 主人 2026-09-24："图片需要打通"）──────────
       //
