@@ -4,6 +4,9 @@
 //   ① 钥匙**只往上游去**（返回值里没有它，日志里也没有）；
 //   ② **他自己那把优先**（`data/creds/<他>.yaml` 的 `HUPO_VIDEO_KEY`）——
 //      没有就是"没填"，**不许**偷偷用别人那份；
+//      ⚠️ ★ **2026-10-01 主人选的"甲"**：图片与视频是**同一把钥匙**（火山方舟那一个）
+//         ⇒ 他自己那份里**视频那一栏空着、图片那栏有**时，**明着借图片那把**（`sharedKeyOf`）——
+//         界面上写着"跟图片同一把钥匙"。**不借别人那份**这条一个字没松。
 //   ③ 失败**说人话**（`videoErrorWords`），认不出就如实说认不出。
 //
 // ⚠️ **视频是异步的**（与图片那一条最大的不同）：所以这里**两个动作分开**
@@ -21,6 +24,7 @@ import {
   videoErrorWords,
 } from './video.js';
 import { credsFor } from './creds-store.js';
+import { sharedKeyOf } from './creds.mjs';
 
 /**
  * 造那两个动作（`start` / `check`）。
@@ -32,11 +36,16 @@ import { credsFor } from './creds-store.js';
  * @returns {{start: Function, check: Function}}
  */
 export function makeVideo({ env = process.env, fetch = globalThis.fetch, log = () => {} } = {}) {
-  /** 这个人那把钥匙（读不出来就是空串 ⇒ 调用方如实说"没填"）。 */
+  /**
+   * 这个人那把钥匙（读不出来就是空串 ⇒ 调用方如实说"没填"）。
+   *
+   * ★ **视频那一栏空着时借图片那把**（同一把火山方舟钥匙，见文件头那段）——
+   *   自己那一栏有就用自己的（他要分开算钱也照他的来）。
+   */
   function keyOf(dataDir, sub) {
     try {
       const mine = credsFor({ dataDir, sub, env }).values;
-      return typeof mine.video === 'string' ? mine.video.trim() : '';
+      return sharedKeyOf(mine, 'video');
     } catch {
       return '';
     }

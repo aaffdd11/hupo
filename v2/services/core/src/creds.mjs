@@ -149,16 +149,36 @@ export function mergeCreds(text, patch = {}) {
 }
 
 /**
+ * 🔴 **图片与视频是同一把钥匙**（都是火山方舟那一把；主人 2026-10-01 选了"不用合并 tab、
+ * 但视频复用图片那把"）⇒ 自己那一栏没有时，**明着**借对方那一栏。
+ *
+ * ⚠️ 为什么这样做：两栏本来要贴**同一串**，只贴一栏就会出现"画得出图、做不了片子"
+ * 这种**没人能猜到原因**的状态；而界面上会说清"同一把钥匙"。
+ * 🔴 **自己那一栏永远优先**（他要真给视频单独一把——比如分开算钱——照他自己的来）。
+ * 这条规则**只住这一处**（`credStatus` 与 `image-use` / `video-use` 都从这里取）。
+ */
+export function sharedKeyOf(values = {}, own = 'image') {
+  const other = own === 'image' ? 'video' : 'image';
+  if (credValueOk(values[own])) return String(values[own]).trim();
+  if (credValueOk(values[other])) return String(values[other]).trim();
+  return '';
+}
+
+/**
  * 那四样**有没有**（配置页与 `/api/space` 只看这个，**永远不回值**）。
+ *
+ * ⚠️ `image` / `video` 这两格的意思是"**这条路现在能不能用**"（而不是"那一栏填没填"）——
+ *    因为同一把钥匙两栏通用（见 [sharedKeyOf]）。⇒ 只贴了一栏时，
+ *    另一格也是 `true`（否则页面会说"还没填"而其实能用 —— 那就是页面在说假话）。
  *
  * @returns {{model:boolean, voice:boolean, image:boolean, video:boolean}}
  */
 export function credStatus(values = {}) {
   return {
     model: credValueOk(values.model),
-    // ⚠️ 语音：**三样齐了才算有**（缺一样就是没有 —— 只有 appid 发不出请求）
+    // ⚠️ 语音：**两样齐了才算有**（缺一样就是没有 —— 只有 appid 发不出请求）
     voice: VOICE_FIELDS.every((f) => credValueOk(values[f])),
-    image: credValueOk(values.image),
-    video: credValueOk(values.video),
+    image: sharedKeyOf(values, 'image') !== '',
+    video: sharedKeyOf(values, 'video') !== '',
   };
 }

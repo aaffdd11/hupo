@@ -28,6 +28,7 @@ import {
   credValueOk,
   mergeCreds,
   parseCreds,
+  sharedKeyOf,
 } from '../src/creds.mjs';
 import { credsFileFor, readUserCreds, writeUserCreds } from '../src/creds-store.js';
 import { OWNER_KEY_REF, recordsOf, renderOwnerKey, writeOwnerKey } from '../src/owner-creds.js';
@@ -61,6 +62,22 @@ test('认得出那六行、认不出的原样留着（空值**不算有**）', (
   assert.equal(s.video, true);
   assert.equal(s.voice, false, '★ 语音两样齐了才算有（缺一样就是没有）');
   assert.equal(unknown.includes('别人写的: 留着'), true, '认不出的行要留着（不是我们写的）');
+});
+
+// ★ 2026-10-01（主人选的**甲**）：图片与视频是**同一把钥匙**（火山方舟）——
+//   规则只住一处（`creds.mjs` 的 `sharedKeyOf`），这里把它的四条边界逐条钉住。
+test('★ `sharedKeyOf`：同一把钥匙两栏通用；**自己那一栏永远优先**；两栏都空 ⇒ 空串', () => {
+  assert.equal(sharedKeyOf({ image: 'A' }, 'video'), 'A', '只有图片那把 ⇒ 视频借它');
+  assert.equal(sharedKeyOf({ video: 'B' }, 'image'), 'B', '只有视频那把 ⇒ 图片借它（对称）');
+  assert.equal(sharedKeyOf({ video: 'B' }, 'video'), 'B', '自己那栏有就用自己的');
+  assert.equal(sharedKeyOf({ image: 'A', video: 'B' }, 'video'), 'B', '★ 自己那栏有（B）就不许借（A）');
+  assert.equal(sharedKeyOf({ image: 'A', video: 'B' }, 'image'), 'A', '★ 反方向也一样');
+  assert.equal(sharedKeyOf({ video: '   ' }, 'image'), '', '★ 空白不算有（那条 credValueOk 的规矩照旧）');
+  assert.equal(sharedKeyOf({}, 'image'), '', '都没有 ⇒ 空串（调用方如实说"没填"）');
+  // 两栏都填时，状态两格都 true（"能不能用"的口径）
+  assert.deepEqual(credStatus({ image: 'A' }), { model: false, voice: false, image: true, video: true });
+  assert.deepEqual(credStatus({ video: 'B' }), { model: false, voice: false, image: true, video: true });
+  assert.deepEqual(credStatus({ video: '   ' }), { model: false, voice: false, image: false, video: false });
 });
 
 test('`credValueOk`：非空 + 只有 ASCII 可打印字符', () => {
@@ -114,7 +131,9 @@ test('按人分开存：写进去读得出来、0600、不留 `.tmp`、**别人�
   try {
     const r1 = writeUserCreds(dir, 'u1', { image: 'img-1', voiceAppId: '1300000001' });
     assert.equal(r1.ok, true);
-    assert.deepEqual(r1.status, { model: false, voice: false, image: true, video: false });
+    // ★ 2026-10-01（主人选的**甲**）：图片与视频是**同一把钥匙** ⇒ 只填了 image 那栏，
+    //   `video` 也如实报 `true`（它真能用）—— 否则页面会说"还没填"而其实能用（页面在说假话）。
+    assert.deepEqual(r1.status, { model: false, voice: false, image: true, video: true });
     writeUserCreds(dir, 'u2', { video: 'vid-2' });
 
     const a = readUserCreds(dir, 'u1');

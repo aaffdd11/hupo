@@ -12,6 +12,7 @@
 //   ③ 失败**说人话**（`imageErrorWords`），而且**认不出就如实说认不出**。
 
 import { credsFor } from './creds-store.js';
+import { sharedKeyOf } from './creds.mjs';
 import { DEFAULT_IMAGE_MODEL, DEFAULT_IMAGE_URL, generateImage, imageErrorWords } from './image.js';
 
 /**
@@ -31,7 +32,9 @@ export function makeDrawImage({ dataDir, env = process.env, fetch = globalThis.f
     //    "盒子里读那份单文件"那一支只在 `env.HUPO_ROLE === 'tenant'` 时才走，
     //    而 `credsFor` 的 `env` 默认**空对象** ⇒ 不传 = 盒子里画图永远说"没有钥匙"。
     const mine = credsFor({ dataDir, sub: userId, env }).values;
-    const key = typeof mine.image === 'string' ? mine.image.trim() : '';
+    // ★ **同一把钥匙**（2026-10-01 主人选的"甲"）：图片那栏空着、视频那栏有 ⇒ 借视频那把
+    //   （自己那栏有就用自己的；这条规则住 `creds.mjs` 的 `sharedKeyOf`，两处不各写一份）
+    const key = sharedKeyOf(mine, 'image');
     if (key === '') {
       return { ok: false, why: 'no-key', text: imageErrorWords({ why: 'no-key' }) };
     }
