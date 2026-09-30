@@ -126,6 +126,34 @@ Future<String?> startHearing({
   final md = html.window.navigator.mediaDevices;
   if (md == null) return 'unsupported';
 
+  // 🔴🔴 **AudioContext 必须"在用户手势这一拍里"建出来并 `resume()`**
+  //   （2026-10-01 主人报"聊天窗口里按了语音、输入框不出字"之后查到的一处**真缺陷**）。
+  //
+  //   为什么必须在这里：下面是**两次 `await`**（先等 WS 连上、再等上游 `asr/ready`，
+  //   然后才 `getUserMedia`）—— 等回来的时候**用户那一下手势已经过期了**。
+  //   在 iOS Safari（以及任何严格按自动播放规矩来的浏览器）上，手势之外
+  //   `resume()` **叫不醒** `AudioContext` ⇒ 那个 `onaudioprocess` **一次都不回调**
+  //   ⇒ 屏幕上写着"正在听"，而**服务端一个字节都收不到** ⇒ 识别那头自然一个字都没有
+  //   （表现与"什么都没听到"一模一样，极难查）。
+  //   ⚠️ 这正是 `docs/dev/71-MIC-ASR.md` 里记着的那条欠账（"iOS Safari 那套
+  //      AudioContext 必须在用户手势里 resume —— 这台机器验不了 iOS"）——
+  //      现在把顺序改对了：**先建、先叫醒，再去连**。
+  late final Object ctx;
+  int rate = 48000;
+  try {
+    ctx = jsu.callConstructor(
+      jsu.getProperty<Object>(jsu.globalThis, 'AudioContext'),
+      <Object?>[],
+    );
+    jsu.callMethod(ctx, 'resume', <Object?>[]);
+    rate = jsu.getProperty<num>(ctx, 'sampleRate').round();
+  } catch (_) {
+    return 'unsupported';
+  }
+  // ⚠️ **这里不许同步读 `state` 判死**：`resume()` 是**异步**的，刚调完读到的
+  //    多半还是 `suspended`（那会误杀本来能用的浏览器）⇒ 真正的判据放到 ③ 那一步
+  //    （`await` 过 resume 之后再读，见下）。
+
   // ── ① 先连上（令牌走子协议，和聊天那条一样；**不进 URL**）──────────
   final WebSocketChannel ch;
   try {
@@ -230,11 +258,9 @@ Future<String?> startHearing({
   session.stream = stream;
 
   // ── ③ 音频图：麦克风 → 16k 单声道 PCM → 对面 ────────────────────
+  //   ⚠️ 那个 `AudioContext` 是**上面手势里就建好、叫醒过的**（见那段批注）——
+  //      这里**只往上接**，绝不再建第二个（再建一个还是会 suspended）。
   try {
-    final ctx = jsu.callConstructor(
-      jsu.getProperty<Object>(jsu.globalThis, 'AudioContext'),
-      <Object?>[],
-    );
     final source = jsu.callMethod(ctx, 'createMediaStreamSource', <Object?>[
       stream,
     ]);
@@ -252,13 +278,23 @@ Future<String?> startHearing({
     jsu.callMethod(gain, 'connect', <Object?>[
       jsu.getProperty<Object>(ctx, 'destination'),
     ]);
-    // 刚建出来时可能是 suspended（自动播放那套规矩）——按用户的手势把它叫醒
-    jsu.callMethod(ctx, 'resume', <Object?>[]);
+    // 🔴 **最后一次叫醒 + 真判据**：`await` 它（异步）之后再读 `state` ——
+    //    还不是 `running` ⇒ **如实说"这台开不了麦"**，绝不装成"在听"
+    //    （装成"在听"的表现就是：屏幕上有"正在听"，而服务端一个字节都收不到）。
+    //   ⚠️ **加超时**：`resume()` 那个 promise 在某些浏览器上可能一直 pending
+    //      （叫不醒又不报错）—— 不给它上限，屏幕上就会永远挂着"正在听"。
+    await jsu
+        .promiseToFuture<Object?>(jsu.callMethod(ctx, 'resume', <Object?>[]))
+        .timeout(_readyLimit, onTimeout: () => null);
+    if (jsu.getProperty<String>(ctx, 'state') != 'running') {
+      _close(session);
+      return 'unsupported';
+    }
     session.ctx = ctx;
     session.source = source;
     session.proc = proc;
     session.gain = gain;
-    session.rate = jsu.getProperty<num>(ctx, 'sampleRate').round();
+    session.rate = rate; // 用**手势里读到**的那个采样率（同一个 context）
   } catch (_) {
     _close(session);
     return 'failed';
