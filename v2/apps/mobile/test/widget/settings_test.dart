@@ -301,6 +301,17 @@ void main() {
     expect(find.byType(TextField), findsNothing);
     expect(find.text(credModifyWords), findsOneWidget);
 
+    // ③·补 🔴 **保存成功之后也要自己退回"已设置"**
+    //    （2026-10-01 真事：填完保存，屏幕上还是那两个框 ⇒ 主人问"是不是没保存成功"）
+    await tester.tap(find.text(credModifyWords));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'abc-123');
+    await tester.tap(find.text(keySubmitChange));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsNothing, reason: '★ 存上了就该退回"已设置"（不然像没保存成功）');
+    expect(find.text(credSetWords), findsOneWidget);
+    expect(find.text(credModifyWords), findsOneWidget);
+
     // ④ 没填过的那一屏**照旧直接画表单**（他还得填第一次）
     await goTab(tester, credTabVideo);
     expect(find.text(credStateLine(tab: credTabVideo, has: false, bad: false)), findsOneWidget);

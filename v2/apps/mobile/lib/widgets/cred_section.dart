@@ -21,7 +21,7 @@ class CredSection extends StatefulWidget {
     required this.has,
     required this.what,
     required this.stateWords,
-    required this.form,
+    required this.formBuilder,
     this.extras = const [],
     this.extraBelow = const [],
   });
@@ -36,7 +36,11 @@ class CredSection extends StatefulWidget {
   final String stateWords;
 
   /// **钥匙那一块表单**（`KeyForm` / `CredForm`）—— 设置过、没点"修改"时**不画它**。
-  final List<Widget> form;
+  ///
+  /// 🔴 它是**一个 builder**（而不是一个现成的列表）：因为**保存成功之后要自动退回
+  ///    "已设置"那一档** —— 那一块得拿到 [onSaved] 这个回调（2026-10-01 的真事：
+  ///    主人填完保存，屏幕上**还是那两个输入框**，他的结论是"是不是没保存成功"）。
+  final List<Widget> Function(VoidCallback onSaved) formBuilder;
 
   /// 🔴 **"试一张 / 录一段 / 试一下"那些块** —— 它们**不碰钥匙**，
   ///    所以**两种状态都画**（设置过之后他更想当场试一下）。
@@ -52,9 +56,16 @@ class CredSection extends StatefulWidget {
 class _CredSectionState extends State<CredSection> {
   bool _editing = false;
 
+  /// 🔴 **保存成功 ⇒ 自动退回"已设置"那一档**（不然那一屏会一直是"修改中"的样子）。
+  void _backToSet() {
+    if (!mounted) return;
+    setState(() => _editing = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
+    final form = widget.formBuilder(_backToSet);
     // ── 设置过、而且没点"修改" ⇒ **只说已设置**（一个输入框都不画）────────
     if (widget.has && !_editing) {
       return Column(
@@ -84,7 +95,7 @@ class _CredSectionState extends State<CredSection> {
         const SizedBox(height: d.gapXs),
         Text(widget.stateWords, style: t.textTheme.bodyMedium?.copyWith(color: d.ink)),
         const SizedBox(height: d.gapM),
-        ...widget.form,
+        ...form,
         // 🔴 动作块（试一张 / 录一段 / 试一下）**两种状态都画**：
         //    它们不碰钥匙，设置过之后他更想当场试一下（漏了这一行的后果：
         //    `voice_record_test` / `voice_try_test` 那 31 条当场全红 —— 2026-10-01 真发生过）。

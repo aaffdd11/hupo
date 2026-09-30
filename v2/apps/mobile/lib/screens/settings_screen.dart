@@ -528,7 +528,7 @@ class SettingsScreen extends StatelessWidget {
                 if (has && tab == credTabChat)
                   Text(configKeyHint, style: t.textTheme.bodySmall?.copyWith(color: d.muted)),
               ],
-              form: _formFor(context, tab),
+              formBuilder: (onSaved) => _formFor(context, tab, onSaved),
               extras: _extrasFor(context, tab),
             ),
           ),
@@ -554,7 +554,7 @@ class SettingsScreen extends StatelessWidget {
   ///
   /// ⚠️ 它与下面 [\_extrasFor] **分开**：设置过之后**只把这一块收起来**，
   ///    而"试一张 / 试一下 / 录一段"那些**动作**照旧摆着（它们是拿来用这一把的）。
-  List<Widget> _formFor(BuildContext context, String tab) {
+  List<Widget> _formFor(BuildContext context, String tab, [VoidCallback? onSaved]) {
     if (tab == credTabChat) {
       return [
         if (localOnly) ...[
@@ -576,6 +576,8 @@ class SettingsScreen extends StatelessWidget {
                 const SnackBar(content: Text(configKeyChanged)),
               );
               onKeyChanged?.call();
+              // 🔴 存上了 ⇒ 退回"已设置"那一档（别让那一屏停在"修改中"）
+              onSaved?.call();
             }
             return r;
           },
@@ -607,7 +609,12 @@ class SettingsScreen extends StatelessWidget {
       CredForm(
         fields: fields,
         submitLabel: credsFor(tab) ? keySubmitChange : keySubmit,
-        onSubmit: (values) => send(tab, values),
+        onSubmit: (values) async {
+          final r = await send(tab, values);
+          // 🔴 存上了 ⇒ 退回"已设置"那一档（真事：不退回他就以为"没保存成功"）
+          if (r == KeySend.ok) onSaved?.call();
+          return r;
+        },
       ),
     ];
   }
