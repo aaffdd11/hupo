@@ -272,6 +272,8 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     appsServerPath: env.HUPO_APPS_SERVER ?? nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname), 'mcp-apps-server.mjs'),
     // ★ **画图那一支**（P1-27 后半）：独立一条 MCP（工具面向分开；通道还是同一条）
     imageServerPath: env.HUPO_IMAGE_SERVER ?? nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname), 'mcp-image-server.mjs'),
+    // ★ **视频那一支**（Seedance · 2026-10-01）：同样是"工具面向独立、通道同一条"
+    videoServerPath: env.HUPO_VIDEO_SERVER ?? nodePath.join(nodePath.dirname(new URL(import.meta.url).pathname), 'mcp-video-server.mjs'),
 
     /**
      * **临时验证码**（开发期口子 · 契约 `docs/dev/37-MULTITENANT.md` §六）。

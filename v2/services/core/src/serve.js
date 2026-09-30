@@ -27,6 +27,8 @@ import { RESUMED_EVENT } from './resume-plan.js';
 import { appsBaseOf, createAppServer, loadSignKey } from './app-serve.js';
 // ★ **`148` §四：定时任务**（注册制 · 串行 · 每天有限额 · 结果回那一间对话）
 import { createTaskRunner } from './app-tasks.js';
+import { createVideoRunner, VideoBook } from './video-tasks.js';
+import { makeVideo } from './video-use.js';
 // ★ **`112`：桌面那一格打开的是"他正在改的那一份"**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）：
 //   `createLiveWatcher` 看着工作区、`liveScopeOfChange` 判"哪个文件算哪一间"。
 import { createLiveWatcher } from './app-live.js';
@@ -632,6 +634,22 @@ const drawImage = makeDrawImage({
   log: (m) => console.log(`  ${m}`),
 });
 
+/**
+ * ★ **视频那一支**（Seedance · 2026-10-01）：两个动作分开 —— `start`（交出去）与
+ *   `check`（查一次）。⚠️ **它们与小程序通道里那个 `startVideo` 是同一份实现**
+ *   （都住 `video-use.js`），只是**数据目录可能不同**（一个人一格）。
+ */
+const videoTools = makeVideo({ log: (m) => console.log(`  ${m}`) });
+
+/** 这个人那一格在哪（主人 = `dataDir`，别人 = `data/users/<id>`）。 */
+const dirOfSub = (sub) => {
+  try {
+    return worlds.worldFor(sub)?.dir ?? cfg.dataDir;
+  } catch {
+    return cfg.dataDir;
+  }
+};
+
 function setCreds(userId, patch) {
   const out = {};
   const modelKey = Object.prototype.hasOwnProperty.call(patch, 'model') ? patch.model : null;
@@ -870,6 +888,25 @@ const appsOrigin = createAppServer({
  *    （这一行只负责把它接上电）。
  * ⚠️ **一件事都不声明时它是白跑的**（每个 tick 只做几次"读清单"）。
  */
+/**
+ * ★ **视频那个巡场**（`video-tasks.js` · 2026-10-01）。
+ *
+ * 为什么非要有它：**视频是异步的**（建任务 ⇒ 几十秒到几分钟）⇒ 一次工具调用等不起。
+ * ⇒ 工具只"交出去"，由**它**每隔一阵去看一眼：好了就往**他问的那一间**说一句
+ * （带视频地址 —— 界面上就是那个能点的框），做坏了/等太久也**如实说一句**。
+ *
+ * ⚠️ **一件事都没交出去时它是白跑的**（每个 tick 只读几次"有没有在飞的"）。
+ */
+const videoRunner = createVideoRunner({
+  worlds,
+  // ⚠️ 一人一格：账本文件跟着**他那一格**走（与通道那侧 `startVideo` 用的是同一个）。
+  bookFor: (sub) => new VideoBook({ dataDir: dirOfSub(sub), log: (m) => console.warn(`  ⚠️ ${m}`) }),
+  check: ({ sub, taskId }) => videoTools.check({ dataDir: dirOfSub(sub), sub, taskId }),
+  deliver: ({ sub, scope, text }) => sayIntoRoom({ sub, scope, text }),
+  now: () => Date.now(),
+  log: (m) => console.warn(`  ⚠️ ${m}`),
+});
+
 const taskRunner = createTaskRunner({
   worlds,
   appsFor: (sub) => appsForSub(sub),
@@ -980,7 +1017,7 @@ if (cfg.trustedSocketPath) {
   });
 }
 
-const { listen, listenTrusted, close, askApp, agentAsk, agentPoll, deliverAppTask } = createServer({
+const { listen, listenTrusted, close, askApp, agentAsk, agentPoll, deliverAppTask, sayIntoRoom } = createServer({
   // ★ **多租户那一侧**：每个请求按令牌里的 `sub` 取那个人的世界。
   //   ⚠️ 上面那五个单例**不再传**了 —— 传了就等于"所有人共用一份"。
   worlds,
@@ -1249,6 +1286,13 @@ try {
   taskRunner.start();
 } catch (err) {
   console.warn(`  ⚠️ 定时任务的调度器没起来：${err?.message ?? err}（别的事照旧）`);
+}
+
+// ★ **视频那个巡场**（2026-10-01）：起不来 / 抛了都不许把服务带走（它只是个定时器）
+try {
+  videoRunner.start();
+} catch (err) {
+  console.warn(`  ⚠️ 视频那个巡场没起来：${err?.message ?? err}（别的事照旧）`);
 }
 
 // ★ 制品那个口（乙-1）：**它起来失败不许拖垮壳** —— 但必须**当场看得见**（静默降级是本仓库反复栽的形状）。

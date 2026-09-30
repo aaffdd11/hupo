@@ -59,6 +59,24 @@
         failOnStartupError: true
         # 画图比聊天慢得多（那边自己也开着 120 秒的上限）
         toolCallTimeoutMs: 150000
+    # ★ **视频那一支**（Seedance · 2026-10-01）：与画图那支**同一个形状** ——
+    #   工具面向独立成一条（要单独停视频，去掉这一块就行），通道还是同一条域套接字。
+    #   ⚠️ **异步**：交出去拿回的是**任务号**，成品由壳那一侧的巡场收回来
+    #     （`video-tasks.js` ＋ `serve.js`）⇒ 这里的超时只管"建任务"那一步。
+    - id: mcp-video
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: video
+        transport: stdio
+        command: !!js process.env.HUPO_NODE_BIN
+        args:
+          - !!js process.env.HUPO_VIDEO_SERVER
+        env:
+          HUPO_VIDEO_SOCKET: !!js process.env.HUPO_APPS_SOCKET
+        # 起不来**不许静默降级**（同账本/小程序/画图那三条的理由）
+        failOnStartupError: true
+        # 建任务那一步是快的（慢的是生成）⇒ 90 秒够宽了
+        toolCallTimeoutMs: 90000
     - id: mcp-apps
       name: '@deepseek-ai/dsh-mcp-client'
       config:

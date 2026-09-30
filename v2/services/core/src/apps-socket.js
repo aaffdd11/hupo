@@ -23,6 +23,7 @@ import { AppsError, isAnAppRoom } from './apps.js';
 import { shouldTellAppFail } from './app-fail-words.js';
 import { INSIDE_APP_NO_CREATE, NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
 import { NEEDS_ASK_IMAGE, asksToDrawImage } from './image.js';
+import { NEEDS_ASK_VIDEO, asksToMakeVideo } from './video.js';
 import { OutboundError, assertOutboundAllowed } from './outbound.js';
 import { PublishedError, authorHashOf } from './published.js';
 import { reviewForPublish } from './review.js';
@@ -263,6 +264,31 @@ async function runAppsOp(apps, req, ctx = {}) {
         ctx.usage?.note(scope, { kind: USAGE_KINDS.image, images: (r.urls ?? []).length, scopeId: scope });
         // ⚠️ 只回"画好了 + 图在哪"（**没有钥匙**）
         return { ok: true, urls: r.urls ?? [] };
+      }
+      // ── **生成一段视频**（Seedance · 主人 2026-10-01）──────────────────
+      //
+      // 🔴 **他明说才许生成**（与画图那条同一个道理，而这一样**更贵**）：
+      //    判据只读**服务端自己记的当轮输入**（`ctx.turnInputFor(scope)`），
+      //    请求里写什么都不作数。
+      // ⚠️ **异步**：这里只"交出去"（回一个任务号）；成品由**壳那一侧的巡场**
+      //    收回来、**说进他问的那一间**（`video-tasks.js` ＋ `serve.js`）。
+      case 'video': {
+        const scope = typeof req.scope === 'string' && req.scope.trim() !== '' ? req.scope.trim() : null;
+        const turnInput = typeof ctx.turnInputFor === 'function'
+          ? ctx.turnInputFor(scope)
+          : (typeof ctx.turnInput === 'function' ? ctx.turnInput() : null);
+        if (!asksToMakeVideo(turnInput)) {
+          return { ok: false, error: NEEDS_ASK_VIDEO, refused: 'needs-ask' };
+        }
+        if (typeof ctx.startVideo !== 'function') return { ok: false, error: '这台部署还没接上视频那条路' };
+        const prompt = typeof req.prompt === 'string' ? req.prompt.trim() : '';
+        if (prompt === '') return { ok: false, error: '先写一句想要什么视频。' };
+        const r = await ctx.startVideo(prompt, scope ?? 'main');
+        if (!r?.ok) return { ok: false, error: r?.text ?? '这次没交出去，等会儿再试。' };
+        // ★ **P2-3：交出去一段也进那个账本**（一个账本三个计数器；数量记 1）
+        //   ⚠️ 归到**叫它的那一间**；记不上账**不许**把这一次弄没。
+        ctx.usage?.note(scope ?? 'main', { kind: USAGE_KINDS.video, videos: 1, scopeId: scope ?? 'main' });
+        return { ok: true, taskId: r.taskId };
       }
       case 'list':
         return { ok: true, apps: apps.list() };

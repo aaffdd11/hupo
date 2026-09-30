@@ -151,7 +151,7 @@ test('🔴 U-3 往那一轮塞私密哨兵与 URL ⇒ `usage.jsonl` 里**零命�
   const row = JSON.parse(raw.trim());
   assert.deepEqual(
     Object.keys(row).sort(),
-    ['at', 'cacheRead', 'calls', 'day', 'images', 'kind', 'output', 'schema', 'scopeId', 'source', 'turn', 'uncachedInput', 'voiceSeconds'].sort(),
+    ['at', 'cacheRead', 'calls', 'day', 'images', 'kind', 'output', 'schema', 'scopeId', 'source', 'turn', 'uncachedInput', 'voiceSeconds', 'videos'].sort(),
     '记录只许有"量"那几个字段（多一个内容字段就是访问日志的苗头）',
   );
 });

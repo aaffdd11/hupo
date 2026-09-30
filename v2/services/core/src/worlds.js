@@ -36,6 +36,7 @@ import { AppWorkspaces, checkScope, scopeDirFor, safeScope, workspacesRoot } fro
 import { AppsSocket, appsSocketPath } from './apps-socket.js';
 import { appendAudit, auditLine, auditPath } from './audit.js';
 import { makeDrawImage } from './image-use.js';
+import { makeVideo } from './video-use.js';
 import {
   MainLeakWatch,
   MAIN_LEAK_WHAT,
@@ -734,6 +735,12 @@ export class Worlds {
         // ★ **画一张图**（P1-27 后半）：工具只递请求，真正去花他那把钥匙的是这里。
         //   ⚠️ 与 `/api/image`（配置页那个「试一张」）**同一套规则**（`image-use.js`）。
         drawImage: makeDrawImage({ dataDir: t.dir, log: (m) => this.#warn(`  ${m}`) }),
+        // ★ **交一段视频出去**（Seedance · 2026-10-01）：与画图同一条形状 ——
+        //   工具只递请求，**真正去花他那把钥匙的是这里**（`video-use.js`）。
+        //   ⚠️ 视频是**异步**的：这里只建任务 ＋ 记账，回一个任务号；
+        //      成品由 `serve.js` 起的那个巡场收回来（`video-tasks.js`）。
+        startVideo: (prompt, scope) => makeVideo({ log: (m) => this.#warn(`  ${m}`) })
+          .start({ dataDir: t.dir, sub: t.userId, prompt, scope }),
         // ★ **用量账**（93 §五）：`ask`（server.js）与画图（apps-socket.js）都记到它上面。
         usage,
         // ★ **上架第一步的预审**（96 第 3b／4 条）：规则是**产品层**那份（只读挂载＋指纹），

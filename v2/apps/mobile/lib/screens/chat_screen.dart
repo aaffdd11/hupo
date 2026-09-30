@@ -2418,6 +2418,9 @@ class _ChatScreenState extends State<ChatScreen> {
               : (canSpeak ? () => c.speakMessage(m.messageId, m.displayText) : null),
           onStopSpeak: c.stopSpeakingNow,
           speaking: c.speakingId == m.messageId,
+          // ★ **点开那段视频**（2026-10-01 · 视频那一样）：与"出处"同一条规矩 ——
+          //   开不了外面的地址就传 `null` ⇒ 那个框**画成不可点的**（不给假按钮）。
+          onOpenVideo: _selecting ? null : (canOpenLinks ? openExternal : null),
           selected: _selecting && _selectedIds.contains(m.messageId),
           onTap: _selecting ? () => _toggleSelect(m.messageId) : null,
         ),

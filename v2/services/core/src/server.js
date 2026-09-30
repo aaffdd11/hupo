@@ -3427,6 +3427,38 @@ const TENANT_ROUTES = [
   }
 
   /**
+   * ★ **往"某一间"说一句**（2026-10-01 · 视频好了要回到**他问的那一间**）。
+   *
+   * 与 `sayIntoAppRoom` **同一套动作**（先落盘、再投递），只差"哪一间"：
+   *   · `scope === 'main'` ⇒ 就是主线那一份（`worldFor(sub)`）；
+   *   · 别的 ⇒ `roomFor(sub, scope)`（与聊天那条路**同一个取法**）。
+   *
+   * 🔴 为什么要有它：视频是**异步**的 —— 他问完那一句之后那一轮早就结束了，
+   *    成品回来时**没有「当轮」可挂** ⇒ 只能往那一间说一句（他看得见，界面上就是那个框）。
+   * ⚠️ 说的那一句是**我们自己拼的事实**（任务号/地址），**不是**模型的创作。
+   */
+  function sayIntoRoom({ sub, scope, text }) {
+    if (typeof text !== 'string' || text.trim() === '') return { ok: false, error: 'empty' };
+    const room = scope === MAIN_SCOPE || !scope ? worldFor(sub) : roomFor(sub, scope);
+    if (!room || !room.say || !room.dispatcher) return { ok: false, error: 'no-room' };
+    const messageId = `sys_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      room.say.say({ messageId, text });
+    } catch (err) {
+      log(`往那一间说一句：落盘没成（${scope}）${err?.message ?? err}`);
+      return { ok: false, error: 'say-failed' };
+    }
+    try {
+      room.dispatcher.deliver(text, { messageId, scope: room.scopeId }).catch((err) => {
+        log(`往那一间说一句：投递失败（${scope}）${err?.message ?? err}`);
+      });
+    } catch (err) {
+      log(`往那一间说一句：投递抛了（${scope}）${err?.message ?? err}`);
+    }
+    return { ok: true };
+  }
+
+  /**
    * ★ **`148` §四：定时任务该干活了**（调度器把到期的交给它）。
    *
    * 🔴 **这一层再判一次**（声明 ＋ 他允许）：调度器那一侧也判（`dueTasks`），
@@ -3561,6 +3593,8 @@ const TENANT_ROUTES = [
     agentPoll: pollAgentFor,
     /** ★ **`148` §四：定时任务的干活口**（调度器用它把到期的那一件交进那一间）。 */
     deliverAppTask,
+    /** ★ **视频那条路**（2026-10-01）：成品好了要**往他问的那一间**说一句。 */
+    sayIntoRoom,
     /** ★ **app 原点那条 `/ask` 口用它**（`serve.js` 把它递给制品服务）—— 见 `askForApp`。 */
     askApp: askForApp,
     /** ⚠️ 只在 127.0.0.1 上听。对外由 VPS 那条隧道走（stcp 不占公网端口）。 */

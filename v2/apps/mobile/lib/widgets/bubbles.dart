@@ -24,6 +24,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/image_links.dart';
+import '../models/video_links.dart';
 import '../models/space_words.dart';
 import '../models/design.dart' as d;
 import '../models/dsh_design.dart';
@@ -183,6 +184,7 @@ class AnswerBubble extends StatelessWidget {
     this.onLongPress,
     this.onOpenSource,
     this.onSpeak,
+    this.onOpenVideo,
     this.onStopSpeak,
     this.speaking = false,
     this.selected = false,
@@ -211,6 +213,13 @@ class AnswerBubble extends StatelessWidget {
   ///
   /// ⚠️ 与出处那条同一条规矩：**界面上不许出现按不动的东西**。
   final VoidCallback? onSpeak;
+
+  /// ★ **点开那段视频**（2026-10-01 · 视频那一样）。
+  ///
+  /// ⚠️ 这一层**不自己开**（`widgets/` 不引 `services/` —— 楼层闸）：谁画这一屏谁把
+  ///    "怎么开"传进来（`chat_screen` 那边用 `links.dart` 的 `openExternal`）。
+  /// `null` ⇒ 那个框**画成不可点的**（不给一个按了没反应的按钮）。
+  final void Function(String url)? onOpenVideo;
 
   /// 正在念这一条时，同一个按钮变成"别念了"。
   final VoidCallback? onStopSpeak;
@@ -259,6 +268,48 @@ class AnswerBubble extends StatelessWidget {
         ),
         const SizedBox(height: d.gapXs),
         Text(imageTempWords, style: small),
+      ],
+    ];
+  }
+
+  /// **生成好的视频**（Seedance · 2026-10-01 · 主人选的那一档："就回在聊天里，带能点的"）。
+  ///
+  /// ⚠️ 认得出**才**画（`videoUrlsIn` 是纯函数，判据钉着）；
+  /// ⚠️ `onOpenVideo` 没接上 ⇒ 画成**不可点的**（不给假按钮）；
+  /// 🔴 **不在这里自动播**：视频是几十 MB 的东西，自己加载 = 花他的流量；
+  ///    这一格是"**点开才看**"（壳那一侧用系统的外部打开）。
+  List<Widget> _videoRows(DshLook look, String text) {
+    final urls = videoUrlsIn(text);
+    if (urls.isEmpty) return const [];
+    return [
+      for (final url in urls) ...[
+        const SizedBox(height: d.gapS),
+        Material(
+          color: look.palette.bgLayer2,
+          borderRadius: BorderRadius.circular(d.radiusField),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            // 没接上"怎么开"⇒ 按不动（画一个按了没反应的按钮更坏）
+            onTap: onOpenVideo == null ? null : () => onOpenVideo!(url),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: d.gapM, vertical: d.gapS),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.play_circle_outline, size: look.content.size + 8, color: d.accent),
+                  const SizedBox(width: d.gapS),
+                  Flexible(
+                    child: Text(
+                      // ⚠️ 人话，不放内部词；地址那一串由"点开"去处理
+                      onOpenVideo == null ? videoCantOpenWords : videoOpenWords,
+                      style: dshTextStyle(look.content, look.palette.labelPrimary),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ],
     ];
   }
@@ -353,10 +404,13 @@ class AnswerBubble extends StatelessWidget {
                     //    🔴 **整条消息就是一张图 ⇒ 正文是空串**（`B37` 还的那笔账）：
                     //      那就**一个字的正文都不画**（不是画一个空的 `Text`）——
                     //      屏幕上只剩那张图，复制那条路照旧"如实说复制不了"。
-                    if (textWithoutImageLines(text).isNotEmpty)
-                      Text(textWithoutImageLines(text), style: bodyStyle),
+                    // 🔴 **两份都过一遍**：图片那一行（`image_links`）与视频那一行
+                    //    （`video_links`）都不许当正文画出来（各自那两份判据钉着）。
+                    if (textWithoutVideoLines(textWithoutImageLines(text)).isNotEmpty)
+                      Text(textWithoutVideoLines(textWithoutImageLines(text)), style: bodyStyle),
                     // ★ **画好的图**（P1-27 后半）：回话里带着图片地址 ⇒ **画在聊天里**
                     ..._imageRows(look, text),
+                    ..._videoRows(look, text),
                   ],
                   if (message.sources.isNotEmpty) ...[
                     const SizedBox(height: DshChatSpace.innerGap),

@@ -44,6 +44,8 @@ export const USAGE_KINDS = Object.freeze({
   ask: 'ask',
   image: 'image',
   voice: 'voice',
+  // ★ **视频**（Seedance · 2026-10-01）：**交出去一段算一笔**（钱是按段花的）
+  video: 'video',
 });
 
 /** 这一格文件名。**只有这一处**写它。 */
@@ -80,7 +82,7 @@ export function scopeForUsage(raw) {
 
 /** 三格 token ＋ 次数的空账。 */
 export function emptyCounters() {
-  return { uncachedInput: 0, output: 0, cacheRead: 0, calls: 0, images: 0, voiceSeconds: 0 };
+  return { uncachedInput: 0, output: 0, cacheRead: 0, calls: 0, images: 0, voiceSeconds: 0, videos: 0 };
 }
 
 function num(v) {
@@ -173,6 +175,7 @@ export function usageRow({
   calls = null,
   images = 0,
   voiceSeconds = 0,
+  videos = 0,
   source = 'box',
   turn = null,
 } = {}) {
@@ -193,6 +196,7 @@ export function usageRow({
     calls: calls === null ? (usage ? 1 : 0) : num(calls),
     images: num(images),
     voiceSeconds: num(voiceSeconds),
+    videos: num(videos),
   };
   if (Number.isInteger(turn)) row.turn = turn;
   return row;
@@ -219,6 +223,7 @@ export function aggregate(rows = []) {
     const calls = num(r.calls);
     const images = num(r.images);
     const voice = num(r.voiceSeconds);
+    const videos = num(r.videos);
     for (const k of ['uncachedInput', 'output', 'cacheRead']) {
       d[k] += u[k];
       totals[k] += u[k];
@@ -226,9 +231,11 @@ export function aggregate(rows = []) {
     d.calls += calls;
     d.images += images;
     d.voiceSeconds += voice;
+    d.videos += videos;
     totals.calls += calls;
     totals.images += images;
     totals.voiceSeconds += voice;
+    totals.videos += videos;
     const one = u.uncachedInput + u.output;
     d.ones += one;
     totals.ones += one;
