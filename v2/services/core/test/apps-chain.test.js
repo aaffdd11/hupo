@@ -386,6 +386,79 @@ test('🔴 装上 ⇒ 复制进他自己的那一份（作者下架之后**他�
   }
 });
 
+test('★ fork 下来就是自己的：别人那个 app 声明了 `db` ⇒ 装到乙这儿**当场就能存**（没有"外来"这一档）', async () => {
+  /**
+   * 🔴 主人 2026-09-30 原话：*「别人发的东西直接 fork 下来就好了。不用管别的。
+   *    代码都成自己的了。」*
+   *
+   * ⇒ 这一条钉的就是那句话：**fork ＝ 复制成他自己的** ——
+   *    清单里那份声明**原样带过来**，而且**当场就是给的**（没有"外来的要多点一下"这一档）。
+   * ⚠️ 它同时是"**别在这条路上加闸**"的反例：谁将来在 install 那条路上塞一道
+   *    "外来的先不许用"，这条判据就会红。
+   */
+  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-forkdb-'));
+  tmpDirs.push(dir);
+  const authorDir = nodePath.join(dir, 'a');
+  const author = new Apps({ dir: authorDir, sub: 'u1' });
+  author.create({ ...APP, id: 'jizhang', title: '记账', permissions: ['db'] });
+  const pub = new Published({ dir });
+  pub.publish(author, { id: 'jizhang', authorSub: 'u1', authorName: '甲' });
+  // 共享库里那份也带着声明（发现那一屏要能看到"它要什么"）
+  assert.deepEqual(pub.discover().find((a) => a.id === 'jizhang').permissions, ['db']);
+
+  // 乙：真链路装下来（MCP 工具 → 套接字 → 复制进乙的制品库）
+  const dirB = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-forkdb-b-'));
+  tmpDirs.push(dirB);
+  const appsB = new Apps({ dir: dirB, sub: 'u2' });
+  const pathB = appsSocketPath(dirB);
+  const sockB = new AppsSocket({
+    apps: appsB,
+    socketPath: pathB,
+    ctx: {
+      published: pub,
+      sub: 'u2',
+      authorName: '用户 2222',
+      turnInput: () => '帮我装那个记账的小程序',
+      reviewPolicy: buildReviewPolicy({ fingerprint: 'test' }),
+      reviewAgent: async () => ({ summary: '没看到外联风险', risks: [], rating: 0, verdict: 'pass' }),
+    },
+  }).listen();
+  const c = mcpClient({ HUPO_APPS_SOCKET: pathB });
+  try {
+    await handshake(c);
+    const r = await c.call('tools/call', { name: 'app_install', arguments: { id: 'jizhang' } });
+    assert.equal(r.result.isError, false, JSON.stringify(r.result));
+
+    const v = appsB.current('jizhang');
+    // ① **声明原样带过来了**（复制模型：那份代码现在是他的）
+    assert.deepEqual(appsB.manifest('jizhang', v).permissions, ['db'], '声明要跟着 fork 过来');
+    // ② 🔴 **而且当场就是给的** —— 没有人点过任何东西
+    assert.deepEqual(appsB.grants('jizhang'), ['db'], '★ fork 下来就是自己的：当场能用');
+    assert.equal(
+      nodeFs.existsSync(nodePath.join(dirB, 'hupo', 'apps', 'jizhang', 'grant.json')),
+      false,
+      '★ 不许凭空写一份 grant.json（默认给 ≠ 记一笔账）',
+    );
+    // ③ **真存一笔**（这才是"能用"的意思，不是"字段对上了"）
+    const w = await appsB.dbExec('jizhang', { op: 'run', sql: 'CREATE TABLE IF NOT EXISTS t(a TEXT)' });
+    assert.equal(w.ok, true, `装下来就该能存（实际 ${JSON.stringify(w)}）`);
+    const w2 = await appsB.dbExec('jizhang', { op: 'run', sql: 'INSERT INTO t VALUES (?)', params: ['乙记的'] });
+    assert.equal(w2.ok, true);
+    const w3 = await appsB.dbExec('jizhang', { op: 'all', sql: 'SELECT a FROM t' });
+    assert.deepEqual(w3.rows, [{ a: '乙记的' }]);
+    // ④ 各存各的：甲那一份没有乙的数据（一个 app 一个库 ＋ 按人分开）
+    assert.equal(nodeFs.existsSync(nodePath.join(authorDir, 'hupo', 'apps', 'jizhang', 'data.sqlite')), false);
+    // ⑤ 他要是关掉 ⇒ 乙自己这份当场就不能存（开关**永远在他手里**）
+    appsB.setGrants('jizhang', []);
+    const off = await appsB.dbExec('jizhang', { op: 'all', sql: 'SELECT a FROM t' });
+    assert.equal(off.ok, false);
+    assert.equal(off.status, 403);
+  } finally {
+    c.child.kill();
+    await sockB.close();
+  }
+});
+
 test('装上 / 发布 都要留一行审计（可倒查）', () => {
   const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-audit-'));
   tmpDirs.push(dir);
