@@ -3,8 +3,15 @@
 #   就是用户推出在首页就可以看到下载。"*）。
 #
 # 用法：
-#   scripts/publish-apk.sh              # 打包 + 拷进 web/ + 在线核一遍
-#   scripts/publish-apk.sh --no-build   # 用现有那个包（不重打）
+#   scripts/publish-apk.sh --owner-asked   # ★ **主人说了才跑**：打包 + 拷进 web/ + 在线核一遍
+#   scripts/publish-apk.sh --no-build       # 只把现有那个包拷回去（不重打）
+#
+# 🔴 **2026-10-01 主人定的规矩**（原话：*"apk我希望是我告诉你弄，你再打包。不然很浪费时间。"*）：
+#    **打包一次好几分钟**（Flutter release build ＋ 签名 ＋ 上传核对），
+#    而**大多数改动根本不需要新包**（网页那一半刷新就有）。⇒
+#    **只有主人明说要 APK 时才打**；平时收尾**只部署网页**。
+#    ⚠️ 这条**不靠"我记着"**：脚本**没有 `--owner-asked` 就直接拒绝**（同 `--spend` 那一族的形状）——
+#      要跳过这一道，得**故意**把那个词打出来。
 #
 # ── 这一步到底做了什么 ────────────────────────────────────
 #   ① 打一个**正式签名**的包（`build-apk.sh`：地址 ＋ 权限 ＋ 签名都从包上核）；
@@ -29,9 +36,23 @@ APK_SRC="$ROOT/v2/apps/mobile/build/app/outputs/flutter-apk/app-release.apk"
 APK_NAME="hupo.apk"
 PUBLIC="${HUPO_PUBLIC:-https://w.stalkerai.cn}"
 
-if [ "${1:-}" != "--no-build" ]; then
-  bash "$ROOT/scripts/build-apk.sh" || exit 1
-fi
+# 🔴 **没有主人的话，不许打包**（2026-10-01 定的规矩）——
+#    `--no-build`（只把现成的包拷回去）**不需要**那句话（它不花时间）；
+#    真要**重打**一个包，必须显式写 `--owner-asked`。
+case "${1:-}" in
+  --no-build)
+    : # 只拷回去：照旧
+    ;;
+  --owner-asked)
+    bash "$ROOT/scripts/build-apk.sh" || exit 1
+    ;;
+  *)
+    echo "⏸ 没有重打包（主人 2026-10-01 的规矩：*\"apk我希望是我告诉你弄，你再打包。不然很浪费时间。\"*）" >&2
+    echo "   · 主人明说要 APK ⇒ 跑：scripts/publish-apk.sh --owner-asked" >&2
+    echo "   · 只想把**现成的**那个包拷回 web/ ⇒ 跑：scripts/publish-apk.sh --no-build" >&2
+    exit 3
+    ;;
+esac
 if [ ! -f "$APK_SRC" ]; then
   echo "✗ 没有这个包：$APK_SRC（先跑 scripts/build-apk.sh）"
   exit 2
