@@ -168,6 +168,10 @@ void main() {
       imageTryFailed,
       imageLoadFailed,
       imageTempLink,
+      // ★ 2026-10-01「已设置 ＋ 修改」那三句也要过词表
+      credSetWords,
+      credModifyWords,
+      credCancelWords,
       credVoiceAppIdLabel,
       credVoiceTokenLabel,
       credOneKeyLabel,
@@ -197,6 +201,17 @@ void main() {
       expect(hasForbidden('把模型钥匙填上'), true);
       expect(hasForbidden('正在给你开一个只属于自己的空间'), false);
     });
+  });
+
+  test('★ "已设置 / 修改 / 不用了"三句就照主人说的那三个词（短、不许改花）', () {
+    // 主人 2026-10-01：*"设置过的你要显示已设置，然后点击修改再修改。"*
+    expect(credSetWords, '已设置');
+    expect(credModifyWords, '修改');
+    expect(credCancelWords, '不用了');
+    for (final s in [credSetWords, credModifyWords, credCancelWords]) {
+      expect(s.length <= 4, true, reason: '这一句要短：$s');
+      expect(scanForbidden(s), isEmpty);
+    }
   });
 
   test('🔴 配置页那四句**只说"填什么"**，而且**短**（主人 2026-10-01 定的写法）', () {

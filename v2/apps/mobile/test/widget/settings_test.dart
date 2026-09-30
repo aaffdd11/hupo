@@ -278,15 +278,35 @@ void main() {
     expect(find.text(keyCancelWhat), findsWidgets);
   });
 
-  testWidgets('已经填过的那一屏说"已经有了"（而且提交按钮变成"换好了"）', (tester) async {
+  testWidgets('⑩ 🔴 设置过的那一屏：只说「已设置」＋「修改」，**一个输入框都不画**', (tester) async {
+    // 主人 2026-10-01：*"设置过的你要显示已设置，然后点击修改再修改。"*
     await pump(tester, creds: const SpaceCreds(image: true));
     await goTab(tester, credTabImage);
-    expect(find.text(credStateLine(tab: credTabImage, has: true, bad: false)), findsOneWidget);
+    // ① 说"已设置"，并且**没有输入框、没有提交按钮**
+    expect(find.text(credSetWords), findsOneWidget);
+    expect(find.text(credModifyWords), findsOneWidget);
+    expect(find.byType(TextField), findsNothing, reason: '★ 设置过了还摆空框 ⇒ 他会以为没生效');
+    expect(find.text(keySubmit), findsNothing);
+    expect(find.text(keySubmitChange), findsNothing);
+
+    // ② 点「修改」⇒ 才画出输入框（提交按钮是"换好了"）
+    await tester.tap(find.text(credModifyWords));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsOneWidget, reason: '点了修改就该能改');
     expect(find.text(keySubmitChange), findsOneWidget);
-    // 负向对照：没填过的那一屏说的是"还没有填"
+
+    // ③ 「不用了」⇒ 收回去（又只剩"已设置 ＋ 修改"）
+    await tester.tap(find.text(credCancelWords));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text(credModifyWords), findsOneWidget);
+
+    // ④ 没填过的那一屏**照旧直接画表单**（他还得填第一次）
     await goTab(tester, credTabVideo);
     expect(find.text(credStateLine(tab: credTabVideo, has: false, bad: false)), findsOneWidget);
+    expect(find.byType(TextField), findsOneWidget);
     expect(find.text(keySubmit), findsOneWidget);
+    expect(find.text(credModifyWords), findsNothing, reason: '没填过就不该有"修改"');
   });
 
   testWidgets('放大到 2.0 倍也不溢出（D3.5 那一族的形状）', (tester) async {

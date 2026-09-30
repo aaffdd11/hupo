@@ -33,6 +33,7 @@ import '../services/api.dart';
 import '../widgets/app_grants_card.dart';
 import '../widgets/cancel_account.dart';
 import '../widgets/cred_form.dart';
+import '../widgets/cred_section.dart';
 import '../widgets/dsh_look.dart';
 import '../widgets/image_try.dart';
 import '../widgets/key_form.dart';
@@ -517,28 +518,18 @@ class SettingsScreen extends StatelessWidget {
         Card(
           child: Padding(
             padding: const EdgeInsets.all(d.gapM),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // ① 这一屏**管什么**
-                Text(
-                  credTabWhat(tab),
-                  style: t.textTheme.bodyMedium?.copyWith(color: d.ink),
-                ),
-                const SizedBox(height: d.gapXs),
-                // ② 现在**有没有**（三种状态分开说，见 `credStateLine`）
-                Text(
-                  credStateLine(tab: tab, has: has, bad: tab == credTabChat && keyBad),
-                  style: t.textTheme.bodyMedium?.copyWith(color: d.ink),
-                ),
-                if (has && tab == credTabChat) ...[
-                  const SizedBox(height: d.gapXs),
+            // ★ **设置过就只说"已设置"，点「修改」才摆输入框**（主人 2026-10-01 定的）。
+            //   没设置过 ⇒ 照旧：填什么 ＋ 有没有 ＋ 那一块表单。
+            child: CredSection(
+              has: has,
+              what: credTabWhat(tab),
+              stateWords: credStateLine(tab: tab, has: has, bad: tab == credTabChat && keyBad),
+              extraBelow: [
+                if (has && tab == credTabChat)
                   Text(configKeyHint, style: t.textTheme.bodySmall?.copyWith(color: d.muted)),
-                ],
-                const SizedBox(height: d.gapM),
-                // ③ 填的那一块
-                ..._formFor(context, tab),
               ],
+              form: _formFor(context, tab),
+              extras: _extrasFor(context, tab),
             ),
           ),
         ),
@@ -559,7 +550,10 @@ class SettingsScreen extends StatelessWidget {
     };
   }
 
-  /// 每一屏各自的表单。**聊天那一屏是老表单**（它带着粘贴与"取消注册"）。
+  /// **钥匙那一块**（真正的输入框 ＋ 提交）。**聊天那一屏是老表单**（它带着粘贴与"取消注册"）。
+  ///
+  /// ⚠️ 它与下面 [\_extrasFor] **分开**：设置过之后**只把这一块收起来**，
+  ///    而"试一张 / 试一下 / 录一段"那些**动作**照旧摆着（它们是拿来用这一把的）。
   List<Widget> _formFor(BuildContext context, String tab) {
     if (tab == credTabChat) {
       return [
@@ -609,17 +603,24 @@ class SettingsScreen extends StatelessWidget {
       credTabVideo => const [CredField(key: 'video', label: credOneKeyLabel)],
       _ => const <CredField>[],
     };
-    final draw = onDrawImage;
-    final vt = voiceTry;
-    final vr = voiceRecord;
     return [
       CredForm(
         fields: fields,
         submitLabel: credsFor(tab) ? keySubmitChange : keySubmit,
         onSubmit: (values) => send(tab, values),
       ),
-      // ★ **画一张试试**（P1-27）：只有"图片"那一屏、而且**填了钥匙**时才给。
-      //   ⚠️ 没接上线（`onDrawImage == null`）就不画 —— 不给假按钮。
+    ];
+  }
+
+  /// **钥匙下面那些"动作"块**（试一张 / 录一段 / 试一下）。
+  ///
+  /// 🔴 它们**不跟着钥匙表单一起收**：设置过之后他更想"当场试一下"
+  ///    （而且它们本来就不碰钥匙 —— 见各自文件顶上那段）。
+  List<Widget> _extrasFor(BuildContext context, String tab) {
+    final draw = onDrawImage;
+    final vt = voiceTry;
+    final vr = voiceRecord;
+    return [
       if (tab == credTabImage && draw != null && credsFor(tab))
         ImageTry(onDraw: (prompt) => draw(prompt)),
       // ★ **试一下语音**（批 7 · 主人 2026-09-26）：只有"语音"那一屏、而且接线了才给。

@@ -505,10 +505,21 @@ const String credOneKeyLabel = '把你那一串粘在这里';
 /// ⚠️ 三种状态必须分开（与 [keyStateLine] 同一条纪律）：
 ///    有 / 填过但被判无效 / 还没填。混成一句就是页面在说假话。
 String credStateLine({required String tab, required bool has, required bool bad}) {
-  if (has) return '已经填了。填新的会换掉它。';
+  if (has) return credSetWords;
   if (bad) return '这串它说用不了，换一串。';
   return '还没有填。';
 }
+
+/// ★ **设置过的那一屏只显示这三句**（主人 2026-10-01：*"设置过的你要显示已设置，
+/// 然后点击修改再修改。"*）。
+///
+/// 🔴 为什么必须这样：以前**输入框永远摆在那里**（空的）⇒ 他填完一看"还是两个空框"，
+///    以为**没生效**（真事：2026-10-01 他报"没效果"）。密钥又**从不回填**（那是纪律），
+///    ⇒ 唯一的解法就是：**设置过就不摆输入框**，只说"已设置"，要看框得**自己点「修改」**。
+const String credSetWords = '已设置';
+const String credModifyWords = '修改';
+/// 点开「修改」之后**反悔**那一下（不说这句，那一屏就只能一路填下去）。
+const String credCancelWords = '不用了';
 
 /// ── 更早的消息：往上翻着加载（批 C · `docs/dev/64-CHAT-REDESIGN.md` §三）──────
 ///
