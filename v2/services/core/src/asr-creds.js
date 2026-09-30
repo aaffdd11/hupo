@@ -219,6 +219,6 @@ export function describeVoiceCreds(cfg) {
   const len = (s) => (typeof s === 'string' ? s.length : 0);
   return (
     `语音凭据（来源 ${cfg.source ?? 'default'} · 引擎 ${cfg.engine ?? ''}${cfg.upstream ? ' · 走中转' : ''}）`
-    + `：APPID ${len(cfg.appid)} 位 · SECRET_ID ${len(cfg.secretId)} 位 · SECRET_KEY ${len(cfg.secretKey)} 位`
+    + `：APPID ${len(cfg.appid)} 位 · TOKEN ${len(cfg.token)} 位`
   );
 }
