@@ -65,6 +65,12 @@
 | 🔴 **线上那条 `/api/asr` 的真读数**（新代码下） | 现发令牌 ⇒ WS 连 `/api/asr`（令牌走**子协议** `['bearer', <token>]`）⇒ 发 `{"type":"asr/start"}` | ① 不带令牌 ⇒ **HTTP 401**（握手阶段就拒）；② 带令牌 ⇒ `{"type":"asr/unavailable","reason":"not-configured"}` ⇒ **不装开麦、如实说没配** |
 | **客户端也部署了**（两半同一次上） | `scripts/deploy-web-v2.sh` ＋ `scripts/publish-apk.sh` | 入口指纹 **`13e72d6a5739`** · 源码指纹 **`01bf3efc9052`** · 公网 **200** · 部署自检「页面开得开、那条流通着」· APK **523**（55,406,454 字节 · sha256 `c97252213b59…` · 公网逐字节一样）· **产物里核过那一屏**：`main.13e72d6a5739.dart.js` 里就是 `voiceAppId:"App ID"` ＋ `voiceAccessToken:"Access Token"` 两样（没有 `SecretId`/`SecretKey`/`腾讯` 任何一个字） |
 | 两闸 | 部署脚本替跑 | 服务端 **1417 过 / 0 挂** · 客户端硬闸全过（unit **849** · a11y **399** · 其余 **427**） |
+| 🔴 **填写那条路也真读了一次**（线上 `POST /api/creds`） | 现发令牌（主人身份）发三种**只读性质**的请求 | ① **老的腾讯字段名**（`voiceSecretId`/`voiceSecretKey`）⇒ **`400 bad-field`**「有一项我不认识，先别存。」⇒ **线上服务端已经不认老名字**（切干净了）· ② 豆包那两样但**空值** ⇒ **`400 blank-key`**（空不算填）· ③ ⚠️ 只给 `voiceAppId` 一样 ⇒ **`200`**（**服务端允许半截写**）但 `creds.voice` **如实 `false`**（判"有没有"的是 `credStatus`：两样齐了才算有）|
+
+⚠️ **如实说一件我自己碰过的现场**：上表第 ③ 条**真的写进去了一个探针值**（`voiceAppId: probe-only-appid`）——
+   我当场把主人那份**还原成"两样都空"**，并用真读者核过（`readUserCreds(owner).values = {}` · 线上 `/api/space`
+   `creds.voice=false` · 文件里 `grep probe` = 0）。⇒ 教训：**"只读性质"要先看清楚哪一条会写**；
+   以后这类检查一律先备份再发、或者直接用一个假身份（⚠️ 假身份走不通：`/api/creds` 对没有租户的人回 `503 space-not-ready`）。
 
 ### 四·甲、**还差最后一步：那两样得填进去**（主人自己的事，一分钟）
 
