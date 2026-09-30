@@ -172,8 +172,7 @@ void main() {
       credSetWords,
       credModifyWords,
       credCancelWords,
-      credVoiceAppIdLabel,
-      credVoiceTokenLabel,
+      credVoiceKeyLabel,
       credOneKeyLabel,
       for (final tab in [credTabChat, credTabVoice, credTabImage, credTabVideo]) ...[
         credStateLine(tab: tab, has: true, bad: false),
@@ -228,11 +227,11 @@ void main() {
       expect(s.contains('收下'), false, reason: '不许再写"收下了"那套：$s');
     }
     // ② 说的就是**填什么**（并且指出去哪儿拿）
-    //    ⚠️ 语音那两样的**名字**由输入框的标签扛（`App ID` / `Access Token`）——
+    //    ⚠️ 语音那一把的**名字**由输入框标签扛（`API Key`）——
     //       那一句只负责"填什么 ＋ 去哪儿拿"，所以这里分别钉两头。
     expect(voice.contains('语音技术'), true, reason: '要说清去哪儿拿：$voice');
-    expect(credVoiceAppIdLabel, 'App ID');
-    expect(credVoiceTokenLabel, 'Access Token');
+    expect(voice.contains('API Key'), true, reason: '要说清填的就是 API Key：$voice');
+    expect(credVoiceKeyLabel, 'API Key');
     expect(image.contains('API Key'), true);
     expect(chat.contains('API Key'), true);
     expect(credOneKeyLabel.length <= 12, true, reason: '输入框上那句也要短：$credOneKeyLabel');

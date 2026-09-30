@@ -21,11 +21,17 @@ import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
 import { asrConfigFromEnv } from './asr.js';
-import { VOICE_FIELDS } from './creds.mjs';
+import { voicePresent } from './creds.mjs';
 import { credsFor } from './creds-store.js';
 
-/** 那三样的名字（**只此一处**：读文件与读环境变量用的是同一组）。 */
-export const VOICE_ENV_NAMES = ['DOUBAO_ASR_APPID', 'DOUBAO_ASR_TOKEN'];
+/**
+ * 语音凭据的**环境变量名**（**只此一处**：读文件与读环境变量用的是同一组）。
+ *
+ * ★ **2026-10-01 晚**：新版控制台是**一把 API Key**（`DOUBAO_ASR_API_KEY`）——
+ *   主人当天贴的官方文档写明请求头是 `X-Api-Key` ＋ `X-Api-Resource-Id` ＋ `X-Api-Request-Id`；
+ *   旧版那两样（App ID ＋ Access Token）**照旧认**，只是页面上不再问它们。
+ */
+export const VOICE_ENV_NAMES = ['DOUBAO_ASR_API_KEY', 'DOUBAO_ASR_APPID', 'DOUBAO_ASR_TOKEN'];
 
 /**
  * **谁是"主人自己"**（P2-2 · 主人 2026-09-25 拍板）。
@@ -40,15 +46,6 @@ export const VOICE_ENV_NAMES = ['DOUBAO_ASR_APPID', 'DOUBAO_ASR_TOKEN'];
 export function isOwnerSub(sub) {
   return typeof sub === 'string' && (sub === 'owner' || sub === 'local');
 }
-
-/**
- * 语音那三样在**存档里**叫什么（短名）。
- * ⚠️ 这张表只住一处：`creds.mjs` 的 `VOICE_FIELDS`（顺序＝AppID / SecretId / SecretKey）。
- */
-const VOICE_FIELD_OF = Object.freeze({
-  DOUBAO_ASR_APPID: VOICE_FIELDS[0],
-  DOUBAO_ASR_TOKEN: VOICE_FIELDS[1],
-});
 
 /** 默认的钥匙文件（`restart-core.sh` 也读它：**0600、不进仓库**）。 */
 export function defaultAsrEnvFile(dataDir) {
@@ -110,14 +107,15 @@ export function resolveVoiceCreds({ dataDir, env = process.env, fs = nodeFs } = 
     why = `那份钥匙文件读不出来（${err?.code ?? err?.message ?? err}）`;
   }
   const pick = (name) => fromFile[name] || env?.[name] || '';
-  // ★ **豆包那两样**（2026-10-01 换的）：App ID ＋ Access Token；资源 id 可选。
+  // ★ **豆包**：新版是**一把 API Key**；旧版那两样照旧读（资源 id 可选）。
+  const apiKey = pick('DOUBAO_ASR_API_KEY');
   const appid = pick('DOUBAO_ASR_APPID');
   const token = pick('DOUBAO_ASR_TOKEN');
   const resource = pick('DOUBAO_ASR_RESOURCE');
   const upstream = fromFile.HUPO_ASR_URL || env?.HUPO_ASR_URL || null;
-  const hasKey = Boolean(appid && token);
+  const hasKey = Boolean(apiKey) || Boolean(appid && token);
   const configured = Boolean(upstream) || hasKey;
-  const source = hasKey && (fromFile.DOUBAO_ASR_APPID || fromFile.DOUBAO_ASR_TOKEN)
+  const source = hasKey && (fromFile.DOUBAO_ASR_API_KEY || fromFile.DOUBAO_ASR_APPID || fromFile.DOUBAO_ASR_TOKEN)
     ? 'file'
     : hasKey ? 'env' : 'none';
   if (!configured && why === '') {
@@ -126,6 +124,7 @@ export function resolveVoiceCreds({ dataDir, env = process.env, fs = nodeFs } = 
   // ⚠️ 形状与 `asrConfigFromEnv()` 一致（`asr.js` 直接用）：文件里那两样**盖过**进程 env。
   const base = asrConfigFromEnv({
     ...env,
+    ...(apiKey ? { DOUBAO_ASR_API_KEY: apiKey } : {}),
     ...(appid ? { DOUBAO_ASR_APPID: appid } : {}),
     ...(token ? { DOUBAO_ASR_TOKEN: token } : {}),
     ...(resource ? { DOUBAO_ASR_RESOURCE: resource } : {}),
@@ -161,14 +160,16 @@ export function voiceCredsFor({ sub = null, dataDir, env = process.env, fs = nod
   //      **显式**给了 `env: {HUPO_ROLE:'tenant'}`（所以那条一直是绿的），
   //      而产品这条路上**没人给** —— 判据现在补在 `voiceCredsFor` 这一侧（见同批测试）。
   const mine = who ? credsFor({ dataDir, sub: who, env, fs }).values : {};
-  const mineOk = VOICE_ENV_NAMES.every((n) => typeof mine[VOICE_FIELD_OF[n]] === 'string'
-    && mine[VOICE_FIELD_OF[n]].length > 0);
+  // ⚠️ "算不算填了"这条规则**只住一处**（`creds.mjs` 的 `voicePresent`）：
+  //    新版一把 API Key，或旧版那两样齐了 —— 与页面回报的口径必须是同一个。
+  const mineOk = voicePresent(mine);
   if (mineOk) {
-    // ★ **他自己填的是豆包那两样**（App ID ＋ Access Token）⇒ 直接连豆包（不走取证中转）
+    // ★ **他自己填的**（新版那把 API Key，或旧版那两样）⇒ 直接连豆包（不走取证中转）
     const base = asrConfigFromEnv({
       ...env,
-      DOUBAO_ASR_APPID: String(mine.voiceAppId),
-      DOUBAO_ASR_TOKEN: String(mine.voiceAccessToken),
+      ...(mine.voiceKey ? { DOUBAO_ASR_API_KEY: String(mine.voiceKey) } : {}),
+      ...(mine.voiceAppId ? { DOUBAO_ASR_APPID: String(mine.voiceAppId) } : {}),
+      ...(mine.voiceAccessToken ? { DOUBAO_ASR_TOKEN: String(mine.voiceAccessToken) } : {}),
       ...(mine.voiceResource ? { DOUBAO_ASR_RESOURCE: String(mine.voiceResource) } : {}),
     });
     return {
@@ -217,8 +218,10 @@ export function describeVoiceCreds(cfg) {
   //    够用来回答"轮换之后读到新的没有"（长度变成 0 就是没读到），
   //    而长度不泄露钥匙本身。
   const len = (s) => (typeof s === 'string' ? s.length : 0);
+  const auth = len(cfg.apiKey) > 0
+    ? `APIKEY ${len(cfg.apiKey)} 位（新版）`
+    : `APPID ${len(cfg.appid)} 位 · TOKEN ${len(cfg.token)} 位（旧版）`;
   return (
-    `语音凭据（来源 ${cfg.source ?? 'default'} · 引擎 ${cfg.engine ?? ''}${cfg.upstream ? ' · 走中转' : ''}）`
-    + `：APPID ${len(cfg.appid)} 位 · TOKEN ${len(cfg.token)} 位`
+    `语音凭据（来源 ${cfg.source ?? 'default'} · 引擎 ${cfg.engine ?? ''}${cfg.upstream ? ' · 走中转' : ''}）：${auth}`
   );
 }

@@ -469,7 +469,7 @@ const String credTabVideo = '视频';
 String credTabWhat(String tab) {
   switch (tab) {
     case credTabVoice:
-      return '填这两个（火山引擎 → 语音技术 → 应用管理）：';
+      return '填这一个（语音技术 →「API Key 管理」）：';
     case credTabImage:
       return '填这一个（火山方舟 → API Key 管理）：';
     case credTabVideo:
@@ -490,12 +490,15 @@ const String imagePromptBlank = '先写一句想要什么图。';
 const String imageTryFailed = '这次没画成，等会儿再试。';
 const String imageLoadFailed = '图取不回来（地址可能已经过期了）。';
 const String imageTempLink = '图是那边临时给的，想要就存下来。';
-/// ★ **语音那两样**（2026-10-01 换成豆包：**两样齐了才算有**）。
+/// ★ **语音那一把 API Key**（★ 2026-10-01 晚定的：主人贴的官方文档写明
+/// 实时语音识别的请求头就是 **`X-Api-Key`**，从**控制台 >「API Key 管理」**拿）
+/// —— 所以那一屏**只问一把**（原话：*"我看使用apikey来做的"*）。
 ///
-/// ⚠️ 人话里**不许**出现"腾讯 / 混元 / 密钥"那类词：他只要会从控制台把那两串**贴进来**。
-///    `AppID` 与 `Access Token` 是**控制台上印着的名字**，照抄最不容易贴错。
-const String credVoiceAppIdLabel = 'App ID';
-const String credVoiceTokenLabel = 'Access Token';
+/// ⚠️ 人话里**不许**出现"腾讯 / 混元 / 密钥"那类词：他只要会从控制台把那一把**贴进来**。
+///    `API Key` 是**控制台上印着的名字**，照抄最不容易贴错。
+/// ⚠️ 旧版控制台那两样（App ID ＋ Access Token）**服务端照旧认**（老填写不作废），
+///    只是页面上不再问它们（见 `docs/dev/152-VOICE-DOUBAO.md`）。
+const String credVoiceKeyLabel = 'API Key';
 
 /// 图片 / 视频 / 聊天：一把钥匙时输入框上那句话。
 const String credOneKeyLabel = '把你那一串粘在这里';

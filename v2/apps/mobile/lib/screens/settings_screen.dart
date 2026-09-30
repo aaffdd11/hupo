@@ -597,9 +597,8 @@ class SettingsScreen extends StatelessWidget {
     }
     final fields = switch (tab) {
       credTabVoice => const [
-          // ★ 豆包那两样（App ID ＋ Access Token）—— 控制台上就是这两个名字
-          CredField(key: 'voiceAppId', label: credVoiceAppIdLabel),
-          CredField(key: 'voiceAccessToken', label: credVoiceTokenLabel),
+          // ★ 豆包那**一把 API Key**（控制台 >「API Key 管理」拿的那一串）
+          CredField(key: 'voiceKey', label: credVoiceKeyLabel),
         ],
       credTabImage => const [CredField(key: 'image', label: credOneKeyLabel)],
       credTabVideo => const [CredField(key: 'video', label: credOneKeyLabel)],

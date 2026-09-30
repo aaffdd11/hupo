@@ -11,10 +11,10 @@
 | | 换之前（腾讯） | 换之后（豆包） |
 |---|---|---|
 | 上游 | `wss://asr.cloud.tencent.com/asr/v2/<appid>` | `wss://openspeech.bytedance.com/api/v3/sauc/bigmodel` |
-| 鉴权 | **签名 URL**（HMAC-SHA1，`SecretId`/`SecretKey`，每次连接现签） | **建连头**：`X-Api-App-Key`(App ID) · `X-Api-Access-Key`(Access Token) · `X-Api-Resource-Id`(资源) · `X-Api-Connect-Id`(UUID) |
+| 鉴权 | **签名 URL**（HMAC-SHA1，`SecretId`/`SecretKey`，每次连接现签） | ★ **两套都支持**：**新版**（一把 API Key）`X-Api-Key` ＋ `X-Api-Resource-Id` ＋ `X-Api-Request-Id`（★ 2026-10-01 晚补的，主人贴的官方文档就是这么写的）；**旧版** `X-Api-App-Key`(App ID) · `X-Api-Access-Key`(Access Token) · `X-Api-Resource-Id` · `X-Api-Connect-Id`(UUID) |
 | 协议 | JSON 文本帧（`code` 握手、`result.slice_type`、`final:1`） | **二进制帧**：4 字节 header ＋ [sequence] ＋ 4 字节长度（大端） ＋ payload；请求参数走 **gzip 的 JSON**；错误帧两种形状 |
 | 音频 | 16k 单声道 PCM | 一样（`pcm_s16le` / 16k / 单声道；一包 100–200ms，我们按 200ms 发） |
-| 凭据几样 | **三样**（AppID / SecretId / SecretKey） | ★ **两样**（App ID / Access Token；资源 id 可选，默认 `volc.bigasr.sauc.duration`） |
+| 凭据几样 | **三样**（AppID / SecretId / SecretKey） | ★ **一把 API Key**（新版控制台；旧版那两样照旧认）。资源 id 可选，默认 `volc.bigasr.sauc.duration` |
 
 🔴 **面向浏览器那一套一个字都没改**：`/api/asr` 的 WS 协议、`asr/ready`·`partial`·`final`·`end`·
 `capped`·`error`·`unavailable` 那些语义、二进制音频进 / JSON 事件出 —— **客户端不用动协议**，

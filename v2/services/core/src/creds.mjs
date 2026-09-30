@@ -32,14 +32,20 @@ export const CRED_FIELDS = Object.freeze({
   model: 'HUPO_MODEL_KEY',
   image: 'HUPO_IMAGE_KEY',
   video: 'HUPO_VIDEO_KEY',
-  // ★ **2026-10-01：语音换成豆包**（主人：*「语音识别，用豆包」*＋他选的"完全换成豆包"）
-  //   ⇒ 存的两样是**豆包那两样**：App ID ＋ Access Token（老的 SecretId/SecretKey 不再用）。
+  // ★ **2026-10-01 晚：新版控制台是"一把 API Key"**（官方文档：`X-Api-Key`，
+  //   控制台 >「API Key 管理」拿）⇒ **页面上只问这一把**（主人当天：*"我看使用apikey来做的"*）。
+  voiceKey: 'HUPO_VOICE_API_KEY',
+  // ⚠️ 旧版控制台那两样**留着照旧认**（老账号、以及他之前填过的那一份）——
+  //    只是页面上不再问它们（见 `VOICE_LEGACY_FIELDS`）。
   voiceAppId: 'HUPO_VOICE_APPID',
   voiceAccessToken: 'HUPO_VOICE_TOKEN',
 });
 
-/** 语音那三样：**三样齐了才算有**（缺一样就是没有）。 */
-export const VOICE_FIELDS = Object.freeze(['voiceAppId', 'voiceAccessToken']);
+/** 语音那一把（新版）：**有它就算有**。 */
+export const VOICE_FIELDS = Object.freeze(['voiceKey']);
+
+/** 旧版控制台那两样：**两样齐了也算有**（老填写照旧认，页面上不再问）。 */
+export const VOICE_LEGACY_FIELDS = Object.freeze(['voiceAppId', 'voiceAccessToken']);
 
 /** 🔴 写下去的次序（**语言那一把最先** —— 理由见文件顶上那段）。 */
 export const CRED_ORDER = Object.freeze(Object.keys(CRED_FIELDS));
@@ -149,6 +155,17 @@ export function mergeCreds(text, patch = {}) {
 }
 
 /**
+ * **语音"有没有"这一条规则**（**只住这一处**）：新版一把 API Key，或有旧版那两样。
+ *
+ * ⚠️ `credStatus` 与 `asr-creds.js` 的"他自己那份算不算填了"都从这里取 ——
+ *    两处各写一份 = 迟早漂（会出现"页面说有、发出去是空的"）。
+ */
+export function voicePresent(values = {}) {
+  if (credValueOk(values.voiceKey)) return true;
+  return VOICE_LEGACY_FIELDS.every((f) => credValueOk(values[f]));
+}
+
+/**
  * 🔴 **图片与视频是同一把钥匙**（都是火山方舟那一把；主人 2026-10-01 选了"不用合并 tab、
  * 但视频复用图片那把"）⇒ 自己那一栏没有时，**明着**借对方那一栏。
  *
@@ -176,8 +193,8 @@ export function sharedKeyOf(values = {}, own = 'image') {
 export function credStatus(values = {}) {
   return {
     model: credValueOk(values.model),
-    // ⚠️ 语音：**两样齐了才算有**（缺一样就是没有 —— 只有 appid 发不出请求）
-    voice: VOICE_FIELDS.every((f) => credValueOk(values[f])),
+    // ⚠️ 语音：**新版那一把有就算有**；没有它时，旧版那两样齐了也算（照旧认）
+    voice: voicePresent(values),
     image: sharedKeyOf(values, 'image') !== '',
     video: sharedKeyOf(values, 'video') !== '',
   };

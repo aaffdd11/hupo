@@ -181,14 +181,14 @@ void main() {
     expect(find.text(credStateLine(tab: credTabVideo, has: false, bad: false)), findsOneWidget);
   });
 
-  testWidgets('④ 语音那一屏是**两样**（豆包：App ID ＋ Access Token）；图片/视频各一串', (tester) async {
+  testWidgets('④ 语音那一屏是**一把 API Key**（新版控制台）；图片/视频各一串', (tester) async {
+    // 主人 2026-10-01 晚贴的官方文档：实时语音识别的请求头就是 `X-Api-Key`（一把）
+    // ⇒ 那一屏只问一把（原话："我看使用apikey来做的"）。
     await pump(tester);
     await goTab(tester, credTabVoice);
     expect(find.byType(CredForm), findsOneWidget);
-    for (final label in [credVoiceAppIdLabel, credVoiceTokenLabel]) {
-      expect(find.text(label), findsOneWidget, reason: '语音少了这一项：$label');
-    }
-    expect(tester.widget<CredForm>(find.byType(CredForm)).fields.length, 2);
+    expect(find.text(credVoiceKeyLabel), findsOneWidget, reason: '语音那一项就是 API Key');
+    expect(tester.widget<CredForm>(find.byType(CredForm)).fields.length, 1);
 
     await goTab(tester, credTabImage);
     expect(tester.widget<CredForm>(find.byType(CredForm)).fields.length, 1);
@@ -200,24 +200,20 @@ void main() {
     expect(find.byType(CredForm), findsNothing);
   });
 
-  testWidgets('⑤ 🔴 提交**一次把那一屏写完**（语音两样一起送）', (tester) async {
+  testWidgets('⑤ 🔴 提交：语音只送 `voiceKey` 这一把；值不许回显', (tester) async {
     final sent = await pump(tester);
     await goTab(tester, credTabVoice);
     final boxes = find.byType(TextField);
-    expect(boxes, findsNWidgets(2));
-    await tester.enterText(boxes.at(0), '1300000001');
-    await tester.enterText(boxes.at(1), 'access-token-x');
+    expect(boxes, findsOneWidget, reason: '新版就一把 API Key');
+    await tester.enterText(boxes.at(0), 'fake-api-key-for-test');
     await tester.tap(find.text(keySubmit));
     await tester.pumpAndSettle();
 
-    expect(sent.n, 1, reason: '★ 只许提交一次（两样必须一起写下去，不许分两次）');
+    expect(sent.n, 1, reason: '只许提交一次');
     expect(sent.tab, credTabVoice);
-    expect(sent.values, {
-      'voiceAppId': '1300000001',
-      'voiceAccessToken': 'access-token-x',
-    });
+    expect(sent.values, {'voiceKey': 'fake-api-key-for-test'});
     // 🔴 值**不许显示回去**（它是密钥；输入框挡着）
-    expect(tester.widget<TextField>(find.byType(TextField).at(1)).obscureText, true);
+    expect(tester.widget<TextField>(find.byType(TextField).at(0)).obscureText, true);
   });
 
   testWidgets('⑤ 图片那一屏：填一串 ⇒ 送的是 `image` 那一个字段', (tester) async {

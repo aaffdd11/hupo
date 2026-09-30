@@ -110,7 +110,7 @@ const String voiceTryBadFrame = '没听清，再按一次试试';
 
 /// **这台还没配好语音钥匙**（上面那三样还没送出去）——
 /// 说清"上面那三样就是它要用的"（主人要的就是这句）。
-const String voiceTryNoKeyEmpty = '还没填语音的钥匙 —— 在上面「语音」那页填 App ID 和 Access Token。';
+const String voiceTryNoKeyEmpty = '还没填语音的 API Key —— 在上面「语音」那页填。';
 
 /// **上面那三样填过、这边却说没接通**（这台还没接上）。
 /// ⚠️ 与上一句分开：一个让他去填，一个让他等接好 —— 混成一句他就不知道该干什么。

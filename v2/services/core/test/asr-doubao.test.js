@@ -60,6 +60,26 @@ test('D1 🔴 凭据：名字是豆包那一套；两样齐了才算配好（另
   assert.equal(doubaoConfigFromEnv({ HUPO_ASR_URL: 'ws://127.0.0.1:9/' }).configured, true);
 });
 
+test('★ D2·补 🔴 **新版鉴权**：给了 API Key ⇒ `X-Api-Key` ＋ 资源 ＋ 请求号（**不发旧版那两样**）', () => {
+  // 主人 2026-10-01 贴的官方文档：实时语音识别的请求头就是这三样
+  // （`X-Api-Key` 从控制台 >「API Key 管理」拿）。
+  const h = doubaoHeaders({ apiKey: 'ark-api-key-x', resource: 'volc.seedasr.sauc.duration', connectId: 'uuid-1' });
+  assert.equal(h['X-Api-Key'], 'ark-api-key-x');
+  assert.equal(h['X-Api-Resource-Id'], 'volc.seedasr.sauc.duration');
+  assert.equal(h['X-Api-Request-Id'], 'uuid-1', '新版要 X-Api-Request-Id（随机 UUID）');
+  // 🔴 负向对照：新版**不许**再发旧版那两个头（发出去就是两套鉴权混着来）
+  assert.equal('X-Api-App-Key' in h, false);
+  assert.equal('X-Api-Access-Key' in h, false);
+  assert.equal('X-Api-Connect-Id' in h, false);
+  // 环境变量那一层：只有一把 API Key 也算"配了"
+  assert.equal(doubaoConfigFromEnv({ DOUBAO_ASR_API_KEY: 'k' }).configured, true);
+  assert.equal(doubaoConfigFromEnv({ DOUBAO_ASR_API_KEY: 'k' }).apiKey, 'k');
+  // 旧版那一对**照旧认**（老账号）
+  assert.equal(doubaoConfigFromEnv({ DOUBAO_ASR_APPID: 'a', DOUBAO_ASR_TOKEN: 't' }).configured, true);
+  assert.equal(doubaoConfigFromEnv({ DOUBAO_ASR_API_KEY: 'k', DOUBAO_ASR_APPID: 'a', DOUBAO_ASR_TOKEN: 't' })
+    .configured, true);
+});
+
 test('D2 建连头：钥匙只在这一处进请求（四样都在）', () => {
   const h = doubaoHeaders({ appid: '1234567890', token: 'tok-abc', resource: 'volc.seedasr.sauc.duration', connectId: 'cid-1' });
   assert.equal(h['X-Api-App-Key'], '1234567890');

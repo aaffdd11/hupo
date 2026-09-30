@@ -51,6 +51,9 @@ export const AUDIO_CHUNK_BYTES = 3200;
  *    ⚠️ 老那三个 `TENCENT_*` **不再读**（`甲`：完全换成豆包）。
  */
 export function doubaoConfigFromEnv(env = process.env) {
+  // ★ **新版控制台：一把 API Key**（官方文档 `X-Api-Key`，控制台 >「API Key 管理」）。
+  const apiKey = String(env.DOUBAO_ASR_API_KEY ?? '').trim();
+  // ⚠️ 旧版那两样（App ID ＋ Access Token）**照旧认** —— 老账号还在用。
   const appid = String(env.DOUBAO_ASR_APPID ?? '').trim();
   const token = String(env.DOUBAO_ASR_TOKEN ?? '').trim();
   const resource = String(env.DOUBAO_ASR_RESOURCE ?? '').trim() || DEFAULT_RESOURCE_ID;
@@ -58,17 +61,35 @@ export function doubaoConfigFromEnv(env = process.env) {
   // `HUPO_ASR_URL` 是**换上游**用的（自托管 / 取证用的桩）：给了它就直接连它
   // —— 让"整条链"能在**没有豆包钥匙**的情况下被真验一遍（判据打在客户端那一侧）。
   const upstream = String(env.HUPO_ASR_URL ?? '').trim() || null;
-  const hasKey = Boolean(appid && token);
-  return { appid, token, resource, url, upstream, configured: Boolean(upstream) || hasKey };
+  const hasKey = Boolean(apiKey) || Boolean(appid && token);
+  return { apiKey, appid, token, resource, url, upstream, configured: Boolean(upstream) || hasKey };
 }
 
-/** 建连头（**钥匙只在这一处进请求**）。 */
-export function doubaoHeaders({ appid, token, resource, connectId }) {
+/**
+ * 建连头（**钥匙只在这一处进请求**）。
+ *
+ * ★ **两套鉴权**（火山官方两版控制台都支持）：
+ *   · **新版**（给了 `apiKey`）⇒ `X-Api-Key` ＋ `X-Api-Resource-Id` ＋ `X-Api-Request-Id`
+ *     （官方文档「实时语音识别」的请求头；控制台 >「API Key 管理」拿那一把）
+ *   · **旧版**（只有 App ID ＋ Access Token）⇒ `X-Api-App-Key` ＋ `X-Api-Access-Key`
+ *     ＋ `X-Api-Resource-Id` ＋ `X-Api-Connect-Id`
+ * ⚠️ **新版优先**（有 `apiKey` 就不发旧版那两个头）。
+ */
+export function doubaoHeaders({ apiKey = '', appid = '', token = '', resource, connectId, requestId = null }) {
+  const resourceId = String(resource || DEFAULT_RESOURCE_ID);
+  const uuid = String(connectId);
+  if (String(apiKey).trim() !== '') {
+    return {
+      'X-Api-Key': String(apiKey).trim(),
+      'X-Api-Resource-Id': resourceId,
+      'X-Api-Request-Id': String(requestId ?? uuid),
+    };
+  }
   return {
     'X-Api-App-Key': String(appid),
     'X-Api-Access-Key': String(token),
-    'X-Api-Resource-Id': String(resource || DEFAULT_RESOURCE_ID),
-    'X-Api-Connect-Id': String(connectId),
+    'X-Api-Resource-Id': resourceId,
+    'X-Api-Connect-Id': uuid,
   };
 }
 
@@ -229,7 +250,7 @@ export function createDoubaoUpstream({ config, connectId = newConnectId, log = (
       const url = config.upstream ?? config.url;
       const headers = config.upstream
         ? {}
-        : doubaoHeaders({ appid: config.appid, token: config.token, resource: config.resource, connectId: connectId() });
+        : doubaoHeaders({ apiKey: config.apiKey, appid: config.appid, token: config.token, resource: config.resource, connectId: connectId() });
       try {
         up = new WebSocketImpl(url, { headers });
       } catch (err) {
