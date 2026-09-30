@@ -8,13 +8,18 @@
 // （**钥匙一个字符都不打印、不落盘、不进日志**）。
 //
 // 用法：
-//   ARK_API_KEY=<火山方舟的 API Key> node scripts/check-ark-image.mjs
-//   ARK_API_KEY=... node scripts/check-ark-image.mjs --prompt "一只在窗台上的橘猫，水彩" --size 2K
-//   ARK_API_KEY=... node scripts/check-ark-image.mjs --model doubao-seedream-4-0-250828
+//   node scripts/check-ark-image.mjs                          # 干跑（不花钱、不用钥匙）
+//   ARK_API_KEY=<火山方舟的 API Key> node scripts/check-ark-image.mjs --preflight
+//                                                            # 🔴 **不花钱**的先手：用真钥匙发一条"模型名是编的"请求
+//                                                            #    ⇒ 回话不是鉴权类 ⇒ 钥匙与路径都对（画不出东西 ⇒ 不花钱）
+//   ARK_API_KEY=... node scripts/check-ark-image.mjs --spend   # 真画一张（花你的钱）
+//   node scripts/check-ark-image.mjs --fake                    # 🔴 **假钥匙连真上游**（不花钱）：看鉴权那一层怎么回
+//   ARK_API_KEY=... node scripts/check-ark-image.mjs --spend --prompt "一只在窗台上的橘猫，水彩" --size 2K
 //
-// ⚠️ **这一步要花钱**（一张图的钱）：所以默认**不跑**，必须显式带 `--spend`。
-//    不带 `--spend` ⇒ 只打印"我会发什么"（干跑，一分钱不花）。
-// ⚠️ 模型名与端点是**会过期的东西**：两边都能用 `--model` / `--url` 覆盖。
+// ⚠️ **模型名与端点是会过期的东西**：两边都能用 `--model` / `--url` 覆盖。
+// 🔴 **`--fake` 那一档能证什么、不能证什么**（实测，见下）：火山方舟的**鉴权在路由之前** ——
+//    带上假钥匙时，**连一条根本不存在的路径也回 401**（不是 404）⇒
+//    它只证"主机与鉴权那一层是活的"，**证不了路径对不对、模型名对不对**（那要真钥匙）。
 
 import nodeProcess from 'node:process';
 
@@ -25,30 +30,55 @@ const val = (f, d = null) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : d;
 };
 
+if (has('--help') || has('-h')) {
+  console.log('用法：node scripts/check-ark-image.mjs [--fake] [--preflight] [--spend] [--prompt …] [--size 2K] [--model …] [--url …]');
+  nodeProcess.exit(0);
+}
+
 const KEY = nodeProcess.env.ARK_API_KEY ?? nodeProcess.env.HUPO_IMAGE_KEY ?? '';
 const URL_ = val('--url', nodeProcess.env.HUPO_IMAGE_URL ?? 'https://ark.cn-beijing.volces.com/api/v3/images/generations');
 const MODEL = val('--model', nodeProcess.env.HUPO_IMAGE_MODEL ?? 'doubao-seedream-4-0-250828');
 const SIZE = val('--size', nodeProcess.env.HUPO_IMAGE_SIZE ?? '2K');
 const PROMPT = val('--prompt', '一张测试图：暖色纸底上放着一枚琥珀色的圆点');
 const SPEND = has('--spend');
+const FAKE = has('--fake');
+const PREFLIGHT = has('--preflight');
 
-if (!KEY) {
-  console.error('✗ 没给钥匙：ARK_API_KEY=<火山方舟 API Key>（或 HUPO_IMAGE_KEY=…）');
+/** 假钥匙：**明摆着是假的**（形状也不对），且永不出现在真配置里。 */
+const FAKE_KEY = 'hupo-probe-not-a-real-key';
+/** 编出来的模型名：它**不可能**画出东西 ⇒ `--preflight` 不花钱。 */
+const BOGUS_MODEL = 'hupo-preflight-definitely-not-a-real-model';
+
+if (!KEY && !FAKE && (SPEND || PREFLIGHT)) {
+  console.error('✗ 没给钥匙：ARK_API_KEY=<火山方舟 API Key>（或 HUPO_IMAGE_KEY=…）；只想看鉴权那一层怎么回 ⇒ 加 `--fake`');
   nodeProcess.exit(3);
 }
 
-const body = { model: MODEL, prompt: PROMPT, size: SIZE, response_format: 'url', watermark: false };
+/** 火山方舟那三种"还没到业务"的回话，翻成人话（**实测**，见 `79-CREDS-TABS.md` §九·补）。 */
+function explainAuth(text) {
+  const t = String(text);
+  if (/API key or AK\/SK in the request is missing or invalid/i.test(t)) return '**没带钥匙**（请求里没有 Authorization）';
+  if (/API key format is incorrect/i.test(t)) return '**钥匙形状不对**（实测：UUID 形状 8-4-4-4-12 它认；`sk-…` 和随机长串都判格式不对）';
+  if (/API key doesn[’\']?t exist/i.test(t)) return '**形状对、但这把钥匙不存在**（拼错/删了/不是这个账号的）';
+  return null;
+}
+
+const useKey = FAKE ? FAKE_KEY : KEY;
+const useModel = PREFLIGHT ? BOGUS_MODEL : MODEL;
+const body = { model: useModel, prompt: PROMPT, size: SIZE, response_format: 'url', watermark: false };
 
 console.log('▶ 图片那条路（Seedream · 火山方舟）');
 console.log(`  端点     ${URL_}`);
-console.log(`  模型     ${MODEL}`);
+console.log(`  模型     ${useModel}${PREFLIGHT ? '  ← **编的**（这一档画不出东西 ⇒ 不花钱）' : ''}`);
 console.log(`  尺寸     ${SIZE}`);
 console.log(`  提示词   ${PROMPT.slice(0, 60)}${PROMPT.length > 60 ? '…' : ''}`);
-console.log(`  钥匙     ${KEY.length} 个字符（**不打印内容**）`);
+console.log(`  钥匙     ${FAKE ? '**假钥匙（--fake）**' : KEY ? `${KEY.length} 个字符（**不打印内容**）` : '**没有**'}`);
 console.log(`  要发的正文 ${JSON.stringify(body)}`);
 
-if (!SPEND) {
+if (!SPEND && !PREFLIGHT && !FAKE) {
   console.log('\n⏸ 干跑：**没有发出去**（这一步要花你的钱）。要真跑就加 `--spend`。');
+  console.log('   不花钱又想知道"钥匙与路径对不对"：`--preflight`（拿真钥匙、模型名是编的）。');
+  console.log('   没有钥匙也想看一眼鉴权那一层：`--fake`。');
   nodeProcess.exit(0);
 }
 
@@ -58,7 +88,7 @@ let text = '';
 try {
   res = await fetch(URL_, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${useKey}` },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(180_000),
   });
@@ -79,10 +109,29 @@ try {
 } catch {
   /* 不是 JSON 也照样打出来 */
 }
+
+/** 🔴 鉴权那三句是**有用的针**（谁贴错钥匙、错在哪一步，照它说）。 */
+const why = explainAuth(text);
+if (why && (FAKE || PREFLIGHT || !res.ok)) console.log(`\n  ⇒ 照原话看：${why}`);
+
 const url = j?.data?.[0]?.url ?? j?.data?.[0]?.b64_json ?? null;
 if (res.ok && typeof url === 'string' && url.startsWith('http')) {
   console.log(`\n✅ 成了：第一张图 ${url.slice(0, 120)}…`);
   console.log('   ⚠️ 这个地址**会过期**（火山那边按小时算）⇒ 要看就现在看。');
+  nodeProcess.exit(0);
+}
+if (FAKE) {
+  console.log('\n⇒ `--fake` 这一档到此为止：它只证"主机与鉴权那一层活着"。');
+  console.log('   ⚠️ **路径对不对、模型名对不对，它证不了** —— 火山的鉴权在路由之前（连不存在的路径也回 401）。');
+  nodeProcess.exit(0);
+}
+if (PREFLIGHT && why) {
+  console.log('\n✗ 先手就卡在鉴权那一层 —— 上面那句就是原因（**没有花钱**：请求根本没走到业务）。');
+  nodeProcess.exit(1);
+}
+if (PREFLIGHT && !res.ok) {
+  console.log('\n✅ **先手过了**：回话**不是**鉴权类 ⇒ 钥匙与路径都对（模型名是编的 ⇒ 它当然画不出来；这一步没花钱）。');
+  console.log('   ⇒ 这时候再 `--spend` 画真的一张。');
   nodeProcess.exit(0);
 }
 console.log('\n✗ 没成（或回话里没有图片地址）—— **上面那段原话就是事实**，按它改。');
