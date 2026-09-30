@@ -12,11 +12,58 @@
 //    那道楼层闸）——所以 `viewId` 与这本账都住 `models/`，判据能在 VM 上直接驱动
 //    （Web 那一侧才认得的 `dart:html` 住 `widgets/mini_runtime_web.dart`）。
 
+/// ★ **壳给页面的那两条内边距**在 URL 上的名字（单位 px）。
+///
+/// 从 2026-10-01 起：**那一层铺满整屏**（页面自己的底色铺到边上），
+/// "别被聊天条压住"改成**壳把这两条内边距写进 URL**、由 app 原点注入到页面 `body` 上
+/// （`src/app-serve.js` 的 `injectShellInset`）—— 这样**老页面也一起对**。
+const String kInsetTopParam = 'pt';
+const String kInsetBottomParam = 'pb';
+
+/// 把这两条内边距**追加**到那条入口 URL 上。**纯函数**。
+///
+/// 🔴 **只追加、不重建**：那条 URL 上带着**签名**（`u`/`e`/`s`）——
+///    用 `Uri.replace(queryParameters:)` 重新编码一遍有可能把签名值改了形状
+///    （编码方式一变，服务端验签就过不去）⇒ 这里只做字符串拼接。
+/// ⚠️ 两个数都是 0 ⇒ **原样返回**（一个字节都不动，老行为）。
+String miniEntryUrlWithInsets(
+  String entryUrl, {
+  required int padTop,
+  required int padBottom,
+}) {
+  final t = padTop > 0 ? padTop : 0;
+  final b = padBottom > 0 ? padBottom : 0;
+  if (t == 0 && b == 0) return entryUrl;
+  final sep = entryUrl.contains('?') ? '&' : '?';
+  return '$entryUrl$sep$kInsetTopParam=$t&$kInsetBottomParam=$b';
+}
+
+/// 把 URL 上那两条内边距**去掉**（只用于算 `viewId`）。**纯函数**。
+///
+/// ⚠️ 按 `&` 切开逐段比 key（**不用正则替换**：`replaceAll` 的替换串里
+///    `$1` 在 Dart 里不是分组引用，第一版就栽在这儿 —— 判据当场红）。
+String stripMiniInsets(String entryUrl) {
+  final q = entryUrl.indexOf('?');
+  if (q < 0) return entryUrl;
+  final head = entryUrl.substring(0, q);
+  final parts = entryUrl.substring(q + 1).split('&');
+  final kept = <String>[
+    for (final kv in parts)
+      if (kv.isNotEmpty && kv.split('=').first != kInsetTopParam && kv.split('=').first != kInsetBottomParam)
+        kv,
+  ];
+  if (kept.length == parts.length) return entryUrl; // 没有那两条 ⇒ 原样
+  return kept.isEmpty ? head : '$head?${kept.join('&')}';
+}
+
 /// 一帧制品的 `viewId`。
 ///
 /// 🔴 **只有这一处算法**：`mini_runtime_web.dart` 建 iframe 用它、
 ///    `MiniAppFrame` 记账用它 —— 两处各算一遍的话，"换没换"这件事就会两说。
-String miniViewIdOf(String entryUrl) => 'hupo-mini-${entryUrl.hashCode}';
+/// ⚠️ **算的时候把那两条内边距摘掉**（2026-10-01）：它们会随设备变
+///    （转屏 ⇒ 状态栏那条变、聊天条量出来也可能差一两像素）——
+///    带进 `viewId` 的话，"转一下屏"就等于**换了一版** ⇒ iframe 重建、页面里那一半的字白填。
+String miniViewIdOf(String entryUrl) => 'hupo-mini-${stripMiniInsets(entryUrl).hashCode}';
 
 /// **哪些 viewId 注册过／现在挂着**（判据 U5）。
 ///

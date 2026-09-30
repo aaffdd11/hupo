@@ -121,5 +121,55 @@ void main() {
       expect(top, greaterThanOrEqualTo(24),
           reason: '★ 容器里没有抬头了（2026-09-27 撤掉）⇒ 不让开的话制品第一行就在时钟底下');
     });
+
+    // ★ **2026-10-01：制品那一屏不这么办**（主人报的"没铺满、底色不同"）——
+    //   它**铺满整屏**（连状态栏那一条也让给页面自己的底色），
+    //   留白由 app 原点注入到页面 `body` 上（契约 `docs/dev/150-APP-FULLBLEED.md`）。
+    testWidgets('🔴 制品那一屏（`bleed`）⇒ **铺满整屏**：上面不让状态栏、底下不留聊天条那一条', (tester) async {
+      await _pumpWithInsets(
+        tester,
+        Scaffold(
+          body: MiniAppHost(
+            open: true,
+            title: '看天气',
+            covered: false,
+            onCoveredTap: () {},
+            bottomInset: 150, // 收起档那条的量
+            bleed: true, // ← 制品那一屏
+            child: const Text('页面自己铺满'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final screen = tester.getRect(find.byType(MaterialApp));
+      // ⚠️ 量的是**容器自己那个 Navigator 的矩形**（页面就在它里面）：
+      //    它就是"页面能铺到哪儿"的那个框。
+      Rect pageBox() => tester.getRect(
+            find.descendant(of: find.byType(MiniAppHost), matching: find.byType(Navigator)).first,
+          );
+      expect(pageBox().size, screen.size,
+          reason: '★ 制品那一屏要**整屏**（实测 ${pageBox().size}）—— 壳一条边距都不许留');
+      expect(pageBox().top, screen.top);
+      // 负向对照：不给 `bleed`（内置那几屏）⇒ 照旧让开状态栏 ＋ 让开聊天条那一条
+      await _pumpWithInsets(
+        tester,
+        Scaffold(
+          body: MiniAppHost(
+            open: true,
+            title: '设置',
+            covered: false,
+            onCoveredTap: () {},
+            bottomInset: 150, // 收起档那条 —— 内置那几屏要**让出来**
+            child: const Text('内置那一屏'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final inner = pageBox();
+      expect(inner.top, greaterThanOrEqualTo(24),
+          reason: '★ 内置那几屏照旧让开状态栏（这一条挡"改过头"）');
+      expect(inner.height, lessThanOrEqualTo(screen.height - 150),
+          reason: '★ 内置那几屏照旧把聊天条那一条让出来');
+    });
   });
 }

@@ -44,6 +44,7 @@ class MiniAppHost extends StatefulWidget {
     required this.covered,
     required this.onCoveredTap,
     required this.bottomInset,
+    this.bleed = false,
     required this.child,
     this.fromRect,
     this.icon,
@@ -69,6 +70,15 @@ class MiniAppHost extends StatefulWidget {
 
   /// **收起时那条压住了多少**（含边距）⇒ 内容底部按它内缩（§6.4 规则 1）。
   final double bottomInset;
+
+  /// ★ **2026-10-01（主人报的"没铺满、底色不同"）：这一屏的页面要铺满整屏**。
+  ///
+  /// `true` ⇒ **壳不在这外面留任何东西**（页面自己的底色铺到四边），
+  /// "别被聊天条压住"由**页面自己身上的内边距**做 —— 那两条内边距是壳写进
+  /// 入口 URL、app 原点注入到页面 `body` 上的（`src/app-serve.js` 的 `injectShellInset`）。
+  /// ⇒ 老页面也一起对（不必重发、不必作者记得）。
+  /// `false`（默认）⇒ 内置那几屏（设置 / 发现 /「我自己那台」）照旧由壳内缩。
+  final bool bleed;
 
   /// app 自己的内容（跑在容器自己的 `Navigator` 里）。
   final Widget child;
@@ -184,8 +194,9 @@ class _MiniAppHostState extends State<MiniAppHost>
       container: true,
       child: Material(
         color: d.paper,
-        // ⚠️ 只有**被聊天盖住**时才有圆角（§6.4 规则 2："要看得出来被盖住"）
-        borderRadius: BorderRadius.circular(covered ? 16 : 0),
+        // 🔴 **一直是直角**（2026-10-01 主人：*"小程序自己也会被压缩一下，并且会显示出桌面。
+        //    这个不对。"*）—— 原来被盖住时给 16 的圆角，那四个角就把**桌面**露出来了。
+        borderRadius: BorderRadius.zero,
         clipBehavior: Clip.antiAlias,
         child: DecoratedBox(
         decoration: const BoxDecoration(),
@@ -226,7 +237,10 @@ class _MiniAppHostState extends State<MiniAppHost>
                   //    ⚠️ 网页（含手机浏览器）那条内边距是 0 ⇒ 一个像素都不变。
                   //    ⚠️ 它和底部那条内缩（`_inset`）走**同一个 `Padding`**：一处口径，
                   //      免得页面高度被两处各算一遍。
-                  padding: EdgeInsets.only(top: safe.top, bottom: _inset),
+                  padding: widget.bleed
+                      // 铺满：页面自己铺到四边（留白已经写进它的 URL 了）
+                      ? EdgeInsets.zero
+                      : EdgeInsets.only(top: safe.top, bottom: _inset),
                   child: Navigator(
                     key: _nav,
                     onGenerateRoute: (_) =>
@@ -289,13 +303,13 @@ class _MiniAppHostState extends State<MiniAppHost>
                   child: Opacity(
                     // ★ "到一半左右换成页面内容"（按位置进度 ⇒ 打开/收回对称）
                     opacity: miniAppContentShare(v),
+                    // 🔴 **被盖住只有"压暗"这一件事**（2026-10-01 主人定的）：
+                    //    原来还叠了 `AnimatedScale(0.98)` —— 那 2% 会让四边（尤其左右）
+                    //    露出**桌面**，看起来就是"小程序被压了一下"。**去掉**。
+                    //    （"看得出来被盖住"由这一层压暗 ＋ 聊天浮窗自己负责。）
                     child: AnimatedOpacity(
-                     opacity: covered ? 0.55 : 1,
-                    duration: d.motionAppOpen,
-                    child: AnimatedScale(
-                      scale: covered ? 0.98 : 1,
+                      opacity: covered ? 0.55 : 1,
                       duration: d.motionAppOpen,
-                      curve: miniAppOpenCurve,
                       // ⚠️ 内容**按全屏排版**，只是被上面那块矩形"露出来"
                       //    ⇒ 看起来就是"从那个图标扩开的"（而不是一个小窗被放大）
                       child: OverflowBox(
@@ -307,7 +321,6 @@ class _MiniAppHostState extends State<MiniAppHost>
                         child: content(),
                       ),
                     ),
-                  ),
                 ),
                 ),
               ),

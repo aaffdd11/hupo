@@ -42,6 +42,36 @@ void main() {
     expect(miniViewIdOf(v1) == miniViewIdOf(v1again), false);
   });
 
+  // ── ★ 2026-10-01：**壳给的那两条内边距**（契约 `docs/dev/150-APP-FULLBLEED.md`）──
+  //
+  // 主人报的是"小程序没铺满、底色不同" ⇒ 页面铺满整屏，那两条留白**写进 URL**、
+  // 由 app 原点注入到页面 `body` 上（`src/app-serve.js` 的 `injectShellInset`）。
+
+  test('★ 那两条内边距**追加**到入口 URL 上（签名一个字节都不动）', () {
+    const url = 'http://127.0.0.1:8021/a/dice/1/index.html?u=u1&e=1&s=aa';
+    final out = miniEntryUrlWithInsets(url, padTop: 24, padBottom: 150);
+    expect(out, '$url&pt=24&pb=150', reason: '★ 只许追加 —— 重新编码会把签名改形状');
+    expect(out.startsWith(url), true, reason: '★ 原来那一整条（含签名）必须原样在前面');
+    // 没有查询串的那种（理论上不会有，但不许拼出 `&&`）
+    final bare = miniEntryUrlWithInsets('http://x/a/dice/1/index.html', padTop: 1, padBottom: 2);
+    expect(bare, 'http://x/a/dice/1/index.html?pt=1&pb=2');
+    // 两个数都是 0 ⇒ 一个字节都不动（老行为）
+    expect(miniEntryUrlWithInsets(url, padTop: 0, padBottom: 0), url);
+    expect(miniEntryUrlWithInsets(url, padTop: -5, padBottom: 0), url, reason: '负数当 0');
+  });
+
+  test('🔴 转屏 / 状态栏变了 ⇒ **不许**换 viewId（那只是边距变了，不是换了一版）', () {
+    const url = 'http://127.0.0.1:8021/a/dice/1/index.html?u=u1&e=1&s=aa';
+    final a = miniEntryUrlWithInsets(url, padTop: 24, padBottom: 150);
+    final b = miniEntryUrlWithInsets(url, padTop: 0, padBottom: 160);
+    expect(a == b, false, reason: '前提：两条 URL 真的不一样');
+    expect(miniViewIdOf(a), miniViewIdOf(b), reason: '★ 摘掉那两条之后要算同一个 viewId');
+    expect(miniViewIdOf(a), miniViewIdOf(url), reason: '★ 带上它们也算原来那一个');
+    // 负向对照：真的换了一版 ⇒ 还是要换
+    const v2 = 'http://127.0.0.1:8021/a/dice/2/index.html?u=u1&e=2&s=bb';
+    expect(miniViewIdOf(a) == miniViewIdOf(v2), false);
+  });
+
   test('🔴 U5：`registered` **只增不减**，`hosted` **随换随销**', () {
     final l = MiniViewLedger();
     const a = 'hupo-mini-a';

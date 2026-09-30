@@ -329,7 +329,11 @@ void main() {
     expect(settings.bottom > 0, true);
   });
 
-  testWidgets('🔴 聊天展开时小程序被盖住 —— 而且**看得出来**（压暗 + 缩小，§6.4 规则 2）', (tester) async {
+  // ★ **2026-10-01 改了**（主人：*"在小程序里点开聊天，小程序自己也会被压缩一下，
+  //   并且会显示出桌面。这个不对。"*）：被盖住只许**压暗** ——
+  //   原来还叠了 `AnimatedScale(0.98)` ＋ 被盖住时的 16 圆角，那两者都会把**桌面**
+  //   从四边/四角露出来。判据也从"量那个 scale"改成"量那一层的矩形还是不是整屏"。
+  testWidgets('🔴 聊天展开时小程序被盖住 —— **只压暗**；不许缩小、不许圆角（那会露桌面）', (tester) async {
     await _pump(tester);
     await _openSettings(tester);
 
@@ -338,20 +342,37 @@ void main() {
           find.ancestor(of: find.byType(SettingsScreen), matching: find.byType(AnimatedOpacity)).first,
         )
         .opacity;
-    double scale() => tester
-        .widget<AnimatedScale>(
-          find.ancestor(of: find.byType(SettingsScreen), matching: find.byType(AnimatedScale)).first,
-        )
-        .scale;
+    /// 被露出来的那块矩形（就是"屏幕上看得见的那一屏"）。
+    Rect revealed() => tester.getRect(
+          find.descendant(of: find.byType(MiniAppHost), matching: find.byType(ClipRRect)).first,
+        );
 
+    final screen = tester.getRect(find.byType(MaterialApp));
     expect(opacity(), 1.0, reason: '没被盖住时是正常的');
-    expect(scale(), 1.0);
+    expect(revealed().size, screen.size, reason: '没被盖住时本来就该是整屏');
+    // 那一层里**不许有 `AnimatedScale`**（它就是"压缩一下"的来源）
+    expect(
+      find.descendant(of: find.byType(MiniAppHost), matching: find.byType(AnimatedScale)),
+      findsNothing,
+      reason: '★ 被盖住时"压缩一下"就是它 —— 主人点名说不对',
+    );
 
     await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
 
     expect(opacity() < 1.0, true, reason: '★ 被盖住要**看得出来**（压暗），不是"悄悄被盖住"');
-    expect(scale() < 1.0, true, reason: '★ 同上（轻微缩小）');
+    // ★ 关键：**矩形还是整屏**（缩了的话这里会变小）
+    expect(revealed().size, screen.size,
+        reason: '★ 被盖住时露出来的矩形必须还是整屏（实测 ${revealed().size}）—— 缩小就是把桌面露出来');
+    // 直角：那一层里带圆角的 `Material` 一个都不许有（圆角同样会露桌面）
+    for (final m in tester.widgetList<Material>(
+      find.descendant(of: find.byType(MiniAppHost), matching: find.byType(Material)),
+    )) {
+      final shape = m.shape;
+      if (shape is RoundedRectangleBorder) {
+        expect(shape.borderRadius, BorderRadius.zero, reason: '★ 圆角会把四个角后面的桌面露出来');
+      }
+    }
     // 负向对照：**它没被销毁**（规则 4/Z2：被盖住 ≠ 被杀）
     expect(find.byType(SettingsScreen), findsOneWidget, reason: '被盖住不许销毁它');
   });

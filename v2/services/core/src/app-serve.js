@@ -34,6 +34,67 @@ import { BoxError } from './apps-box.js';
 /** 制品 URL 的前缀：`/a/<id>/<version>/<path>`。 */
 export const ARTIFACT_PREFIX = '/a/';
 
+/**
+ * ★ **壳给页面的那两条内边距的上限**（`pt` / `pb`，单位 px）。
+ *
+ * ⚠️ 它是一条**防注入**的闸：那两个数是壳按 `MediaQuery` 算出来、写进 URL 的，
+ *    但 URL 是**页面自己也能改**的东西 ⇒ 只认 0..这个数，认不出来的当 0。
+ *    （真正要紧的不是"数字大小"，而是**它一个字都不许跑进 HTML 结构里** ——
+ *      所以这里先 `Number`＋`round`＋夹，再拼进那条 `<style>`。）
+ */
+export const MAX_SHELL_INSET = 400;
+
+/** 把 URL 上那个数解成合法的内边距（认不出来 / 越界 ⇒ 0）。**纯函数**。 */
+export function shellInsetOf(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 0;
+  const v = Math.round(n);
+  if (v <= 0) return 0;
+  return v > MAX_SHELL_INSET ? MAX_SHELL_INSET : v;
+}
+
+/**
+ * ★ 2026-10-01（主人报的"小程序没铺满、底色不同"）：**页面铺满整页，留白挪进页面里**。
+ *
+ * ── 为什么要由**壳**来写这一段（而不是叫每个作者自己留）──────────────
+ * 主人原话：*「小程序不是铺满整页并加一个内容padding以防被聊天窗口遮住，而是用了 margin，
+ * 导致页面没铺满，底色不同。」* ⇒ 从今天起：**那一层铺满整屏**（页面自己的底色铺到边上），
+ * 而"别被聊天条压住"这件事**由壳注入一条 `body` 的 padding** 来做 ——
+ * 这样**已经做好的老页面也一起对**（不用重发、不用作者记得）。
+ *
+ * ⚠️ 用 `!important` ＋ `box-sizing:border-box`：页面自己的 `body{padding:…}` 压不过它，
+ *    而且 `box-sizing` 保证"自己写了 `height:100vh` 的页面"不会因为多出这条内边距而溢出。
+ * ⚠️ **只在壳带了这个数（`pt`/`pb` 大于 0）时才注入**：老客户端不带 ⇒ 一个字节都不动
+ *    （它那一侧照旧用"把 iframe 缩小"的老办法，见 `mini_app_host.dart`）。
+ * ⚠️ **不碰 `<head>` 之外的结构**：只在 `</head>` 前插一段 `<style>`（找不到 head 就退回
+ *    文档最前面）。**一个标签都不删、不改。**
+ *
+ * @param {string} html 制品原文
+ * @param {{padTop?:number, padBottom?:number}} o 壳给的两条内边距（px）
+ * @returns {string} 注入之后的 HTML；两个数都是 0 ⇒ **原样返回**
+ */
+export function injectShellInset(html, { padTop = 0, padBottom = 0 } = {}) {
+  const top = shellInsetOf(padTop);
+  const bottom = shellInsetOf(padBottom);
+  if (top === 0 && bottom === 0) return html;
+  const style =
+    '<style id="hupo-shell-inset">' +
+    '/* 琥珀壳给的边距：让页面铺满，同时不被底下的聊天条压住 —— **别自己再加一份** */' +
+    'body{' +
+    `padding-top:${top}px !important;` +
+    `padding-bottom:${bottom}px !important;` +
+    'box-sizing:border-box !important}' +
+    '</style>';
+  const at = html.search(/<\/head\s*>/i);
+  if (at !== -1) return html.slice(0, at) + style + html.slice(at);
+  const bodyAt = html.search(/<body[^>]*>/i);
+  if (bodyAt !== -1) {
+    const end = html.indexOf('>', bodyAt) + 1;
+    return html.slice(0, end) + style + html.slice(end);
+  }
+  return style + html;
+}
+
 /** 签名 URL 的有效期。**短**是刻意的：它是一条"凭 URL 就能取"的能力。 */
 export const SIGNED_TTL_MS = 10 * 60 * 1000;
 
@@ -795,9 +856,24 @@ export function createAppServer({
           }
         })();
         const cspOut = await cspForApp(metaStore, id).catch(() => csp);
+        /**
+         * ★ **壳给的那两条内边距**（`pt`/`pb`，2026-10-01）：只有 HTML 才注入，
+         *   而且两个数都是 0 ⇒ 字节原样（老客户端 / 没要边距 ⇒ 一个字节都不动）。
+         * ⚠️ 注入之后 `content-length` 要跟着改（不然浏览器会截断/挂住）。
+         */
+        const isHtml = typeof got.contentType === 'string' && got.contentType.startsWith('text/html');
+        const padTop = shellInsetOf(q.get('pt'));
+        const padBottom = shellInsetOf(q.get('pb'));
+        let out = got.content;
+        if (isHtml && (padTop > 0 || padBottom > 0)) {
+          out = Buffer.from(
+            injectShellInset(Buffer.from(got.content).toString('utf8'), { padTop, padBottom }),
+            'utf8',
+          );
+        }
         res.writeHead(200, {
           'content-type': got.contentType,
-          'content-length': got.content.length,
+          'content-length': out.length,
           // 🔴 **不许发 X-Frame-Options**（壳里要嵌它）；只让壳嵌 ⇒ 用 CSP 的 frame-ancestors
           'content-security-policy': cspOut,
           // 制品是"凭签名取一次"的东西：**别让浏览器缓存**（缓存了就没法验签了）
@@ -805,7 +881,7 @@ export function createAppServer({
           'x-content-type-options': 'nosniff',
           'referrer-policy': 'no-referrer',
         });
-        res.end(req.method === 'HEAD' ? undefined : got.content);
+        res.end(req.method === 'HEAD' ? undefined : out);
       },
       (e) => {
         log(`${live ? '活地址' : '制品口'}：读不出来（${id}）${e instanceof AppsError ? e.message : (e?.message ?? '未知错')}`);
