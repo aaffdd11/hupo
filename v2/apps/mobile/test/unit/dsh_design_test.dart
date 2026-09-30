@@ -264,6 +264,49 @@ void main() {
       expect([s.content.size, s.content.lineHeight], [12, 22]);
       expect(s.contentStrong.weight, 600);
     });
+
+    // ── ★ 2026-10-01：**聊天那两块**（主人当场定的：主要 14/20 · 非主要 11/14）────
+    group('聊天那两块（`chatBody` / `chatQuiet`）', () {
+      test('★ 默认档：主要 14/20 · 非主要 11/14（不是 DSH 的 16/24 与 13/20）', () {
+        final s = dshContentScale(dshContentFontSizeDefault);
+        expect([DshTypes.chatBody.size, DshTypes.chatBody.weight, DshTypes.chatBody.lineHeight],
+            [14, 400, 20]);
+        expect([DshTypes.chatQuiet.size, DshTypes.chatQuiet.weight, DshTypes.chatQuiet.lineHeight],
+            [11, 400, 14]);
+        expect([s.chatBody.size, s.chatBody.lineHeight], [14, 20]);
+        expect([s.quiet.size, s.quiet.lineHeight], [11, 14]);
+        // 负向对照：别把它接回 DSH 那两档（那两档都松得多）
+        expect(s.chatBody.lineHeight, isNot(DshTypes.base.lineHeight));
+        expect(s.quiet.lineHeight, isNot(DshTypes.xs.lineHeight));
+      });
+
+      test('🔴 主人要的"小很多"：非主要比主要小 3 号，而且**行高比值紧得多**', () {
+        final s = dshContentScale(dshContentFontSizeDefault);
+        expect(s.chatBody.size - s.quiet.size, 3);
+        final mainRatio = s.chatBody.lineHeight / s.chatBody.size;
+        final quietRatio = s.quiet.lineHeight / s.quiet.size;
+        expect(mainRatio, greaterThan(1.4)); // 20/14 ≈ 1.43
+        expect(quietRatio, lessThan(1.3)); // 14/11 ≈ 1.27
+        expect(quietRatio, lessThan(mainRatio));
+      });
+
+      test('两块都跟着用户字号轴走（差 3 号的关系不漂）', () {
+        final big = dshContentScale(dshContentFontSizeMax); // 17 ⇒ Δ = 3
+        expect([big.chatBody.size, big.chatBody.lineHeight], [17, 23]);
+        expect([big.quiet.size, big.quiet.lineHeight], [14, 17]);
+        final small = dshContentScale(dshContentFontSizeMin); // 12 ⇒ Δ = -2
+        expect([small.chatBody.size, small.chatBody.lineHeight], [12, 18]);
+      });
+
+      test('🔴 非主要那一档有**地板**：他往小调（12）时它是 11，不是 9', () {
+        final small = dshContentScale(dshContentFontSizeMin);
+        expect(small.quiet.size, DshTypes.chatQuiet.size,
+            reason: '★ 非主要掉到 11 以下了（9 号字看不清）');
+        expect(small.quiet.lineHeight, DshTypes.chatQuiet.lineHeight);
+        // 负向对照：主要那一档**没有**地板（他选了小一号，正文就得小一号）
+        expect(small.chatBody.size, 12);
+      });
+    });
   });
 
   group('圆角 / 间距', () {

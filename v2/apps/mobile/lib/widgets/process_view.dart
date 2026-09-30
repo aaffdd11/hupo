@@ -26,6 +26,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../models/dsh_design.dart';
 import '../models/process_words.dart';
 import 'dsh_look.dart';
 import 'bubbles.dart';
@@ -86,23 +87,16 @@ class ReasoningBlock extends StatelessWidget {
             children: [
               Text(
                 reasoningLabel,
-                // ★ `119`：抬头与小字都跟着用户字号轴（同上）
-                style: TextStyle(
-                  fontSize: DshLook.of(context).caption.size,
-                  height: DshLook.of(context).caption.lineHeight / DshLook.of(context).caption.size,
-                  fontWeight: FontWeight.w600,
-                ),
+                // ★ `119`：抬头与小字都跟着用户字号轴；
+                // ★ 2026-10-01：这两行都是**非主要**（它是"过程"，不是回答）⇒ 走
+                //   `look.quietStrong` / `look.quiet`（11/14）—— 行高比原来紧得多。
+                style: dshTextStyle(DshLook.of(context).quietStrong, theme.hintColor),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: DshSpace.s4),
               Text(
                 text,
-                style: TextStyle(
-                  fontSize: DshLook.of(context).content.size,
-                  height: DshLook.of(context).content.lineHeight / DshLook.of(context).content.size,
-                ).copyWith(
-                  color: theme.hintColor,
-                  fontStyle: FontStyle.italic,
-                ),
+                style: dshTextStyle(DshLook.of(context).quiet, theme.hintColor)
+                    .copyWith(fontStyle: FontStyle.italic),
               ),
             ],
           ),

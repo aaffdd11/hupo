@@ -70,13 +70,24 @@ class DshLook {
     return DshLook(dshPaletteFor(dark: dark), dshContentScale(null));
   }
 
-  /// 正文那一档（DSH `markdown-base`：400 `14+Δ` / `24+Δ`）。
-  DshType get content => scale.content;
+  /// ★ **聊天·主要那一档**（他的话 / 它的话 / 输入框）：400 `14+Δ` / `20+Δ`。
+  ///
+  /// ⚠️ 2026-10-01 起它**不再**是 DSH 的 `markdown-base`（14/24）——
+  ///    主人当场把聊天那两块的字定了（主要 14/20 · 非主要 11/14，
+  ///    见 `models/dsh_design.dart` 的 `chatBody` / `chatQuiet` 那段批注）。
+  DshType get content => scale.chatBody;
 
-  /// 抬头下面那行小字（DSH 二级台阶 13/20）。
-  DshType get caption => scale.secondaryAt(DshTypes.xs);
+  /// ★ **聊天·非主要那一档**（工具行 / 过程 / 通知 / 出处 / 右栏 / 排队条）：
+  /// 400 `11+Δ` / `14+Δ` —— 比主要**小 3 号、行高紧得多**（主人要的"小很多"）。
+  DshType get quiet => scale.quiet;
+
+  /// 非主要那一档的加粗（500）。
+  DshType get quietStrong => scale.quietStrong;
+
+  /// 抬头下面那行小字 —— ★ 2026-10-01 起就是**非主要那一档**（原来走 DSH 二级台阶 13/20）。
+  DshType get caption => scale.quiet;
 
   /// 展开后那块正文（DSH 代码块小阶 11/16 —— 我们**没有 11px 这个 token**，
   /// 用二级台阶代替；差的那一档等真的需要时再进 `dsh_design.dart`）。
-  DshType get mono => scale.secondaryAt(DshTypes.xs);
+  DshType get mono => scale.quiet;
 }

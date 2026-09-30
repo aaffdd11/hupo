@@ -8,11 +8,13 @@
 // ⇒ 每态都配一个**图标 + 文字**。
 //
 // ── ★ 批次 4：气泡的**字**跟着用户字号走（契约 `docs/dev/119`）──────────
-// 用户那个 12–17 只影响**聊天内容**（DSH 原话：`B-render.md` §3.1），
-// 而气泡正是内容 ⇒ 正文用 `scale.at(DshTypes.base)`（= `calc(16px + Δ)`，
-// 与屏幕上原来那个 16 在默认档**一模一样**），小字用
-// `scale.secondaryAt(DshTypes.xxs)`（= `calc(12px + Δ₂)`，默认档也一模一样）。
-// ⇒ **默认档下这一屏一个像素都不变**，只有用户真去调字号时才动。
+// 用户那个 12–17 只影响**聊天内容**（DSH 原话：`B-render.md` §3.1）。
+// ★ **2026-10-01 换了两档**（主人：*「聊天窗口字体缩小……非主要回复的，
+//    需要字体更小一点，行间距也要小很多」*）：
+//   · **正文**（他的话 / 它的话）＝ `look.content` ⇒ 400 `14+Δ` / `20+Δ`；
+//   · **小字**（出处 / 状态 / "这条没说完" / 它正在做…）＝ `look.quiet`
+//     ⇒ 400 `11+Δ` / `14+Δ`（比正文小 3 号、行高紧得多）。
+// ⚠️ 两档都还在**用户字号那条轴**上（Δ = 用户字号 − 14）—— 差 3 号的关系不会漂。
 // ⚠️ 气泡的颜色**不在这一份里改**：它们读 `Theme.of(context)`，而聊天浮窗
 //    里面那一整棵的主题由 `appearance_scope.dart` 的 `chatThemeOf` 换掉了
 //    （`specific-bubble` / `bg-layer-2` / 失败那一档的罩色）—— 一处出处。
@@ -56,7 +58,7 @@ class _SelectedMark extends StatelessWidget {
       child: Icon(
         Icons.check_circle,
         // 跟着字算（**不写死尺寸**，手册 D3）
-        size: (theme.textTheme.bodySmall?.fontSize ?? 12) + 4,
+        size: DshLook.of(context).quiet.size + 4,
         color: d.accent,
       ),
     );
@@ -104,8 +106,8 @@ class UserBubble extends StatelessWidget {
     final mark = _stateMark(utterance.state);
     final base = failed ? theme.colorScheme.errorContainer : theme.colorScheme.primaryContainer;
     // ★ 批次 4：那条正文的字号从用户那条轴来（默认档下与 `bodyLarge` 同值）。
-    final bodyStyle = dshTextStyle(look.scale.at(DshTypes.base), p.labelPrimary);
-    final smallStyle = dshTextStyle(look.scale.secondaryAt(DshTypes.xxs), p.labelSecondary);
+    final bodyStyle = dshTextStyle(look.content, p.labelPrimary);
+    final smallStyle = dshTextStyle(look.quiet, p.labelSecondary);
 
     return Align(
       alignment: Alignment.centerRight,
@@ -228,7 +230,7 @@ class AnswerBubble extends StatelessWidget {
     final urls = imageUrlsIn(text);
     if (urls.isEmpty) return const [];
     final small = dshTextStyle(
-      look.scale.secondaryAt(DshTypes.xxs),
+      look.quiet,
       look.palette.labelSecondary,
     );
     return [
@@ -261,7 +263,7 @@ class AnswerBubble extends StatelessWidget {
     final shown = message.sources.take(sourcesShown).toList();
     final extra = message.sources.length - shown.length;
     final small = dshTextStyle(
-      look.scale.secondaryAt(DshTypes.xxs),
+      look.quiet,
       look.palette.labelSecondary,
     );
     final markSize = small.fontSize! + 4;
@@ -309,8 +311,8 @@ class AnswerBubble extends StatelessWidget {
     final text = message.displayText;
     final base = theme.colorScheme.surfaceContainerHighest;
     // ★ 批次 4：正文与那几行小字都跟着用户那条字号轴（默认档下与原来同值）。
-    final bodyStyle = dshTextStyle(look.scale.at(DshTypes.base), p.labelPrimary);
-    final smallStyle = dshTextStyle(look.scale.secondaryAt(DshTypes.xxs), p.labelSecondary);
+    final bodyStyle = dshTextStyle(look.content, p.labelPrimary);
+    final smallStyle = dshTextStyle(look.quiet, p.labelSecondary);
 
     return Align(
       alignment: Alignment.centerLeft,
@@ -373,6 +375,8 @@ class AnswerBubble extends StatelessWidget {
                         speaking ? speakStopWords : speakOnceWords,
                         // ★ 2026-09-23：`bodySmall`(≈12) → `labelLarge`(≈14) + 淡色
                         //   （原来又小又淡，主人这一批"整理 UI"里点过它）
+                        // ⚠️ 2026-10-01：这一颗**是按钮，不是"非主要的回复"** ⇒
+                        //    不跟 `look.quiet`（11/14）缩 —— 按钮的字缩到 11 会点不着。
                         style: dshTextStyle(look.scale.at(DshTypes.s), p.labelSecondary),
                       ),
                       style: TextButton.styleFrom(
@@ -423,9 +427,9 @@ class SystemNotice extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          Icon(Icons.info_outline, size: theme.textTheme.bodySmall!.fontSize! + 4),
+          Icon(Icons.info_outline, size: DshLook.of(context).quiet.size + 4, color: theme.hintColor),
           const SizedBox(width: 8),
-          Expanded(child: Text(text, style: theme.textTheme.bodySmall)),
+          Expanded(child: Text(text, style: dshTextStyle(DshLook.of(context).quiet, theme.hintColor))),
           if (onUndo != null)
             TextButton(
               onPressed: onUndo,
@@ -460,7 +464,7 @@ class MarkerLine extends StatelessWidget {
           const Expanded(child: Divider()),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Text(label, style: theme.textTheme.bodySmall),
+            child: Text(label, style: dshTextStyle(DshLook.of(context).quiet, theme.hintColor)),
           ),
           const Expanded(child: Divider()),
         ],
@@ -493,10 +497,12 @@ class BusyLine extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
       child: Row(
         children: [
-          Icon(Icons.more_horiz, size: theme.textTheme.bodySmall?.fontSize, color: theme.hintColor),
+          Icon(Icons.more_horiz, size: DshLook.of(context).quiet.size, color: theme.hintColor),
           const SizedBox(width: 6),
           // 跟着系统字号走（**不写死尺寸**，手册 D3）
-          Flexible(child: Text(text, style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor))),
+          Flexible(
+            child: Text(text, style: dshTextStyle(DshLook.of(context).quiet, theme.hintColor)),
+          ),
         ],
       ),
     );

@@ -188,7 +188,7 @@ class FilePanel extends StatelessWidget {
                   child: Text(
                     filePanelEmptyLine,
                     textAlign: TextAlign.center,
-                    style: dshTextStyle(look.content, p.labelTertiary),
+                    style: dshTextStyle(look.quiet, p.labelTertiary),
                   ),
                 ),
               ),
@@ -222,7 +222,7 @@ class FilePanel extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: dshTextStyle(
-                    look.scale.at(DshTypes.sStrong),
+                    look.quietStrong,
                     p.labelPrimary,
                   ),
                 ),
@@ -242,7 +242,7 @@ class FilePanel extends StatelessWidget {
           if (!changes.isEmpty) ...[
             Text(
               filePanelCountLine(changes.totalTurns, changes.totalFiles),
-              style: dshTextStyle(look.content, p.labelSecondary),
+              style: dshTextStyle(look.quiet, p.labelSecondary),
             ),
             Text(
               filePanelOrderLine,
@@ -285,7 +285,7 @@ class FilePanel extends StatelessWidget {
               Text(
                 filePanelTurnHead(turn.turn),
                 style: dshTextStyle(
-                  look.scale.at(DshTypes.sStrong),
+                  look.quietStrong,
                   look.palette.labelSecondary,
                 ),
               ),
@@ -356,7 +356,7 @@ class _FileChangeRowState extends State<FileChangeRow> {
                     // ⚠️ 方向只表示"点开/收起"，不是状态（状态不许只靠图形；
                     //    这里旁边就写着那是哪一次、还跑不跑）。
                     _open ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-                    size: look.content.size,
+                    size: look.quiet.size,
                     color: p.labelTertiary,
                   ),
                   const SizedBox(width: DshSpace.s4),
@@ -367,7 +367,7 @@ class _FileChangeRowState extends State<FileChangeRow> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: dshTextStyle(
-                        look.content,
+                        look.quiet,
                         p.labelPrimary,
                         family: dshMonoFamily,
                       ),

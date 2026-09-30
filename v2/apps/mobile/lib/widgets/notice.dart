@@ -20,9 +20,9 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
-
 import '../models/notice.dart';
 import '../models/notice_words.dart';
+import 'dsh_look.dart';
 
 /// **时间线里那一条通知**（约束 2）。
 ///
@@ -105,8 +105,10 @@ class NoticeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final look = DshLook.of(context);
     // 图标跟着字算（**不写死尺寸**，D3）
-    final iconSize = theme.textTheme.bodySmall!.fontSize! + 4;
+    // ★ 2026-10-01：通知是"非主要"⇒ 走非主要那一档（`look.quiet` = 11/14）
+    final iconSize = look.quiet.size + 4;
     final undo = notice.undo;
     final note = footnote;
 
@@ -141,8 +143,7 @@ class NoticeCard extends StatelessWidget {
                 child: Text(
                   // ★ **服务端给的那句话，照抄**（契约 §五 🔴）
                   notice.text,
-                  style: theme.textTheme.bodyMedium
-                      ?.copyWith(color: theme.colorScheme.onSecondaryContainer),
+                  style: dshTextStyle(look.quiet, theme.colorScheme.onSecondaryContainer),
                 ),
               ),
               if (onDismiss != null) ...[
@@ -162,7 +163,7 @@ class NoticeCard extends StatelessWidget {
           if (note != null)
             Padding(
               padding: const EdgeInsets.only(top: 2, left: 4),
-              child: Text(note, style: theme.textTheme.bodySmall),
+              child: Text(note, style: dshTextStyle(look.quiet, look.palette.labelTertiary)),
             ),
           if (undo != null && undo.usable) ...[
             // ⚠️ `Wrap` 不是 `Row`：字放到最大时按钮要能折行（D3.5 五档那道闸）

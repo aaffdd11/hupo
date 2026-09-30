@@ -124,7 +124,7 @@ class _QueueStripState extends State<QueueStrip> {
           children: [
             Icon(
               _expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up,
-              size: look.content.size,
+              size: look.quiet.size,
               color: p.labelTertiary,
             ),
             const SizedBox(width: DshSpace.s8),
@@ -133,13 +133,13 @@ class _QueueStripState extends State<QueueStrip> {
               child: Text(
                 queueCountHeader(count),
                 overflow: TextOverflow.ellipsis,
-                style: dshTextStyle(look.content, p.labelSecondary),
+                style: dshTextStyle(look.quiet, p.labelSecondary),
               ),
             ),
             // 抬头那一颗也带一句读屏/悬停的话（它是"点开会发生什么"）。
             Tooltip(
               message: _expanded ? queueCollapseLabel : queueExpandLabel,
-              child: Icon(Icons.expand_more, size: look.content.size, color: p.labelTertiary),
+              child: Icon(Icons.expand_more, size: look.quiet.size, color: p.labelTertiary),
             ),
           ],
         ),
@@ -164,7 +164,7 @@ class _QueueStripState extends State<QueueStrip> {
               item.text,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: dshTextStyle(look.content, p.labelSecondary),
+              style: dshTextStyle(look.quiet, p.labelSecondary),
             ),
           ),
           // 撤掉这颗**是真按钮**：命中区由 Material 撑着（D3.6 ≥44）。

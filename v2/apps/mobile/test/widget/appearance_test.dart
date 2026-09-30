@@ -87,7 +87,7 @@ class _FakeStream implements StreamClient {
   Future<void> dispose() async {}
 }
 
-/// 一条工具行（量字号用那一行工具名：它直接走 `look.content`）。
+/// 一条工具行（量字号用那一行工具名：它直接走 `look.quiet` —— 非主要那一档）。
 ///
 /// ⚠️ 这就是**真入口**（`controller.ingest` 喂服务端那一帧的形状）——
 ///    不直接 pump `ToolRowView`：那样它底下没有聊天屏，量的不是用户真会看到的树。
@@ -299,6 +299,9 @@ void main() {
 
   testWidgets('🔴 改字号 ⇒ 聊天里那一行字的**渲染度量**真的变了', (tester) async {
     // 三档各来一次（12 / 14 / 17）—— 判据量的是**字号与高度**，不是"看起来像"。
+    // ⚠️ 量的是**输入框那一段的字**（聊天"主要"那一档 —— 它永远跟着那条轴走；
+    //    工具行那一档从 2026-10-01 起有个 11 的**地板**，12 与 14 两档它一样大，
+    //    拿它量这条轴会读成"轴没传下去"）。
     final seen = <int, (double, double)>{};
     for (final n in <int>[12, 14, 17]) {
       SharedPreferences.setMockInitialValues(<String, Object>{kKey: 'system|$n'});
@@ -318,8 +321,9 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final h = tester.getSize(find.text('bash')).height;
-      seen[n] = (_rowFontSize(tester), h);
+      final box = find.descendant(of: find.byType(Composer), matching: find.byType(TextField));
+      final h = tester.getSize(box).height;
+      seen[n] = (_composerFontSize(tester), h);
     }
     // 12 / 14 / 17 的字号**逐档对得上**那条轴（不是"都在变"就算过）
     expect(seen[12]!.$1, 12);
@@ -330,6 +334,52 @@ void main() {
     expect(seen[12]!.$2, lessThan(seen[14]!.$2));
   });
 
+  testWidgets('★ 聊天那两块的字：主要 14/20 · 非主要 11/14（差 3 号、行高紧得多）', (tester) async {
+    final (screen, _, _) = await _screen(tier: FloaterTier.full);
+    await tester.pumpWidget(MaterialApp(home: screen));
+    await tester.pumpAndSettle();
+
+    // ① **主要**：输入框那一段（他的话 / 它的话同一档）⇒ 14 / 行高 20
+    final box = tester.widget<TextField>(
+      find.descendant(of: find.byType(Composer), matching: find.byType(TextField)),
+    );
+    final mainSize = box.style!.fontSize!;
+    final mainLine = mainSize * box.style!.height!;
+    expect(mainSize, 14, reason: '★ 主要那一档的字号');
+    expect(mainLine, closeTo(20, 0.01), reason: '★ 主要那一档的行高（绝对值）');
+
+    // ② **非主要**：那一行工具名 ⇒ 11 / 行高 14
+    expect(find.text('bash'), findsOneWidget);
+    final rowStyle = tester.widget<Text>(find.text('bash')).style!;
+    final rowSize = rowStyle.fontSize!;
+    final rowLine = rowSize * rowStyle.height!;
+    expect(rowSize, 11, reason: '★ 非主要那一档的字号（工具行）');
+    expect(rowLine, closeTo(14, 0.01), reason: '★ 非主要那一档的行高');
+
+    // ③ 🔴 主人要的那两件事：**非主要更小**，而且**行间距小很多**
+    expect(rowSize, lessThan(mainSize), reason: '★ 非主要没有比主要小');
+    expect(rowStyle.height!, lessThan(box.style!.height!),
+        reason: '★ 非主要的行高（倍数）没有更紧');
+    expect(mainLine / mainSize, greaterThan(1.4));
+    expect(rowLine / rowSize, lessThan(1.3), reason: '★ 行高比值没小下来');
+  });
+
+  testWidgets('🔴 非主要那一档有**地板**：他把字号调到最小（12）时它是 11，不是 9', (tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{kKey: 'system|12'});
+    final c = ChatController(api: Api(base: 'http://127.0.0.1:1'), tokens: TokenStore());
+    _feedToolRow(c);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 主要那一档照轴缩到 12（他选了"小一点"，正文就得跟着小）
+    expect(_composerFontSize(tester), 12);
+    // 而非主要**不再往下缩**（11）—— 9 号字在平板上是看不清的
+    expect(_rowFontSize(tester), 11, reason: '★ 非主要那一档掉到 11 以下了');
+  });
+
   testWidgets('🔴 在设置里按"大一点" ⇒ 聊天**当场**跟着变，而且**不重连**', (tester) async {
     // ⚠️ 这一条量的是**输入条那个框**（收起档也在树上，而且它就是"聊天里的字"）：
     //    设置那一屏开着时浮窗是收起的（打开小程序会自动收起），时间线不在树里
@@ -338,15 +388,15 @@ void main() {
     await tester.pumpWidget(MaterialApp(home: screen));
     await tester.pumpAndSettle();
     expect(made.length, 1, reason: '起点：那条流只建过一次');
-    expect(_composerFontSize(tester), 16, reason: '起点是默认档（16 = `DshTypes.base` + Δ0）');
+    expect(_composerFontSize(tester), 14, reason: '起点是默认档（14 = 聊天主要那一档 + Δ0）');
 
     await _openSettings(tester);
     await _scrollTo(tester, settingsFontSizeLabel);
     await tester.tap(find.byTooltip(settingsFontSizeBigger));
     await tester.pumpAndSettle();
 
-    // ① 屏幕上（同一棵树里）：那个框的字**当场**大了一号（15 ⇒ 17）
-    expect(_composerFontSize(tester), 17, reason: '★ 按了"大一点"而聊天里的字没变');
+    // ① 屏幕上（同一棵树里）：那个框的字**当场**大了一号（14 ⇒ 15）
+    expect(_composerFontSize(tester), 15, reason: '★ 按了"大一点"而聊天里的字没变');
     // ② 存住了
     expect((await AppearanceStore().read()).fontSize, 15);
     // ③ 🔴 **没有重连**：那条流一个字节都没动（改外观不是"重新连一次"）
@@ -355,7 +405,7 @@ void main() {
     // 负向对照：按"小一点"回去（不是单行道）
     await tester.tap(find.byTooltip(settingsFontSizeSmaller));
     await tester.pumpAndSettle();
-    expect(_composerFontSize(tester), 16);
+    expect(_composerFontSize(tester), 14);
     expect((await AppearanceStore().read()).fontSize, 14);
   });
 
@@ -371,6 +421,6 @@ void main() {
     expect(tester.takeException(), isNull, reason: '★ 盘上那个串把界面弄崩了');
     expect(_floaterBg(tester), DshPalette.light.bgLayer1,
         reason: '★ 认不出的外观没有退回默认档');
-    expect(_rowFontSize(tester), 14, reason: '★ 认不出的字号没有退回默认档');
+    expect(_rowFontSize(tester), 11, reason: '★ 认不出的字号没有退回默认档（非主要那一档 = 11）');
   });
 }

@@ -398,7 +398,8 @@ class _ComposerState extends State<Composer> {
       ),
       child: Text(
         _notice,
-        style: theme.textTheme.bodySmall?.copyWith(color: look.palette.labelSecondary),
+        // ★ 2026-10-01：这一条是"非主要"（状态话，不是他说的话）⇒ 走非主要那一档
+        style: dshTextStyle(look.quiet, look.palette.labelSecondary),
       ),
     ),
   );
@@ -470,11 +471,11 @@ class _ComposerState extends State<Composer> {
     maxLines: 6,
     textInputAction: TextInputAction.send,
     // ★ 批次 4：**框里那几个字**是聊天内容 ⇒ 字号从用户那条轴来
-    //   （`DshTypes.base` = 16/24，**默认档下与改前逐像素相同** —— 只有用户
+    //   （`look.content` = 聊天**主要**那一档：400 `14+Δ` / `20+Δ` —— 只有用户
     //    真去调字号时才动。⚠️ 别改成 14：那会让输入条矮 6 像素，而时间线的
     //    `followSlack`（160）正好卡在它的 `maxScrollExtent` 上 —— 6 像素就够
     //    让 a11y 那条"先把时间线拉回最上面"的判据失效，见 `docs/dev/119` §六）。
-    style: dshTextStyle(look.scale.at(DshTypes.base), look.palette.labelPrimary),
+    style: dshTextStyle(look.content, look.palette.labelPrimary),
     cursorColor: look.palette.stateBusiness,
     // ★ **点了打字框 ⇒ 告诉上层"把窗口打开"**（主人 2026-09-22：
     //   *"点击说点什么，聊天窗口会自动打开。"*）
@@ -483,7 +484,7 @@ class _ComposerState extends State<Composer> {
     onSubmitted: (_) => _submit(),
     decoration: InputDecoration(
       hintText: widget.hint ?? '说点什么',
-      hintStyle: dshTextStyle(look.scale.at(DshTypes.base), look.palette.labelTertiary),
+      hintStyle: dshTextStyle(look.content, look.palette.labelTertiary),
       // ⚠️ **没有边框、没有底**：那一圈与实底归外面那层 `_messageBox` 的容器
       //    （这样"消息框"是一整块，而输入框自己的矩形里**没有按钮** —— 见那边那段批注）。
       border: InputBorder.none,
@@ -634,7 +635,7 @@ class _ComposerState extends State<Composer> {
               h.notice,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall?.copyWith(color: p.labelSecondary),
+              style: dshTextStyle(look.quiet, p.labelSecondary),
             ),
           ),
         ],

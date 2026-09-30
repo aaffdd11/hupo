@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import '../models/design.dart' as d;
 import '../models/job_ask.dart';
 import '../models/job_words.dart';
+import 'dsh_look.dart';
 
 class JobAskSheet extends StatelessWidget {
   const JobAskSheet({super.key, required this.ask});
@@ -40,14 +41,17 @@ class JobAskSheet extends StatelessWidget {
           // 服务端给的那句问话：**原样**（一个字都不改）。
           Padding(
             padding: const EdgeInsets.fromLTRB(d.gapL, 0, d.gapL, d.gapS),
-            child: Text(ask.text, style: theme.textTheme.bodyMedium),
+            child: Text(ask.text, style: dshTextStyle(DshLook.of(context).content, theme.colorScheme.onSurface)),
           ),
           // 他说的那句原话：让他认出"你让我做的是这个"。
           // ⚠️ 服务端没给 ⇒ **那一行不画**（不编一句"你要做一个东西"）。
           if (ask.why.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(d.gapL, 0, d.gapL, d.gapS),
-              child: Text(jobAskWhyLine(ask.why), style: theme.textTheme.bodySmall),
+              child: Text(
+                jobAskWhyLine(ask.why),
+                style: dshTextStyle(DshLook.of(context).quiet, theme.colorScheme.onSurfaceVariant),
+              ),
             ),
           Padding(
             padding: const EdgeInsets.fromLTRB(d.gapM, d.gapS, d.gapM, d.gapS),

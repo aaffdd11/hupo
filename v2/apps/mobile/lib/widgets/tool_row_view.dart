@@ -87,7 +87,7 @@ class _ToolRowViewState extends State<ToolRowView> {
               Padding(
                 // ⚠️ 图标跟着字号算（不写死尺寸）
                 padding: const EdgeInsets.only(top: DshSpace.s4),
-                child: Icon(glyph, size: look.content.size, color: glyphColor),
+                child: Icon(glyph, size: look.quiet.size, color: glyphColor),
               ),
               const SizedBox(width: DshSpace.s8),
               // ⚠️ `Expanded` + `Wrap`：窄屏 + 大字号下这一串会折行，
@@ -102,10 +102,10 @@ class _ToolRowViewState extends State<ToolRowView> {
                     //    规矩 4）只画结果那一行，那时**我们不知道是哪个工具** ——
                     //    名字那一格就空着，绝不编一个占位名（N10：沉默优于编造）。
                     if (row.name.isNotEmpty)
-                      Text(row.name, style: _styleOf(look.content, p.labelSecondary, family: _monoFamily)),
+                      Text(row.name, style: _styleOf(look.quiet, p.labelSecondary, family: _monoFamily)),
                     if (title != null && title.isNotEmpty) ...[
-                      if (row.name.isNotEmpty) Text('·', style: _styleOf(look.content, p.labelCaption)),
-                      Text(title, style: _styleOf(look.content, p.labelSecondary)),
+                      if (row.name.isNotEmpty) Text('·', style: _styleOf(look.quiet, p.labelCaption)),
+                      Text(title, style: _styleOf(look.quiet, p.labelSecondary)),
                     ],
                     Text(
                       toolStatusWord(row.status),
@@ -207,13 +207,13 @@ class _SystemPromptViewState extends State<SystemPromptView> {
         children: [
           Row(
             children: [
-              Icon(Icons.article_outlined, size: look.content.size, color: p.labelTertiary),
+              Icon(Icons.article_outlined, size: look.quiet.size, color: p.labelTertiary),
               const SizedBox(width: DshSpace.s8),
               // ⚠️ `Expanded`：抬头那句话在大字号下也不许把这一行顶出去。
               Expanded(
                 child: Text(
                   systemPromptTitle,
-                  style: _styleOf(look.content, p.labelSecondary),
+                  style: _styleOf(look.quiet, p.labelSecondary),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -336,14 +336,14 @@ class TurnProcessControl extends StatelessWidget {
             children: [
               Icon(
                 expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
-                size: look.content.size,
+                size: look.quiet.size,
                 color: p.labelTertiary,
               ),
               const SizedBox(width: DshSpace.s8),
               Expanded(
                 child: Text(
                   label,
-                  style: _styleOf(look.content, p.labelSecondary),
+                  style: _styleOf(look.quiet, p.labelSecondary),
                 ),
               ),
             ],

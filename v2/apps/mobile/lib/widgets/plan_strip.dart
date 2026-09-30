@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import '../models/design.dart' as d;
 import '../models/plan.dart';
 import '../models/plan_words.dart';
+import 'dsh_look.dart';
 
 class PlanStrip extends StatelessWidget {
   const PlanStrip({super.key, required this.plan});
@@ -76,10 +77,9 @@ class PlanStrip extends StatelessWidget {
                             : '$planGoalLabel${phaseWord.isEmpty ? '' : '（$phaseWord）'}：${p.goal}',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: t.textTheme.bodyMedium?.copyWith(
-                          color: d.ink,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        // ★ 2026-10-01：计划条是**非主要**那一档（11/14）——
+                        //    抬头用加粗那一档，条目用普通那一档，行高都很紧。
+                        style: dshTextStyle(DshLook.of(context).quietStrong, d.ink),
                       ),
                     ),
                   ],
@@ -109,9 +109,11 @@ class PlanStrip extends StatelessWidget {
                             // ⚠️ **完成的条目不许画删除线**（2026-09-23 主人实测：
                             //    那条横线被读成了"**删掉了**"）—— "做完了"靠**勾**说，
                             //    颜色只是第二眼；判据钉着这件事。
-                            style: t.textTheme.bodySmall?.copyWith(
-                              color: todo.done ? d.muted : d.ink,
-                              fontWeight: todo.now ? FontWeight.w600 : null,
+                            style: dshTextStyle(
+                              todo.now
+                                  ? DshLook.of(context).quietStrong
+                                  : DshLook.of(context).quiet,
+                              todo.done ? d.muted : d.ink,
                             ),
                           ),
                         ),

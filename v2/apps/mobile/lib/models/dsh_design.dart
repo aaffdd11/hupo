@@ -316,6 +316,33 @@ abstract final class DshTypes {
 
   /// markdown 正文加粗：DSH `--dsw-font-markdown-base-strong` = 600 `calc(14px + Δ)`。
   static const DshType contentBaseStrong = DshType(size: 14, weight: 600, lineHeight: 24);
+
+  // ── ★ 2026-10-01：**聊天窗口那两块的字**（主人当场定的）────────────────────
+  //
+  // 主人原话：*「聊天窗口字体缩小，同时根据内容类型，非主要回复的，需要字体更小一点，
+  // 行间距也要小很多。」* 他当场把三档都点了：主要 **14/20** · 非主要 **11/14** ·
+  // 他自己发的消息**跟着一起缩**（同一档）。
+  //
+  // ⚠️ 这三个**不是 DSH 的 token** —— DSH 那边 UI 正文是 16/24、二级台阶是 13/20；
+  //    而"非主要"（工具行 / 过程 / 通知 / 出处 / 右栏 / 排队条）在他这儿要
+  //    **小很多、紧很多**（行高比值 ≈1.27），DSH 那两档都太松。
+  // ⇒ 上面那一整套 `DshTypes.*` **原样留着**（`dsh_design_test` 逐个数钉着，
+  //    它们是"我们照抄 DSH 的那一版"）；**聊天那两块**改用下面这三个。
+  // ⚠️ 它们仍然**走用户字号那条轴**（`Δ = 用户字号 − 14`）⇒ 他在设置里调大字号时，
+  //    两块一起变大、**永远差 3 号**（关系不会漂）。
+
+  /// 聊天·**主要**那一档（他的话 / 它的话 / 输入框里的字）：400 `14+Δ` / `20+Δ`。
+  static const DshType chatBody = DshType(size: 14, weight: 400, lineHeight: 20);
+
+  /// 聊天·主要那一档的加粗：600 `14+Δ` / `20+Δ`。
+  static const DshType chatBodyStrong = DshType(size: 14, weight: 600, lineHeight: 20);
+
+  /// 聊天·**非主要**那一档（工具行 / 过程 / 通知 / 出处 / 右栏 / 排队条）：
+  /// 400 `11+Δ` / `14+Δ` —— 主人要的"**小很多、行间距小很多**"就住在这个数里。
+  static const DshType chatQuiet = DshType(size: 11, weight: 400, lineHeight: 14);
+
+  /// 聊天·非主要那一档的加粗：500 `11+Δ` / `14+Δ`。
+  static const DshType chatQuietStrong = DshType(size: 11, weight: 500, lineHeight: 14);
 }
 
 // ── 内容字号轴（用户设置 12–17）────────────────────────────────
@@ -398,6 +425,29 @@ class DshContentScale {
 
   /// 聊天正文加粗那一段。
   DshType get contentStrong => at(DshTypes.contentBaseStrong);
+
+  // ── ★ 2026-10-01：聊天那两块（`DshTypes.chatBody` / `chatQuiet`，见那边的批注）──
+  //
+  // ⚠️ 与上面 `content`（DSH 的 `markdown-base`）**不是一回事**：
+  //    那一个是"我们照 DSH 抄的那一档"（14/24），现在没有聊天控件用它；
+  //    聊天走下面这三个（14/20 · 11/14）。两个都留着是有意的 ——
+  //    上面那套要跟 DSH 对得上（`dsh_design_test`），下面这档是**他的产品口径**。
+
+  /// 聊天·主要那一档：`14+Δ` / `20+Δ`。
+  DshType get chatBody => at(DshTypes.chatBody);
+
+  /// 聊天·主要那一档的加粗：600。
+  DshType get chatBodyStrong => at(DshTypes.chatBodyStrong);
+
+  /// 聊天·非主要那一档：`11+Δ` / `14+Δ`，**但不小于 11**。
+  ///
+  /// 🔴 **为什么有个地板**：他在设置里往**小**调（12 那档 ⇒ Δ=−2）时，
+  ///    `11−2 = 9` 就真看不清了 —— 而"非主要"本来就比主要小 3 号。
+  ///    ⇒ 底档不再往下缩（主 12 时它 11、只差 1 号），往大调照常跟。
+  DshType get quiet => delta >= 0 ? at(DshTypes.chatQuiet) : DshTypes.chatQuiet;
+
+  /// 聊天·非主要那一档的加粗（500）。
+  DshType get quietStrong => at(DshTypes.chatQuietStrong);
 }
 
 /// 从一个"用户设置的字号"解出整条轴（**聊天里每一行的字号都必须从这里来**）。

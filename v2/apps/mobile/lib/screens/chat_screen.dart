@@ -1334,7 +1334,8 @@ class _ChatScreenState extends State<ChatScreen> {
     ),
     child: Text(
       homeHintWords,
-      style: TextStyle(fontSize: 13, color: look.palette.labelSecondary),
+      // ★ 2026-10-01：这一句是提示，不是回答 ⇒ 走非主要那一档（原来这里写死 13）
+      style: dshTextStyle(look.quiet, look.palette.labelSecondary),
     ),
   );
 
