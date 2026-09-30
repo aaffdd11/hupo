@@ -504,8 +504,8 @@ class SettingsScreen extends StatelessWidget {
   Widget _tabBody(BuildContext context, String tab) {
     final t = Theme.of(context);
     final has = credsFor(tab);
-    // ⚠️ 边界句要看**两件事**：是不是有自己一台（`localOnly` 的反面）、以及**他填过没有**。
-    final boundary = credBoundaryOf(tab, isTenant: !localOnly, hasOwn: has, voiceReady: voiceReady);
+    // 🔴 2026-10-01 主人定的一屏两句：**填什么**（`credTabWhat`）＋ **有没有**（`credStateLine`）。
+    //    「边界句」那一套（"收下了 ≠ 现在就生效"）**删掉了** —— 他读不懂就等于没说。
     return ListView(
       // ⚠️ **给每一屏一个指名道姓的 key**（`credTab:<名字>`）：`TabBarView` 自己
       //    也是一个 `Scrollable`（横向翻页那一个），而且排在**前面**
@@ -535,13 +535,8 @@ class SettingsScreen extends StatelessWidget {
                   const SizedBox(height: d.gapXs),
                   Text(configKeyHint, style: t.textTheme.bodySmall?.copyWith(color: d.muted)),
                 ],
-                // ③ 🔴 **这一批的边界**（图片/视频/语音：收下了 ≠ 现在就生效）
-                if (boundary != null) ...[
-                  const SizedBox(height: d.gapXs),
-                  Text(boundary, style: t.textTheme.bodySmall?.copyWith(color: d.muted)),
-                ],
                 const SizedBox(height: d.gapM),
-                // ④ 填的那一块
+                // ③ 填的那一块
                 ..._formFor(context, tab),
               ],
             ),

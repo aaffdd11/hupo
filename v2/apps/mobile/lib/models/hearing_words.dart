@@ -96,22 +96,22 @@ const String voiceTryWorking = '收尾中…';
 /// 一句怎么用（**说清字会落在哪儿**，别让人猜）。
 /// ★ 2026-09-26：加上"中间停一下也接着听" —— 主人要的是"再点一下才结束录音"，
 ///    引擎自己在停顿处收尾**不算**他说完了（见 `123-VOICE-TEST-BUTTON.md` §八）。
-const String voiceTryHint = '按一下开始，再按一下才结束；中间停一下也接着听 —— 认出来的字会落在下面那个框里。';
+const String voiceTryHint = '按一下开始，再按一下结束。';
 
 /// 下面那个框的标签（**空着的时候也要挂在那儿**）。
-const String voiceTryBoxLabel = '认出来的字（可以选、可以复制）';
+const String voiceTryBoxLabel = '认出来的字';
 
 /// **读不懂的一帧**（识别那一头回了个我们认不出的东西）。
 /// 🔴 它和「开不了麦克风」**必须分开说**：麦克风那一步明明成了，混成一句就是假话。
-const String voiceTryBadFrame = '那边回了个读不懂的东西，再按一次试试';
+const String voiceTryBadFrame = '没听清，再按一次试试';
 
 /// **这台还没配好语音钥匙**（上面那三样还没送出去）——
 /// 说清"上面那三样就是它要用的"（主人要的就是这句）。
-const String voiceTryNoKeyEmpty = '这台还没配好语音的钥匙 —— 上面那三样填好、送出去，试一下用的就是它们。';
+const String voiceTryNoKeyEmpty = '还没填语音的钥匙 —— 在上面「语音」那页填 App ID 和 Access Token。';
 
 /// **上面那三样填过、这边却说没接通**（这台还没接上）。
 /// ⚠️ 与上一句分开：一个让他去填，一个让他等接好 —— 混成一句他就不知道该干什么。
-const String voiceTryNoKeyFilled = '这边说语音还没接通 —— 上面那三样它现在还用不上，得等这台接好。';
+const String voiceTryNoKeyFilled = '填好了，但这边还没用上 —— 过一会儿再试。';
 
 // ── ★ **录一段（录音 ＋ 回放）**（主人 2026-09-27：*"先实现录音功能。录音和播放。在设置页。"*）──
 //

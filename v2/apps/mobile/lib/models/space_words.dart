@@ -445,17 +445,19 @@ const String settingsFontSizeBigger = '字大一点';
 /// 钥匙那一段的小标题。
 const String configKeySection = '你那串钥匙';
 
-// ── ★ 配置页那**四个 tab**（主人 2026-09-24 定的形状）────────────────
+// ── ★ 配置页那**四样**（主人 2026-09-24 定的形状）──────────────────
 //
 // 主人原话：*"配置页用来配置模型，语言大模型apikey，语音大模型，图片生成，视频生成。"*
 //
-// ⚠️ **tab 上那两个字必须是他说得懂的话**：他点的这一屏要能自己看明白。
-//    "模型"是**内部词**（词表硬闸会拦）⇒ 一律用"干什么用"来说：
-//    聊天 / 语音 / 图片 / 视频。
-// ⚠️ 每一屏都要说清**它管什么**＋**收下之后生效不生效**：
-//    图片：接通了（填了就能在下面「试一张」）· 视频：接通了（跟图片**同一把钥匙**，
-//    见 [credBoundaryVideo]）· 语音：★ 2026-10-01 完全切成豆包（**两样**），
-//    填了就真用它（没填之前用的是这台机器上已经配好的那一份）。
+// 🔴 **2026-10-01 主人又定了一次怎么写**（原话）：*"设置这里不要写人看不懂的东西。
+//    你以为你说了人话，其实我作为人类我看不懂。一点意义都没有。就直白一点填入什么就好了。"*
+//    ⇒ 从这一版起，一屏**只有两句**：
+//      ① **填什么、从哪儿拿**（[credTabWhat]）
+//      ② **有没有**（[credStateLine]）
+//    ⚠️ 以前那一套（"填上它我才能…"＋"边界句：收下了 ≠ 现在就生效"＋状态句，三层叠着）
+//      **整段删掉** —— 那些是我以为的"人话"，主人读不懂就等于没说。
+//    ⚠️ **不留边界句**不等于可以说假话：状态句仍然分"有 / 没填过 / 填了但用不了"三档
+//      （那是他真正要看的那件事），只是**每个字都要短**。
 
 /// 四个 tab 的名字（顺序＝主人说的顺序）。
 const String credTabChat = '聊天';
@@ -463,58 +465,24 @@ const String credTabVoice = '语音';
 const String credTabImage = '图片';
 const String credTabVideo = '视频';
 
-/// 某一屏那一句人话（**说它管什么**）。
+/// **这一屏填什么、从哪儿拿**（一屏就这一句，直说）。
 String credTabWhat(String tab) {
   switch (tab) {
     case credTabVoice:
-      return '填上它，我就能听懂你说话。';
+      return '填这两个（火山引擎 → 语音技术 → 应用管理）：';
     case credTabImage:
-      return '填上它，我才能给你画图。';
+      return '填这一个（火山方舟 → API Key 管理）：';
     case credTabVideo:
-      return '填上它，我才能给你做小片子。';
+      return '不用填 —— 跟「图片」是同一个 API Key。';
     case credTabChat:
     default:
-      return '填上它，我才能开口答话。';
+      return '填这一个（你的 API Key）：';
   }
 }
 
-/// 🔴 **这一批的边界句**（P1-1：收下之后**生效不生效**，必须当面说清）。
-///
-/// ⚠️ 为什么非说不可：不说的话，他填完图/视频那两把，以为什么都能干了 ——
-///    而这两条路**还没接上**。那句"填上了"就成了他自己脑补出来的假承诺。
-/// 🔴 **图片那一句也跟事实走**（P1-27 接通之后 · 2026-09-24）：
-///   · 主人这一份填了 ⇒ **当场就能画**（这一屏下面有「试一张」）；
-///   · 没填 ⇒ 说清"填上它才能画"；
-///   · 租户那台**还没接**（和他的语音同一个原因：盒子里读的是盒子里那份存档）。
-const String credImageBoundaryMine = '填好了。在下面写一句想要什么图，我就能给你画。（做片子用的是同一把钥匙。）';
-const String credImageBoundaryNone = '还没有填。填上它，我才能给你画图。（做片子用的是同一把钥匙。）';
-/// ⚠️ 2026-09-24 更正：租户**下面那个「试一张」本来就能用**（那条路走的是中心，
-///    用的是中心这份按人存档）—— 真正还没接的是**"在聊天里让它画"**
-///    （助手跑在他自己盒子里，读的是盒子里那份存档，见 `77-BLOCKERS.md` B10）。
-///    ⇒ 旧那句"你这台还没接上"**把能用的那半也说成不能用了**，是假话。
-const String credImageBoundaryTenant = '填好了。下面能试一张；在聊天里让它画，还得等你这台接上。';
-const String credImageBoundaryTenantNone = '填上它，就能在下面试一张（聊天里让它画还得等你这台接上）。';
-
-String credImageBoundary({required bool isTenant, required bool hasOwn}) {
-  if (isTenant) return hasOwn ? credImageBoundaryTenant : credImageBoundaryTenantNone;
-  return hasOwn ? credImageBoundaryMine : credImageBoundaryNone;
-}
-
-/// 视频那一句（★ **2026-10-01 改成真话**：这条路**已经做了**，
-/// 而且**跟「图片」那一屏用的是同一把钥匙**）。
-///
-/// 🔴 原来这里写的是「做片子那条路**不做**（你说不需要）」—— 那是 **2026-09-24** 的事实
-///    （主人当天：*"图片需要打通，视频不需要。"*），而 **2026-10-01 视频做完并上线**了
-///    （`docs/dev/151-APP-VIDEO.md`）⇒ 那句话**就成了假话**（页面在说假话 = 缺陷，
-///    主人 2026-10-01 问"设置页要不要合并"时我顺手抓到的）。
-/// ⚠️ 两件事必须写在脸上：① 跟图片**同一把钥匙**（贴一处就行，不用贴两遍）；
-///    ② 做片子**慢、而且贵**（一次只做一段）。
-const String credBoundaryVideo = '跟「图片」那一屏用的是同一把钥匙 —— 填一处就行，另一处不用再填，两样都能用。'
-    '做一段小片子比画图慢得多、也贵得多：一次只做一段，要等一会儿，做好了那段会直接回到你问我的话里。';
-
 // ── 「试一张」那几句（画图那一屏里）────────────────────────────
 const String imageTryLabel = '试一张';
-const String imageTryHint = '填好钥匙之后，在这儿写一句话，看它能不能画出来。';
+const String imageTryHint = '写一句话，点「画一张」。';
 const String imagePromptLabel = '想要什么样的图';
 const String imageTrySubmit = '画一张';
 const String imageGenerating = '正在画…';
@@ -522,57 +490,6 @@ const String imagePromptBlank = '先写一句想要什么图。';
 const String imageTryFailed = '这次没画成，等会儿再试。';
 const String imageLoadFailed = '图取不回来（地址可能已经过期了）。';
 const String imageTempLink = '图是那边临时给的，想要就存下来。';
-/// 🔴 **语音那一句要跟着事实变**（P1-26 后半，2026-09-24 接通"按人一份"之后）。
-///
-/// ⚠️ 为什么不能再写死一句：
-///   · 主人这一份（本机）**填了就真的用它**（识别路优先读他自己那两样）
-///     ⇒ 那时候还说"现在用的是这台机器上配好的那一份"就是**假话**；
-///   · 租户那台**当心**：他那条识别路在盒子里、读的是盒子里那份 —— 而"填了到底送不送得进去"
-///     是**会变的**（2026-09-27 之前**送不进去也读不到**，那时候说"填了就真用它"是假话；
-///     修好之后**送得进也读得到**，再那么说才是假话）。
-/// ⇒ 四种组合四句话，**一个字都不许省**（说错哪一句都是"页面在说假话"）。
-const String credVoiceBoundaryMine = '填好了。以后听你说话就用你自己这两样。';
-/// ⚠️ **只有机器上真有一份**（`voiceReady`）时才能说这句 —— 2026-10-01 完全切成豆包、
-///    把 `data/asr.env` 里老那几行删掉之后，它**曾经变成假话**（页面说"先收着"，
-///    而语音其实是"没配"：`/api/asr` 回 `asr/unavailable`）。
-const String credVoiceBoundaryDefault = '先收着。现在听你说话用的是这台机器上已经配好的那一份。';
-/// 🔴 **机器上那份也没有** ⇒ 只能说实话：**填了才能用**。
-const String credVoiceBoundaryNotReady = '还没有填。填上这两样，我才能听懂你说话。';
-/// ⚠️ **2026-09-27 改**（`#175`）：这两句原来是「先收着。你这台还没接上……」——
-///    那句在**修好之前**是真的（租户账号里填的那三样，中心收下了却**从来没送进盒子**，
-///    而且盒子那份单文件识别路也读不到，见 `docs/dev/125-TENANT-VOICE-CREDS.md`）；
-///    **两处都修好之后它就是假话** ⇒ 改成实话（活系统上验过：盒子日志
-///    `会话开始 · 引擎 16k_zh · 凭据来源 his-own`）。
-const String credVoiceBoundaryTenantHas = '填好了。以后听你说话就用这两样。';
-const String credVoiceBoundaryTenantNone = '先收着。填上这两样，这台就能听你说话。';
-
-/// 语音那一屏此刻该说的那句话（**纯函数**，判据钉四种组合）。
-String credVoiceBoundary({
-  required bool isTenant,
-  required bool hasOwn,
-  bool ready = false,
-}) {
-  if (isTenant) return hasOwn ? credVoiceBoundaryTenantHas : credVoiceBoundaryTenantNone;
-  if (hasOwn) return credVoiceBoundaryMine;
-  // 🔴 没填：**机器上真有一份**才说"先收着"，否则如实说"填了才能用"
-  return ready ? credVoiceBoundaryDefault : credVoiceBoundaryNotReady;
-}
-
-/// 某一屏的边界句（**聊天那一屏没有** —— 它是现在就在用的那一条）。
-String? credBoundaryOf(String tab, {bool isTenant = false, bool hasOwn = false, bool voiceReady = false}) {
-  switch (tab) {
-    case credTabVoice:
-      return credVoiceBoundary(isTenant: isTenant, hasOwn: hasOwn, ready: voiceReady);
-    case credTabImage:
-      return credImageBoundary(isTenant: isTenant, hasOwn: hasOwn);
-    case credTabVideo:
-      return credBoundaryVideo;
-    case credTabChat:
-    default:
-      return null;
-  }
-}
-
 /// ★ **语音那两样**（2026-10-01 换成豆包：**两样齐了才算有**）。
 ///
 /// ⚠️ 人话里**不许**出现"腾讯 / 混元 / 密钥"那类词：他只要会从控制台把那两串**贴进来**。
@@ -581,18 +498,15 @@ const String credVoiceAppIdLabel = 'App ID';
 const String credVoiceTokenLabel = 'Access Token';
 
 /// 图片 / 视频 / 聊天：一把钥匙时输入框上那句话。
-const String credOneKeyLabel = '把它们给你的那一串贴进来';
+const String credOneKeyLabel = '把你那一串粘在这里';
 
 /// 某一屏"现在有没有"那句话（**纯函数**）。
 ///
 /// ⚠️ 三种状态必须分开（与 [keyStateLine] 同一条纪律）：
 ///    有 / 填过但被判无效 / 还没填。混成一句就是页面在说假话。
 String credStateLine({required String tab, required bool has, required bool bad}) {
-  if (has) {
-    if (tab == credTabChat) return keyStateHas;
-    return '这一样已经有了。填一串新的就会把它换掉。';
-  }
-  if (bad) return keyStateBad;
+  if (has) return '已经填了。填新的会换掉它。';
+  if (bad) return '这串它说用不了，换一串。';
   return '还没有填。';
 }
 

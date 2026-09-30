@@ -157,15 +157,8 @@ void main() {
       credTabImage,
       credTabVideo,
       for (final tab in [credTabChat, credTabVoice, credTabImage, credTabVideo]) credTabWhat(tab),
-      // 语音那一句有**四种说法**（本机/租户 × 填了/没填）—— 四种都要过词表
-      credVoiceBoundaryMine,
-      credVoiceBoundaryDefault,
-      credVoiceBoundaryTenantHas,
-      credVoiceBoundaryTenantNone,
-      credImageBoundaryMine,
-      credImageBoundaryNone,
-      credImageBoundaryTenant,
-      credImageBoundaryTenantNone,
+      // ⚠️ 2026-10-01：**"边界句"那一套整段删了**（主人："不要写人看不懂的东西……
+      //    就直白一点填入什么就好了"）⇒ 这一份清单里不再有它们。
       imageTryLabel,
       imageTryHint,
       imagePromptLabel,
@@ -175,7 +168,6 @@ void main() {
       imageTryFailed,
       imageLoadFailed,
       imageTempLink,
-      credBoundaryVideo,
       credVoiceAppIdLabel,
       credVoiceTokenLabel,
       credOneKeyLabel,
@@ -207,53 +199,34 @@ void main() {
     });
   });
 
-  test('★ 图片那句边界话：租户那两档**不许把"试一张"说成不能用**（2026-09-24 更正）', () {
-    expect(credImageBoundary(isTenant: false, hasOwn: false), credImageBoundaryNone);
-    expect(credImageBoundary(isTenant: false, hasOwn: true), credImageBoundaryMine);
-    expect(credImageBoundary(isTenant: true, hasOwn: true), credImageBoundaryTenant);
-    expect(credImageBoundary(isTenant: true, hasOwn: false), credImageBoundaryTenantNone);
-    // 🔴 租户那两句必须**提到"下面能试一张"**（那是真的能用的那半）
-    for (final line in [credImageBoundaryTenant, credImageBoundaryTenantNone]) {
-      expect(line.contains('试一张'), true, reason: '租户能用的那半要说出来：$line');
+  test('🔴 配置页那四句**只说"填什么"**，而且**短**（主人 2026-10-01 定的写法）', () {
+    // 主人原话：*"设置这里不要写人看不懂的东西……就直白一点填入什么就好了。"*
+    // ⇒ 每屏就一句"填什么、从哪儿拿"；**不许**再出现"收下了 ≠ 现在就生效"那套。
+    final voice = credTabWhat(credTabVoice);
+    final image = credTabWhat(credTabImage);
+    final video = credTabWhat(credTabVideo);
+    final chat = credTabWhat(credTabChat);
+    // ① 每一句都要**短**（一句话读得完；长了就是又回到"看不懂"）
+    for (final s in [voice, image, video, chat]) {
+      expect(s.length <= 30, true, reason: '这一句太长了（主人读不懂）：$s');
+      expect(s.contains('生效'), false, reason: '不许再写"生效不生效"那套：$s');
+      expect(s.contains('收下'), false, reason: '不许再写"收下了"那套：$s');
     }
-    // 而"聊天里让它画"还没接 —— 也要说出来（不许含糊）
-    expect(credImageBoundaryTenant.contains('等你这台接上'), true);
-  });
-
-  test('★ 语音那句边界话：**五种组合**逐条对表（说错哪一句都是假话）', () {
-    // 本机 + 没填 + **机器上真有一份**（`voiceReady`）⇒ 才可以说"先收着，用的是机器上那份"
-    expect(credVoiceBoundary(isTenant: false, hasOwn: false, ready: true), credVoiceBoundaryDefault);
-    // 🔴 本机 + 没填 + **机器上那份也没有** ⇒ **不许**说"先收着"（那是假话：
-    //    2026-10-01 完全切成豆包、把 `data/asr.env` 里老那几行删掉之后就是这个状态）
-    expect(credVoiceBoundary(isTenant: false, hasOwn: false, ready: false), credVoiceBoundaryNotReady);
-    expect(credVoiceBoundary(isTenant: false, hasOwn: false), credVoiceBoundaryNotReady,
-        reason: '★ 缺省（不知道机器上有没有）时必须走"还没填"这一句 —— 不吹牛');
-    expect(credVoiceBoundaryNotReady.contains('填上这两样'), true);
-    expect(credVoiceBoundaryNotReady.contains('先收着'), false, reason: '★ 这句不许说"先收着"');
-    // 本机 + 填了 ⇒ **真的就用它**（识别路优先读他自己那两样）
-    expect(credVoiceBoundary(isTenant: false, hasOwn: true), credVoiceBoundaryMine);
-    // 租户 + 填了 ⇒ **填了就真进他那台、那台也真读得到**（`#175` 两处都修好之后）
-    //   ⇒ 说"就用这三样"；🔴 而且**不许**再出现"还没接上"那句旧话（修好之前它是真的，
-    //   修好之后就是假话）。
-    expect(credVoiceBoundary(isTenant: true, hasOwn: true), credVoiceBoundaryTenantHas);
-    expect(credVoiceBoundaryTenantHas.contains('就用这两样'), true);
-    expect(credVoiceBoundaryTenantHas.contains('还没接上'), false, reason: '★ 那句现在是假话');
-    // 租户 + 没填 ⇒ 要**说得出"填了就能用"**（这台没有"机器上配好的那份"兜底）
-    expect(credVoiceBoundary(isTenant: true, hasOwn: false), credVoiceBoundaryTenantNone);
-    expect(credVoiceBoundaryTenantNone.contains('填上这两样'), true);
-    expect(credVoiceBoundaryTenantNone.contains('还没接上'), false);
-    // 🔴 五句**互不相同**（两两相同就是把两种情况说成一件事）
-    final all = {
-      credVoiceBoundaryMine,
-      credVoiceBoundaryDefault,
-      credVoiceBoundaryNotReady,
-      credVoiceBoundaryTenantHas,
-      credVoiceBoundaryTenantNone,
-    };
-    expect(all.length, 5, reason: '五种组合要有五句不同的话');
-    // ⚠️ "本机 + 填了"那一句要说清"**用你自己这两样**"（与租户那句区分开：
-    //    同义但不能同一句 —— 它们是两件事）。
-    expect(credVoiceBoundaryMine.contains('你自己这两样'), true);
+    // ② 说的就是**填什么**（并且指出去哪儿拿）
+    //    ⚠️ 语音那两样的**名字**由输入框的标签扛（`App ID` / `Access Token`）——
+    //       那一句只负责"填什么 ＋ 去哪儿拿"，所以这里分别钉两头。
+    expect(voice.contains('语音技术'), true, reason: '要说清去哪儿拿：$voice');
+    expect(credVoiceAppIdLabel, 'App ID');
+    expect(credVoiceTokenLabel, 'Access Token');
+    expect(image.contains('API Key'), true);
+    expect(chat.contains('API Key'), true);
+    expect(credOneKeyLabel.length <= 12, true, reason: '输入框上那句也要短：$credOneKeyLabel');
+    // ③ 视频那屏：**不用填**（跟图片同一把），而且**不许**再说"不做"
+    expect(video.contains('不用填'), true, reason: '视频那屏应当直说"不用填"：$video');
+    expect(video.contains('图片'), true, reason: '要说清跟哪一屏共用：$video');
+    expect(video.contains('不做'), false, reason: '★ 视频早就做了，说"不做"就是假话');
+    // ④ 四句互不相同
+    expect({voice, image, video, chat}.length, 4);
   });
 
   test('★ `voiceReady`：只有**真的 true** 才算（缺字段/老服务端 ⇒ false ⇒ 页面说"还没填"）', () {

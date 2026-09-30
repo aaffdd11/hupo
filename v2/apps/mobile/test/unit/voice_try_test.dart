@@ -138,12 +138,15 @@ void main() {
   });
 
   group('② 每一种失败都有自己的那句话（**一个都不许静默**，字一个都不丢）', () {
-    test('没配钥匙 ⇒ 那一句，而且**说清"上面那三样就是它要用的"**', () {
+    test('没配钥匙 ⇒ 那一句，而且**说清去哪儿填**', () {
       final h = voiceTryFrame(listening(), {'type': 'asr/unavailable'});
       expect(h.phase, HearingPhase.unavailable);
       final empty = voiceTryNotice(h, hasOwn: false);
       expect(empty, voiceTryNoKeyEmpty);
-      expect(empty.contains('上面那三样'), true, reason: '主人点名要这句');
+      // 🔴 2026-10-01：换成"直说去哪儿填"（主人："不要写人看不懂的东西……直白一点"）
+      expect(empty.contains('App ID'), true, reason: '要说清填什么');
+      expect(empty.contains('Access Token'), true);
+      expect(empty.length <= 45, true, reason: '这句也要短：$empty');
       final filled = voiceTryNotice(h, hasOwn: true);
       expect(filled, voiceTryNoKeyFilled);
       expect(filled == empty, false, reason: '两件事两句话（去填 vs 等接好）');

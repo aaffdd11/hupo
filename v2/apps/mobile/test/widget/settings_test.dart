@@ -161,63 +161,24 @@ void main() {
     }
   });
 
-  testWidgets('③ 🔴 图片/视频/语音那一屏都说清"收下了 ≠ 现在就生效"', (tester) async {
-    await pump(tester);
+  testWidgets('③ 🔴 每一屏**只说"填什么"＋"有没有"**，没有别的废话', (tester) async {
+    // 主人 2026-10-01：*"设置这里不要写人看不懂的东西……就直白一点填入什么就好了。"*
+    // ⇒ 一屏就两行字：① 填什么（`credTabWhat`）② 有没有（`credStateLine`）。
     for (final tab in [credTabVoice, credTabImage, credTabVideo]) {
+      await pump(tester);
       await goTab(tester, tab);
-      final line = credBoundaryOf(tab)!;
-      expect(find.text(line), findsOneWidget, reason: '$tab 那一屏少了边界那句');
-      // ⚠️ 那句话的**实质**：说清"什么时候才用它 / 现在为什么还不能用" ——
-      //    **要么**"还没填 ⇒ 填上就能用"、**要么**"填好了 ⇒ 现在就能用"、
-      //    **要么**"还没接上 / 没做"。🔴 **不许**含糊过去（那才是这一条要守的东西）。
-      //
-      // 🔴 2026-09-25 更正（这条闸**在 HEAD 上就是红的**，子 agent 查出来的）：
-      //    旧断言钉的是 `先收`／`还没接上`，那是**图片接通之前**（2026-09-24 之前）的事实；
-      //    图片那条接通之后，那种说法**本身成了假话**（把"能用的那半"也说成不能用 ——
-      //    见 `space_words.dart` 里那段"2026-09-24 更正"）⇒ 判据改成"必须落在
-      //    这几档**诚实说法**里"，**不是**钉死某一句。守的还是同一件事：
-      //    **"收下了"不等于"现在就生效"，页面要把这件事说清**。
-      // ⚠️ 2026-10-01：**'没做' 这一档删了** —— 三样现在**都接通了**
-      //    （视频那一页原来那句"这条路不做"就是靠它混过去的，而那是假话）。
-      const honest = ['填上', '还没填', '填好', '先收', '还没接', '等你这台', '同一把钥匙'];
-      expect(
-        honest.any(line.contains),
-        true,
-        reason: '边界句要说实话（说清什么时候才生效）：$line',
-      );
+      // ① 那一句"填什么"必须在屏幕上
+      expect(find.text(credTabWhat(tab)), findsOneWidget, reason: '$tab 那一屏少了"填什么"那句');
+      // ② 状态那句也在
+      expect(find.text(credStateLine(tab: tab, has: false, bad: false)), findsOneWidget);
+      // 🔴 负向对照：以前那一套"边界话"里的字样**一个字都不许剩**
+      for (final bad in ['收下了', '生效', '不再用这台机器', '先收着', '边界']) {
+        expect(find.textContaining(bad), findsNothing, reason: '★ "$bad" 那套话应当已经删掉了');
+      }
     }
-    // 负向对照：聊天那一屏**没有**这句（它是现在就在用的那一条）
-    await goTab(tester, credTabChat);
-    expect(find.text(credVoiceBoundaryDefault), findsNothing);
-    expect(credBoundaryOf(credTabChat), isNull);
-  });
-
-  testWidgets('③ 🔴 语音那一句**跟着事实变**（填了就真用它 / 租户那台还没接上）', (tester) async {
-    // ① 主人（本机）**没填**、机器上那份也**没有** ⇒ 如实说"填了才能用"
-    //    🔴 2026-10-01：这句原来是 `credVoiceBoundaryDefault`（"先收着，用的是机器上那份"）
-    //       —— 完全切成豆包、`data/asr.env` 清空之后，**那句成了假话**（语音其实是"没配"）。
-    await pump(tester);
-    await goTab(tester, credTabVoice);
-    expect(find.text(credVoiceBoundaryNotReady), findsOneWidget);
-    expect(find.text(credVoiceBoundaryDefault), findsNothing,
-        reason: '★ 机器上那份都没有，还敢说"先收着"就是假话');
-
-    // ①·补 主人（本机）**没填**、但机器上**真有一份**（`voiceReady`）⇒ 才说"先收着"
-    await pump(tester, voiceReady: true);
-    await goTab(tester, credTabVoice);
-    expect(find.text(credVoiceBoundaryDefault), findsOneWidget);
-
-    // ② 主人（本机）**填了** ⇒ 说清"以后就用这三样"
-    await pump(tester, creds: const SpaceCreds(voice: true));
-    await goTab(tester, credTabVoice);
-    expect(find.text(credVoiceBoundaryMine), findsOneWidget);
-    expect(find.text(credVoiceBoundaryDefault), findsNothing, reason: '★ 填了还说"用的是别的那份"就是假话');
-
-    // ③ 租户（有自己一台）——**还没接上**：填了也不许说"就用它"
-    await pump(tester, localOnly: false, creds: const SpaceCreds(voice: true), tenant: true);
-    await goTab(tester, credTabVoice);
-    expect(find.text(credVoiceBoundaryTenantHas), findsOneWidget);
-    expect(find.text(credVoiceBoundaryMine), findsNothing, reason: '★ 租户那台还没接上，不许承诺');
+    // 没填 ⇒ 状态说"还没有填"；填了 ⇒ 说"已经填了"（两档分得开）
+    await goTab(tester, credTabVideo);
+    expect(find.text(credStateLine(tab: credTabVideo, has: false, bad: false)), findsOneWidget);
   });
 
   testWidgets('④ 语音那一屏是**两样**（豆包：App ID ＋ Access Token）；图片/视频各一串', (tester) async {
@@ -350,20 +311,15 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('⑨ 🔴 视频那一页：**不许再说"这条路不做"**，要说清跟图片同一把钥匙', (tester) async {
+  testWidgets('⑨ 🔴 视频那一页：直说**不用填**（跟图片同一个 API Key），不许再说"不做"', (tester) async {
     await pump(tester);
     await goTab(tester, credTabVideo);
-    final line = credBoundaryOf(credTabVideo)!;
+    final line = credTabWhat(credTabVideo);
     expect(find.text(line), findsOneWidget);
-    // 🔴 负向对照（这一条就是这次抓到的缺陷）：那句话里**不许**有"不做"
-    expect(line.contains('不做'), false, reason: '视频早就做完上线了，说"不做"就是页面在说假话：$line');
-    // 🔴 正面：必须说清"跟图片是同一把钥匙"（不然他会把同一串贴两遍）
-    expect(line.contains('同一把钥匙'), true, reason: '没说清跟图片共用一把钥匙：$line');
-    // 🔴 也要说清"慢、贵"（它是异步的、比画图贵得多）
-    expect(line.contains('贵'), true, reason: '没说清做片子更贵：$line');
-    expect(line.contains('等'), true, reason: '没说清要等：$line');
-    // 而图片那一页也要提一句"做片子用的是同一把钥匙"（两边说的是同一件事）
-    await goTab(tester, credTabImage);
-    expect(credBoundaryOf(credTabImage)!.contains('同一把钥匙'), true);
+    expect(line.contains('不用填'), true, reason: '视频那屏应当直说"不用填"：$line');
+    expect(line.contains('图片'), true, reason: '要说清跟哪一屏共用：$line');
+    // 🔴 负向对照（这条就是当初抓到的缺陷）：**不许**有"不做"
+    expect(line.contains('不做'), false, reason: '视频早就做完上线了，说"不做"就是页面在说假话');
+    expect(find.textContaining('不做'), findsNothing);
   });
 }
