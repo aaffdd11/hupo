@@ -386,6 +386,42 @@ test('🔴 装上 ⇒ 复制进他自己的那一份（作者下架之后**他�
   }
 });
 
+test('★ 傻瓜式：助手在 `app_create` 里声明 `net` ＋ 域名 ⇒ 清单里真有、那一条 CSP 里真有那些站', async () => {
+  const s = setup();
+  const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
+  try {
+    await handshake(c);
+    /**
+     * 🔴 `148` §二：**网络这一样也要"声明即用"**，而且白名单必须**从工具一路到 CSP**
+     *    （工具 schema → 套接字 → 制品库 → `netHostsFor` → 响应头）——
+     *    中间任何一段丢了，页面上就是"配了却连不出去"。
+     */
+    const made = await c.call('tools/call', {
+      name: 'app_create',
+      arguments: { ...APP, id: 'tianqi', title: '看天气', permissions: ['net'], net: ['api.example.com'] },
+    });
+    assert.equal(made.result.isError, false, JSON.stringify(made.result));
+    const v = s.apps.current('tianqi');
+    const man = s.apps.manifest('tianqi', v);
+    assert.deepEqual(man.permissions, ['net'], '声明要真的进清单');
+    assert.deepEqual(man.net, ['api.example.com'], '★ 白名单也要真的进清单');
+    assert.deepEqual(s.apps.grants('tianqi'), ['net'], '声明了就是给的（不用他点）');
+    // ★ 一路到"该给它哪些站"那一层（真函数，不是替身）
+    const { netHostsFor } = await import('../src/app-serve.js');
+    assert.deepEqual(await netHostsFor(s.apps, 'tianqi'), ['api.example.com']);
+    // 反例那一侧：坏域名**在工具这一层就被拒**（写不进去）
+    const bad = await c.call('tools/call', {
+      name: 'app_create',
+      arguments: { ...APP, id: 'badnet', title: '坏的', permissions: ['net'], net: ['evil.com; script-src *'] },
+    });
+    assert.equal(bad.result.isError, true, '🔴 能改写 CSP 的那种"域名"必须被拒');
+    assert.equal(s.apps.has('badnet'), false, '拒了就不许留下这个 app');
+  } finally {
+    c.child.kill();
+    await s.sock.close();
+  }
+});
+
 test('★ fork 下来就是自己的：别人那个 app 声明了 `db` ⇒ 装到乙这儿**当场就能存**（没有"外来"这一档）', async () => {
   /**
    * 🔴 主人 2026-09-30 原话：*「别人发的东西直接 fork 下来就好了。不用管别的。

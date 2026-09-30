@@ -105,6 +105,22 @@ export const MAX_COPY_TRIES = 50;
 export { ICONS } from './app-icons.js';
 
 /**
+ * ★ **`net`：它要访问哪几个站**（主人 2026-09-30：*「这些功能都要有」*）。
+ *
+ * ── 形状（两样一起才算）────────────────────────────────────
+ *   · `permissions` 里有 **`net`** ⇒ "**它要上网**"（设置页那颗开关管的就是这一样）；
+ *   · `net: ["api.example.com", …]` ⇒ **白名单**（它只许连这几个站）。
+ * ⇒ **能上网 ＋ 名单** 两样齐了，制品页那条 CSP 才会把名单放进去（`app-serve.js` 的 `cspFor`）。
+ *   ⚠️ 那一下**由浏览器/WebView 自己执行**（CSP 是硬的）—— **关掉开关 ⇒ 名单立刻不进 CSP**
+ *     ⇒ 它当场连不出去（判据 `N4`）。
+ *
+ * 🔴 **名单的来源是助手**（主人 2026-09-30：*「agent 可以去访问网站并为小程序建立白名单」*）：
+ *   助手写页面时**自己去访问过**，然后把用到的域名写进清单 ⇒ **声明了就能用**（傻瓜式）。
+ *   ⚠️ **加新站 = 新的一版**（要重新声明）——**不许**"运行时自己往白名单里加"。
+ */
+export const NET_PERMISSION = 'net';
+
+/**
  * **权限白名单**（乙-4 开门：`ask`；2026-09-30 加第二个门：`db`）。
  *
  * `ask` = 允许它请求「用**看的人**的钥匙问一句话」。
@@ -113,7 +129,45 @@ export { ICONS } from './app-icons.js';
  * ⚠️ **钥匙永远不进制品**：制品只拿得到"问一句"这个动作，拿不到钥匙本身，也拿不到别人的钥匙。
  * ⚠️ **`db` 也拿不到文件**：它拿到的只是"替我执行这一条"这个动作（跨库那条路是堵死的）。
  */
-export const PERMISSIONS = Object.freeze(['ask', DB_PERMISSION]);
+export const PERMISSIONS = Object.freeze(['ask', DB_PERMISSION, NET_PERMISSION]);
+
+/** 一个 app 最多声明几个站（防呆：这不是给人手写的长名单）。 */
+export const MAX_NET_HOSTS = 8;
+
+/** 一个域名最长多少字符（DNS 的实际上限就在这一带）。 */
+export const MAX_HOST_CHARS = 100;
+
+/**
+ * **一张白名单过一遍**（纯函数，**只有这一处**）。
+ *
+ * 🔴 它是一道**安全边界**：名单会被拼进**响应头**（`connect-src …`）——
+ *   一条带 `;`／空格／引号的"域名"就足以**改写整条 CSP**。
+ * ⇒ 只认**规规矩矩的 https 域名**：小写字母/数字/`-`/`.`，至少一个点，不许通配、不许端口、
+ *    不许路径、不许 scheme、不许空白。**认不出来就拒**（不猜、不修）。
+ *
+ * @param {unknown} raw
+ * @returns {{ok:true, hosts:string[]} | {ok:false, text:string}}
+ */
+export function checkNetHosts(raw) {
+  if (raw === undefined || raw === null) return { ok: true, hosts: [] };
+  if (!Array.isArray(raw)) return { ok: false, text: '要访问的站得列一个清单。' };
+  if (raw.length > MAX_NET_HOSTS) return { ok: false, text: `最多写 ${MAX_NET_HOSTS} 个站。` };
+  const out = [];
+  for (const one of raw) {
+    if (typeof one !== 'string') return { ok: false, text: '清单里有一个看不懂。' };
+    // 🔴 **一个空白字符都不许有**（这一串会被拼进**响应头**）——
+    //    所以不做 trim 容忍：`" api.example.com\n"` 这种**直接拒**（判据 N3）。
+    if (one !== one.trim() || /\s/.test(one)) return { ok: false, text: '清单里那个不许带空白字符。' };
+    const h = one.toLowerCase();
+    if (h.length === 0 || h.length > MAX_HOST_CHARS) return { ok: false, text: '清单里有一个太长或者空的。' };
+    // 🔴 严格形状：`a.b` / `a.b.c`；标签只许字母数字与短横（不许以短横开头/结尾）
+    if (!/^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$/.test(h)) {
+      return { ok: false, text: '清单里那个不像是域名（只写域名本身，别带 http://、路径、端口或通配）。' };
+    }
+    if (!out.includes(h)) out.push(h);
+  }
+  return { ok: true, hosts: out };
+}
 
 /**
  * **一次问话的配额**（数字只住这里）。
@@ -488,6 +542,7 @@ export class Apps {
         rootHash: m.rootHash,
         bytes: m.bytes,
         permissions: [...(m.permissions ?? [])],
+        net: [...(m.net ?? [])],
         minShellVersion: m.minShellVersion,
         createdAt: m.createdAt,
         live: false,
@@ -504,6 +559,7 @@ export class Apps {
         rootHash: live.rootHash ?? null,
         bytes: live.bytes ?? null,
         permissions: [...(live.permissions ?? [])],
+        net: [...(live.net ?? [])],
         minShellVersion: 1,
         createdAt: live.createdAt ?? null,
         live: true,
@@ -521,6 +577,7 @@ export class Apps {
       rootHash: m.rootHash,
       bytes: m.bytes,
       permissions: [...(live.permissions ?? [])],
+      net: [...(live.net ?? [])],
       minShellVersion: m.minShellVersion,
       createdAt: live.createdAt ?? m.createdAt,
       live: true,
@@ -552,6 +609,7 @@ export class Apps {
    * @param {string} [o.icon]        认不出/没给 ⇒ 自动配一个（同 `create`）
    * @param {string} o.entry
    * @param {string[]} [o.permissions]
+   * @param {string[]} [o.net]        ★ 要访问的站（`148` §二）：**只有声明了 `net` 才算数**
    * @param {string} [o.createdBy]   `user` | `agent`
    * @param {number} [o.createdTurn]
    * @param {string|null} [o.rootHash] 登记那一刻工作区的指纹（**可以不带**；不带就不写）
@@ -564,6 +622,7 @@ export class Apps {
     icon = undefined,
     entry,
     permissions = [],
+    net = [],
     createdBy = 'agent',
     createdTurn = null,
     description = '',
@@ -577,6 +636,12 @@ export class Apps {
       if (!PERMISSIONS.includes(p)) {
         throw new AppsError(`这个权限现在还不给（${String(p).slice(0, 30)}）—— 制品暂时什么能力都没有`);
       }
+    }
+    // ★ `148` §二：**白名单只在声明了 `net` 的时候才算数**（校验只有这一处，两个入口共用它）
+    const netCheck = checkNetHosts(net);
+    if (netCheck.ok !== true) throw new AppsError(netCheck.text);
+    if (netCheck.hosts.length > 0 && !permissions.includes(NET_PERMISSION)) {
+      throw new AppsError('写了要访问的站，却没说要用网 —— 两样要一起给');
     }
     if (typeof title !== 'string' || title.trim().length === 0) throw new AppsError('小程序要有一个名字');
     if (title.length > MAX_TITLE_CHARS) throw new AppsError(`名字太长（上限 ${MAX_TITLE_CHARS} 个字）`);
@@ -601,6 +666,7 @@ export class Apps {
       icon: picked.icon,
       entry,
       permissions: [...permissions],
+      net: [...netCheck.hosts],
       version,
       rootHash: typeof rootHash === 'string' && rootHash !== '' ? rootHash : null,
       bytes: Number.isInteger(bytes) && bytes >= 0 ? bytes : null,
@@ -677,7 +743,7 @@ export class Apps {
    *      所以既有判据的**报错顺序与话都不变**（`test/app-write-gates.test.js` 那条保留 id 判据）。
    * @returns {object} 写下去的 manifest
    */
-  create({ id, title, icon, entry, files, permissions = [], createdBy = 'user', createdTurn = null, expectRootHash = null }) {
+  create({ id, title, icon, entry, files, permissions = [], net = [], createdBy = 'user', createdTurn = null, expectRootHash = null }) {
     checkAppId(id);
     // 🔴 **保留 id 的唯一一道闸**（`REFUSED_APP_IDS`）：主线 ＋ 桌面内置三格。
     //    写在这里 ⇒ **每一条写路都过它**（含 `apps-socket.js` 那条老路、装上、迁移）。
@@ -689,6 +755,12 @@ export class Apps {
       if (!PERMISSIONS.includes(p)) {
         throw new AppsError(`这个权限现在还不给（${String(p).slice(0, 30)}）—— 制品暂时什么能力都没有`);
       }
+    }
+    // ★ `148` §二：**白名单只在声明了 `net` 的时候才算数**（与 `register` 同一个纯函数）
+    const netOk = checkNetHosts(net);
+    if (netOk.ok !== true) throw new AppsError(netOk.text);
+    if (netOk.hosts.length > 0 && !permissions.includes(NET_PERMISSION)) {
+      throw new AppsError('写了要访问的站，却没说要用网 —— 两样要一起给');
     }
     if (typeof title !== 'string' || title.trim().length === 0) throw new AppsError('小程序要有一个名字');
     if (title.length > MAX_TITLE_CHARS) throw new AppsError(`名字太长（上限 ${MAX_TITLE_CHARS} 个字）`);
@@ -741,6 +813,7 @@ export class Apps {
       files: checked.map((f) => ({ path: f.path, sha256: f.sha256, bytes: f.buf.length })),
       rootHash: rootHashOf(checked.map((f) => ({ path: f.path, sha256: f.sha256 }))),
       permissions: [...permissions],
+      net: [...netOk.hosts],
       minShellVersion: 1,
       createdBy,
       createdTurn,

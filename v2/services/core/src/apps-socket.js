@@ -162,6 +162,8 @@ async function runAppsOp(apps, req, ctx = {}) {
             // ⚠️ 入口以**工作区里真实存在的那个**为准（工作区可能不是模型刚交的那份）
             entry: a.entry ?? stat.entry ?? 'index.html',
             permissions: a.permissions ?? [],
+            // ★ `148` §二：要访问的站（白名单）—— `Apps` 那一层严查形状
+            net: Array.isArray(a.net) ? a.net : [],
             createdBy: 'agent',
             createdTurn: Number.isInteger(req.turn) ? req.turn : null,
             rootHash: stat.rootHash,
@@ -184,6 +186,7 @@ async function runAppsOp(apps, req, ctx = {}) {
             entry: a.entry,
             files: a.files,
             permissions: a.permissions ?? [],
+            net: Array.isArray(a.net) ? a.net : [],
             createdBy: 'agent',
             createdTurn: Number.isInteger(req.turn) ? req.turn : null,
           });

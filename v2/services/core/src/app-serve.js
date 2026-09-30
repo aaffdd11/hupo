@@ -55,17 +55,57 @@ export const SIGNED_TTL_MS = 10 * 60 * 1000;
  *   · `base-uri 'none'` / `form-action 'none'` —— 堵住"改 base 之后把请求发到别处"
  *   · `frame-ancestors <壳>` —— **只许壳嵌它**（别处嵌不了）
  */
-export function cspFor(frameAncestors) {
+export function cspFor(frameAncestors, hosts = []) {
+  /**
+   * ★ **`148` §二：`net` 白名单进不进这一条，全看"他有没有关掉"**。
+   *
+   * 🔴 那一下**由浏览器/WebView 自己执行**（CSP 是硬的）—— 关掉开关 ⇒ 名单**立刻不进 CSP**
+   *    ⇒ 制品当场连不出去（判据 `N4`）。这是"设置里能关"这句话**真的成立**的地方。
+   * ⚠️ 名单里的每一串**已经过 `checkNetHosts`**（`apps.js`）—— 到这儿只做"拼上去"，
+   *    **不再自己解析**（安全边界只有一处）。这里再兜一道形状（认不出来就丢掉那一条）。
+   */
+  const allow = [];
+  for (const h of Array.isArray(hosts) ? hosts : []) {
+    if (typeof h === 'string' && /^[a-z0-9.-]+$/.test(h) && h.length <= 100) allow.push(`https://${h}`);
+  }
   return [
     "default-src 'none'",
     "script-src 'unsafe-inline'",
     "style-src 'unsafe-inline'",
     'img-src data: blob:',
-    "connect-src 'self'",
+    ['connect-src', "'self'", ...allow].join(' '),
     "base-uri 'none'",
     "form-action 'none'",
     `frame-ancestors ${frameAncestors}`,
   ].join('; ');
+}
+
+/**
+ * ★ **这一版制品该拿到哪些站**（`148` §二）。
+ *
+ * 三条一起才算：① 制品**声明了 `net`** ② **他没关掉**（`grants` 里有 `net`）
+ * ③ `meta` 里那份名单。任何一种读不出来 ⇒ **空名单**（fail-closed：宁可连不出去，
+ * 也不许"名单读不出来就放行"）。
+ */
+export async function netHostsFor(apps, id) {
+  try {
+    const meta = typeof apps?.meta === 'function'
+      ? apps.meta(id)
+      // 租户那一侧：盒代理没有 `meta`，但它的清单里每一格字段是齐的（`/internal/apps`）
+      : (await apps.list()).find((a) => a.id === id);
+    if (!meta) return [];
+    if (!Array.isArray(meta.permissions) || !meta.permissions.includes('net')) return [];
+    let granted = [];
+    try {
+      granted = typeof apps.grants === 'function' ? apps.grants(id) : [];
+    } catch {
+      granted = [];
+    }
+    if (!granted.includes('net')) return [];
+    return Array.isArray(meta.net) ? meta.net : [];
+  } catch {
+    return [];
+  }
 }
 
 /** ★ **"替我问一句"那条口的路**（app 原点上的 `POST /ask`）——与 `/db` 同一个形状。 */
@@ -261,7 +301,15 @@ export function createAppServer({
 }) {
   if (!key) throw new AppsError('签名密钥必填');
   if (!frameAncestors) throw new AppsError('frameAncestors 必填（CSP 要它）');
+  // ⚠️ 这个只是**兜底**（`/db`、`/ask` 那几条口与"算不出 app"时用它）——
+  //    真正发出去的那一条是**按 app 算的**（见下面 `cspForApp`）。
   const csp = cspFor(frameAncestors);
+
+  /** 按 app 算 CSP：**只有它自己声明的那些站**（`netHostsFor` 已经把三道闸过完了）。 */
+  async function cspForApp(apps, id) {
+    const hosts = await netHostsFor(apps, id);
+    return hosts.length === 0 ? csp : cspFor(frameAncestors, hosts);
+  }
 
   /**
    * app 原点那几条口共用的跨源头。
@@ -618,12 +666,15 @@ export function createAppServer({
      *    没签名的请求**连库都不会碰**（反例钉在 `test/apps-box.test.js`）。
      */
     Promise.resolve(pending).then(
-      (got) => {
+      // ⚠️ `async`：这一条要**按 app 算 CSP**（`netHostsFor` 对租户那一侧要过隧道）
+      async (got) => {
+        // ★ `148` §二：**这一条 CSP 是按 app 算的**（它声明的站 ＋ 他没关掉 ⇒ 才进名单）
+        const cspOut = await cspForApp(apps, id).catch(() => csp);
         res.writeHead(200, {
           'content-type': got.contentType,
           'content-length': got.content.length,
           // 🔴 **不许发 X-Frame-Options**（壳里要嵌它）；只让壳嵌 ⇒ 用 CSP 的 frame-ancestors
-          'content-security-policy': csp,
+          'content-security-policy': cspOut,
           // 制品是"凭签名取一次"的东西：**别让浏览器缓存**（缓存了就没法验签了）
           'cache-control': 'no-store',
           'x-content-type-options': 'nosniff',
