@@ -203,14 +203,14 @@ void main() {
     expect(find.text(credVoiceBoundaryMine), findsNothing, reason: '★ 租户那台还没接上，不许承诺');
   });
 
-  testWidgets('④ 语音那一屏是**三样**；图片/视频各一串', (tester) async {
+  testWidgets('④ 语音那一屏是**两样**（豆包：App ID ＋ Access Token）；图片/视频各一串', (tester) async {
     await pump(tester);
     await goTab(tester, credTabVoice);
     expect(find.byType(CredForm), findsOneWidget);
-    for (final label in [credVoiceAppIdLabel, credVoiceSecretIdLabel, credVoiceSecretKeyLabel]) {
+    for (final label in [credVoiceAppIdLabel, credVoiceTokenLabel]) {
       expect(find.text(label), findsOneWidget, reason: '语音少了这一项：$label');
     }
-    expect(tester.widget<CredForm>(find.byType(CredForm)).fields.length, 3);
+    expect(tester.widget<CredForm>(find.byType(CredForm)).fields.length, 2);
 
     await goTab(tester, credTabImage);
     expect(tester.widget<CredForm>(find.byType(CredForm)).fields.length, 1);
@@ -222,23 +222,21 @@ void main() {
     expect(find.byType(CredForm), findsNothing);
   });
 
-  testWidgets('⑤ 🔴 提交**一次把那一屏写完**（语音三样一起送）', (tester) async {
+  testWidgets('⑤ 🔴 提交**一次把那一屏写完**（语音两样一起送）', (tester) async {
     final sent = await pump(tester);
     await goTab(tester, credTabVoice);
     final boxes = find.byType(TextField);
-    expect(boxes, findsNWidgets(3));
+    expect(boxes, findsNWidgets(2));
     await tester.enterText(boxes.at(0), '1300000001');
-    await tester.enterText(boxes.at(1), 'secret-id-x');
-    await tester.enterText(boxes.at(2), 'secret-key-y');
+    await tester.enterText(boxes.at(1), 'access-token-x');
     await tester.tap(find.text(keySubmit));
     await tester.pumpAndSettle();
 
-    expect(sent.n, 1, reason: '★ 只许提交一次（三样必须一起写下去，不许分三次）');
+    expect(sent.n, 1, reason: '★ 只许提交一次（两样必须一起写下去，不许分两次）');
     expect(sent.tab, credTabVoice);
     expect(sent.values, {
       'voiceAppId': '1300000001',
-      'voiceSecretId': 'secret-id-x',
-      'voiceSecretKey': 'secret-key-y',
+      'voiceAccessToken': 'access-token-x',
     });
     // 🔴 值**不许显示回去**（它是密钥；输入框挡着）
     expect(tester.widget<TextField>(find.byType(TextField).at(1)).obscureText, true);

@@ -1,9 +1,13 @@
-// **把浏览器的麦克风接给腾讯云混元 ASR**（服务端这一段）。
+// **把浏览器的麦克风接给"豆包大模型流式语音识别"**（服务端这一段 · 2026-10-01 换的）。
 //
-// 为什么不让浏览器直连腾讯云：**`SecretKey` 就得出现在浏览器里**。
+// ⚠️ **2026-10-01 之前这一跳是腾讯**；主人当天说*「语音识别，用豆包」*并选了
+//    **「完全换成豆包」**（腾讯那三样撤掉）⇒ 上游那一跳现在住 `src/asr-doubao.js`
+//    （**面向浏览器的这一套协议一个字没改**）。
+//
+// 为什么不让浏览器直连上游：**钥匙（Access Token）就得出现在浏览器里**。
 // 密钥一旦下发，页面上的任何人都能拿它烧我们的额度 —— 而且这回不是"猜"，
-// 是明文摆在 devtools 里。⇒ 音频走**我们这条**：浏览器 → 这台 → 腾讯云。
-// 代价是这台机要中转音频（16k 单声道 ≈ 32 KB/s，一次连接最多一分钟，很小）。
+// 是明文摆在 devtools 里。⇒ 音频走**我们这条**：浏览器 → 这台 → 豆包。
+// 代价是这台机要中转音频（16k 单声道 ≈ 32 KB/s，一次连接几十秒，很小）。
 //
 // 协议（**新开一条 `/api/asr`，不动已冻结的聊天那条 `/api/stream`**）：
 //   浏览器 → 这里：**二进制帧 = 16k 单声道 PCM**；文本帧 = `{type:'asr/stop'}`
@@ -13,39 +17,35 @@
 //   （`partial` = 还在说的半句；`final` = 一句话定稿；`end` = 整段收尾）
 //
 // 🔴 **绝不做的事**：不认识/没配钥匙时**如实说**，不假装开麦；
-//    **签名 URL 与密钥一个字都不进日志**（那个 URL 本身就是凭据）。
+//    **App ID / Access Token 一个字都不进日志**。
 
 import nodeProcess from 'node:process';
-import WebSocket from 'ws';
 
-import { DEFAULT_ASR_ENGINE, newVoiceId, signAsrUrl } from './asr-sign.js';
+import { createDoubaoUpstream, doubaoConfigFromEnv } from './asr-doubao.js';
 
 /** 这条 WS 的路径。 */
 export const ASR_PATH = '/api/asr';
 
 /**
- * 一次最多听多久。
- * ⚠️ 腾讯那个内测版**一条连接最多 1 分钟**（`docs/dev/69-ASR-ROUTES.md` §四·补），
- * 所以**我们提前收手**，别等它半路把连接掐了（那样用户会看到"说到一半没了"）。
+ * 一次最多听多久（毫秒）。
+ *
+ * ⚠️ 这个上限是**我们自己的**约定（老那套是因为腾讯内测版一条连接最多 1 分钟才这么定），
+ *    豆包那边没有这条硬限 ⇒ **先照旧**（55 秒），要改是产品决定（一次说多久算一次）。
  */
 export const ASR_MAX_MS = 55_000;
 
 /**
  * 凭据只从**环境变量**读（`docs/dev/69-ASR-ROUTES.md`）：不进文件、不进仓库、不进日志。
  *
- * `HUPO_ASR_URL` 是**换上游**用的（自托管 / 取证用的桩）：给了它就直接连它，
- * 不再算签名。它让"整条链"能在**没有腾讯云钥匙**的情况下被真验一遍 ——
- * 判据打在客户端那一侧（V13），而不是"等钥匙到了再说"。
+ * ⚠️ 名字是**豆包那一套**：`DOUBAO_ASR_APPID` / `DOUBAO_ASR_TOKEN`（＋可选
+ *    `DOUBAO_ASR_RESOURCE`）—— 住 `src/asr-doubao.js`（**只有那一处**）。
+ *    `HUPO_ASR_URL` 照旧是**换上游**用的（自托管 / 判据里的桩）。
  */
-export function asrConfigFromEnv(env = nodeProcess.env) {
-  const appid = env.TENCENT_APPID ?? '';
-  const secretId = env.TENCENT_SECRET_ID ?? '';
-  const secretKey = env.TENCENT_SECRET_KEY ?? '';
-  const engine = env.TENCENT_ASR_ENGINE || DEFAULT_ASR_ENGINE;
-  const upstream = env.HUPO_ASR_URL || null;
-  const hasKey = Boolean(appid && secretId && secretKey);
-  return { appid, secretId, secretKey, engine, upstream, configured: Boolean(upstream) || hasKey };
-}
+export const asrConfigFromEnv = (env = nodeProcess.env) => {
+  const c = doubaoConfigFromEnv(env);
+  // ⚠️ 老调用方认这两个名字（`engine` 用来报给客户端 / 日志）；豆包那边"引擎"就是资源 id。
+  return { ...c, engine: c.resource };
+};
 
 /** 出错时只留一句人话：**不许把 URL（里面有签名）带出去**。 */
 export const safeAsrMessage = (err) => {
@@ -107,35 +107,17 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
       return closeClient();
     }
 
-    /** @type {WebSocket|null} */
+    /**
+     * **上游那一跳**（`asr-doubao.js` 造的那个东西；`null` = 还没连）。
+     * ⚠️ 排队、握手、帧的编解码**都在它里面** —— 这一层只管"什么时候连、什么时候收尾"。
+     * @type {{open:Function, audio:Function, finish:Function, close:Function}|null}
+     */
     let up = null;
-    let handshake = null;
     let ended = false;
     let cap = null;
     let lastText = '';
     /** 最后见到的段号（收尾那条也带上，客户端好把最后一段收住）。 */
     let lastIndex = 0;
-    /** 上游还没握上手时先攒着（音频不能丢：丢一段就是丢一句话的开头）。 */
-    const queue = [];
-
-    const upSend = (data) => {
-      if (!up) return;
-      if (up.readyState === WebSocket.OPEN) up.send(data);
-      else if (up.readyState === WebSocket.CONNECTING) queue.push(data);
-    };
-
-    const upstreamUrl = () => {
-      if (config.upstream) return config.upstream;
-      return signAsrUrl({
-        appid: config.appid,
-        secretId: config.secretId,
-        secretKey: config.secretKey,
-        engine: config.engine,
-        // 每次连接换一个新 UUID（文档要求）
-        params: { voice_id: newVoiceId() },
-        now: now(),
-      }).url;
-    };
 
     const stopUpstream = () => {
       if (cap) clearTimeout(cap);
@@ -189,120 +171,82 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
     /** 客户端说"开始"（或者直接推了音频）⇒ 去连上游。 */
     const start = () => {
       if (up) return;
-      // ⚠️ 这一行是**排查用的**（2026-09-23 加）：主人手机上"按一下就没声了"，
-      //    而服务端以前**什么都不记** ⇒ 只能猜。现在至少能看清"有没有走到这里、是谁的设备"。
+      // ⚠️ 这一行是**排查用的**：主人手机上"按一下就没声了"，而服务端以前**什么都不记**
+      //    ⇒ 只能猜。现在至少能看清"有没有走到这里、是谁的设备"。
       // ⚠️ 带上**来源**（`his-own` / `default`）—— 它是"到底用了谁的钥匙"的唯一线索，
       //    而它**不是秘密**（只是"从哪来"）。
       log(
-        `asr：会话开始 · 引擎 ${config.engine} · 凭据来源 ${config.source ?? 'default'}` +
+        `asr：会话开始 · 资源 ${config.engine} · 凭据来源 ${config.source ?? 'default'}` +
           ` · 来自 ${String(info.ua ?? '未知设备').slice(0, 90)}`,
       );
-      let url;
-      try {
-        url = upstreamUrl();
-      } catch (err) {
-        send({ type: 'asr/error', reason: 'upstream', message: safeAsrMessage(err) });
-        return closeClient();
-      }
-      up = new WebSocket(url);
+      // ★ **上游那一跳 = 豆包**（`src/asr-doubao.js`；面向浏览器的协议一个字没改）
+      up = createDoubaoUpstream({ config, log });
+      up.open({
+        onReady: () => {
+          // 🔴 **握上手才说 ready**（对应老那套"上游回了 code 0 才算"）：
+          //    没握上手就说"能听"，用户会对着一个没在听的麦克风说话。
+          send({ type: 'asr/ready', engine: config.engine });
+        },
+        onPartial: ({ text, index }) => {
+          if (text) lastText = text;
+          if (typeof index === 'number') lastIndex = index;
+          send({ type: 'asr/partial', text: text ?? '', index: typeof index === 'number' ? index : 0 });
+        },
+        onFinal: ({ text, index }) => {
+          // ⚠️ `definite` 是**这一段说完了**（上游按句给）；`index` 是它的位置 ——
+          //    客户端靠它**按段替换**（不然同一段会被接成一串重复的话）。
+          if (text) lastText = text;
+          if (typeof index === 'number') lastIndex = index;
+          send({ type: 'asr/final', text: text ?? '', index: typeof index === 'number' ? index : 0 });
+        },
+        onEnd: () => {
+          why = '上游说整段说完了';
+          reason = 'upstream';
+          finish(lastText);
+        },
+        onError: (e) => {
+          // ⚠️ **一句话都不许带密钥**（URL / token 都不进回话）
+          why = e?.kind === 'engine' ? `上游不成（错误码 ${e?.code ?? '?'}）` : '上游出错';
+          reason = 'engine';
+          log(`asr 上游出错（${e?.kind ?? '?'}）：${safeAsrMessage(e?.message)}`);
+          send({
+            type: 'asr/error',
+            // ⚠️ 只有"上游明说不行"（错误帧 / 鉴权）才是 `engine`；
+            //    连不上、握不上手、半路断都算 `upstream`（客户端那两档的处置不一样）。
+            reason: e?.kind === 'engine' ? 'engine' : 'upstream',
+            code: e?.code ?? null,
+            message: safeAsrMessage(e?.message),
+          });
+          ended = true;
+          stopUpstream();
+          closeClient();
+        },
+      });
       cap = setTimeout(() => {
-        why = '到点收手（上游一次连接的上限）';
+        why = '到点收手（我们自己的上限）';
         reason = 'capped';
-        // 内测版上限 ⇒ 我们提前收手，并**告诉客户端为什么**
+        // 上限 ⇒ 我们提前收手，并**告诉客户端为什么**
         send({ type: 'asr/capped' });
         try {
-          up?.send(JSON.stringify({ type: 'end' }));
+          up?.finish();
         } catch {
           /* 已经没了 */
         }
         // 给它一点时间把最后的字吐回来；不给就一直等
         setTimeout(() => finish(), 1500);
       }, maxMs);
-
-      up.on('open', () => {
-        for (const b of queue) {
-          try {
-            up.send(b);
-          } catch {
-            /* 已经没了 */
-          }
-        }
-        queue.length = 0;
-      });
-      up.on('message', (raw) => {
-        let j;
-        try {
-          j = JSON.parse(String(raw));
-        } catch {
-          return; // 不认识的一律丢（不猜）
-        }
-        // ── 第一句是握手：成不成全看它的 `code` ────────────────
-        if (handshake === null) {
-          handshake = j;
-          if (j.code === 0) {
-            send({ type: 'asr/ready', engine: config.engine });
-          } else {
-            why = `上游不成（code ${j.code}）`;
-            reason = 'engine';
-            // ⚠️ 只说服务端那句原话（鉴权 / 没开通 / 参数）——**不带密钥、不带 URL**
-            send({
-              type: 'asr/error',
-              reason: 'engine',
-              code: j.code,
-              message: String(j.message ?? '').slice(0, 200),
-            });
-            ended = true;
-            stopUpstream();
-            closeClient();
-          }
-          return;
-        }
-        const text = j.result?.voice_text_str ?? '';
-        if (text) lastText = text;
-        const slice = j.result?.slice_type;
-        // 🔴 **`index` 必须传下去**（2026-09-23 抓真帧抓出来的）：
-        //    腾讯**同一段**会连着发好几条，`voice_text_str` 是**那一段逐次累积**的字
-        //    （实测 `嗯` → `今天` → `今天天气` → … → `今天天气怎么样？`，而 `index` 全是 0）。
-        //    ⇒ 客户端要靠它做"**按段替换**"，否则这几条会被接成一串重复的话。
-        const index = typeof j.result?.index === 'number' ? j.result.index : 0;
-        if (typeof j.result?.index === 'number') lastIndex = j.result.index;
-        if (slice === 0) send({ type: 'asr/partial', text, index });
-        else if (slice === 1 || slice === 2) send({ type: 'asr/final', text, index });
-        // ⚠️ **收尾那条要带最后听到的字**：腾讯的 `final:1` 里没有 `result`，
-        //    照抄就是一条空字 —— 客户端那半边虽然也不许被空字擦掉，
-        //    但这条本来就该把"整段最后是什么"说清楚。
-        if (j.final === 1) {
-          why = '上游说整段说完了';
-          reason = 'upstream';
-          finish(lastText);
-        }
-      });
-      up.on('error', (err) => {
-        why = '上游出错';
-        reason = 'engine';
-        // ⚠️ **不许把签名 URL 写进日志/回话**（`safeAsrMessage` 负责）
-        log(`asr 上游出错：${safeAsrMessage(err)}`);
-        send({ type: 'asr/error', reason: 'upstream', message: safeAsrMessage(err) });
-        ended = true;
-        stopUpstream();
-        closeClient();
-      });
-      up.on('close', () => {
-        // 上游自己断了（没走到 final）⇒ 也算收尾，别让界面挂在那儿
-        if (!ended) {
-          why = why === '（还在跑）' ? '上游把连接关了' : why;
-          if (reason === 'user-stop') reason = 'upstream';
-          finish();
-        }
-      });
     };
 
     ws.on('message', (data, isBinary) => {
       if (isBinary) {
-        // ★ 音频：**原样**转给上游（一个字节都不改）
+        // ★ 音频：**原样**交给上游那一跳（编码成豆包的帧是它的事；PCM 一个字节都不改）
         start();
         bytes += data.length ?? 0;
-        upSend(Buffer.isBuffer(data) ? data : Buffer.from(data));
+        try {
+          up?.audio(Buffer.isBuffer(data) ? data : Buffer.from(data));
+        } catch {
+          /* 上游已经没了 ⇒ 让它自己那条 error/close 走收尾 */
+        }
         return;
       }
       let j = null;
@@ -313,9 +257,13 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
       }
       if (j?.type === 'asr/start') start();
       else if (j?.type === 'asr/stop') {
-        // 用户按了"结束" ⇒ 请上游收尾（它会回 final=1）
+        // 用户按了"结束" ⇒ 请上游收尾（发一个"最后一包"空音频 ⇒ 它把最后那些字吐回来）
         start();
-        upSend(JSON.stringify({ type: 'end' }));
+        try {
+          up?.finish();
+        } catch {
+          /* 已经没了 */
+        }
       }
     });
 

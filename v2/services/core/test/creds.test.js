@@ -46,7 +46,7 @@ test('认得出那六行、认不出的原样留着（空值**不算有**）', (
     'HUPO_MODEL_KEY: sk-abc',
     'HUPO_IMAGE_KEY:   img-123  ',
     'HUPO_VOICE_APPID: 1300000001',
-    'HUPO_VOICE_SECRET_KEY:',
+    'HUPO_VOICE_TOKEN:',
     'HUPO_VIDEO_KEY: vid-xyz',
     '别人写的: 留着',
   ].join('\n'));
@@ -54,12 +54,12 @@ test('认得出那六行、认不出的原样留着（空值**不算有**）', (
   assert.equal(values.image, 'img-123', '两边的空格要去掉');
   assert.equal(values.voiceAppId, '1300000001');
   assert.equal(values.video, 'vid-xyz');
-  assert.equal(values.voiceSecretKey, undefined, '★ 空值**不算有**');
+  assert.equal(values.voiceAccessToken, undefined, '★ 空值**不算有**');
   const s = credStatus(values);
   assert.equal(s.model, true);
   assert.equal(s.image, true);
   assert.equal(s.video, true);
-  assert.equal(s.voice, false, '★ 语音三样齐了才算有（缺一样就是没有）');
+  assert.equal(s.voice, false, '★ 语音两样齐了才算有（缺一样就是没有）');
   assert.equal(unknown.includes('别人写的: 留着'), true, '认不出的行要留着（不是我们写的）');
 });
 
@@ -72,11 +72,11 @@ test('`credValueOk`：非空 + 只有 ASCII 可打印字符', () => {
 
 test('🔴 合并：**语言那一把必须写在最前**（旧文件顺序错了也纠正）', () => {
   // 旧文件是"语音在前"（那正是危险形状）
-  const old = 'HUPO_VOICE_SECRET_KEY: SK-voice\nHUPO_MODEL_KEY: sk-model\n别人写的: 留着\n';
+  const old = 'HUPO_VOICE_TOKEN: SK-voice\nHUPO_MODEL_KEY: sk-model\n别人写的: 留着\n';
   const next = mergeCreds(old, { image: 'img-1' });
   const order = next.split('\n').filter((l) => l.includes(':')).map((l) => l.split(':')[0].trim());
   const ours = order.filter((n) => Object.values(CRED_FIELDS).includes(n));
-  assert.deepEqual(ours, ['HUPO_MODEL_KEY', 'HUPO_IMAGE_KEY', 'HUPO_VOICE_SECRET_KEY'],
+  assert.deepEqual(ours, ['HUPO_MODEL_KEY', 'HUPO_IMAGE_KEY', 'HUPO_VOICE_TOKEN'],
     `★ 我们那几行要按 CRED_ORDER 重排（实际 ${JSON.stringify(order)}）`);
   assert.equal(order[0], '别人写的', '别人的行照留');
   assert.match(next, /HUPO_MODEL_KEY: sk-model/, '没给新值的字段要保住原值');
@@ -94,7 +94,7 @@ test('合并：给空串 ⇒ **删掉那一行**（不是写一个空值）', ()
 test('🔴 盒子那边读文件：**名字优先**，语音密钥写在前面也抢不走模型那把', () => {
   // 这是那个真陷阱：`parseKey` 原来只按"名字里带 KEY/SECRET 的第一个"取
   const text = [
-    'HUPO_VOICE_SECRET_KEY: SK-voice-secret',
+    'HUPO_VOICE_TOKEN: SK-voice-secret',
     'HUPO_MODEL_KEY: sk-the-real-one',
     'HUPO_IMAGE_KEY: img-1',
   ].join('\n');

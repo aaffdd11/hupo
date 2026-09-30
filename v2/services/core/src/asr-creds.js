@@ -25,7 +25,7 @@ import { VOICE_FIELDS } from './creds.mjs';
 import { credsFor } from './creds-store.js';
 
 /** 那三样的名字（**只此一处**：读文件与读环境变量用的是同一组）。 */
-export const VOICE_ENV_NAMES = ['TENCENT_APPID', 'TENCENT_SECRET_ID', 'TENCENT_SECRET_KEY'];
+export const VOICE_ENV_NAMES = ['DOUBAO_ASR_APPID', 'DOUBAO_ASR_TOKEN'];
 
 /**
  * **谁是"主人自己"**（P2-2 · 主人 2026-09-25 拍板）。
@@ -46,9 +46,8 @@ export function isOwnerSub(sub) {
  * ⚠️ 这张表只住一处：`creds.mjs` 的 `VOICE_FIELDS`（顺序＝AppID / SecretId / SecretKey）。
  */
 const VOICE_FIELD_OF = Object.freeze({
-  TENCENT_APPID: VOICE_FIELDS[0],
-  TENCENT_SECRET_ID: VOICE_FIELDS[1],
-  TENCENT_SECRET_KEY: VOICE_FIELDS[2],
+  DOUBAO_ASR_APPID: VOICE_FIELDS[0],
+  DOUBAO_ASR_TOKEN: VOICE_FIELDS[1],
 });
 
 /** 默认的钥匙文件（`restart-core.sh` 也读它：**0600、不进仓库**）。 */
@@ -111,22 +110,28 @@ export function resolveVoiceCreds({ dataDir, env = process.env, fs = nodeFs } = 
     why = `那份钥匙文件读不出来（${err?.code ?? err?.message ?? err}）`;
   }
   const pick = (name) => fromFile[name] || env?.[name] || '';
-  const appid = pick('TENCENT_APPID');
-  const secretId = pick('TENCENT_SECRET_ID');
-  const secretKey = pick('TENCENT_SECRET_KEY');
-  const engine = fromFile.TENCENT_ASR_ENGINE || env?.TENCENT_ASR_ENGINE || '';
+  // ★ **豆包那两样**（2026-10-01 换的）：App ID ＋ Access Token；资源 id 可选。
+  const appid = pick('DOUBAO_ASR_APPID');
+  const token = pick('DOUBAO_ASR_TOKEN');
+  const resource = pick('DOUBAO_ASR_RESOURCE');
   const upstream = fromFile.HUPO_ASR_URL || env?.HUPO_ASR_URL || null;
-  const hasKey = Boolean(appid && secretId && secretKey);
+  const hasKey = Boolean(appid && token);
   const configured = Boolean(upstream) || hasKey;
-  const source = hasKey && (fromFile.TENCENT_APPID || fromFile.TENCENT_SECRET_ID || fromFile.TENCENT_SECRET_KEY)
+  const source = hasKey && (fromFile.DOUBAO_ASR_APPID || fromFile.DOUBAO_ASR_TOKEN)
     ? 'file'
     : hasKey ? 'env' : 'none';
   if (!configured && why === '') {
-    why = hadFile ? '文件在，但里面没有那三样（或只写了一半）' : '还没有那份钥匙文件';
+    why = hadFile ? '文件在，但里面没有那两样（或只写了一半）' : '还没有那份钥匙文件';
   }
-  // ⚠️ 形状与 `asrConfigFromEnv()` 一致（`asr.js` 直接用）——`engine` 空就让它去兜底。
-  const base = asrConfigFromEnv({ ...env, ...(engine ? { TENCENT_ASR_ENGINE: engine } : {}) });
-  return { ...base, appid, secretId, secretKey, engine: engine || base.engine, upstream, configured, source, why };
+  // ⚠️ 形状与 `asrConfigFromEnv()` 一致（`asr.js` 直接用）：文件里那两样**盖过**进程 env。
+  const base = asrConfigFromEnv({
+    ...env,
+    ...(appid ? { DOUBAO_ASR_APPID: appid } : {}),
+    ...(token ? { DOUBAO_ASR_TOKEN: token } : {}),
+    ...(resource ? { DOUBAO_ASR_RESOURCE: resource } : {}),
+    ...(upstream ? { HUPO_ASR_URL: upstream } : {}),
+  });
+  return { ...base, configured, source, why };
 }
 
 /**
@@ -159,14 +164,16 @@ export function voiceCredsFor({ sub = null, dataDir, env = process.env, fs = nod
   const mineOk = VOICE_ENV_NAMES.every((n) => typeof mine[VOICE_FIELD_OF[n]] === 'string'
     && mine[VOICE_FIELD_OF[n]].length > 0);
   if (mineOk) {
-    const engine = mine.engine ?? '';
-    const base = asrConfigFromEnv(engine ? { ...env, TENCENT_ASR_ENGINE: engine } : env);
+    // ★ **他自己填的是豆包那两样**（App ID ＋ Access Token）⇒ 直接连豆包（不走取证中转）
+    const base = asrConfigFromEnv({
+      ...env,
+      DOUBAO_ASR_APPID: String(mine.voiceAppId),
+      DOUBAO_ASR_TOKEN: String(mine.voiceAccessToken),
+      ...(mine.voiceResource ? { DOUBAO_ASR_RESOURCE: String(mine.voiceResource) } : {}),
+    });
     return {
       ...base,
-      appid: mine.voiceAppId,
-      secretId: mine.voiceSecretId,
-      secretKey: mine.voiceSecretKey,
-      upstream: null, // 他自己填的是"直连腾讯"那三样，不走取证中转
+      upstream: null,
       configured: true,
       source: 'his-own',
       sub: who,

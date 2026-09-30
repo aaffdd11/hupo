@@ -37,9 +37,9 @@ function tmp() {
 //       仓库规则拦的是**形状**，它不看你是不是测试数据。
 //    ⇒ 假钥匙就写成一望而知的假（`fake-…`），这样既不会被误判，也不会被当成泄露。
 const KEYS = {
-  TENCENT_APPID: '1300000001',
-  TENCENT_SECRET_ID: 'fake-secret-id-for-test-only',
-  TENCENT_SECRET_KEY: 'fake-secret-key-for-test-only-abcd',
+  DOUBAO_ASR_APPID: '1300000001',
+  DOUBAO_ASR_TOKEN: 'fake-secret-id-for-test-only',
+  DOUBAO_ASR_TOKEN: 'fake-secret-key-for-test-only-abcd',
 };
 
 /** 照 `restart-core.sh` 那种写法落一份（主人是手写的 ⇒ 注释/空行/引号都要认）。 */
@@ -54,17 +54,17 @@ test('`KEY=VALUE` 那种文件：注释/空行/引号都认，坏行跳过（**�
   const o = parseEnvFile([
     '# 这是注释',
     '',
-    'TENCENT_APPID=1300000001',
-    'TENCENT_SECRET_ID="AKIDxxxx"',
-    "TENCENT_SECRET_KEY='SKxxxx'",
+    'DOUBAO_ASR_APPID=1300000001',
+    'DOUBAO_ASR_TOKEN="AKIDxxxx"',
+    "DOUBAO_ASR_RESOURCE='volc.bigasr.sauc.duration'",
     '没有等号的一行',
     '=只有值没有名字',
     '2数字开头=不许（不是合法变量名）',
     '别的变量=名字不是 ASCII ⇒ 跳过（不是错）',
   ].join('\n'));
-  assert.equal(o.TENCENT_APPID, '1300000001');
-  assert.equal(o.TENCENT_SECRET_ID, 'AKIDxxxx', '两边的引号要脱掉');
-  assert.equal(o.TENCENT_SECRET_KEY, 'SKxxxx');
+  assert.equal(o.DOUBAO_ASR_APPID, '1300000001');
+  assert.equal(o.DOUBAO_ASR_TOKEN, 'AKIDxxxx', '两边的引号要脱掉');
+  assert.equal(o.DOUBAO_ASR_RESOURCE, 'volc.bigasr.sauc.duration', '单引号也要脱');
   assert.equal(o['别的变量'], undefined, '名字不是 ASCII ⇒ 跳过（这种行多半是粘错了）');
   assert.equal(o['没有等号的一行'], undefined);
   assert.equal(o['2数字开头'], undefined);
@@ -73,17 +73,17 @@ test('`KEY=VALUE` 那种文件：注释/空行/引号都认，坏行跳过（**�
 test('🔴 轮换：**同一个进程里**再取一次 ⇒ 读到的是新钥匙（不用重启）', () => {
   const dir = tmp();
   try {
-    writeEnvFile(dir, 'TENCENT_APPID=1\nTENCENT_SECRET_ID=a\nTENCENT_SECRET_KEY=b\n');
+    writeEnvFile(dir, 'DOUBAO_ASR_APPID=1\nDOUBAO_ASR_TOKEN=a\nDOUBAO_ASR_TOKEN=b\n');
     const before = resolveVoiceCreds({ dataDir: dir, env: {} });
     assert.equal(before.configured, true);
     assert.equal(before.source, 'file');
     assert.equal(before.appid, '1');
 
     // 主人轮换：把那三行换掉（B5 就是这么做的）
-    writeEnvFile(dir, 'TENCENT_APPID=2\nTENCENT_SECRET_ID=aa\nTENCENT_SECRET_KEY=bb\n');
+    writeEnvFile(dir, 'DOUBAO_ASR_APPID=2\nDOUBAO_ASR_TOKEN=aa\nDOUBAO_ASR_TOKEN=bb\n');
     const after = resolveVoiceCreds({ dataDir: dir, env: {} });
     assert.equal(after.appid, '2', '★ 换完**不用重启**就该读到新的（现读的那份文件）');
-    assert.equal(after.secretKey, 'bb');
+    assert.equal(after.token, 'bb');
   } finally {
     nodeFs.rmSync(dir, { recursive: true, force: true });
   }
@@ -97,10 +97,10 @@ test('③ 没配 ⇒ 如实说"没配"，而且说得出为什么（文件不在
     assert.equal(empty.source, 'none');
     assert.match(empty.why, /还没有那份钥匙文件/);
 
-    writeEnvFile(dir, 'TENCENT_APPID=1\n'); // 只写了一半
+    writeEnvFile(dir, 'DOUBAO_ASR_APPID=1\n'); // 只写了一半
     const half = resolveVoiceCreds({ dataDir: dir, env: {} });
     assert.equal(half.configured, false);
-    assert.match(half.why, /没有那三样|只写了一半/);
+    assert.match(half.why, /没有那两样|只写了一半/);
   } finally {
     nodeFs.rmSync(dir, { recursive: true, force: true });
   }
@@ -109,7 +109,7 @@ test('③ 没配 ⇒ 如实说"没配"，而且说得出为什么（文件不在
 test('③ 读不出来（比如权限不对）⇒ 当成没配，但**说得出是哪一种**', () => {
   const dir = tmp();
   try {
-    const f = writeEnvFile(dir, 'TENCENT_APPID=1\nTENCENT_SECRET_ID=a\nTENCENT_SECRET_KEY=b\n');
+    const f = writeEnvFile(dir, 'DOUBAO_ASR_APPID=1\nDOUBAO_ASR_TOKEN=a\nDOUBAO_ASR_TOKEN=b\n');
     nodeFs.chmodSync(f, 0o000);
     const fake = {
       existsSync: (p) => nodeFs.existsSync(p),
@@ -134,8 +134,8 @@ test('② 🔴 日志那一句**一个字符的钥匙都不带**（只有长度�
     const cfg = resolveVoiceCreds({ dataDir: dir, env: {} });
     const said = describeVoiceCreds(cfg);
     // 负向对照：上面那几串**真的读进去了**（不然"没泄漏"是因为压根没读到）
-    assert.equal(cfg.appid, KEYS.TENCENT_APPID);
-    assert.equal(cfg.secretKey, KEYS.TENCENT_SECRET_KEY);
+    assert.equal(cfg.appid, KEYS.DOUBAO_ASR_APPID);
+    assert.equal(cfg.token, KEYS.DOUBAO_ASR_TOKEN);
     for (const v of Object.values(KEYS)) {
       assert.equal(said.includes(v), false, `★ 日志里不许出现钥匙：${said}`);
       assert.equal(said.includes(v.slice(0, 6)), false, `★ 连前几位都不许：${said}`);
@@ -160,7 +160,7 @@ test('★ 🔴 P2-2：兜底那份**只给主人**；别人没填自己的 ⇒ �
       assert.equal(other.source, 'none', `★ ${String(who)} 不许吃部署默认那份（那是主人的钥匙）`);
       assert.equal(other.configured, false, '★ 没填自己的 ⇒ 如实说"没配"');
       assert.equal(other.appid, '', '★ 一个字符的钥匙都不许递出去');
-      assert.equal(other.secretKey, '');
+      assert.equal(other.token, '');
       assert.match(other.why, /没填|没配|只给主人/, `要说得出为什么：${other.why}`);
     }
     // ── 🔴 反例（主人那一份**一个字都不动**）：`owner` / `local` 照旧吃兜底
@@ -168,8 +168,8 @@ test('★ 🔴 P2-2：兜底那份**只给主人**；别人没填自己的 ⇒ �
       const mine = voiceCredsFor({ sub: owner, dataDir: dir, env: {} });
       assert.equal(mine.source, 'default', `★ ${owner} 是主人 ⇒ 兜底照旧能用`);
       assert.equal(mine.configured, true);
-      assert.equal(mine.appid, KEYS.TENCENT_APPID);
-      assert.equal(mine.secretKey, KEYS.TENCENT_SECRET_KEY);
+      assert.equal(mine.appid, KEYS.DOUBAO_ASR_APPID);
+      assert.equal(mine.token, KEYS.DOUBAO_ASR_TOKEN);
       assert.equal(mine.sub, owner);
     }
   } finally {
@@ -183,7 +183,7 @@ test('🔴 中继：`config` 是函数 ⇒ **每条连接各取一份**（一条
   const relay = createAsrRelay({
     config: (info) => (info.sub === 'mei-qian'
       ? { configured: false }
-      : { configured: true, appid: '1', secretId: 'a', secretKey: 'b', engine: '16k_zh', upstream: null }),
+      : { configured: true, appid: '1', token: 'a', token: 'b', engine: '16k_zh', upstream: null }),
     log: () => {},
   });
   // 构造两条假连接，只看它们各自收到什么
@@ -216,25 +216,23 @@ test('🔴 中继：`config` 是函数 ⇒ **每条连接各取一份**（一条
   assert.equal(createAsrRelay({ config: { configured: false }, log: () => {} }).configured, false);
 });
 
-// ── ★ P1-26 后半：**他自己填的那三样优先**（2026-09-24）──────────
-test('★ 🔴 配置页那三样填了 ⇒ **就用他的**（来源如实写 `his-own`）', () => {
+// ── ★ P1-26 后半：**他自己填的那两样优先**（2026-09-24）──────────
+test('★ 🔴 配置页那两样填了 ⇒ **就用他的**（来源如实写 `his-own`）', () => {
   const dir = tmp();
   try {
     // 部署默认那一份也在（负向对照要靠它：证明不是"默认那份没了才用他的"）
-    writeEnvFile(dir, 'TENCENT_APPID=999\nTENCENT_SECRET_ID=env-id\nTENCENT_SECRET_KEY=env-key\n');
+    writeEnvFile(dir, 'DOUBAO_ASR_APPID=999\nDOUBAO_ASR_TOKEN=env-id\nDOUBAO_ASR_TOKEN=env-key\n');
     const w = writeUserCreds(dir, 'u1', {
-      voiceAppId: '1300000001',
-      voiceSecretId: 'mine-id',
-      voiceSecretKey: 'mine-key',
+      voiceAppId: 'mine-appid',
+      voiceAccessToken: 'mine-token',
     });
     assert.equal(w.ok, true);
-    assert.equal(w.status.voice, true, '三样齐了 ⇒ 页面那边也该说"有"');
+    assert.equal(w.status.voice, true, '两样齐了 ⇒ 页面那边也该说"有"');
 
     const cfg = voiceCredsFor({ sub: 'u1', dataDir: dir, env: {} });
     assert.equal(cfg.source, 'his-own');
-    assert.equal(cfg.appid, '1300000001');
-    assert.equal(cfg.secretId, 'mine-id');
-    assert.equal(cfg.secretKey, 'mine-key');
+    assert.equal(cfg.appid, 'mine-appid');
+    assert.equal(cfg.token, 'mine-token');
     assert.equal(cfg.configured, true);
     assert.equal(cfg.sub, 'u1', '要记住这是谁的（日志用）');
 
@@ -251,12 +249,12 @@ test('★ 🔴 配置页那三样填了 ⇒ **就用他的**（来源如实写 `
 test('★ 三样**缺一** ⇒ 不算"他填了"（别人 ⇒ 没配；主人 ⇒ 退回兜底）', () => {
   const dir = tmp();
   try {
-    writeEnvFile(dir, 'TENCENT_APPID=999\nTENCENT_SECRET_ID=env-id\nTENCENT_SECRET_KEY=env-key\n');
-    writeUserCreds(dir, 'u1', { voiceAppId: '1300000001', voiceSecretId: 'mine-id' }); // 少 secretKey
+    writeEnvFile(dir, 'DOUBAO_ASR_APPID=999\nDOUBAO_ASR_TOKEN=env-id\nDOUBAO_ASR_TOKEN=env-key\n');
+    writeUserCreds(dir, 'u1', { voiceAccessToken: 'mine-token' }); // 少了 App ID（两样缺一）
     const cfg = voiceCredsFor({ sub: 'u1', dataDir: dir, env: {} });
     assert.equal(cfg.source, 'none', '★ 只有两样 ⇒ 当没填过（缺一样发不出请求）');
     assert.equal(cfg.configured, false, '★ P2-2：别人缺一样 ⇒ 如实"没配"，不许拿兜底顶上');
-    assert.equal(cfg.secretKey, '');
+    assert.equal(cfg.token, '');
     // 负向对照：主人缺一样 ⇒ 兜底照旧（**他的钥匙没被动**）
     const owner = voiceCredsFor({ sub: 'owner', dataDir: dir, env: {} });
     assert.equal(owner.source, 'default', '★ 主人缺一样 ⇒ 仍然吃兜底');
@@ -270,8 +268,8 @@ test('★ 三样**缺一** ⇒ 不算"他填了"（别人 ⇒ 没配；主人 �
 test('他自己填了 ⇒ 不许走"取证中转"（那是给没钥匙时验链路用的）', () => {
   const dir = tmp();
   try {
-    writeEnvFile(dir, 'HUPO_ASR_URL=ws://127.0.0.1:1/up\nTENCENT_APPID=999\nTENCENT_SECRET_ID=e\nTENCENT_SECRET_KEY=k\n');
-    writeUserCreds(dir, 'u1', { voiceAppId: '1', voiceSecretId: 'a', voiceSecretKey: 'b' });
+    writeEnvFile(dir, 'HUPO_ASR_URL=ws://127.0.0.1:1/up\nDOUBAO_ASR_APPID=999\nDOUBAO_ASR_TOKEN=e\nDOUBAO_ASR_TOKEN=k\n');
+    writeUserCreds(dir, 'u1', { voiceAppId: '1', voiceAccessToken: 'a', voiceAccessToken: 'b' });
     const cfg = voiceCredsFor({ sub: 'u1', dataDir: dir, env: {} });
     assert.equal(cfg.source, 'his-own');
     assert.equal(cfg.upstream, null, '★ 用他自己的钥匙时不许再指向中转');
@@ -296,15 +294,15 @@ test('★ 🔴 盒子里那份**单文件**：识别路要读得到（`env` 必�
     writeKeyFile(file, 'sk-box-model'); // 老的：只有模型那一把
     mergeKeyFile(file, {
       voiceAppId: '1300000001',
-      voiceSecretId: 'box-id',
-      voiceSecretKey: 'box-key',
+      voiceAccessToken: 'box-id',
+      voiceAccessToken: 'box-key',
     });
     // 盒子里：那份单文件 ＋ `HUPO_ROLE=tenant` ⇒ 必须认出来
     const cfg = voiceCredsFor({ sub: 'owner', dataDir: dir, env: { HUPO_ROLE: 'tenant' } });
     assert.equal(cfg.configured, true, '★ 盒子里推进去的三样要真的接上识别路');
     assert.equal(cfg.source, 'his-own');
     assert.equal(cfg.appid, '1300000001');
-    assert.equal(cfg.secretKey, 'box-key');
+    assert.equal(cfg.token, 'box-key');
 
     // 负向对照：**没有那一台的角色** ⇒ 宿主上不许拿一份陈旧单文件去顶（宁可说"没配"）
     const host = voiceCredsFor({ sub: 'owner', dataDir: dir, env: {} });

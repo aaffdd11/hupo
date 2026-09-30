@@ -8,8 +8,8 @@
 //
 // ── 主人 2026-09-24 定的四样（配置页就是配它）──────────────────
 //   · **语言大模型**：一把 key（`HUPO_MODEL_KEY`）
-//   · **语音大模型**：**三样齐了才算有**（`HUPO_VOICE_APPID/SECRET_ID/SECRET_KEY`）
-//     —— 与识别路（`src/asr-creds.js` 的 `TENCENT_APPID/SECRET_ID/SECRET_KEY`）**同一组含义**
+//   · **语音**（豆包大模型流式语音识别）：**两样齐了才算有**（`HUPO_VOICE_APPID` ＋ `HUPO_VOICE_TOKEN`）
+//     —— 与识别路（`src/asr-creds.js` 的 `DOUBAO_ASR_APPID/DOUBAO_ASR_TOKEN`）**同一组含义**
 //   · **图片生成**：一把 key（`HUPO_IMAGE_KEY`）
 //   · **视频生成**：一把 key（`HUPO_VIDEO_KEY`）
 //
@@ -32,13 +32,14 @@ export const CRED_FIELDS = Object.freeze({
   model: 'HUPO_MODEL_KEY',
   image: 'HUPO_IMAGE_KEY',
   video: 'HUPO_VIDEO_KEY',
+  // ★ **2026-10-01：语音换成豆包**（主人：*「语音识别，用豆包」*＋他选的"完全换成豆包"）
+  //   ⇒ 存的两样是**豆包那两样**：App ID ＋ Access Token（老的 SecretId/SecretKey 不再用）。
   voiceAppId: 'HUPO_VOICE_APPID',
-  voiceSecretId: 'HUPO_VOICE_SECRET_ID',
-  voiceSecretKey: 'HUPO_VOICE_SECRET_KEY',
+  voiceAccessToken: 'HUPO_VOICE_TOKEN',
 });
 
 /** 语音那三样：**三样齐了才算有**（缺一样就是没有）。 */
-export const VOICE_FIELDS = Object.freeze(['voiceAppId', 'voiceSecretId', 'voiceSecretKey']);
+export const VOICE_FIELDS = Object.freeze(['voiceAppId', 'voiceAccessToken']);
 
 /** 🔴 写下去的次序（**语言那一把最先** —— 理由见文件顶上那段）。 */
 export const CRED_ORDER = Object.freeze(Object.keys(CRED_FIELDS));

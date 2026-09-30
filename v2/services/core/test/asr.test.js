@@ -1,21 +1,24 @@
 // **语音那条路（`/api/asr`）的验收** —— 真 HTTP + 真 WebSocket + **一个假的上游**。
 //
-// 🔴 为什么用一个"假腾讯云"而不是等钥匙：钥匙是主人的（`AGENTS.md` §六 第 1 条），
+// 🔴 为什么用一个"假豆包"而不是等钥匙：钥匙是主人的（`AGENTS.md` §六 第 1 条），
 //    而"等钥匙到了再说"等于这一批**没有判据**。⇒ 上游那一段被换成一个**桩**
-//    （`HUPO_ASR_URL` 指向它），于是**除了腾讯云自己那台**之外，
-//    每一环都是真的：真浏览器来的二进制、真签名调用点、真映射、真收尾。
-//    剩下"腾讯收不收我们的签名"那一条，由 `scripts/check-asr-tencent.mjs`
-//    （主人自己跑）钉住 —— 两半合起来才是完整的一条路。
+//    （`HUPO_ASR_URL` 指向它），于是**除了豆包自己那台**之外，
+//    每一环都是真的：真浏览器来的二进制、真帧编码（4 字节 header ＋ 长度 ＋
+//    gzip 的 JSON）、真解码、真映射、真收尾。⇒ 这个桩**说的就是豆包的协议**
+//    （二进制帧那一套，见 `src/asr-doubao.js`），换成真上游只是换个地址。
+//    ⚠️ 剩下"豆包那台收不收我们这套帧"那一条**还没有真读数**（缺钥匙，见
+//    `docs/dev/152-VOICE-DOUBAO.md` §四）——**不许把它说成验过了**。
 //
 // 判据（每条都打在**真那一侧**）：
-//   ① 签名是纯的（同输入同签名）、`voice_id` 缺了要**明着抛**（不许偷偷生成）
+//   ① 帧的形状对（header 那几格 · 长度大端 · request 那段是 gzip 的 JSON）、
+//      没配 App ID/Token 时**明着不建连**（不许偷偷发）
 //   ② 路径：`/api/asr` 之外的升级仍然 404（别顺手把别的口放进来）
 //   ③ 没令牌 ⇒ **握手阶段** 401（不是"先连上再关"）
 //   ④ 没配钥匙 ⇒ 接上，但如实回 `asr/unavailable`（**不装开麦**）
 //   ⑤ 配好了 ⇒ ready → 音频**一个字节不改**地过去 → partial/final/end 映射对
-//   ⑥ 用户按"结束" ⇒ 上游收到 `{"type":"end"}`（收尾靠它，不是靠我们猜）
-//   ⑦ 上游回错（鉴权/没开通）⇒ 原话转达，**回话里不许出现密钥/签名 URL**
-//   ⑧ 超时收手 ⇒ `asr/capped`（内测版一条连接最多 1 分钟）
+//   ⑥ 用户按"结束" ⇒ 上游收到**最后一包**（`flags=0b0010`；收尾靠它，不是靠我们猜）
+//   ⑦ 上游回错（鉴权/没开通）⇒ 原话转达，**回话里不许出现 App ID/Token**
+//   ⑧ 到点收手 ⇒ `asr/capped` ＋ 对上游说"最后一包"（55 秒是产品决定，见 152 §六）
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,7 +33,6 @@ import { Store } from '../src/store.js';
 import { Timeline } from '../src/timeline.js';
 import { createServer } from '../src/server.js';
 import { ASR_MAX_MS, asrConfigFromEnv, createAsrRelay, safeAsrMessage } from '../src/asr.js';
-import { DEFAULT_ASR_ENGINE, signAsrUrl } from '../src/asr-sign.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -109,52 +111,97 @@ async function boot({ asrConfig = null, maxMs = ASR_MAX_MS } = {}) {
 }
 
 /**
- * **假腾讯云**：同一套线上协议的形状（先握手 `code`，再 `result.slice_type`，最后 `final:1`）。
+ * **假豆包**（`wss://openspeech.bytedance.com/api/v3/sauc/bigmodel` 那一套的**帧形状**）。
+ *
+ * ⚠️ 它说的是**真的那套二进制协议**（4 字节 header ＋ [sequence] ＋ 4 字节长度 ＋ payload），
+ *    不是 JSON 假装的 —— 这样"我们发出去的帧对不对"才有判据。
+ *
  * @param {object} o
- * @param {number} [o.code] 握手回的 code（非 0 = 服务端不收）
- * @param {Array<{slice:number,text:string}>} [o.scripts] 收到多少字节之后吐哪一句
+ * @param {number} [o.errCode] 建连之后先回一个**错误帧**（非 0 = 上游不收）
+ * @param {Array<{at:number,text:string,definite?:string,index?:number}>} [o.scripts]
+ *        收到多少字节之后吐哪一句（`definite` 非空 = 那是一句"确定句"）
+ * @param {boolean} [o.silentReady] 收到请求参数也**不回**（用来量"握不上手"那一档）
  */
-async function stubUpstream({ code = 0, scripts = [] } = {}) {
+async function stubUpstream({ errCode = 0, scripts = [], silentReady = false } = {}) {
+  const { encodeFullClientRequest, encodeAudioFrame, decodeServerFrame } = await import('../src/asr-doubao.js');
   const wss = new WebSocketServer({ port: 0 });
   await new Promise((r) => wss.once('listening', r));
   const state = {
     bytes: 0,
     frames: 0,
-    texts: [],
-    gotEnd: false,
-    ws: null,
-    /** 每收到这么多字节就吐一句（`slice` 0=半句 1=一句话 2=整段） */
+    /** 收到的**请求参数**那一份（解出来的 JSON） */
+    clientRequest: null,
+    /** 收到的音频**原始字节**（判据要核"一个字节都没改"） */
+    pcm: Buffer.alloc(0),
+    gotLast: false,
+    headers: null,
     scripts: [...scripts],
   };
-  wss.on('connection', (ws) => {
-    state.ws = ws;
-    ws.send(JSON.stringify({ code, message: code === 0 ? 'success' : 'auth failed: secretid 不对', voice_id: 'v', message_id: 'm' }));
-    ws.on('message', (data, isBinary) => {
-      if (isBinary) {
-        state.bytes += data.length;
-        state.frames += 1;
-        while (state.scripts.length && state.bytes >= state.scripts[0].at) {
-          const s = state.scripts.shift();
-          ws.send(JSON.stringify({
-            code: 0,
-            result: { slice_type: s.slice, voice_text_str: s.text, index: s.index ?? 0 },
-            final: 0,
-          }));
-        }
+  /** 回一帧"识别结果"（照官方那份：`result.text` ＋ `result.utterances[].definite`）。 */
+  const reply = (ws, text, definite = null, index = 0) => {
+    // ⚠️ **`utterances` 是累积的**（真上游就是这样：每说出一个"确定句"就往数组后面加一条）
+    //    ⇒ 我们的解码器按**数组下标**当段号，正好等于测试脚本里那个 `index`。
+    const utts = [];
+    for (let i = 0; i < index; i += 1) utts.push({ text: `（第${i + 1}段）`, definite: true, start_time: 0, end_time: 1 });
+    if (definite !== null) utts.push({ text: definite, definite: true, start_time: 0, end_time: 1 });
+    const payload = Buffer.from(
+      JSON.stringify({ result: { text, utterances: utts } }),
+      'utf8',
+    );
+    const header = Buffer.from([0x11, 0x90, 0x10, 0x00]); // 0b1001 = full server response，JSON，不压缩
+    const size = Buffer.alloc(4);
+    size.writeUInt32BE(payload.length, 0);
+    ws.send(Buffer.concat([header, size, payload]));
+  };
+  const fail = (ws, code, message) => {
+    const body = Buffer.from(message, 'utf8');
+    const header = Buffer.from([0x11, 0xf0, 0x00, 0x00]); // 0b1111 = 错误
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(code, 0);
+    head.writeUInt32BE(body.length, 4);
+    ws.send(Buffer.concat([header, head, body]));
+  };
+  wss.on('connection', (ws, req) => {
+    state.headers = req.headers;
+    if (errCode !== 0) {
+      fail(ws, errCode, 'auth failed: 资源没有开通');
+      return;
+    }
+    ws.on('message', (data) => {
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      const type = (buf[1] >> 4) & 0x0f;
+      if (type === 0b0001) {
+        // 请求参数：解出来存着（顺带证明我们发的是合法的那一份）
+        const ev = decodeServerFrame(buf);
+        void ev;
+        state.clientRequest = buf;
+        if (!silentReady) reply(ws, ''); // 握手那一拍：回一帧（空结果）
         return;
       }
-      state.texts.push(String(data));
-      if (String(data).includes('"end"')) {
-        state.gotEnd = true;
-        ws.send(JSON.stringify({ code: 0, result: { slice_type: 2, voice_text_str: '今天天气怎么样' }, final: 1 }));
+      if (type === 0b0010) {
+        const last = (buf[1] & 0x0f) === 0b0010;
+        const size = buf.readUInt32BE(4);
+        const pcm = buf.slice(8, 8 + size);
+        if (last) {
+          state.gotLast = true;
+          state.gotEnd = true; // 老判据用的名字（同一件事）
+          reply(ws, '今天天气怎么样', '今天天气怎么样', 0);
+          return;
+        }
+        state.bytes += pcm.length;
+        state.frames += 1;
+        state.pcm = Buffer.concat([state.pcm, pcm]);
+        while (state.scripts.length && state.bytes >= state.scripts[0].at) {
+          const sc = state.scripts.shift();
+          // ⚠️ 这个桩同时认两种写法：`definite`（新）与 `slice`（老那种：0=半句 1/2=一句）
+          const definite = sc.definite ?? (sc.slice === 1 || sc.slice === 2 ? sc.text : null);
+          reply(ws, sc.text, definite, sc.index ?? 0);
+        }
       }
     });
   });
   state.url = `ws://127.0.0.1:${wss.address().port}/`;
   state.wss = wss;
-  // ⚠️ **先 terminate 再关**：`wss.close()` 会等客户端自己走，
-  //    而中继那条上游要等到"到点收手"（55 秒）才会断 ——
-  //    这条测试第一次跑就是这样卡了 55 秒（同 `server.close()` 那个坑）。
   state.close = () =>
     new Promise((r) => {
       for (const ws of wss.clients) {
@@ -208,51 +255,6 @@ async function waitFor(events, pred, ms = 4000) {
 }
 
 // ── ① 签名（纯函数）────────────────────────────────────────
-
-test('★ 签名是纯的：同输入 ⇒ 同签名（`voice_id` 由调用方给）', () => {
-  const o = {
-    appid: '1250000000',
-    secretId: 'AKIDexample',
-    secretKey: 'sk-example',
-    params: { voice_id: '11111111-2222-3333-4444-555555555555' },
-    now: 1_700_000_000_000,
-  };
-  const a = signAsrUrl(o);
-  const b = signAsrUrl(o);
-  assert.equal(a.signature, b.signature);
-  // 原文不含协议头、不含 signature，参数按字典序
-  assert.ok(!a.origin.startsWith('wss://'));
-  assert.ok(!a.origin.includes('signature'));
-  assert.ok(a.origin.indexOf('engine_model_type=') < a.origin.indexOf('expired='));
-  // URL 里 signature 是 urlencode 过的
-  assert.ok(a.url.startsWith(`wss://${a.origin}&signature=`));
-  // 默认引擎就是文档里那个
-  assert.ok(a.origin.includes(`engine_model_type=${DEFAULT_ASR_ENGINE}`));
-});
-
-test('★ 少了 `voice_id` ⇒ 明着抛（不许偷偷生成：那会让它不纯）', () => {
-  assert.throws(
-    () => signAsrUrl({ appid: '1', secretId: 's', secretKey: 'k', params: {} }),
-    /voice_id/,
-  );
-});
-
-test('换了密钥 / 换了引擎 ⇒ 签名就变（金丝雀：参数真的进了原文）', () => {
-  const base = {
-    appid: '1250000000',
-    secretId: 'AKIDexample',
-    secretKey: 'sk-example',
-    params: { voice_id: 'v-1' },
-    now: 1_700_000_000_000,
-  };
-  const a = signAsrUrl(base);
-  assert.notEqual(a.signature, signAsrUrl({ ...base, secretKey: 'sk-other' }).signature);
-  // ⚠️ 换的那个引擎**必须与默认值不同**（默认是 `DEFAULT_ASR_ENGINE`；`#175` 之后它是
-  //    `16k_zh`）—— 写死一个"另一个"引擎名，这条才不会因为默认值变了就悄悄失效。
-  const other = DEFAULT_ASR_ENGINE === '16k_zh_large' ? '16k_zh' : '16k_zh_large';
-  assert.notEqual(a.signature, signAsrUrl({ ...base, engine: other }).signature);
-  assert.notEqual(a.signature, signAsrUrl({ ...base, params: { voice_id: 'v-2' } }).signature);
-});
 
 test('上游出错那句话里不许带 URL（URL 本身就是凭据）', () => {
   const raw = 'connect ECONNREFUSED wss://asr.cloud.tencent.com/asr/v2/125?secretid=AKIDx&signature=YWJj';
@@ -328,27 +330,43 @@ test('★ 配好了：音频一个字节不改地过去，半句/定稿/收尾�
   c.ws.send(Buffer.alloc(3200, 9));
   const fin = await waitFor(c.events, (e) => e.type === 'asr/final');
   assert.equal(fin.text, '今天天气');
-  // **一个字节不多、一个字节不少**
+  // **一个字节不多、一个字节不少**（桩解出来的是帧里的 PCM）
   assert.equal(stub.bytes, 6400);
   assert.equal(stub.frames, 2);
+  assert.deepEqual(stub.pcm, Buffer.concat([Buffer.alloc(3200, 7), Buffer.alloc(3200, 9)]),
+      '★ 送出去的 PCM 必须逐字节一样（我们只许给它套帧，不许动它的内容）');
 
-  // 用户按"结束" ⇒ 上游收到 `{"type":"end"}`
+  // 用户按"结束" ⇒ 上游收到那一包"最后一包"（flags=0b0010 的空音频）
   c.ws.send(JSON.stringify({ type: 'asr/stop' }));
   const end = await waitFor(c.events, (e) => e.type === 'asr/end');
   assert.equal(end.text, '今天天气怎么样');
-  assert.equal(stub.gotEnd, true);
-  assert.ok(stub.texts.some((t) => t.includes('"end"')));
+  assert.equal(stub.gotLast, true, '★ 没发"最后一包" ⇒ 上游不会把最后那几个字吐回来');
   await stub.close();
   await s.close();
 });
 
-test('★ `asr/ready` 要等上游**握手真的回了 code 0**（不是连上就算）', async () => {
+test('★ `asr/ready` 要等上游**真的回了第一帧**（不是连上就算）', async () => {
   const stub = await stubUpstream();
   const s = await boot({ asrConfig: asrConfigFromEnv({ HUPO_ASR_URL: stub.url }) });
   const c = await connectAsr(s.wsBase, s.token);
   c.ws.send(JSON.stringify({ type: 'asr/start' }));
   const ready = await waitFor(c.events, (e) => e.type === 'asr/ready');
-  assert.equal(ready.engine, DEFAULT_ASR_ENGINE);
+  assert.ok(typeof ready.engine === 'string' && ready.engine.length > 0, '要报出用的是哪个资源');
+  await stub.close();
+  await s.close();
+});
+
+test('🔴 上游**握不上手**（一帧都不回就断了）⇒ 如实 `asr/error`，不许说"能听"', async () => {
+  const stub = await stubUpstream({ silentReady: true });
+  const s = await boot({ asrConfig: asrConfigFromEnv({ HUPO_ASR_URL: stub.url }) });
+  const c = await connectAsr(s.wsBase, s.token);
+  c.ws.send(JSON.stringify({ type: 'asr/start' }));
+  // 桩不回 ⇒ 我们把上游掐掉（模拟"对面不理我"）
+  await sleep(150);
+  for (const ws of stub.wss.clients) ws.terminate();
+  const err = await waitFor(c.events, (e) => e.type === 'asr/error');
+  assert.equal(err.reason, 'upstream');
+  assert.equal(c.events.some((e) => e.type === 'asr/ready'), false, '★ 没握上手就说 ready = 假话');
   await stub.close();
   await s.close();
 });
@@ -399,13 +417,13 @@ test('★ `index` 要真的传下去（同一段替换全靠它 —— 少了它
   await s.close();
 });
 
-test('★ 上游说"鉴权不过" ⇒ 原话转达，而回话里**没有密钥**', async () => {
-  const stub = await stubUpstream({ code: 4001 });
+test('★ 上游说"鉴权不过"（错误帧）⇒ 原话转达，而回话里**没有密钥**', async () => {
+  const stub = await stubUpstream({ errCode: 4001 });
   const s = await boot({
     asrConfig: asrConfigFromEnv({
       HUPO_ASR_URL: stub.url,
-      TENCENT_SECRET_KEY: 'sk-must-not-leak',
-      TENCENT_SECRET_ID: 'AKIDmustnotleak',
+      DOUBAO_ASR_APPID: '1234567890',
+      DOUBAO_ASR_TOKEN: 'token-must-not-leak',
     }),
   });
   const c = await connectAsr(s.wsBase, s.token);
@@ -415,9 +433,9 @@ test('★ 上游说"鉴权不过" ⇒ 原话转达，而回话里**没有密钥*
   assert.equal(err.code, 4001);
   assert.ok(err.message.includes('auth failed'));
   const all = c.raw.join('\n');
-  assert.ok(!all.includes('sk-must-not-leak'));
-  assert.ok(!all.includes('AKIDmustnotleak'));
-  assert.ok(!all.includes('signature='));
+  assert.ok(!all.includes('token-must-not-leak'), '★ 令牌漏进回话了');
+  assert.ok(!all.includes('1234567890'), '★ App ID 也不许漏');
+  assert.ok(!all.includes('X-Api-Access-Key'), '★ 连头的名字都不许回给客户端');
   await stub.close();
   await s.close();
 });
@@ -450,7 +468,7 @@ test('★ 到点收手 ⇒ `asr/capped`（内测版一条连接最多 1 分钟�
   await s.close();
 });
 
-test('默认上限比腾讯那个 1 分钟**小**（提前收手，不让它半路被掐）', () => {
+test('上限是**我们自己的**约定：几十秒就收手（豆包那边没有这条硬限，别照旧猜）', () => {
   assert.ok(ASR_MAX_MS < 60_000);
   assert.ok(ASR_MAX_MS > 15_000);
 });

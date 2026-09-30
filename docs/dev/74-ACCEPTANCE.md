@@ -114,7 +114,7 @@
 7. **容量那两个口径与开关**：`lib/tenant-capacity.sh:28` 的 `HUPO_CAPACITY_RESERVE_PCT`、`:31-48` 的 `capacity_fits`/`capacity_limit`——handbook 0 处。
 8. **`deploy-web-v2.sh --no-build`**（`:37,:50`）——handbook 0 处。
 9. **`fingerprint-fonts.mjs`**（字体 URL 上内容哈希，修"字都在只有图标不在"）——只在 `docs/dev/15-CACHE.md` / `72-UI-PASS.md`，**handbook 0 处**。
-10. **几个"判据脚本"在 handbook 里没有名字**：`scripts/check-tenant-channels.sh`、`scripts/check-tenant-limit.sh`、`scripts/check-asr-tencent.mjs`。
+10. **几个"判据脚本"在 handbook 里没有名字**：`scripts/check-tenant-channels.sh`、`scripts/check-tenant-limit.sh`、~~`scripts/check-asr-tencent.mjs`~~（⚠️ **2026-10-01 已删**：语音换豆包，见 [`152-VOICE-DOUBAO.md`](152-VOICE-DOUBAO.md)）。
 11. **WS 下行的 ASR 字段 `index`**：`asr.js:215-222` 明说"漏了它客户端会接出重复的话"，但 `08-SPEC.md:191` 只写 `{text}`。
 12. **`tenant-reload.mjs` / `key-drop.js` 的模块名**：机制在 `45-TENANT-UPDATE.md` / `06-OPERATIONS.md:383` 有写，但文件名在 `docs/` 0 命中；`DocsSocket` 一族符号（`appsSocketPath`/`handleAppsOp`/`ledgerSocketPath`/`handleLedgerOp`）也 0 命中。
 13. **客户端在跑、`08-SPEC.md` §2.1/§2.2 表里没有的三类事件**：控制帧 `client/ping`（`stream.dart:130`，服务端 `server.js:1386`）、`client/hello`（`:132`）、`client/reset`（`:142`）；过程帧 `step/start|end`、`reasoning/delta`（只在 `docs/dev/26-PROCESS-LEVELS.md:53-61`，不在手册事件表）。

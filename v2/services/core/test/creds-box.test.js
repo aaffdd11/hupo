@@ -17,7 +17,7 @@ import { mergeKeyFile, writeKeyFile } from '../src/tenant-shell.mjs';
 const tmp = () => nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-box-'));
 
 // ── ② 盒子里：合并写（不再抹掉别的几样）──────────────────────
-test('🔴 盒子里写凭据：**合并**（模型钥匙 ＋ 语音三样 ＋ 图片 一起在）', () => {
+test('🔴 盒子里写凭据：**合并**（模型钥匙 ＋ 语音两样 ＋ 图片 一起在）', () => {
   const dir = tmp();
   try {
     const file = nodePath.join(dir, 'creds.yaml');
@@ -25,20 +25,18 @@ test('🔴 盒子里写凭据：**合并**（模型钥匙 ＋ 语音三样 ＋ �
     writeKeyFile(file, 'sk-model-1');
     assert.match(nodeFs.readFileSync(file, 'utf8'), /HUPO_MODEL_KEY: sk-model-1/);
 
-    // 新形状：一整包（含语音三样 ＋ 图片）
+    // 新形状：一整包（含语音两样 ＋ 图片）
     mergeKeyFile(file, {
       model: 'sk-model-1',
-      voiceAppId: '1300000001',
-      voiceSecretId: 'vid',
-      voiceSecretKey: 'vkey',
+      voiceAppId: 'vappid',
+      voiceAccessToken: 'vkey',
       image: 'ark-img-key',
     });
     const text = nodeFs.readFileSync(file, 'utf8');
     for (const [name, v] of [
       ['HUPO_MODEL_KEY', 'sk-model-1'],
-      ['HUPO_VOICE_APPID', '1300000001'],
-      ['HUPO_VOICE_SECRET_ID', 'vid'],
-      ['HUPO_VOICE_SECRET_KEY', 'vkey'],
+      ['HUPO_VOICE_APPID', 'vappid'],
+      ['HUPO_VOICE_TOKEN', 'vkey'],
       ['HUPO_IMAGE_KEY', 'ark-img-key'],
     ]) {
       assert.match(text, new RegExp(`^${name}: ${v}$`, 'm'), `少了一样：${name}`);
@@ -49,10 +47,10 @@ test('🔴 盒子里写凭据：**合并**（模型钥匙 ＋ 语音三样 ＋ �
     assert.equal(nodeFs.statSync(file).mode & 0o777, 0o600, '盒子里的凭据必须 0600');
     assert.equal(nodeFs.existsSync(`${file}.tmp`), false, '原子写不该留下 .tmp');
 
-    // 负向对照：**再写一次**只带图片 ⇒ 语音那三样**还在**（这就是"合并"的全部意义）
+    // 负向对照：**再写一次**只带图片 ⇒ 语音那两样**还在**（这就是"合并"的全部意义）
     mergeKeyFile(file, { image: 'ark-img-key-2' });
     const again = nodeFs.readFileSync(file, 'utf8');
-    assert.match(again, /HUPO_VOICE_APPID: 1300000001/, '★ 只改图片那一样，别的不许被抹掉');
+    assert.match(again, /HUPO_VOICE_APPID: vappid/, '★ 只改图片那一样，别的不许被抹掉');
     assert.match(again, /HUPO_IMAGE_KEY: ark-img-key-2/);
   } finally {
     nodeFs.rmSync(dir, { recursive: true, force: true });
@@ -65,7 +63,7 @@ test('🔴 盒子里那份**单文件**读得到；宿主上**不认**它（不�
   try {
     const file = nodePath.join(dir, 'creds.yaml');
     writeKeyFile(file, 'sk-box-only');
-    mergeKeyFile(file, { voiceAppId: '1', voiceSecretId: 'a', voiceSecretKey: 'b', image: 'img-1' });
+    mergeKeyFile(file, { voiceAppId: '1', voiceAccessToken: 'a', voiceAccessToken: 'b', image: 'img-1' });
 
     // 盒子里（HUPO_ROLE=tenant）：认得出
     const box = credsFor({ dataDir: dir, sub: 'u1', env: { HUPO_ROLE: 'tenant' } });
@@ -106,7 +104,7 @@ test('🔴 中心推凭据：**老形状 `key` 与新形状 `creds` 一起带**�
   }
 });
 
-test('🔴 盒子里：**只推语音那三样**（不带动模型钥匙）⇒ 模型与图片那两把还在', () => {
+test('🔴 盒子里：**只推语音那两样**（不带动模型钥匙）⇒ 模型与图片那两把还在', () => {
   const dir = tmp();
   try {
     const file = nodePath.join(dir, 'creds.yaml');
@@ -115,17 +113,15 @@ test('🔴 盒子里：**只推语音那三样**（不带动模型钥匙）⇒ �
 
     // ★ 这就是修好之后真正会推到盒子里的那一帧（`pushKey(tenant, null, pack)`）
     mergeKeyFile(file, {
-      voiceAppId: '1300000001',
-      voiceSecretId: 'vid',
-      voiceSecretKey: 'vkey',
+      voiceAppId: 'vappid',
+      voiceAccessToken: 'vkey',
     });
     const text = nodeFs.readFileSync(file, 'utf8');
     for (const [name, v] of [
       ['HUPO_MODEL_KEY', 'sk-model-keep'],
       ['HUPO_IMAGE_KEY', 'ark-img-keep'],
-      ['HUPO_VOICE_APPID', '1300000001'],
-      ['HUPO_VOICE_SECRET_ID', 'vid'],
-      ['HUPO_VOICE_SECRET_KEY', 'vkey'],
+      ['HUPO_VOICE_APPID', 'vappid'],
+      ['HUPO_VOICE_TOKEN', 'vkey'],
     ]) {
       assert.match(text, new RegExp(`^${name}: ${v}$`, 'm'), `少了一样：${name}`);
     }
@@ -138,7 +134,7 @@ test('🔴 盒子里：**只推语音那三样**（不带动模型钥匙）⇒ �
 
 // ── ④ ★ `#174`（2026-09-27）：**不带动模型钥匙的那几样也要推得进盒子** ──────
 // 修之前：只有"这一包里有 `model`"那一次才推（`setModelKey` 里那一下），
-// 而配置页**一屏一次提交** ⇒ 语音三样永远送不进盒子（那台一直回「没配凭据」）。
+// 而配置页**一屏一次提交** ⇒ 语音两样永远送不进盒子（那台一直回「没配凭据」）。
 // 这两个判据钉的是修好之后**必须成立**的两件：
 //   ① `tenantCredsPack` 把"中心存的那几样"＋（手里有就带上）模型那一把**现合**成一份；
 //   ② 那一包**推得进去**：盒子那条通道上真的收得到 `creds`（而且可以没有 `key`）。
@@ -149,24 +145,24 @@ test('🔴 tenantCredsPack：中心存的几样 ＋（手里有就带）模型�
     // 一样都没有
     assert.equal(tenantCredsPack({ dataDir: dir, sub: 'u2' }), null);
 
-    // 语音那一屏提交（**没有模型钥匙**）⇒ 包里就是那三样
+    // 语音那一屏提交（**没有模型钥匙**）⇒ 包里就是那两样
     writeUserCreds(dir, 'u2', {
       voiceAppId: '1300000001',
-      voiceSecretId: 'vid-1',
-      voiceSecretKey: 'vkey-1',
+      voiceAppId: 'vappid-1',
+      voiceAccessToken: 'vkey-1',
     });
     const voiceOnly = tenantCredsPack({ dataDir: dir, sub: 'u2' });
     assert.deepEqual(voiceOnly, {
       voiceAppId: '1300000001',
-      voiceSecretId: 'vid-1',
-      voiceSecretKey: 'vkey-1',
+      voiceAppId: 'vappid-1',
+      voiceAccessToken: 'vkey-1',
     });
     assert.equal('model' in voiceOnly, false, '中心不存模型那把 ⇒ 包里不该凭空多一个');
 
     // 手里有模型那一把（宿主内存 `tenantKeys`）⇒ 一起带上
     const withModel = tenantCredsPack({ dataDir: dir, sub: 'u2', model: 'sk-model' });
     assert.equal(withModel.model, 'sk-model');
-    assert.equal(withModel.voiceSecretKey, 'vkey-1');
+    assert.equal(withModel.voiceAccessToken, 'vkey-1');
 
     // 别人那一份**不许**混进来（按人分）
     assert.equal(tenantCredsPack({ dataDir: dir, sub: 'u1' }), null);
@@ -209,12 +205,12 @@ test('🔴 推得进：**不带 `key` 的 `creds` 包**也送到了盒子那条�
     assert.equal('creds' in frames[0], false, '负向对照：没东西可给时不许塞一个空包');
 
     // ★ 语音那一屏提交 ⇒ 只推 `creds`（没有 key）—— 这一帧必须真的发出去
-    const pushed = ch.pushKey('hupo-b', null, { voiceAppId: '1300000001', voiceSecretKey: 'vk' });
+    const pushed = ch.pushKey('hupo-b', null, { voiceAppId: '1300000001', voiceAccessToken: 'vk' });
     assert.equal(pushed, 1, '★ 一台连着 ⇒ 就是推给它那一条');
     await waitFor(() => frames.length >= 2);
     assert.equal(frames[1].state, 'ready');
     assert.equal('key' in frames[1], false, '没有模型那把就不带 `key`（盒子那边按"合并"写）');
-    assert.equal(frames[1].creds.voiceSecretKey, 'vk');
+    assert.equal(frames[1].creds.voiceAccessToken, 'vk');
 
     // 负向对照：不存在的租户 ⇒ 如实回 0（"报个恒真的数"就是假话）
     assert.equal(ch.pushKey('hupo-a', null, { voiceAppId: 'x' }), 0);
@@ -249,7 +245,7 @@ test('🔴 `#174`：盒子连上来（以及每次 `need-key`）都跟着第一�
   const ch = new TenantChannel({
     dir,
     keyFor: () => null, // 宿主内存里没有模型钥匙（重启之后就是这样）
-    credsFor: () => ({ voiceAppId: '1300000001', voiceSecretKey: 'vk' }),
+    credsFor: () => ({ voiceAppId: '1300000001', voiceAccessToken: 'vk' }),
     log: () => {},
   });
   let conn = null;
@@ -278,7 +274,7 @@ test('🔴 `#174`：盒子连上来（以及每次 `need-key`）都跟着第一�
     conn.write(`${JSON.stringify({ v: 1, type: 'need-key' })}\n`);
     await waitFor(() => frames.length >= 2);
     assert.equal(frames[1].state, 'ready');
-    assert.equal(frames[1].creds.voiceSecretKey, 'vk');
+    assert.equal(frames[1].creds.voiceAccessToken, 'vk');
   } finally {
     conn?.destroy();
     ch.close();

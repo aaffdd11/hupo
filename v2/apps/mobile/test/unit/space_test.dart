@@ -177,8 +177,7 @@ void main() {
       imageTempLink,
       credBoundaryVideo,
       credVoiceAppIdLabel,
-      credVoiceSecretIdLabel,
-      credVoiceSecretKeyLabel,
+      credVoiceTokenLabel,
       credOneKeyLabel,
       for (final tab in [credTabChat, credTabVoice, credTabImage, credTabVideo]) ...[
         credStateLine(tab: tab, has: true, bad: false),
@@ -224,17 +223,17 @@ void main() {
   test('★ 语音那句边界话：四种组合逐条对表（说错哪一句都是假话）', () {
     // 本机 + 没填 ⇒ 说清现在用的是机器上那份
     expect(credVoiceBoundary(isTenant: false, hasOwn: false), credVoiceBoundaryDefault);
-    // 本机 + 填了 ⇒ **真的就用它**（识别路优先读他自己的三样）
+    // 本机 + 填了 ⇒ **真的就用它**（识别路优先读他自己那两样）
     expect(credVoiceBoundary(isTenant: false, hasOwn: true), credVoiceBoundaryMine);
     // 租户 + 填了 ⇒ **填了就真进他那台、那台也真读得到**（`#175` 两处都修好之后）
     //   ⇒ 说"就用这三样"；🔴 而且**不许**再出现"还没接上"那句旧话（修好之前它是真的，
     //   修好之后就是假话）。
     expect(credVoiceBoundary(isTenant: true, hasOwn: true), credVoiceBoundaryTenantHas);
-    expect(credVoiceBoundaryTenantHas.contains('就用这三样'), true);
+    expect(credVoiceBoundaryTenantHas.contains('就用这两样'), true);
     expect(credVoiceBoundaryTenantHas.contains('还没接上'), false, reason: '★ 那句现在是假话');
     // 租户 + 没填 ⇒ 要**说得出"填了就能用"**（这台没有"机器上配好的那份"兜底）
     expect(credVoiceBoundary(isTenant: true, hasOwn: false), credVoiceBoundaryTenantNone);
-    expect(credVoiceBoundaryTenantNone.contains('填上这三样'), true);
+    expect(credVoiceBoundaryTenantNone.contains('填上这两样'), true);
     expect(credVoiceBoundaryTenantNone.contains('还没接上'), false);
     // 🔴 四句**互不相同**（两两相同就是把两种情况说成一件事）
     final all = {
@@ -248,7 +247,7 @@ void main() {
     //    （只提"这台机器上那份"不算错 —— 它正是要说"不再用它"；
     //      第一版判据就写糙在这里，自己当场红了一次。）
     expect(credVoiceBoundaryMine.contains('不再用'), true);
-    expect(credVoiceBoundaryMine.contains('就用这三样'), true);
+    expect(credVoiceBoundaryMine.contains('就用这两样'), true);
   });
 
   test('★ 配置页那四样"有没有"：宽容解析（缺字段/坏类型 ⇒ 一律"没有"，不许当成有）', () {
