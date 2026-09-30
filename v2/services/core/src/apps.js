@@ -958,22 +958,28 @@ export class Apps {
    *
    * @returns {string[]} 关掉的那几样（只认白名单里的名字）
    */
-  #denied(id) {
+  #grantBook(id) {
     let j = null;
     try {
       j = JSON.parse(this.fs.readFileSync(nodePath.join(this.appDir(id), 'grant.json'), 'utf8'));
     } catch {
-      return []; // 没关过（也没这份文件）
+      return { allowed: [], denied: [] }; // 没这份文件 ⇒ **他还没表过态**（新版默认：不给）
     }
-    if (Array.isArray(j?.denied)) {
-      return j.denied.filter((p) => PERMISSIONS.includes(p));
+    const pick = (arr) => (Array.isArray(arr) ? arr.filter((p) => PERMISSIONS.includes(p)) : []);
+    if (Array.isArray(j?.allowed) || Array.isArray(j?.denied)) {
+      return { allowed: pick(j?.allowed), denied: pick(j?.denied) };
     }
     if (Array.isArray(j?.permissions)) {
-      // ★ **老格式（允许清单）现算成"关掉清单"** —— 逐字保住当年的行为
-      const allowed = j.permissions.filter((p) => PERMISSIONS.includes(p));
-      return this.#declaredOf(id).filter((p) => !allowed.includes(p));
+      /**
+       * ⚠️ **更早那份格式（允许清单）**：那时"写进清单 = 他允许了" ⇒ 原样认成 `allowed`
+       *    （他当年的点头不能因为换了一版就作废）。
+       */
+      return { allowed: pick(j.permissions), denied: [] };
     }
-    return [];
+    if (Array.isArray(j?.denied)) {
+      return { allowed: [], denied: pick(j.denied) };
+    }
+    return { allowed: [], denied: [] };
   }
 
   /** **制品声明了哪几样**（`permissions`；读不出来 ⇒ 空数组）。 */
@@ -997,8 +1003,23 @@ export class Apps {
    */
   grants(id) {
     checkAppId(id);
-    const denied = this.#denied(id);
-    return this.#declaredOf(id).filter((p) => !denied.includes(p));
+    const { allowed, denied } = this.#grantBook(id);
+    // ★ **默认不给**（主人 2026-10-01）：**清单里声明 = "它想要什么"**（弹窗的依据），
+    //   真正生效要**他点头**（`allowed`）。他点过"不给"的一样不生效（`denied`）。
+    return this.#declaredOf(id).filter((p) => allowed.includes(p) && !denied.includes(p));
+  }
+
+  /**
+   * **他还没表过态的那几样** = 声明的 − 已允许 − 已拒绝。
+   *
+   * ★ 这张表是**那条"打开时弹窗"的依据**（主人 2026-10-01 选的形状）：
+   *   打开一个小程序 ⇒ 拿这张表 ⇒ 非空就弹一张"它想用：… [允许] [不给]"。
+   *   ⚠️ **弹过并且他拒了的，不再自动弹**（免得天天问同一件事）；**设置页里随时能改**。
+   */
+  unanswered(id) {
+    checkAppId(id);
+    const { allowed, denied } = this.#grantBook(id);
+    return this.#declaredOf(id).filter((p) => !allowed.includes(p) && !denied.includes(p));
   }
 
   /**
@@ -1018,17 +1039,25 @@ export class Apps {
       if (!keep.includes(p)) keep.push(p);
     }
     const declared = this.#declaredOf(id);
-    // ★ **只有"制品声明了的"才有资格进 `denied`**（没声明的本来就用不了，不用记）
+    /**
+     * ★ **两张表**（主人 2026-10-01 的新形状）：
+     *   · `allowed` = 他点过头的那几样（**只有这个才生效**）；
+     *   · `denied`  = 他点过"不给"的那几样（**不再自动弹**；设置里能改回来）。
+     * ⚠️ 入参 `permissions` 仍然是"他要允许的那几样"（**线上协议一个字没改**：
+     *    客户端与新老盒子照旧传这个），只是**落盘的意思变成了两张表**。
+     * ⚠️ **只有"制品声明了的"才有资格进这两张表**（没声明的本来就用不了，不用记）。
+     */
+    const allowed = declared.filter((p) => keep.includes(p));
     const denied = declared.filter((p) => !keep.includes(p));
     writeAtomic(
       this.fs,
       nodePath.join(this.appDir(id), 'grant.json'),
-      `${JSON.stringify({ denied, at: this.now() })}\n`,
+      `${JSON.stringify({ allowed, denied, at: this.now() })}\n`,
       0o644,
     );
-    this.#audit({ what: 'grant', id, permissions: keep });
+    this.#audit({ what: 'grant', id, permissions: allowed, denied });
     // ⚠️ 回的是**实际生效**的那几样（制品**没声明**的名字给了也不算数 —— 那是"声明"那道闸）
-    return declared.filter((p) => keep.includes(p));
+    return allowed;
   }
 
   /**

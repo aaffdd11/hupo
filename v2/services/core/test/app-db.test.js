@@ -274,7 +274,7 @@ function makeApps(dir, sub) {
   return new Apps({ dir, sub, now: () => NOW });
 }
 
-test('D5 Apps.dbExec：没声明 403 · **声明了当场就能用**（不用任何人点）· 他关掉 ⇒ 403', async () => {
+test('D5 Apps.dbExec：没声明 403 · **声明了也要他点头**（弹窗那条路）· 他关掉 ⇒ 403', async () => {
   const dir = tmpdir();
   const apps = makeApps(dir, 'u1');
   // ① 先注册一个**没声明** db 的 app
@@ -283,10 +283,17 @@ test('D5 Apps.dbExec：没声明 403 · **声明了当场就能用**（不用任
   assert.equal(r1.ok, false);
   assert.equal(r1.status, 403);
   assert.equal(r1.text, DB_DECLARED_TEXT);
-  // ② ★ **傻瓜式**（主人 2026-09-30）：声明了**当场就能用** ——
-  //    不用他去设置里点任何东西（这是他让助手给自己做的东西，不是别人发来的）
+  // ② ★ **声明只是"它想要什么"**（主人 2026-10-01 翻回来：**默认不给**，要**他点头**）
   apps.register({ id: 'dice', title: '骰子', entry: 'index.html', permissions: ['db'] });
-  assert.deepEqual(apps.grants('dice'), ['db'], '🔴 声明了就是给的（默认给）');
+  assert.deepEqual(apps.grants('dice'), [], '🔴 光声明还不算数（默认不给）');
+  assert.deepEqual(apps.unanswered('dice'), ['db'], '它还没问过他 ⇒ 打开时要弹那张窗');
+  const before = await apps.dbExec('dice', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
+  assert.equal(before.ok, false);
+  assert.equal(before.status, 403);
+  //     他点头了 ⇒ 才生效
+  apps.setGrants('dice', ['db']);
+  assert.deepEqual(apps.grants('dice'), ['db'], '他点头之后才生效');
+  assert.deepEqual(apps.unanswered('dice'), [], '表过态了 ⇒ 不再弹');
   const r3 = await apps.dbExec('dice', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
   assert.equal(r3.ok, true, JSON.stringify(r3));
   const r4 = await apps.dbExec('dice', { op: 'run', sql: 'INSERT INTO t VALUES (?)', params: ['甲'] });
@@ -318,6 +325,7 @@ test('D5 两个 app 的库是**两个文件**：写进 A 的东西在 B 里查�
   const apps = makeApps(dir, 'u1');
   for (const id of ['a1', 'b1']) {
     apps.register({ id, title: id, entry: 'index.html', permissions: ['db'] });
+    apps.setGrants(id, ['db']); // ★ 默认不给
     await apps.dbExec(id, { op: 'run', sql: 'CREATE TABLE t(v TEXT)' });
     await apps.dbExec(id, { op: 'run', sql: 'INSERT INTO t VALUES (?)', params: [id] });
   }
@@ -332,6 +340,7 @@ test('D4 频率闸：一分钟里超过那个数 ⇒ 429（拒绝也要说清是
   const dir = tmpdir();
   const apps = makeApps(dir, 'u1');
   apps.register({ id: 'coin', title: '硬币', entry: 'index.html', permissions: ['db'] });
+  apps.setGrants('coin', ['db']); // ★ 默认不给 ⇒ 先让他点头
   // ⚠️ 不真跑 240 次子进程（那要八秒）：把这本账直接填满 —— 验的是**那一道闸**本身
   apps.dbCalls.set('coin', Array.from({ length: 240 }, () => NOW));
   const r = await apps.dbExec('coin', { op: 'all', sql: 'SELECT 1' });
@@ -356,6 +365,7 @@ test('D8 清空它存的东西：库真没了、**制品与工作区一个字没
     files: { 'index.html': '<p>x</p>' },
     permissions: ['db'],
   });
+  apps.setGrants('jizhang', ['db']); // ★ 默认不给
   await apps.dbExec('jizhang', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
   await apps.dbExec('jizhang', { op: 'run', sql: 'INSERT INTO t VALUES (?)', params: ['甲'] });
   assert.equal(nodeFs.existsSync(apps.dbPath('jizhang')), true, '前提：库在');

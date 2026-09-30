@@ -59,6 +59,7 @@ import '../services/hearing.dart';
 import '../services/speech.dart';
 import '../services/wallpaper_store.dart';
 import '../widgets/app_desktop.dart';
+import '../widgets/app_grants_ask.dart';
 import '../widgets/appearance_scope.dart';
 import '../widgets/dsh_look.dart';
 import '../widgets/harness_pane.dart';
@@ -1541,6 +1542,47 @@ class _ChatScreenState extends State<ChatScreen> {
     return (title: v.title.trim(), description: v.description.trim());
   }
 
+  /// ★ **打开时那张弹窗**（2026-10-01 · 契约 `docs/dev/147-APP-SQLITE.md` §二·乙）。
+  ///
+  /// 主人原话：*「小程序不要声明，应该是打开后有弹窗申请权限」* ·
+  /// *「打开时一次问完」* · *「那一样用不了，别的照旧」*。
+  ///
+  /// 顺序是刻意的：
+  ///   ① 手上没有这一条（清单还没拿到 / 刚被别人改过）⇒ **先拉一次**再判 ——
+  ///      不然会"该问的没问"就把它打开（页面上一片空白，他还要猜为什么）；
+  ///   ② 它**没有还没问过的**（或老服务端没这个字段）⇒ 一个字都不弹；
+  ///   ③ 弹窗只负责把"他勾成什么样"交回来；**发请求是这一步做的**
+  ///      （`_grantMyApp`：那儿才有令牌，也才拿得到回执）；
+  ///   ④ 他要是**把窗划掉**（`null` = 没表态）⇒ 什么都不记（下次打开再问）；
+  ///   ⑤ 有几样**没记下来** ⇒ 如实说一句（`askOnOpenFailed`），而**窗照开**
+  ///      —— 没记住的那一样下次再问，别的照旧。
+  Future<void> _askGrantsOnOpen(String id) async {
+    MiniApp? mine = _mineApp(id);
+    if (mine == null) {
+      await _loadMyApps();
+      if (!mounted) return;
+      mine = _mineApp(id);
+    }
+    if (mine == null || !needsAskOnOpen(mine)) return;
+    final choices = await askOnOpen(context, mine);
+    if (!mounted || choices == null) return; // 划掉了 ⇒ 没表态
+    var missed = 0;
+    for (final e in choices.entries) {
+      final out = await _grantMyApp(id, e.key, e.value);
+      if (!mounted) return;
+      if (out is! GrantOk) missed += 1;
+    }
+    if (missed > 0 && mounted) _say(askOnOpenFailed);
+  }
+
+  /// 手上那份清单里有没有这一个（**「我的小程序」那一批**）。
+  MiniApp? _mineApp(String id) {
+    for (final a in _myApps) {
+      if (a.id == id) return a;
+    }
+    return null;
+  }
+
   /// ★ **注册制那一下**（契约 `docs/dev/147-APP-SQLITE.md` §二 ·
   /// 主人原话：*「注册制，在设置里可以看到也可以关闭」*）。
   ///
@@ -1571,8 +1613,16 @@ class _ChatScreenState extends State<ChatScreen> {
           _myApps = [
             for (final a in _myApps)
               if (a.id == id)
-                a.withGranted(
+                // ★ **问过就不再问**：允许 / 不给都算他表过态 ⇒ 把这一样从
+                //    `unanswered` 里挪走（老服务端没这个字段 ⇒ 保持"不知道"）。
+                a.withGrantAnswer(
                   permissions ?? nextGranted(a.granted ?? const [], permission, allow),
+                  a.unanswered == null
+                      ? null
+                      : [
+                          for (final p in a.unanswered!)
+                            if (p != permission) p,
+                        ],
                 )
               else
                 a,
@@ -1794,6 +1844,15 @@ class _ChatScreenState extends State<ChatScreen> {
       if (mounted) _staleMine.remove(which.substring(_minePrefix.length));
     }
     if (!mounted) return;
+    // ★ **打开之前先问一句**（2026-10-01 主人定的规矩：*"小程序不要声明，应该是打开后
+    //   有弹窗申请权限"* · *"打开时一次问完"*）。
+    //   🔴 必须**在这一屏画出来之前**问完：他那几样是服务端记的账，而页面（`net` 那一样）
+    //      的响应头就是照那本账算的 —— 等他点完再建 iframe，它才连得出去。
+    //   ⚠️ 他要是**一样都不给**，那也照开（"那一样用不了，别的照旧"）。
+    if (which.startsWith(_minePrefix)) {
+      await _askGrantsOnOpen(which.substring(_minePrefix.length));
+      if (!mounted) return;
+    }
     setState(() {
       _appFrom = from;
       _openApp = which;

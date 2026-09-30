@@ -331,14 +331,20 @@ test('制品口：405 / 404 / HEAD', async () => {
   await close();
 });
 
-test('乙-4：★ **声明了就是给的**；他关掉要落盘、只认白名单；卸载是**软删**（能拿回来）', () => {
+test('乙-4：★ **声明只是"它想要"**（要等他点头）；他关掉要落盘、只认白名单；卸载是**软删**（能拿回来）', () => {
   const dir = tmp();
   const apps = new Apps({ dir, sub: 'u1' });
   apps.create({ ...OK, permissions: ['ask'] });
-  // 🔴 **2026-09-30 语义翻了**（主人："我希望是傻瓜式的"）：**声明了就默认能用**
-  assert.deepEqual(apps.grants('dice'), ['ask'], '声明了就是给的（不用任何人点）');
+  // 🔴 **2026-10-01 又翻回来**（主人："小程序不要声明，应该是打开后有弹窗申请权限"）：
+  //    **声明 = 它想要什么**；打开时那张弹窗问的就是 `unanswered`；他点头才生效。
+  assert.deepEqual(apps.grants('dice'), [], '声明了也**还没给**');
+  assert.deepEqual(apps.unanswered('dice'), ['ask'], '还没问过他 ⇒ 弹窗要问它');
+  assert.deepEqual(apps.setGrants('dice', ['ask']), ['ask'], '他点头 ⇒ 给了');
+  assert.deepEqual(apps.grants('dice'), ['ask']);
+  assert.deepEqual(apps.unanswered('dice'), [], '表过态了 ⇒ 不再弹');
   assert.deepEqual(apps.setGrants('dice', []), [], '他关掉 ⇒ 一样都不给');
   assert.deepEqual(apps.grants('dice'), [], '关掉要落盘（重启之后还是关着）');
+  assert.deepEqual(apps.unanswered('dice'), [], '他拒过 ⇒ 不再自动弹（设置里能改回来）');
   assert.throws(() => apps.setGrants('dice', ['root']), /不认识/);
   assert.deepEqual(apps.setGrants('dice', ['ask']), ['ask'], '他再打开 ⇒ 又给了');
   assert.deepEqual(apps.grants('dice'), ['ask']);

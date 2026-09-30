@@ -33,6 +33,8 @@ class MiniApp {
     required this.entryUrl,
     this.permissions = const [],
     this.granted,
+    this.unanswered,
+    this.net = const [],
     this.expiresAt = 0,
   });
 
@@ -61,6 +63,20 @@ class MiniApp {
   /// ⚠️ 它是"允许了的那几样"；[permissions] 是"制品声明的那几样" —— **两件事**。
   final List<String>? granted;
 
+  /// ★ **还没问过他的那几样**（`/api/apps` 回的 `unanswered` · 2026-10-01）。
+  ///
+  /// 🔴 **打开时那张弹窗问的就是它**：`unanswered` 非空 ⇒ 开之前先问一句。
+  /// ⚠️ 同样是**`null` ≠ 空数组**：`null` = 老服务端没回 ⇒ **不知道**（那就别弹，
+  ///    弹一张问不出结果的窗 = 白挡他一下）；`[]` = 都问过了。
+  /// ⚠️ 他一旦表过态（允许 / 不给），这一样就从这儿挪走 —— **不再重复问**。
+  final List<String>? unanswered;
+
+  /// ★ **它声明想连的那几个站**（清单里 `net: [...]`，只在声明了上网时非空）。
+  ///
+  /// ⚠️ 只有**打开时那张弹窗**会摆出来（"它想连的是这几个站"）—— 那是他**要点头
+  ///    才生效**的那一样里唯一会让他意外的细节。设置页那张卡上**不摆**（摆一列域名看不懂）。
+  final List<String> net;
+
   /// 这条 URL 什么时候过期（毫秒）。
   final int expiresAt;
 
@@ -73,6 +89,26 @@ class MiniApp {
     entryUrl: entryUrl,
     permissions: permissions,
     granted: next,
+    unanswered: unanswered,
+    net: net,
+    expiresAt: expiresAt,
+  );
+
+  /// 复制一份，换上**问完之后**的那两份：`granted`（给了哪几样）＋
+  /// `unanswered`（还剩哪几样没问）。
+  ///
+  /// ⚠️ 它只用来记**服务端已经明说成了**的那几样（同 [withGranted] 那条纪律）：
+  ///    答应了 / 不给的那一样就从 `unanswered` 里挪走 —— **问过就不再问**。
+  MiniApp withGrantAnswer(List<String> nextGranted, List<String>? nextUnanswered) => MiniApp(
+    id: id,
+    title: title,
+    icon: icon,
+    version: version,
+    entryUrl: entryUrl,
+    permissions: permissions,
+    granted: nextGranted,
+    unanswered: nextUnanswered,
+    net: net,
     expiresAt: expiresAt,
   );
 
@@ -111,6 +147,24 @@ class MiniApp {
           if (p is String && p.isNotEmpty) p,
       ];
     }
+    // ★ **`unanswered` 缺了就是缺了**（老服务端）：`null` 走上去 ⇒ **不弹窗**
+    //   （弹一张问不出结果的窗只会白挡他一下）。
+    List<String>? unanswered;
+    final rawUnanswered = raw['unanswered'];
+    if (rawUnanswered is List) {
+      unanswered = <String>[
+        for (final p in rawUnanswered)
+          if (p is String && p.isNotEmpty) p,
+      ];
+    }
+    // ⚠️ 名单读不到 ⇒ 空（只影响"弹窗里摆不摆那几个站"，不影响给不给）。
+    final hosts = <String>[];
+    final rawNet = raw['net'];
+    if (rawNet is List) {
+      for (final h in rawNet) {
+        if (h is String && h.isNotEmpty) hosts.add(h);
+      }
+    }
     return MiniApp(
       id: id,
       title: title,
@@ -119,6 +173,8 @@ class MiniApp {
       entryUrl: url,
       permissions: perms,
       granted: granted,
+      unanswered: unanswered,
+      net: hosts,
       expiresAt: expires,
     );
   }

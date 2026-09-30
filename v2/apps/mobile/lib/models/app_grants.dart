@@ -1,9 +1,13 @@
 // **注册制那张卡背后的纯逻辑**（手册 `08-SPEC.md` §14.1·甲 · 契约 `docs/dev/147-APP-SQLITE.md`）。
 //
-// 主人原话：*「注册制，在设置里可以看到也可以关闭」*。
+// 主人原话：*「注册制，在设置里可以看到也可以关闭」*
+// ＋ 2026-10-01：*「小程序不要声明，应该是打开后有弹窗申请权限」* ·
+//    *「打开时一次问完」* · *「那一样用不了，别的照旧」*。
 // 规矩是"声明 + 允许"两样都齐了才算：
-//   · `permissions` = **制品声明的**（它想要什么）；
-//   · `granted`     = **主人允许了的**（你给了没有）—— 由 `/api/apps` 带回来。
+//   · `permissions` = **制品声明的**（它想要什么 —— **不是"它已经有了"**）；
+//   · `granted`     = **主人允许了的**（你给了没有）—— 由 `/api/apps` 带回来；
+//   · `unanswered`  = **还没问过他的那几样** —— **打开时那张弹窗问的就是它**，
+//     问过（允许 / 不给）之后那一样就从这儿挪走（之后在设置里能改）。
 //
 // ── 这一份守什么 ──────────────────────────────────────────
 //   ① 🔴 **老服务端不回 `granted` ⇒ 不知道**（`null`，**不是**空数组）——
@@ -71,6 +75,33 @@ List<MiniApp> wantsApps(List<MiniApp> apps) => [
   for (final a in apps)
     if (hasWants(a)) a,
 ];
+
+/// ★ **还没问过他的那几样**（`unanswered`）：`null` = 服务端**没回**（老服务端）⇒
+/// **不知道**（那就**不弹窗**：弹一张问不出结果的窗只会白挡他一下）。
+///
+/// 🔴 这是 2026-10-01 主人定下的那一档：**声明 ≠ 已给** ——
+///    制品里写的 `permissions` 只是"它想要什么"，**打开时那张弹窗**问的就是它。
+Set<String>? unansweredOf(MiniApp app) {
+  final u = app.unanswered;
+  if (u == null) return null;
+  return {for (final p in u) p};
+}
+
+/// 🔴 **打开它之前该问的那几样**（顺序照服务端那份 `unanswered`）。
+///
+/// 三个条件都要：**它声明了** ＋ **他还没表过态** ＋ **界面上认得这个名字**
+/// （认不出来的名字不给开关 —— 那个开关按下去必被服务端拒，摆它比不摆更坏）。
+List<String> pendingWantsOf(MiniApp app) {
+  final un = unansweredOf(app);
+  if (un == null) return const [];
+  return [
+    for (final p in app.permissions)
+      if (un.contains(p) && knownWant(p)) p,
+  ];
+}
+
+/// **打开它之前要不要先问一句**。
+bool needsAskOnOpen(MiniApp app) => pendingWantsOf(app).isNotEmpty;
 
 /// **你给了没有**：`null` = 服务端**没回这个字段**（老服务端）⇒ **不知道**。
 ///

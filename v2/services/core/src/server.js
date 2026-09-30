@@ -1361,10 +1361,25 @@ export function createServer({
             return [];
           }
         });
+        /**
+         * ★ **`149`/`#226`：他还没表过态的那几样**（＝"打开时那张弹窗"的依据）。
+         * ⚠️ 读不出来一律 `[]`（fail-closed：**宁可弹一次**，也不许"该问的不问"）。
+         */
+        const unansweredList = items.map((a) => {
+          if (Array.isArray(a.unanswered)) return a.unanswered;
+          if (src.isBox === true) return [];
+          try {
+            return typeof src.unanswered === 'function' ? src.unanswered(a.id) : [];
+          } catch {
+            return [];
+          }
+        });
         return sendJson(res, 200, {
           apps: items.map((a, i) => ({
             ...a,
             granted: Array.isArray(grantedList[i]) ? grantedList[i] : [],
+            /** ★ 还没表过态的（非空 ⇒ 打开它时要弹那张窗） */
+            unanswered: Array.isArray(unansweredList[i]) ? unansweredList[i] : [],
             entryUrl: liveEntryUrl({
               base: apps.base,
               key: apps.key,
@@ -3057,12 +3072,18 @@ const TENANT_ROUTES = [
       return sendJson(res, 200, {
         apps: items.map((a) => {
           let granted = [];
+          let unanswered = [];
           try {
             granted = typeof src.grants === 'function' ? src.grants(a.id) : [];
           } catch {
             granted = [];
           }
-          return { ...a, granted };
+          try {
+            unanswered = typeof src.unanswered === 'function' ? src.unanswered(a.id) : [];
+          } catch {
+            unanswered = [];
+          }
+          return { ...a, granted, unanswered };
         }),
       });
     }

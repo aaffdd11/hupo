@@ -404,6 +404,20 @@ void main() {
       settingsClearDbYes,
       settingsClearDbDone,
       settingsClearDbFailed,
+      // ★ 2026-10-01：**打开时那张弹窗**（主人：*"小程序不要声明，应该是打开后有弹窗
+      //    申请权限"* · *"打开时一次问完"* · *"那一样用不了，别的照旧"*）——
+      //    **直接引数据源**（手抄会漂）。
+      //    ⚠️ 这一批最容易混进来的是"权限 / 授权 / scope / 勾选"那类词；
+      //       允许的是他说得懂的话："允许"、"不给"、"别的照旧"。
+      askOnOpenTitle,
+      askOnOpenLead,
+      askOnOpenSitesLead,
+      askOnOpenOn,
+      askOnOpenOff,
+      askOnOpenGo,
+      askOnOpenNone,
+      askOnOpenLater,
+      askOnOpenFailed,
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

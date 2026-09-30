@@ -28,6 +28,8 @@ Map<String, Object?> _raw({
   String title = '随手记',
   List<String> permissions = const ['db'],
   List<String>? granted = const [],
+  List<String>? unanswered,
+  List<String> net = const [],
 }) => {
   'id': id,
   'title': title,
@@ -37,6 +39,8 @@ Map<String, Object?> _raw({
   'expiresAt': 0,
   'permissions': permissions,
   if (granted != null) 'granted': granted,
+  if (unanswered != null) 'unanswered': unanswered,
+  if (net.isNotEmpty) 'net': net,
 };
 
 void main() {
@@ -381,6 +385,108 @@ void main() {
       for (final bad in ['删', '清空', '清除', '抹掉']) {
         expect(settingsGrantsHint.contains(bad), false,
             reason: '★ 关掉不删东西（`147` §五：清空那颗按钮没做）：$bad');
+      }
+    });
+  });
+
+  // ── ★ 2026-10-01：**打开时那张弹窗**（主人：*"小程序不要声明，应该是打开后有
+  //    弹窗申请权限"* · *"打开时一次问完"* · *"那一样用不了，别的照旧"*）────────
+  group('打开时那张弹窗：该问哪几样 / 不许问哪几样', () {
+    test('🔴 该问的 = **声明了 ＋ 他还没表过态 ＋ 界面认得**（顺序照清单）', () {
+      final app = MiniApp.parse(_raw(
+        permissions: const ['db', 'net', 'agent'],
+        granted: const [],
+        unanswered: const ['db', 'net', 'agent'],
+      ))!;
+      expect(needsAskOnOpen(app), true);
+      expect(pendingWantsOf(app), ['db', 'net', 'agent'],
+          reason: '★ 一次问完：还没表态的几样都在这一张窗里');
+      // 表过态的（`granted` 里有）不许再问
+      final partly = MiniApp.parse(_raw(
+        permissions: const ['db', 'net'],
+        granted: const ['db'],
+        unanswered: const ['net'],
+      ))!;
+      expect(pendingWantsOf(partly), ['net'], reason: '★ 给过的那些不再问');
+    });
+
+    test('🔴 他**不给**过的那一样：也从"该问的"里挪走（`unanswered` 里没有它）', () {
+      final app = MiniApp.parse(_raw(
+        permissions: const ['db', 'net'],
+        granted: const [],
+        unanswered: const ['net'],
+      ))!;
+      expect(pendingWantsOf(app), ['net']);
+      expect(grantSwitchOn(app, 'db'), false, reason: '★ 不给过 ⇒ 设置页那颗开关是关着的');
+      expect(needsAskOnOpen(app), true, reason: '还有一样没问过 ⇒ 照样得问');
+    });
+
+    test('🔴 老服务端**没回** `unanswered` ⇒ **一次都不弹**（`null` ≠ 空）', () {
+      final old = MiniApp.parse(_raw(granted: const []))!; // 没带 unanswered
+      expect(old.unanswered, isNull);
+      expect(unansweredOf(old), isNull);
+      expect(pendingWantsOf(old), isEmpty);
+      expect(needsAskOnOpen(old), false,
+          reason: '★ 弹一张问不出结果的窗，只会白挡他一下');
+      // 负向对照：回了**空数组** = 都问过了 ⇒ 也不弹
+      final answered = MiniApp.parse(_raw(granted: const ['db'], unanswered: const []))!;
+      expect(needsAskOnOpen(answered), false);
+    });
+
+    test('🔴 界面上**认不出来**的名字不许进弹窗（摆了那颗开关必被服务端拒）', () {
+      final app = MiniApp.parse(_raw(
+        permissions: const ['something-new'],
+        granted: const [],
+        unanswered: const ['something-new'],
+      ))!;
+      expect(pendingWantsOf(app), isEmpty);
+      expect(needsAskOnOpen(app), false);
+    });
+
+    test('★ `net` 那一样带着**要连的站**（只有弹窗会摆；读不到就是空）', () {
+      final net = MiniApp.parse(_raw(
+        permissions: const ['net'],
+        granted: const [],
+        unanswered: const ['net'],
+        net: const ['api.example.com', 'data.example.org'],
+      ))!;
+      expect(net.net, ['api.example.com', 'data.example.org']);
+      // 没带来的（老服务端）⇒ 空名单，不影响"问不问"
+      expect(MiniApp.parse(_raw(permissions: const ['net'], granted: const [], unanswered: const ['net']))!.net,
+          isEmpty);
+    });
+
+    test('★ 弹窗那几句话：**干净**、说清"关掉一样只影响那一样"、说清后面还能改', () {
+      for (final c in [
+        askOnOpenTitle,
+        askOnOpenLead,
+        askOnOpenSitesLead,
+        askOnOpenOn,
+        askOnOpenOff,
+        askOnOpenGo,
+        askOnOpenNone,
+        askOnOpenLater,
+        askOnOpenFailed,
+      ]) {
+        final hits = scanForbidden(c);
+        expect(hits, isEmpty, reason: '「$c」里有禁用词：$hits');
+      }
+      // 🔴 "别的照旧"这一句必须在（不然他以为关一样就整个用不了）
+      expect(askOnOpenLead.contains('别的照旧'), true, reason: '★ 主人点名的那句话');
+      // 🔴 "关掉哪一样，就只是那一样用不了"
+      expect(askOnOpenLead.contains('那一样用不了'), true);
+      // ⚠️ 问过就不再问这件事要说出来（不然他以为按错了没法回头）
+      expect(askOnOpenLater.contains('设置'), true, reason: '★ 之后在哪儿能改');
+      // ⚠️ 没记下来那一句**不许**说成"没给"（他明明点了允许）
+      expect(askOnOpenFailed.contains('没给'), false);
+      // ⚠️ 两个按钮各自的字（不许画一个没字的按钮）
+      expect(askOnOpenGo.trim().isNotEmpty, true);
+      expect(askOnOpenNone.trim().isNotEmpty, true);
+      // ⚠️ 技术词一个都不许上屏
+      for (final bad in ['权限', '授权', 'scope', 'db', 'sqlite']) {
+        for (final c in [askOnOpenTitle, askOnOpenLead, askOnOpenLater, askOnOpenFailed]) {
+          expect(c.toLowerCase().contains(bad.toLowerCase()), false, reason: '「$c」里有「$bad」');
+        }
       }
     });
   });

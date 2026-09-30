@@ -152,49 +152,55 @@ const exists = (p) => {
 // G1 / G2 —— 主人这一侧：他点一下，能力当场有 / 当场没
 // ════════════════════════════════════════════════════════════
 
-test('G1 ★ 傻瓜式：他自己那个 app 声明了**当场就能存**（不用他点）· 他关掉 ⇒ 当场进不去 · 再打开又行', async (t) => {
+test('G1 ★ 默认不给：声明了也**要等他点头**；`unanswered` 就是"打开时那张弹窗"的依据；他关掉 ⇒ 又不生效', async (t) => {
   const dir = tmp();
   const apps = new Apps({ dir, sub: 'main', now: () => NOW });
   apps.register({ id: 'coin', title: '硬币', entry: 'index.html', permissions: ['db'] });
   const host = await bootHost(t, { hostDirs: { main: dir } });
   const token = host.tokenFor('main');
 
-  // ① 🔴 **一条都不点就能用**（主人 2026-09-30：「我希望是傻瓜式的……尽量理解并给全套」）
+  // ① 🔴 **光声明还不算数**（主人 2026-10-01：不要"声明即用"，改成"打开时弹窗申请"）
+  assert.deepEqual(apps.grants('coin'), [], '默认不给');
+  assert.deepEqual(apps.unanswered('coin'), ['db'], '★ 还没表过态的那几样 = 弹窗要问的');
   const before = await apps.dbExec('coin', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
-  assert.equal(before.ok, true, `声明了就该当场能用（实际 ${JSON.stringify(before)}）`);
-  assert.equal(
-    nodeFs.existsSync(grantFileOf(dir, 'coin')),
-    false,
-    '🔴 没人点过 ⇒ **不许**凭空写一份 grant.json（默认给 ≠ 记一笔账）',
-  );
+  assert.equal(before.ok, false);
+  assert.equal(before.status, 403);
+  //    清单那一侧也看得到（客户端就是拿它弹窗）
+  let list = (await (await getApps(host, token)).json()).apps;
+  assert.deepEqual(list.find((a) => a.id === 'coin').unanswered, ['db']);
 
-  // ② 他关掉（设置页那颗开关）⇒ 落盘的是"关掉清单"
+  // ② 他点头（设置页那颗开关 / 打开时那张弹窗，两条路都走这一条口）
+  const allow = await postGrant(host, token, { id: 'coin', permission: 'db', allow: true });
+  assert.equal(allow.status, 200, JSON.stringify(await allow.clone().json()));
+  assert.deepEqual((await allow.json()).permissions, ['db']);
+  assert.deepEqual(apps.grants('coin'), ['db'], '★ 点头之后才生效');
+  assert.deepEqual(apps.unanswered('coin'), [], '表过态了 ⇒ 不再弹');
+  assert.deepEqual(Object.keys(JSON.parse(nodeFs.readFileSync(grantFileOf(dir, 'coin'), 'utf8'))), ['allowed', 'denied', 'at']);
+
+  // ③ 当场就能存了（同一份库、同一个进程，什么都不用重启）
+  const mk = await apps.dbExec('coin', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
+  assert.equal(mk.ok, true, JSON.stringify(mk)); // ★ ① 里那一条被 403 真的拦掉了，所以表先前没建成
+  const r1 = await apps.dbExec('coin', { op: 'run', sql: 'INSERT INTO t VALUES (?)', params: ['甲'] });
+  assert.equal(r1.ok, true, JSON.stringify(r1));
+
+  // ④ 他关掉 ⇒ 当场进不去（而且记成"他表过态"⇒ 不再自动弹）
   const deny = await postGrant(host, token, { id: 'coin', permission: 'db', allow: false });
-  assert.equal(deny.status, 200, JSON.stringify(await deny.clone().json()));
   assert.deepEqual((await deny.json()).permissions, []);
-  assert.deepEqual(
-    JSON.parse(nodeFs.readFileSync(grantFileOf(dir, 'coin'), 'utf8')).denied,
-    ['db'],
-    '★ 落盘的语义是"他关掉了哪几样"',
-  );
-  const off = await apps.dbExec('coin', { op: 'run', sql: "INSERT INTO t VALUES ('甲')" });
+  assert.deepEqual(apps.grants('coin'), [], '关掉就不生效');
+  assert.deepEqual(apps.unanswered('coin'), [], '他拒过 ⇒ 不再自动弹（设置里能改回来）');
+  const off = await apps.dbExec('coin', { op: 'all', sql: 'SELECT a FROM t' });
   assert.equal(off.ok, false);
   assert.equal(off.status, 403);
 
-  // ③ 他再打开 ⇒ 又行了，**数据还在**（关掉只是"现在不给"）
-  const allow = await postGrant(host, token, { id: 'coin', permission: 'db', allow: true });
-  assert.deepEqual((await allow.json()).permissions, ['db']);
-  const r1 = await apps.dbExec('coin', { op: 'run', sql: 'INSERT INTO t VALUES (?)', params: ['甲'] });
-  assert.equal(r1.ok, true, JSON.stringify(r1));
-  const r3 = await apps.dbExec('coin', { op: 'all', sql: 'SELECT a FROM t' });
-  assert.deepEqual(r3.rows, [{ a: '甲' }], '就那一行 —— 关着的那段时间一行都没进去');
-  assert.equal(exists(dbFileOf(dir, 'main', 'coin')), true, '库要真的落在他那一格里');
-
-  // ④ ★ 关掉**不删库**（关掉是"现在不给"，不是"抹掉"）：库与数据都还在
+  // ⑤ 再打开 ⇒ 又行了，**数据还在**
+  await postGrant(host, token, { id: 'coin', permission: 'db', allow: true });
+  const r7 = await apps.dbExec('coin', { op: 'all', sql: 'SELECT a FROM t' });
+  assert.equal(r7.ok, true, JSON.stringify(r7));
+  assert.deepEqual(r7.rows, [{ a: '甲' }], '关掉再打开，数据还在');
   assert.equal(exists(dbFileOf(dir, 'main', 'coin')), true, '关掉不许顺手删他的数据');
 });
 
-test('G2 界面两件事分开：`permissions`＝它想要 · `granted`＝你给了没有', async (t) => {
+test('G2 清单里三件事分得清：`permissions`＝它想要 · `granted`＝你给了 · `unanswered`＝还没问过', async (t) => {
   const dir = tmp();
   const apps = new Apps({ dir, sub: 'main', now: () => NOW });
   apps.register({ id: 'wants', title: '想要', entry: 'index.html', permissions: ['db'] });
@@ -206,16 +212,22 @@ test('G2 界面两件事分开：`permissions`＝它想要 · `granted`＝你给
   const wants = list.find((a) => a.id === 'wants');
   const plain = list.find((a) => a.id === 'plain');
   assert.deepEqual(wants.permissions, ['db'], '它想要什么');
-  assert.deepEqual(wants.granted, ['db'], '★ 默认给：还没人点过，它就能用');
-  assert.deepEqual(plain.permissions, [], '没声明的：想要什么是空的');
-  assert.deepEqual(plain.granted, [], '没声明的：能用什么是空的');
-  assert.equal(plain.granted.length === 0 && plain.permissions.length === 0, true, '两件事都空，但它们是两件事');
+  assert.deepEqual(wants.granted, [], '默认不给');
+  assert.deepEqual(wants.unanswered, ['db'], '★ 还没问过他 ⇒ 打开时弹窗');
+  assert.deepEqual(plain.permissions, [], '没声明的：什么都不想要');
+  assert.deepEqual(plain.granted, []);
+  assert.deepEqual(plain.unanswered, [], '没声明的：没什么可问的');
 
-  // 他关掉 ⇒ 屏幕上看得到"现在不给"
+  // 他点头 ⇒ 换到 granted；他关掉 ⇒ 换到"表过态"（unanswered 不再有它）
+  await postGrant(host, token, { id: 'wants', permission: 'db', allow: true });
+  list = (await (await getApps(host, token)).json()).apps;
+  assert.deepEqual(list.find((a) => a.id === 'wants').granted, ['db']);
+  assert.deepEqual(list.find((a) => a.id === 'wants').unanswered, []);
   await postGrant(host, token, { id: 'wants', permission: 'db', allow: false });
   list = (await (await getApps(host, token)).json()).apps;
-  assert.deepEqual(list.find((a) => a.id === 'wants').permissions, ['db'], '它想要什么**没变**（关掉不等于它不要了）');
+  assert.deepEqual(list.find((a) => a.id === 'wants').permissions, ['db'], '它想要什么**没变**');
   assert.deepEqual(list.find((a) => a.id === 'wants').granted, [], '关掉之后：能用什么是空的');
+  assert.deepEqual(list.find((a) => a.id === 'wants').unanswered, [], '表过态 ⇒ 不再问');
   assert.deepEqual(list.find((a) => a.id === 'plain').granted, [], '别的 app 不受影响');
 });
 
@@ -243,30 +255,31 @@ test('G4 认不出来的权限名 / 不存在的 app ⇒ 如实拒（不许悄�
 // G5 —— **老文件（允许清单）翻新语义**：他当年关掉的，今天仍然是关着的
 // ════════════════════════════════════════════════════════════
 
-test('G5 ★ 老格式 `{permissions:[…]}` 现算成"关掉清单"：当年关着的**不许悄悄打开**', async () => {
+test('G5 ★ 老文件照旧认：老"允许清单"＝他已经点过头（不能因为换版作废）；老"关掉清单"＝他表过态、不给', async () => {
   const dir = tmp();
   const apps = new Apps({ dir, sub: 'main', now: () => NOW });
   const grantFile = (id) => nodePath.join(dir, 'hupo', 'apps', id, 'grant.json');
 
-  // ① 老文件：他当年把这个 app 的 `db` **关着**（允许清单是空的）
-  apps.register({ id: 'off-old', title: '老的·关着', entry: 'index.html', permissions: ['db'] });
-  nodeFs.writeFileSync(grantFile('off-old'), `${JSON.stringify({ permissions: [], at: NOW })}\n`);
-  assert.deepEqual(apps.grants('off-old'), [], '🔴 当年关着的，翻语义之后必须还是关着');
-  const r1 = await apps.dbExec('off-old', { op: 'run', sql: 'CREATE TABLE t(a)' });
-  assert.equal(r1.ok, false, '🔴 不许"悄悄给他打开"');
-  assert.equal(r1.status, 403);
+  // ① 最早那份 `{permissions:[…]}`（那时"写进清单 = 他允许了"）⇒ 原样认成 allowed
+  apps.register({ id: 'old-allow', title: '老的·允许过', entry: 'index.html', permissions: ['db'] });
+  nodeFs.writeFileSync(grantFile('old-allow'), `${JSON.stringify({ permissions: ['db'], at: NOW })}\n`);
+  assert.deepEqual(apps.grants('old-allow'), ['db'], '★ 他当年的点头不许作废');
+  assert.deepEqual(apps.unanswered('old-allow'), [], '表过态 ⇒ 不弹');
+  const ok1 = await apps.dbExec('old-allow', { op: 'run', sql: 'CREATE TABLE t(a)' });
+  assert.equal(ok1.ok, true, JSON.stringify(ok1));
 
-  // ② 老文件：他当年**允许**了（也就是没关）⇒ 今天照旧能用
-  apps.register({ id: 'on-old', title: '老的·开着', entry: 'index.html', permissions: ['db'] });
-  nodeFs.writeFileSync(grantFile('on-old'), `${JSON.stringify({ permissions: ['db'], at: NOW })}\n`);
-  assert.deepEqual(apps.grants('on-old'), ['db']);
-  const r2 = await apps.dbExec('on-old', { op: 'run', sql: 'CREATE TABLE t(a)' });
-  assert.equal(r2.ok, true, JSON.stringify(r2));
+  // ② 上一版那份 `{denied:[…]}`（"他关掉了"）⇒ 认成"表过态、不给"
+  apps.register({ id: 'old-deny', title: '老的·关着', entry: 'index.html', permissions: ['db'] });
+  nodeFs.writeFileSync(grantFile('old-deny'), `${JSON.stringify({ denied: ['db'], at: NOW })}\n`);
+  assert.deepEqual(apps.grants('old-deny'), [], '关着的照样关着');
+  assert.deepEqual(apps.unanswered('old-deny'), [], '表过态 ⇒ 不弹');
+  const bad = await apps.dbExec('old-deny', { op: 'run', sql: 'CREATE TABLE t(a)' });
+  assert.equal(bad.ok, false);
 
-  // ③ 他再点一下（新格式）⇒ 文件变成 `{denied}`，而且行为逐字不变
-  apps.setGrants('on-old', ['db']);
-  assert.deepEqual(apps.grants('on-old'), ['db']);
-  assert.deepEqual(Object.keys(JSON.parse(nodeFs.readFileSync(grantFile('on-old'), 'utf8'))), ['denied', 'at']);
+  // ③ 他一点头 ⇒ 文件变成新形状（两张表），而且行为逐字对
+  apps.setGrants('old-deny', ['db']);
+  assert.deepEqual(apps.grants('old-deny'), ['db']);
+  assert.deepEqual(Object.keys(JSON.parse(nodeFs.readFileSync(grantFile('old-deny'), 'utf8'))), ['allowed', 'denied', 'at']);
   nodeFs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -287,6 +300,8 @@ test('G6 主人：清空 ⇒ 库真没了、制品还在；没令牌拒；幂等
   apps.register({ id: 'jizhang', title: '记账', entry: 'index.html', permissions: ['db'] });
   const host = await bootHost(t, { hostDirs: { main: dir } });
   const token = host.tokenFor('main');
+  // 他先点头（下面钉的是"清空"，不是"给不给存"）
+  assert.equal((await postGrant(host, token, { id: 'jizhang', permission: 'db', allow: true })).status, 200);
   // 先存一笔
   const w = await apps.dbExec('jizhang', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
   assert.equal(w.ok, true, JSON.stringify(w));
@@ -316,7 +331,8 @@ test('G6 租户：清空**在盒里落**（宿主那格一个字节都没有）'
   const boxDir = tmp();
   const boxApps = new Apps({ dir: boxDir, sub: 'owner', now: () => NOW });
   boxApps.register({ id: 'jizhang', title: '记账', entry: 'index.html', permissions: ['db'] });
-  // 盒里先真存一笔
+  // 盒里先真存一笔（先点头，否则存不进去）
+  boxApps.setGrants('jizhang', ['db']);
   await boxApps.dbExec('jizhang', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
   assert.equal(exists(dbFileOf(boxDir, 'owner', 'jizhang')), true, '前提：盒里有库');
   const box = await bootBox(t, { dir: boxDir });
@@ -349,22 +365,28 @@ test('G3 租户：`grant.json` 与那个 SQLite 都只出现在盒里（宿主�
   });
   const token = host.tokenFor('u2');
 
-  // ① 清单里看得到"它想要 db"，而且**默认就是给的**（盒子那一侧的判据也一样）
+  // ① 清单里看得到"它想要 db、还没表过态"（盒子那一侧的判据也一样）
   let list = (await (await getApps(host, token)).json()).apps;
   assert.deepEqual(list.map((a) => a.id), ['coin']);
   assert.deepEqual(list[0].permissions, ['db']);
-  assert.deepEqual(list[0].granted, ['db'], '★ 傻瓜式：声明了就能用（不用他点）');
+  assert.deepEqual(list[0].granted, [], '★ 默认不给：声明只是"它想要"');
+  assert.deepEqual(list[0].unanswered, ['db'], '★ 还没问过他 ⇒ 打开时弹窗');
 
-  // ② 他关掉 ⇒ **盒子里**多一份"关掉清单"（宿主那格没有）
-  const deny = await postGrant(host, token, { id: 'coin', permission: 'db', allow: false });
-  assert.equal(deny.status, 200, JSON.stringify(await deny.clone().json()));
-  assert.equal(exists(grantFileOf(boxDir, 'coin')), true, '★ 他关掉那一下要落在盒里');
+  // ② 他点头 ⇒ **盒子里**落一份（宿主那格没有）；答应的是盒子，不是宿主
+  const allow = await postGrant(host, token, { id: 'coin', permission: 'db', allow: true });
+  assert.equal(allow.status, 200, JSON.stringify(await allow.clone().json()));
+  assert.equal(exists(grantFileOf(boxDir, 'coin')), true, '★ 他的点头要落在盒里');
   assert.equal(exists(grantFileOf(hostDir, 'coin')), false, '★ 宿主那格不许有它');
   list = (await (await getApps(host, token)).json()).apps;
+  assert.deepEqual(list[0].granted, ['db'], '盒里那份说了算');
+
+  // ③ 他再关掉 ⇒ 盒里那份立马不算数；再打开（④ 要接着跑）
+  const deny = await postGrant(host, token, { id: 'coin', permission: 'db', allow: false });
+  assert.equal(deny.status, 200, JSON.stringify(await deny.clone().json()));
+  list = (await (await getApps(host, token)).json()).apps;
   assert.deepEqual(list[0].granted, [], '关掉之后盒里那份说了算');
-  // 再打开（后面 ④ 要接着跑）
-  const allow = await postGrant(host, token, { id: 'coin', permission: 'db', allow: true });
-  assert.deepEqual((await allow.json()).permissions, ['db']);
+  const allow2 = await postGrant(host, token, { id: 'coin', permission: 'db', allow: true });
+  assert.deepEqual((await allow2.json()).permissions, ['db']);
 
   // ④ **真跑一条**：经隧道在盒里跑，库文件落在盒里
   const store = host.appsFor('u2');

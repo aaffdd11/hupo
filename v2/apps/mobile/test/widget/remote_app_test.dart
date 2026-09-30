@@ -24,6 +24,7 @@ import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/app_desktop.dart';
+import 'package:hupo_app/widgets/app_grants_ask.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -144,6 +145,78 @@ void main() {
     await _pump(tester, _apiWith(const [], status: 500));
     expect(find.text(settingsAppLabel), findsOneWidget);
     expect(find.text('说点什么'), findsOneWidget, reason: '聊天不许因为清单拉不到就坏掉');
+  });
+
+  // ── ★ 2026-10-01：**打开时先问一句**（主人：*"小程序不要声明，应该是打开后
+  //    有弹窗申请权限"* · *"打开时一次问完"*）────────────────────────────
+  //
+  // ⚠️ 判据打在**真入口**上（泵出那一屏、像他那样点那个图标）：
+  //    "弹窗先出、容器后开"这件事只有在这一层才量得到。
+
+  /// 一个记着"哪几条请求真的发出去了"的假接口（清单那条 ＋ 点头那一条）。
+  ({Api api, List<Map<String, Object?>> grants}) apiWithWants(List<Object?> apps) {
+    final grants = <Map<String, Object?>>[];
+    final api = Api(
+      base: '',
+      client: MockClient((req) async {
+        if (req.url.path == '/api/apps') {
+          return http.Response(jsonEncode({'apps': apps}), 200,
+              headers: {'content-type': 'application/json'});
+        }
+        if (req.url.path == '/api/app-grant') {
+          grants.add(jsonDecode(req.body) as Map<String, Object?>);
+          return http.Response(jsonEncode({'ok': true, 'permissions': ['db']}), 200,
+              headers: {'content-type': 'application/json'});
+        }
+        return http.Response('', 404);
+      }),
+    );
+    return (api: api, grants: grants);
+  }
+
+  testWidgets('★ 还没表过态 ⇒ **点开先弹窗**；按「就这样」才真发那一条，然后才开', (tester) async {
+    final h = apiWithWants([
+      {
+        ..._entry(id: 'jizhang', title: '记账'),
+        'permissions': ['db'],
+        'granted': <String>[],
+        'unanswered': ['db'],
+      },
+    ]);
+    await _pump(tester, h.api);
+    await tester.tap(find.text('记账'));
+    await tester.pumpAndSettle();
+
+    // ① **先问**（声明只是"它想要"，不是"它已经有了"）
+    expect(find.byKey(askOnOpenKey), findsOneWidget, reason: '★ 打开之前必须先问一句');
+    expect(find.textContaining('记账'), findsWidgets, reason: '要写清是哪个小程序在问');
+    expect(find.text(appRuntimeNotHere), findsNothing, reason: '★ 问完之前不许先把它开起来');
+    expect(h.grants, isEmpty, reason: '★ 弹窗自己不发请求（发请求那一步在屏那一侧）');
+
+    // ② 他什么都不改按一下 ⇒ 真发了那一条（allow=true）
+    await tester.tap(find.byKey(askOnOpenGoKey));
+    await tester.pumpAndSettle();
+    expect(h.grants.length, 1, reason: '★ 点了「就这样」就得真去说一声');
+    expect(h.grants.single['id'], 'jizhang');
+    expect(h.grants.single['permission'], 'db');
+    expect(h.grants.single['allow'], true);
+
+    // ③ 问完就照开（"那一样用不了，别的照旧"—— 他就算不给也照开）
+    expect(find.byKey(askOnOpenKey), findsNothing);
+    expect(find.text(appRuntimeNotHere), findsOneWidget, reason: '★ 问完就该把它开起来');
+  });
+
+  testWidgets('🔴 没有要问的 ⇒ **一个字都不弹**（`unanswered` 空的 / 老服务端没这个字段）', (tester) async {
+    // 老服务端：**根本没回 `unanswered`** ⇒ 不许弹（弹一张问不出结果的窗只会白挡他一下）
+    final h = apiWithWants([
+      {..._entry(id: 'plain', title: '没事要问'), 'permissions': <String>[], 'granted': <String>[]},
+    ]);
+    await _pump(tester, h.api);
+    await tester.tap(find.text('没事要问'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(askOnOpenKey), findsNothing);
+    expect(h.grants, isEmpty, reason: '★ 没什么可问的 ⇒ 一条请求都不该发');
+    expect(find.text(appRuntimeNotHere), findsOneWidget, reason: '★ 照开');
   });
 
   _discoverTests();

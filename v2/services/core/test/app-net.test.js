@@ -121,6 +121,12 @@ test('N1/N2 真制品头：声明了就在 `connect-src` 里；没声明就只�
   apps.create({ id: 'pure', title: '纯页面', icon: 'dice', entry: 'index.html', files: { 'index.html': '<p>x</p>' } });
   const { server, port } = await startAppOrigin(apps);
   try {
+    // ★ 2026-10-01：**声明了也还没给** —— 他还没点过头，一个站都不许进 CSP
+    const ungranted = String((await get(port, sigOf(port, 'shuju'))).headers['content-security-policy']);
+    assert.match(ungranted, /connect-src 'self'(;|$)/, `还没点头 ⇒ 只有 'self'（实际 ${ungranted}）`);
+    assert.ok(!ungranted.includes('api.example.com'), '★ 声明只是"它想要"，不是"它已经有"');
+
+    apps.setGrants('shuju', ['net']); // 他点头
     const a = await get(port, sigOf(port, 'shuju'));
     const cspA = String(a.headers['content-security-policy']);
     assert.match(cspA, /connect-src 'self' https:\/\/api\.example\.com https:\/\/data\.example\.org/, cspA);
@@ -152,8 +158,12 @@ test('N4 🔴 他关掉 ⇒ 名单**立刻**不进 CSP（"设置里能关"真的
   });
   const { server, port } = await startAppOrigin(apps);
   try {
+    const closed = String((await get(port, sigOf(port, 'shuju'))).headers['content-security-policy']);
+    assert.ok(!closed.includes('api.example.com'), '前提：没人点头的时候它不在');
+
+    apps.setGrants('shuju', ['net']); // ★ 他点头（打开时那张弹窗 / 设置页那颗开关）
     const before = String((await get(port, sigOf(port, 'shuju'))).headers['content-security-policy']);
-    assert.match(before, /https:\/\/api\.example\.com/, '前提：开着的时候它在');
+    assert.match(before, /https:\/\/api\.example\.com/, '前提：给的时候它在');
 
     apps.setGrants('shuju', []); // ★ 他在设置页关掉
     const after = String((await get(port, sigOf(port, 'shuju'))).headers['content-security-policy']);
@@ -177,6 +187,7 @@ test('N6 名单**不许自己长**：加站要重新登记一版（旧那一版�
   apps.create({ id: 'shuju', title: '看数据', icon: 'dice', entry: 'index.html', files, permissions: ['net'], net: ['api.example.com'] });
   const { server, port } = await startAppOrigin(apps);
   try {
+    apps.setGrants('shuju', ['net']); // 他点头（这一条钉的是"名单不许自己长"，先把点头补上）
     const v1 = String((await get(port, sigOf(port, 'shuju'))).headers['content-security-policy']);
     assert.match(v1, /api\.example\.com/);
     assert.ok(!v1.includes('new.example.com'), '还没加过的站不在头上');
@@ -206,12 +217,15 @@ test('netHostsFor：三道闸缺一不可（没声明 / 他关掉 / 读不出来
   apps.create({ id: 'off', title: 'B', icon: 'dice', entry: 'index.html', files, permissions: ['net'], net: ['api.example.com'] });
   apps.setGrants('off', []);
   assert.deepEqual(await netHostsFor(apps, 'off'), []);
-  // ③ 正常 ⇒ 名单
+  // ③ 声明了、**他还没点头** ⇒ 也是空（2026-10-01 加的这一道）
   apps.create({ id: 'on', title: 'C', icon: 'dice', entry: 'index.html', files, permissions: ['net'], net: ['api.example.com'] });
+  assert.deepEqual(await netHostsFor(apps, 'on'), [], '还没点头 ⇒ 空');
+  // ④ 他点头 ⇒ 名单
+  apps.setGrants('on', ['net']);
   assert.deepEqual(await netHostsFor(apps, 'on'), ['api.example.com']);
-  // ④ 不存在的 app ⇒ 空（不抛）
+  // ⑤ 不存在的 app ⇒ 空（不抛）
   assert.deepEqual(await netHostsFor(apps, 'nope'), []);
-  // ⑤ 🔴 **盘上被手改过**（有名单却没声明 `net`）⇒ 照样空 ——
+  // ⑥ 🔴 **盘上被手改过**（有名单却没声明 `net`）⇒ 照样空 ——
   //    正常入口拒这种组合（"两样要一起给"），所以这一条是**防线里那一层**：
   //    谁绕过入口直接把文件改了，CSP 也不会给出去。
   //  ⚠️ 用 `register`（它写的是 `app.json`）—— 手改的就是那一份
@@ -222,7 +236,7 @@ test('netHostsFor：三道闸缺一不可（没声明 / 他关掉 / 读不出来
   nodeFs.writeFileSync(metaPath, `${JSON.stringify(meta)}\n`);
   assert.deepEqual(await netHostsFor(apps, 'hacked'), [], '没声明 net ⇒ 名单一个都不许进 CSP');
 
-  // ⑥ 抛着的 store ⇒ 空（fail-closed）
+  // ⑦ 抛着的 store ⇒ 空（fail-closed）
   assert.deepEqual(await netHostsFor({ meta: () => { throw new Error('坏了'); } }, 'on'), []);
   nodeFs.rmSync(dir, { recursive: true, force: true });
 });

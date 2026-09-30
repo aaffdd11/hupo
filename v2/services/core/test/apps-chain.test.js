@@ -386,15 +386,16 @@ test('🔴 装上 ⇒ 复制进他自己的那一份（作者下架之后**他�
   }
 });
 
-test('★ 傻瓜式：助手在 `app_create` 里声明 `net` ＋ 域名 ⇒ 清单里真有、那一条 CSP 里真有那些站', async () => {
+test('★ 助手在 `app_create` 里声明 `net` ＋ 域名 ⇒ 清单里真有；**他点头之后**那一条 CSP 里才有那些站', async () => {
   const s = setup();
   const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
   try {
     await handshake(c);
     /**
-     * 🔴 `148` §二：**网络这一样也要"声明即用"**，而且白名单必须**从工具一路到 CSP**
+     * 🔴 `148` §二：网络这一样的白名单必须**从工具一路到 CSP**
      *    （工具 schema → 套接字 → 制品库 → `netHostsFor` → 响应头）——
      *    中间任何一段丢了，页面上就是"配了却连不出去"。
+     * ⚠️ 但"一路到 CSP"的前提是**他点过头**（2026-10-01：声明只是"它想要"）。
      */
     const made = await c.call('tools/call', {
       name: 'app_create',
@@ -405,10 +406,14 @@ test('★ 傻瓜式：助手在 `app_create` 里声明 `net` ＋ 域名 ⇒ 清�
     const man = s.apps.manifest('tianqi', v);
     assert.deepEqual(man.permissions, ['net'], '声明要真的进清单');
     assert.deepEqual(man.net, ['api.example.com'], '★ 白名单也要真的进清单');
-    assert.deepEqual(s.apps.grants('tianqi'), ['net'], '声明了就是给的（不用他点）');
-    // ★ 一路到"该给它哪些站"那一层（真函数，不是替身）
+    assert.deepEqual(s.apps.grants('tianqi'), [], '★ 声明了也还没给（默认不给）');
+    assert.deepEqual(s.apps.unanswered('tianqi'), ['net'], '★ 打开时那张弹窗要问的就是它');
+    // ★ 一路到"该给它哪些站"那一层（真函数，不是替身）：**没点头 ⇒ 一个站都不许进**
     const { netHostsFor } = await import('../src/app-serve.js');
-    assert.deepEqual(await netHostsFor(s.apps, 'tianqi'), ['api.example.com']);
+    assert.deepEqual(await netHostsFor(s.apps, 'tianqi'), [], '★ 他还没点头 ⇒ 名单是空的');
+    s.apps.setGrants('tianqi', ['net']); // 他点头
+    assert.deepEqual(s.apps.grants('tianqi'), ['net']);
+    assert.deepEqual(await netHostsFor(s.apps, 'tianqi'), ['api.example.com'], '点头之后才真进 CSP');
     // 反例那一侧：坏域名**在工具这一层就被拒**（写不进去）
     const bad = await c.call('tools/call', {
       name: 'app_create',
@@ -422,15 +427,17 @@ test('★ 傻瓜式：助手在 `app_create` 里声明 `net` ＋ 域名 ⇒ 清�
   }
 });
 
-test('★ fork 下来就是自己的：别人那个 app 声明了 `db` ⇒ 装到乙这儿**当场就能存**（没有"外来"这一档）', async () => {
+test('★ fork 下来就是自己的（没有"外来"这一档）：声明原样带过来，**要不要给仍然是他那一下**', async () => {
   /**
    * 🔴 主人 2026-09-30 原话：*「别人发的东西直接 fork 下来就好了。不用管别的。
    *    代码都成自己的了。」*
    *
    * ⇒ 这一条钉的就是那句话：**fork ＝ 复制成他自己的** ——
-   *    清单里那份声明**原样带过来**，而且**当场就是给的**（没有"外来的要多点一下"这一档）。
+   *    代码、清单、声明**原样带过来**，**没有"外来的要多点一下"这一档**。
    * ⚠️ 它同时是"**别在这条路上加闸**"的反例：谁将来在 install 那条路上塞一道
-   *    "外来的先不许用"，这条判据就会红。
+   *    "外来的先不许用 / 先扣着"，这条判据就会红。
+   * ⚠️ 至于"给不给存储"：那**永远**是打开时问他那一下（2026-10-01 定的），
+   *    跟"是谁写的"无关 —— 自己写的也一样要问。
    */
   const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'hupo-apps-forkdb-'));
   tmpDirs.push(dir);
@@ -468,23 +475,29 @@ test('★ fork 下来就是自己的：别人那个 app 声明了 `db` ⇒ 装�
     const v = appsB.current('jizhang');
     // ① **声明原样带过来了**（复制模型：那份代码现在是他的）
     assert.deepEqual(appsB.manifest('jizhang', v).permissions, ['db'], '声明要跟着 fork 过来');
-    // ② 🔴 **而且当场就是给的** —— 没有人点过任何东西
-    assert.deepEqual(appsB.grants('jizhang'), ['db'], '★ fork 下来就是自己的：当场能用');
+    // ② 🔴 **没有"外来"这一档**：声明原样带过来，但**给不给仍然要问他**
+    assert.deepEqual(appsB.grants('jizhang'), [], '装下来也还没给（默认不给）');
+    assert.deepEqual(appsB.unanswered('jizhang'), ['db'], '★ 打开时那张弹窗会问他');
     assert.equal(
       nodeFs.existsSync(nodePath.join(dirB, 'hupo', 'apps', 'jizhang', 'grant.json')),
       false,
-      '★ 不许凭空写一份 grant.json（默认给 ≠ 记一笔账）',
+      '★ 没人点过 ⇒ 不许凭空写一份 grant.json',
     );
-    // ③ **真存一笔**（这才是"能用"的意思，不是"字段对上了"）
+    // ③ 没点头 ⇒ 真存不进去（"字段对上了"不等于能用）
+    const locked = await appsB.dbExec('jizhang', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
+    assert.equal(locked.ok, false);
+    assert.equal(locked.status, 403);
+    // ④ **他点头** ⇒ 真存一笔（这才是"能用"的意思）
+    appsB.setGrants('jizhang', ['db']);
     const w = await appsB.dbExec('jizhang', { op: 'run', sql: 'CREATE TABLE IF NOT EXISTS t(a TEXT)' });
-    assert.equal(w.ok, true, `装下来就该能存（实际 ${JSON.stringify(w)}）`);
+    assert.equal(w.ok, true, `他点头之后就该能存（实际 ${JSON.stringify(w)}）`);
     const w2 = await appsB.dbExec('jizhang', { op: 'run', sql: 'INSERT INTO t VALUES (?)', params: ['乙记的'] });
     assert.equal(w2.ok, true);
     const w3 = await appsB.dbExec('jizhang', { op: 'all', sql: 'SELECT a FROM t' });
     assert.deepEqual(w3.rows, [{ a: '乙记的' }]);
-    // ④ 各存各的：甲那一份没有乙的数据（一个 app 一个库 ＋ 按人分开）
+    // ⑤ 各存各的：甲那一份没有乙的数据（一个 app 一个库 ＋ 按人分开）
     assert.equal(nodeFs.existsSync(nodePath.join(authorDir, 'hupo', 'apps', 'jizhang', 'data.sqlite')), false);
-    // ⑤ 他要是关掉 ⇒ 乙自己这份当场就不能存（开关**永远在他手里**）
+    // ⑥ 他要是关掉 ⇒ 乙自己这份当场就不能存（开关**永远在他手里**）
     appsB.setGrants('jizhang', []);
     const off = await appsB.dbExec('jizhang', { op: 'all', sql: 'SELECT a FROM t' });
     assert.equal(off.ok, false);
@@ -583,7 +596,7 @@ test('★ 制品自查：`app_create` 的回执里**当场摊出"哪一条标准
   }
 });
 
-test('★ 傻瓜式：助手在 `app_create` 里声明 `db` ⇒ **它当场就能存**（不用任何人点开关）', async () => {
+test('★ 助手在 `app_create` 里声明 `db` ⇒ 清单里真有 ⇒ **打开时那张弹窗问他** ⇒ 点头才存得进去', async () => {
   const s = setup();
   const c = mcpClient({ HUPO_APPS_SOCKET: s.socketPath });
   try {
@@ -593,6 +606,8 @@ test('★ 傻瓜式：助手在 `app_create` 里声明 `db` ⇒ **它当场就�
      *    而 `app_create` 这个工具**当时根本没有 `permissions` 参数** ——
      *    也就是说那句话当年是**空话**，助手做不到。
      * ⚠️ 它量的是**工具那一层**（真 MCP 子进程 → 真套接字 → 真制品库），不是纯函数。
+     * 🔴 2026-10-01 主人改了口径：**不再"声明即用"**，改成"打开后有弹窗申请权限" ——
+     *    所以这里钉的是"声明真的进清单（弹窗才有得问）＋ 他点头之前存不进去"。
      */
     const made = await c.call('tools/call', {
       name: 'app_create',
@@ -601,15 +616,21 @@ test('★ 傻瓜式：助手在 `app_create` 里声明 `db` ⇒ **它当场就�
     assert.equal(made.result.isError, false, JSON.stringify(made.result));
     // ① 清单里真声明了
     assert.deepEqual(s.apps.manifest('jizhang', s.apps.current('jizhang')).permissions, ['db'], '声明要真的进清单');
-    // ② **而且当场就能用**（默认给：没人点过任何开关）
-    assert.deepEqual(s.apps.grants('jizhang'), ['db'], '声明了就是给的');
+    // ② **但还没给**：要等他打开时那一句"允许"
+    assert.deepEqual(s.apps.grants('jizhang'), [], '声明了也还没给');
+    assert.deepEqual(s.apps.unanswered('jizhang'), ['db'], '★ 弹窗要问的就是它');
+    const locked = await s.apps.dbExec('jizhang', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
+    assert.equal(locked.ok, false, '没点头 ⇒ 存不进去');
+    assert.equal(locked.status, 403);
+    // ③ 他点头 ⇒ 当场能存
+    s.apps.setGrants('jizhang', ['db']);
     const w = await s.apps.dbExec('jizhang', { op: 'run', sql: 'CREATE TABLE IF NOT EXISTS t(a TEXT)' });
-    assert.equal(w.ok, true, `声明之后要能直接存（实际 ${JSON.stringify(w)}）`);
+    assert.equal(w.ok, true, `他点头之后要能存（实际 ${JSON.stringify(w)}）`);
     const w2 = await s.apps.dbExec('jizhang', { op: 'run', sql: 'INSERT INTO t VALUES (?)', params: ['甲'] });
     assert.equal(w2.ok, true);
     const w3 = await s.apps.dbExec('jizhang', { op: 'all', sql: 'SELECT a FROM t' });
     assert.deepEqual(w3.rows, [{ a: '甲' }]);
-    // ③ 反例那一侧：**没声明**的照旧存不进去（默认给 ≠ 谁都能存）
+    // ④ 反例那一侧：**没声明**的照旧存不进去（点头也点不出来这一样）
     const none = await c.call('tools/call', { name: 'app_create', arguments: { ...APP, id: 'pure', title: '纯页面' } });
     assert.equal(none.result.isError, false);
     assert.deepEqual(s.apps.grants('pure'), [], '没声明 ⇒ 一样都不给');

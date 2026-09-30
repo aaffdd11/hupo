@@ -173,12 +173,20 @@ async function boot() {
   return h;
 }
 
-/** 造一个 app（工作区 ＋ 登记），并把它声明成 `permissions`。 */
-function makeApp(h, id, permissions) {
+/**
+ * 造一个 app（工作区 ＋ 登记），声明成 `permissions`，**并且替他点头**（`setGrants`）。
+ *
+ * ⚠️ 为什么要替他点这一下：这一份量的**是那条口**（`/agent` 收不收、回执怎么取），
+ *    不是"打开时那张弹窗"。**"声明 ≠ 已给"** 那一档有它自己的判据
+ *    （`app-grant.test.js` G1/G2、`apps-chain.test.js`、`app-net.test.js`）。
+ *    想看"他没点头 ⇒ 403"的，用 `makeApp(h, id, ['agent'], { grant: false })`。
+ */
+function makeApp(h, id, permissions, { grant = true } = {}) {
   const w = h.w;
   w.workspaces.ensure(id, { title: id, entry: 'index.html' });
   w.workspaces.write(id, { 'index.html': `<!doctype html><p>${id}</p>` });
   w.apps.register({ id, title: id, entry: 'index.html', permissions });
+  if (grant) w.apps.setGrants(id, permissions ?? []);
   return id;
 }
 
@@ -298,8 +306,10 @@ test('A3 闸和 `ask` 是两样：没声明 `agent` ⇒ 403 · 他关掉了 ⇒ 
   assert.match(a.body.text, /没说要跟你的助手说话/);
   assert.equal(h.delivered.length, 0, '🔴 闸没过 ⇒ 一个字节都不许送进那一间');
 
-  // ② 声明了、他关掉了 ⇒ 拒
+  // ② 声明了、**他本来点了头、后来又关掉了** ⇒ 拒（新模型下"没点头"也是 403，
+  //    这里特意走"点过再关"这一下：它证明的是**关掉真的把已经生效的收回来**）
   const off = makeApp(h, 'off', ['agent']);
+  h.w.apps.setGrants(off, ['agent']);
   h.w.apps.setGrants(off, []);
   const sig2 = await sigOf(h, off);
   const b = await post(h.appPort, AGENT_PATH, { id: off, v: '1', ...sig2, prompt: '你好' });
