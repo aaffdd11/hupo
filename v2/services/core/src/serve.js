@@ -25,6 +25,8 @@ import { dropTunnel, notifyHost } from './tenant-tunnel-agent.mjs';
 import { CRASH_WINDOW_MS } from './boot-marker.js';
 import { RESUMED_EVENT } from './resume-plan.js';
 import { appsBaseOf, createAppServer, loadSignKey } from './app-serve.js';
+// ★ **`148` §四：定时任务**（注册制 · 串行 · 每天有限额 · 结果回那一间对话）
+import { createTaskRunner } from './app-tasks.js';
 // ★ **`112`：桌面那一格打开的是"他正在改的那一份"**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）：
 //   `createLiveWatcher` 看着工作区、`liveScopeOfChange` 判"哪个文件算哪一间"。
 import { createLiveWatcher } from './app-live.js';
@@ -860,6 +862,23 @@ const appsOrigin = createAppServer({
 });
 
 /**
+ * ★ **`148` §四：小程序定时任务的调度器**（主人：*「这些功能都要有」*）。
+ *
+ * ⚠️ **它跑在壳这一侧**（宿主 / 盒子里那个服务自己）—— **不是**我们的云：
+ *    "跑在他自己的盒子里"这句话的落点就是这儿。
+ * 🔴 **注册制 ＋ 串行 ＋ 每天有限额 ＋ 先记再跑**：全在 `app-tasks.js` 那一个执行器里
+ *    （这一行只负责把它接上电）。
+ * ⚠️ **一件事都不声明时它是白跑的**（每个 tick 只做几次"读清单"）。
+ */
+const taskRunner = createTaskRunner({
+  worlds,
+  appsFor: (sub) => appsForSub(sub),
+  deliver: (o) => deliverAppTask(o),
+  now: () => Date.now(),
+  log: (m) => console.warn(`  ⚠️ ${m}`),
+});
+
+/**
  * ★ **`112`：看着工作区 —— 他改完，正开着它的那一屏自己换**（契约 112 §四）。
  *
  * 🔴 **为什么不挂在某个写入函数上**：他改那一份的主要方式是让助手在**那个目录里
@@ -961,7 +980,7 @@ if (cfg.trustedSocketPath) {
   });
 }
 
-const { listen, listenTrusted, close, askApp, agentAsk, agentPoll } = createServer({
+const { listen, listenTrusted, close, askApp, agentAsk, agentPoll, deliverAppTask } = createServer({
   // ★ **多租户那一侧**：每个请求按令牌里的 `sub` 取那个人的世界。
   //   ⚠️ 上面那五个单例**不再传**了 —— 传了就等于"所有人共用一份"。
   worlds,
@@ -1222,6 +1241,15 @@ if (cfg.trustedSocketPath) {
   }
 }
 const addr = await listen(cfg.port, cfg.host);
+
+// ★ **`148` §四：定时任务**（注册制 · 串行 · 每天有限额 · 结果回那一间对话）——
+//   ⚠️ **只在自己这一侧跑**（宿主 / 盒子里那个服务）；**不接**别人的盒子（见 `deliverAppTask`）。
+//   ⚠️ 起不来 / 抛了都不许把服务带走（它只是个定时器）——如实记一句。
+try {
+  taskRunner.start();
+} catch (err) {
+  console.warn(`  ⚠️ 定时任务的调度器没起来：${err?.message ?? err}（别的事照旧）`);
+}
 
 // ★ 制品那个口（乙-1）：**它起来失败不许拖垮壳** —— 但必须**当场看得见**（静默降级是本仓库反复栽的形状）。
 try {

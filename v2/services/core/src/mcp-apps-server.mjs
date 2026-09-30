@@ -148,7 +148,7 @@ const TOOLS = [
          */
         permissions: {
           type: 'array',
-          items: { type: 'string', enum: ['db', 'ask', 'net', 'agent'] },
+          items: { type: 'string', enum: ['db', 'ask', 'net', 'agent', 'tasks'] },
           description:
             '这个小程序要用到的东西（**声明的意思 = 它就能用**，不用他去点任何开关）。\n'
             + '· `db` —— **它要记住东西**（翻到第几题、他填过的表、一份清单）：它自己一格独立的库，'
@@ -159,11 +159,34 @@ const TOOLS = [
             + '⚠️ 这一样会**请动那一间的助手**（它有手：能读文件、能查网），所以**每天有上限**、'
             + '两次之间也要隔一会儿；🔴 **每一次都看得见**（问题以"来自小程序"的样子落进那一间，'
             + '他随时翻得到）。真要问"一件需要查/需要想的事"才加；随口一句用 `ask` 就够。\n'
+            + '· `tasks` —— **它要"按点自己跑一件小事"**（每天/每隔一阵让助手替它做一件事）：'
+            + '加了这一样还要在 `tasks` 里把每一件写清（名字 · 每隔几分钟 · 让它干什么）。'
+            + '⚠️ 跑在**他自己的机器上**、**一次只跑一件**、**每天有上限**，而且**结果会回到那一间对话**'
+            + '（他看得见）。真要"自己会动"才加。\n'
             + '· `net` —— **它要访问几个网站取数据**（比如查天气、查价）：光加这一样还不够，'
             + '**同时要在 `net` 里把域名一个一个写出来**（只写域名本身，不许通配、端口、路径）。'
             + '⚠️ 域名**你自己先去访问确认过**再写进去 —— 他要的是"能拿到数据"，不是"看起来配了"。\n'
             + '⚠️ **不确定就先不加**：先做一个纯页面的版本，等他真的说"它得记住"再加也来得及'
             + '（加的时候再调一次 app_create，清单会更新）。',
+        },
+        tasks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: '这一件的短名（小写字母/数字/短横）' },
+              title: { type: 'string', description: '它的名字，给人看的（如「每天看一眼账单」）' },
+              everyMinutes: { type: 'integer', description: '每隔多少分钟做一次（整数分钟，**不许太频**）' },
+              prompt: { type: 'string', description: '让它干什么（一句人话；它会当成"他让做的事"去做）' },
+            },
+            required: ['id', 'title', 'everyMinutes', 'prompt'],
+            additionalProperties: false,
+          },
+          description:
+            '它要**按点自己跑**的那几件事（只在 `permissions` 里也加了 `tasks` 时才算数）。'
+            + '🔴 **写进去的 `prompt` 会被当成"他让它做的事"**（助手会照做）——'
+            + '所以只写**他明确要的那种事**（"看看今天花了多少"这种），别写成"随便逛逛"。'
+            + '⚠️ 结果**回到那一间对话**（他看得见）；他自己也能在设置里把这一样关掉。',
         },
         net: {
           type: 'array',
@@ -316,13 +339,22 @@ async function callTool(name, args) {
     //   （`apps-socket.js` 的 `ctx.turnInputFor`；2026-09-26 修）。
     // ★ 2026-09-30：**声明的能力要真的带下去**（内部口那两个分支都认 `permissions`）
     const permissions = Array.isArray(args?.permissions)
-      ? args.permissions.filter((p) => p === 'db' || p === 'ask' || p === 'net' || p === 'agent')
+      ? args.permissions.filter((p) => p === 'db' || p === 'ask' || p === 'net' || p === 'agent' || p === 'tasks')
       : [];
     // ★ `148` §二：**要访问的站**（白名单）。形状由 `Apps` 那一层严查（这里只搬过去）
     const net = Array.isArray(args?.net) ? args.net.filter((h) => typeof h === 'string') : [];
+    // ★ `148` §四：定时任务（形状由 `Apps` 那一层严查：间隔下限、件数上限、重名…）
+    const tasks = Array.isArray(args?.tasks)
+      ? args.tasks.filter((t) => t && typeof t === 'object').map((t) => ({
+          id: typeof t.id === 'string' ? t.id : '',
+          title: typeof t.title === 'string' ? t.title : '',
+          everyMinutes: Number.isInteger(t.everyMinutes) ? t.everyMinutes : 0,
+          prompt: typeof t.prompt === 'string' ? t.prompt : '',
+        }))
+      : [];
     const r = await ask({
       op: 'create',
-      app: { id, title, icon, entry, files, permissions, net },
+      app: { id, title, icon, entry, files, permissions, net, tasks },
       ...(SCOPE ? { scope: SCOPE } : {}),
     });
     if (r.ok) {

@@ -88,12 +88,12 @@ void main() {
       expect(nextGranted(const ['db'], 'db', true), ['db']);
     });
 
-    test('★ 认得的四样与**顺序**：存东西 → 问一句 → 上网 → 跟助手说话', () {
+    test('★ 认得的五样与**顺序**：存东西 → 问一句 → 上网 → 跟助手说话 → 按点跑', () {
       // ⚠️ 顺序就是那张卡上摆出来的顺序（`148` §二/§三）。
-      expect(knownWants, ['db', 'ask', 'net', 'agent']);
-      expect(knownWants, [wantStore, wantAsk, wantNet, wantAgent]);
+      expect(knownWants, ['db', 'ask', 'net', 'agent', 'tasks']);
+      expect(knownWants, [wantStore, wantAsk, wantNet, wantAgent, wantTasks]);
       // 负向对照：四样都得认得（少一样 ⇒ 那一样就没有开关，而它本来是服务端认的）
-      for (final p in ['db', 'ask', 'net', 'agent']) {
+      for (final p in ['db', 'ask', 'net', 'agent', 'tasks']) {
         expect(knownWant(p), true, reason: '★ $p 是服务端白名单里的，界面上必须认得');
       }
       expect(knownWant('something-new'), false);

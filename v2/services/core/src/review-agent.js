@@ -261,6 +261,17 @@ export function converseWithReviewDsh({
     // 🔴 `--patch` 是**全局选项**，必须写在 `--profile` 之后（照 `harness-session.mjs`）。
     //    ⚠️ **只挂模型那条** —— 人格 / 能力层一律不挂（评审是中立读者、且不带写盘工具）。
     if (cfg.modelPatchPath) args.push('--patch', cfg.modelPatchPath);
+    /**
+     * ★ **额外的补丁层**（`148` §三"限定档"）：例如给"替小程序跑的那一轮"挂上**只读**那一层
+     * （`hupo-app-agent.yml`：把 bash / 后台活 / 派活 / 加载说明那些"能动手的"关掉）。
+     *
+     * ⚠️ **顺序**：`--patch` 是全局选项，必须在 `--profile` 之后（同上面那条）；
+     *    而且**后挂的覆盖先挂的** ⇒ 这一层排在模型那条之后。
+     * ⚠️ 不传（`undefined` / 空数组）⇒ **命令行一个字节都不变**（评审那条路原样）。
+     */
+    for (const one of Array.isArray(cfg.extraPatchPaths) ? cfg.extraPatchPaths : []) {
+      if (typeof one === 'string' && one !== '') args.push('--patch', one);
+    }
 
     let child;
     try {

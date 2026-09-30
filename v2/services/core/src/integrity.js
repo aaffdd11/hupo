@@ -83,6 +83,16 @@ export function protectedPaths({ repo, home = nodeOs.homedir() }) {
       mode: 'strict',
       why: '能力层：每开一个新 agent 就挂一次（它决定模型手里有哪些工具）——改它就能给自己加一条新的能力',
     },
+    {
+      path: p('v2/services/core/hupo-app-agent.yml'),
+      mode: 'strict',
+      why: '小程序那一轮的**限定档**（`148` §3.5）：它决定"替小程序跑的那一轮有没有手"——改它就能把那些能动手的工具放回来',
+    },
+    {
+      path: p('v2/services/core/hupo-model-proxy.yml'),
+      mode: 'strict',
+      why: '模型那条补丁：每开一个新 agent 就挂一次（改它就能把请求指到别处去）',
+    },
     { path: p('AGENTS.md'), mode: 'strict', why: '助手给"下一次的自己"读的说明书' },
     {
       path: d('profiles'),

@@ -1,0 +1,49 @@
+# 琥珀 —— **"限定档"：替小程序跑一轮时挂的那一层**（契约 `docs/dev/148-APP-FULL-SET.md` §三）
+#
+# ── 它是干什么的（主人 2026-09-30："小程序要有 dsh 的对话" · 目标里那句"限定档"）──
+#   小程序问的那一句会**请动助手**（它有手）。这一层把那双手**收起来**：
+#   凡是"能在世界里动手"的工具，一律 `disabled: true`：
+#     · `tool-bash` / `tool-pwsh` —— 跑命令（最要紧的那一条）；
+#     · `tool-jobs` —— 起后台的活；
+#     · `tool-subagent*` —— 再派别的 agent 出去；
+#     · `skill` —— 加载说明（说明里可能带"照着做"的动作，收掉）。
+#   **不挂能力层**（`hupo-capabilities.yml`）⇒ 记账号 / 小程序库 / 画图那几件 MCP 工具**根本不在**。
+#   留下来的：读文件、找文件（`tool-fs` / `tool-fs-search`）、查网（`web_fetch` / `web_search`）。
+#
+# ── 🔴 三条不许破 ──────────────────────────────────────────
+#   ① **`--patch` 是全局选项，必须写在 `--profile` 之后**（同 `hupo-capabilities.yml` 顶上那条）；
+#   ② **这一层是"减法"**（`disabled: true`），所以它**只许挂给"替小程序跑的那一轮"** ——
+#      挂到主人自己的对话上，等于把他的助手的手也捆起来；
+#   ③ ⚠️ **如实说一条**：`tool-fs` 是一整块（读与写在一起），**今天关不掉它一半** ⇒
+#      那一轮**还写得了那个工作区里的文件**。所以跑的 cwd 是**那个小程序自己的那一间**，
+#      而且跑完要核一遍工作区有没有被动过（`app-agent.js` 的调用方负责说清）。
+#      要彻底只读 ⇒ 得另起一个 **dsh profile**（`~/.dsh/profiles/**` 是 `strict`，要主人点头）。
+#
+# ⚠️ **形状**：`- id: <已存在的 id>` ＋ 覆盖字段 —— 这是"改一个已存在的条目"。
+#    写成 `- insert:` 就会**又加一个**（不是关掉）。
+
+- id: tool-bash
+  disabled: true
+
+- id: tool-pwsh
+  disabled: true
+
+- id: tool-jobs
+  disabled: true
+
+- id: tool-subagent
+  disabled: true
+
+- id: tool-subagent-fork
+  disabled: true
+
+- id: tool-subagent-control
+  disabled: true
+
+# ⚠️ **关的是"工具"那一条（`tool-skill`），不是服务提供者那条（`skill`）**：
+#    2026-10-01 我一开始写成 `- id: skill` ⇒ `@deepseek-ai/dsh-skill-filesystem` 与
+#    `@deepseek-ai/dsh-tool-skill` **等不到那个服务** ⇒ `plugin tree failed to load`
+#    （"2 entries did not activate"）⇒ **整台 dsh 起不来**（那一轮永远答不上来）。
+#    判据里现在钉着这一条：挂上这一层之后 **`initialize` 必须成功**。
+- id: tool-skill
+  disabled: true

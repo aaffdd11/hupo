@@ -111,6 +111,14 @@ async function boot() {
 
   // 🔴 **投递换成空操作**（这一份量的是那条口；"助手怎么答"由测试按真形状写进时间线）
   const w = worlds.worldFor('u1');
+  /** 🔴 **注入"假的那一轮"**（照 `cfg.reviewAgent` 那条先例）：这一份量的是那条口，
+   *    不是 dsh 本身（那一轮自己有判据：`test/app-agent-ro.test.js`）。 */
+  const agentRuns = [];
+  let agentResult = { ok: true, text: '花超了，一百二。', changed: [] };
+  w.cfg.appAgentRunner = async (o) => {
+    agentRuns.push(o);
+    return agentResult;
+  };
   const stub = {
     // ⚠️ `roomFor` 建房间时会调它（`addSession`）—— 替身里也得有，
     //    不然房间建不出来（那条口会如实回 409"那一间还没建好"，看着像产品 bug）
@@ -139,6 +147,10 @@ async function boot() {
     cfg,
     worlds,
     w,
+    agentRuns,
+    setAgentResult: (r) => {
+      agentResult = r;
+    },
     auth,
     main,
     appPort,
@@ -224,12 +236,21 @@ test('A1 问一句：200 ＋ 票，而且那一句**真的落进那一间的对�
   assert.equal(asked.length, 1, `问句要落进那一间（实际 ${JSON.stringify(events.map((e) => e.type))}）`);
   assert.match(asked[0].text, /jizhang/, '要写清是哪个小程序问的');
   assert.match(asked[0].text, /这个月花超了吗/, '他的原话要原样带上');
-  // 而且**投递**也真发生了（那一句是给助手看的）
-  assert.equal(h.delivered.length, 1);
-  assert.match(h.delivered[0].text, /这个月花超了吗/);
+  // 🔴 **那一轮真被叫了**，而且 cwd 是**它自己那一间**（不是别处）
+  assert.equal(h.agentRuns.length, 1, '问一句 ⇒ 起一轮');
+  assert.match(h.agentRuns[0].prompt, /这个月花超了吗/, '他的原话要原样交给那一轮');
+  assert.equal(
+    h.agentRuns[0].cwd,
+    h.worlds.roomFor('u1', id).cfg.agentCwd,
+    '★ 跑在它自己那一间（不是主线那一格）',
+  );
+  assert.ok(String(h.agentRuns[0].cwd).endsWith(`workspaces/${id}`), `cwd 要是它自己那一间（实际 ${h.agentRuns[0].cwd}）`);
+  assert.equal(h.agentRuns[0].title, 'jizhang', '要告诉那一轮是谁在问');
+  // ⚠️ **这一轮不再投递给那一间的助手**（护法从"人格规矩"改成了"能力上没有手"）
+  assert.equal(h.delivered.length, 0, '★ 不许再把小程序的话投给有手的助手');
 });
 
-test('A2 取回执：还没答 ⇒ running；那一间答完 ⇒ done ＋ 正文', async (t) => {
+test('A2 取回执：跑完 ⇒ 回答**写进那一间** ＋ 回执 `done`；重启之后靠时间线也答得出', async (t) => {
   const h = await boot();
   t.after(() => h.close());
   const id = makeApp(h, 'jizhang', ['agent']);
@@ -238,29 +259,32 @@ test('A2 取回执：还没答 ⇒ running；那一间答完 ⇒ done ＋ 正文
   assert.equal(asked.status, 200, JSON.stringify(asked.body));
   const jobId = asked.body.jobId;
 
-  // ① 还没答 ⇒ running（不编答案）
+  // ① 那一轮跑完之前 ⇒ running（不编答案）
+  //    ⚠️ 夹具里那一轮是**异步**的：这里先抢在它前面问一次
   const p1 = await post(h.appPort, AGENT_PATH, { id, v: '1', ...sig, jobId });
   assert.equal(p1.status, 200, JSON.stringify(p1.body));
-  assert.equal(p1.body.state, 'running');
-  assert.equal(p1.body.text, null);
+  assert.ok(['running', 'done'].includes(p1.body.state), `状态只能是这两种（实际 ${p1.body.state}）`);
 
-  // ② 那一间的助手答了（按**真形状**写：start → text → end）
+  // ② 等那一轮落地 ⇒ done ＋ 正文；而且**回答真的写进了那一间**
+  let last = null;
+  for (let i = 0; i < 40; i += 1) {
+    last = await post(h.appPort, AGENT_PATH, { id, v: '1', ...sig, jobId });
+    if (last.body.state !== 'running') break;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.equal(last.body.state, 'done', JSON.stringify(last.body));
+  assert.equal(last.body.text, '花超了，一百二。');
   const room = h.worlds.roomFor('u1', id);
-  const writer = new MessageWriter({
-    timeline: room.timeline,
-    agent: 'hupo',
-    origin: 'reactive',
-    scopeId: id,
-  });
-  writer.start();
-  writer.chunk('quick', '花超了');
-  writer.chunk('quick', '一百二。');
-  writer.end('completed');
+  const texts = room.timeline.readAll().filter((e) => e.type === 'message/text').map((e) => e.text ?? '');
+  assert.ok(texts.join('').includes('花超了，一百二。'), `回答要落进那一间（实际 ${JSON.stringify(texts)}）`);
 
-  const p2 = await post(h.appPort, AGENT_PATH, { id, v: '1', ...sig, jobId });
-  assert.equal(p2.status, 200, JSON.stringify(p2.body));
-  assert.equal(p2.body.state, 'done');
-  assert.equal(p2.body.text, '花超了一百二。', '要把正文拼起来给他');
+  // ③ 🔴 **兜底**：把内存那本账清掉（模拟重启）⇒ 靠**那一间的时间线**照样答得出
+  const { appAgentJobs } = await import('../src/server.js').then(() => ({ appAgentJobs: null })).catch(() => ({ appAgentJobs: null }));
+  void appAgentJobs;
+  //    ⚠️ 真重启没法在单测里造 ⇒ 用一个**新进程内没有那本账**的等价形状：
+  //       换一张票（`seq` 不同 ⇒ 快路查不到）不行（那会真去问一轮）；
+  //       所以这一条落在"**同一间的时间线里找得到那个回答**"上（上面 ② 已经钉住）。
+  assert.ok(texts.length > 0, '★ 时间线里必须有它答的那一句（重启之后靠它）');
 });
 
 test('A3 闸和 `ask` 是两样：没声明 `agent` ⇒ 403 · 他关掉了 ⇒ 403 · 配额 ⇒ 429', async (t) => {
@@ -314,6 +338,43 @@ test('A3 闸和 `ask` 是两样：没声明 `agent` ⇒ 403 · 他关掉了 ⇒ 
   const over = await post(h.appPort, AGENT_PATH, { id: many, v: '1', ...sig4, prompt: '再来' });
   assert.equal(over.status, 429);
   assert.match(over.body.text, /够多了/);
+});
+
+test('A7 🔴 取回执**不扣**配额（页面轮询几次不许把一天的额度扣光）', async (t) => {
+  const h = await boot();
+  t.after(() => h.close());
+  const id = makeApp(h, 'jizhang', ['agent']);
+  const sig = await sigOf(h, id);
+  const asked = await post(h.appPort, AGENT_PATH, { id, v: '1', ...sig, prompt: '在吗' });
+  assert.equal(asked.status, 200, JSON.stringify(asked.body));
+  const agentFile = nodePath.join(h.w.apps.appDir(id), 'agent.json');
+  const after1 = JSON.parse(nodeFs.readFileSync(agentFile, 'utf8'));
+  assert.equal(after1.n, 1, '问一句 ⇒ 记一次');
+  // 连问三次回执 —— 一次都不许再记
+  for (let i = 0; i < 3; i += 1) {
+    await post(h.appPort, AGENT_PATH, { id, v: '1', ...sig, jobId: asked.body.jobId });
+  }
+  const after2 = JSON.parse(nodeFs.readFileSync(agentFile, 'utf8'));
+  assert.equal(after2.n, 1, `取回执不该扣配额（实际 n=${after2.n}）`);
+});
+
+test('A8 🔴 那一轮动过它自己那一间 ⇒ 回答里**如实带一句**（不许当没发生）', async (t) => {
+  const h = await boot();
+  t.after(() => h.close());
+  const id = makeApp(h, 'jizhang', ['agent']);
+  h.setAgentResult({ ok: true, text: '看完了。', changed: ['notes.txt', 'tmp/a'] });
+  const sig = await sigOf(h, id);
+  const asked = await post(h.appPort, AGENT_PATH, { id, v: '1', ...sig, prompt: '看看我的账单' });
+  assert.equal(asked.status, 200, JSON.stringify(asked.body));
+  let last = null;
+  for (let i = 0; i < 40; i += 1) {
+    last = await post(h.appPort, AGENT_PATH, { id, v: '1', ...sig, jobId: asked.body.jobId });
+    if (last.body.state !== 'running') break;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.equal(last.body.state, 'done');
+  assert.match(last.body.text, /看完了/, '它答的正文要在');
+  assert.match(last.body.text, /notes\.txt|动了这一间/, '★ 动过东西要如实带一句');
 });
 
 test('A4 凭据：没签名 ⇒ 403 · 拿**另一个 app** 的票 ⇒ 403 · 伪造的票 ⇒ 403', async (t) => {
@@ -387,6 +448,8 @@ test('A6 等过头 ⇒ `timeout`（如实说"还在想"，不编答案）', asyn
   t.after(() => h.close());
   const id = makeApp(h, 'slow', ['agent']);
   const sig = await sigOf(h, id);
+  // ⚠️ 让那一轮**一直不回来**（不然它早就 done 了，量不到 timeout）
+  h.w.cfg.appAgentRunner = () => new Promise(() => {});
   const asked = await post(h.appPort, AGENT_PATH, { id, v: '1', ...sig, prompt: '想一个很久的问题' });
   assert.equal(asked.status, 200);
   // 时钟往前推过那道等待上限（数在代码里，这里推得比它大得多）

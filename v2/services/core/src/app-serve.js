@@ -779,8 +779,22 @@ export function createAppServer({
     Promise.resolve(pending).then(
       // ⚠️ `async`：这一条要**按 app 算 CSP**（`netHostsFor` 对租户那一侧要过隧道）
       async (got) => {
-        // ★ `148` §二：**这一条 CSP 是按 app 算的**（它声明的站 ＋ 他没关掉 ⇒ 才进名单）
-        const cspOut = await cspForApp(apps, id).catch(() => csp);
+        /**
+         * ★ `148` §二：**这一条 CSP 是按 app 算的**（它声明的站 ＋ 他没关掉 ⇒ 才进名单）。
+         *
+         * ⚠️ **声明的来源要用"那个人的小程序库"那一份**：活地址（`/w/`）那条路给的是
+         *    `resolveLive(sub)` 那个**只管读文件**的库（它没有 `meta` / `list`）——
+         *    2026-10-01 真跑的时候量出来的：拿它去问"声明了什么"永远问不出来 ⇒
+         *    **声明的站进不了 CSP**（页面上就是"配了却连不出去"）。
+         */
+        const metaStore = (() => {
+          try {
+            return typeof resolveApps === 'function' ? (resolveApps(sub) ?? apps) : apps;
+          } catch {
+            return apps;
+          }
+        })();
+        const cspOut = await cspForApp(metaStore, id).catch(() => csp);
         res.writeHead(200, {
           'content-type': got.contentType,
           'content-length': got.content.length,

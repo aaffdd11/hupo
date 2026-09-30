@@ -47,6 +47,12 @@ import { ADMIT_RATIO, readAdmission } from './admission.js';
 import { CATCHUP_RENDER, markCatchUp, planBackfill, planResume } from './resume.js';
 import { buildExport } from './export.js';
 import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
+// ★ `148` §四：定时任务那一句的标记（"他能一眼看出这不是他自己说的"）
+import { TASK_MARK } from './app-tasks.js';
+// ★ **`148` §3.5：限定档**（替小程序跑的那一轮**不许有手**）—— 默认就是它，`cfg` 里可注入假的
+import { runAppAgent } from './app-agent.js';
+// ★ 把"它答的那一句"写进那一间（`message/start → text → end`，和真调度器同一个形状）
+import { MessageWriter } from './message-writer.js';
 
 /**
  * **等那一间的助手答多久**（`148` §三）。
@@ -2661,7 +2667,7 @@ const TENANT_ROUTES = [
    *    另一本配额（`agentQuota`）。**不许**把两样混成一个开关（那是两种不同的能力：
    *    `ask` = 直连模型问一句；`agent` = 请动那一间的助手）。
    */
-  function checkAppAgent(apps, appIdRaw) {
+  function checkAppAgent(apps, appIdRaw, { bump = true } = {}) {
     const appId = typeof appIdRaw === 'string' ? appIdRaw : '';
     if (!apps) return { ok: false, status: 404, error: '这台部署还没开小程序' };
     const mine = apps.list().find((a) => a.id === appId);
@@ -2674,8 +2680,13 @@ const TENANT_ROUTES = [
     }
     const q = apps.agentQuota(appId);
     if (!q.ok) return { ok: false, status: 429, error: q.reason };
-    // ⚠️ **先记再花**：投递那一步可能失败，但"它说过一次"这笔账已经记下了
-    apps.bumpAgent(appId);
+    /**
+     * ⚠️ **先记再花**：投递那一步可能失败，但"它说过一次"这笔账已经记下了。
+     * 🔴 **只有"问"那一趟才记**（`bump:true`）：**取回执**（`/agent` 带 `jobId`）
+     *    也走这道闸看"还能不能看"，但它**绝不许再扣一次配额** ——
+     *    页面轮询几次就把一天的额度扣光，那是"它明明没说几句就被告知说够了"。
+     */
+    if (bump) apps.bumpAgent(appId);
     return { ok: true, left: q.left };
   }
 
@@ -3277,36 +3288,165 @@ const TENANT_ROUTES = [
     const gate = checkAppAgent(apps, appId);
     if (!gate.ok) return { ok: false, status: gate.status, error: gate.error, text: gate.error };
     const W = roomFor(sub, appId);
-    if (!W || !W.say || !W.dispatcher) {
+    if (!W || !W.say || !W.timeline) {
       // ⚠️ 那一间还没建好 ⇒ **如实说**（不许悄悄落到主线 —— 那会让"小程序问的话"混进主对话）
       return { ok: false, status: 409, error: 'no-room', text: '那一间还没建好，先在对话里把它做出来。' };
     }
-    const title = (() => {
-      try {
-        return apps.list().find((a) => a.id === appId)?.title ?? appId;
-      } catch {
-        return appId;
-      }
-    })();
-    // 🔴 **看得见**：这一句以"来自小程序"的样子落进那一间（他翻得到）
-    const text = `【来自小程序「${title}」】${prompt}`;
+    /**
+     * 🔴 **`148` §3.5：走"限定档"那一轮**（不再把这句话投给那一间的助手）。
+     *
+     * ── 为什么换了（这一刀的意义）──────────────────────────
+     *   原来是把问题 `deliver` 给**那一间的助手**（它有手），护着它的只有人格里那句
+     *   "来自小程序的问题只回答、要动手先问他" —— **那是提示层**。
+     *   现在改成：**落一句问句（他看得见）→ 起一台无头 dsh 跑"限定档"那一轮
+     *   （`runAppAgent`：挂减法补丁、不挂能力层 ⇒ 没有 bash/派活/后台活那几样）→
+     *   把回答也写进那一间（他同样看得见）** ⇒ "只答不动手"从**规矩**变成**做不到**。
+     *
+     * ⚠️ 回执有**两路**：内存里那本账（快）＋ **那一间的时间线**（重启之后照样答得出）。
+     */
+    const title = appTitleOf(apps, appId);
+    // ① **看得见**：问句先落进那一间（**不投递** —— 这一轮不是那一间的助手在答）
+    const messageId = `app_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    let seq = null;
+    try {
+      const r = W.say.say({ messageId, text: `【来自小程序「${title}」】${prompt}` });
+      seq = r?.event?.seq ?? null;
+    } catch (err) {
+      log(`跟助手说话：落盘没成（${appId}）${err?.message ?? err}`);
+      return { ok: false, status: 503, error: 'say-failed', text: '这一句没送出去，等会儿再试。' };
+    }
+    const at = now();
+    const jobKey = appAgentKey(sub, appId, seq);
+    appAgentJobs.set(jobKey, { state: 'running', at, text: null });
+    // ② **跑那一轮**（后台；那一轮没有手）
+    const runner = typeof W.cfg?.appAgentRunner === 'function' ? W.cfg.appAgentRunner : runAppAgent;
+    Promise.resolve()
+      .then(() =>
+        runner({
+          cfg: W.cfg ?? {},
+          cwd: W.cfg?.agentCwd ?? null,
+          title,
+          prompt,
+          log,
+        }),
+      )
+      .then((r) => {
+        const ok = r?.ok === true && typeof r.text === 'string' && r.text.trim() !== '';
+        const changed = Array.isArray(r?.changed) ? r.changed : [];
+        // 🔴 **动过工作区就如实说**（补丁里 `tool-fs` 关不掉"写"那一半 —— 见 `148` §3.5）
+        const tail = changed.length > 0 ? `\n\n（它这一轮动了这一间里的东西：${changed.slice(0, 5).join('、')}）` : '';
+        const text = ok ? `${r.text}${tail}` : '（这一轮它没答上来。你可以在这一间里问一句。）';
+        writeAppAnswer({ W, appId, text });
+        appAgentJobs.set(jobKey, { state: ok ? 'done' : 'failed', at, text: ok ? text : null });
+      })
+      .catch((err) => {
+        log(`跟助手说话：那一轮抛了（${appId}）${err?.message ?? err}`);
+        writeAppAnswer({ W, appId, text: '（这一轮它没答上来。你可以在这一间里问一句。）' });
+        appAgentJobs.set(jobKey, { state: 'failed', at, text: null });
+      });
+    return { ok: true, seq: Number.isInteger(seq) ? seq : 0, at };
+  }
+
+  /** 那一轮的回执账（进程内；重启之后靠**那一间的时间线**兜底）。 */
+  const appAgentJobs = new Map();
+  const appAgentKey = (sub, appId, seq) => `${sub}\u0000${appId}\u0000${seq}`;
+
+  /** 把"它答的那一句"写进那一间（形状与真调度器**逐字同源**：`message/start → text → end`）。 */
+  function writeAppAnswer({ W, appId, text }) {
+    try {
+      const w = new MessageWriter({
+        timeline: W.timeline,
+        agent: 'hupo',
+        origin: 'reactive',
+        scopeId: appId,
+      });
+      w.start();
+      w.chunk('quick', text);
+      w.end('completed');
+      return true;
+    } catch (err) {
+      log(`跟助手说话：回答没写进那一间（${appId}）${err?.message ?? err}`);
+      return false;
+    }
+  }
+
+  /** 那一份清单里这个 app 叫什么（认不出 ⇒ 用 id；**绝不**把别的内部东西写上屏）。 */
+  function appTitleOf(apps, appId) {
+    try {
+      return apps.list().find((a) => a.id === appId)?.title ?? appId;
+    } catch {
+      return appId;
+    }
+  }
+
+  /**
+   * ★ **把一句话送进那个 app 那一间**（`askForApp` 与**定时任务**共用这一段）。
+   *
+   * ⚠️ 抽出来是为了**一条实现**：证据（`user/echo`）与投递**只有这一处** ——
+   *    两份的话，总有一条忘了落盘（那就是"助手凭空说话"）。
+   */
+  function sayIntoAppRoom({ apps, W, appId, text }) {
     const messageId = `app_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     let seq = null;
     try {
       const r = W.say.say({ messageId, text });
       seq = r?.event?.seq ?? null;
     } catch (err) {
-      log(`跟助手说话：落盘没成（${appId}）${err?.message ?? err}`);
+      log(`小程序说一句：落盘没成（${appId}）${err?.message ?? err}`);
       return { ok: false, status: 503, error: 'say-failed', text: '这一句没送出去，等会儿再试。' };
     }
     try {
       W.dispatcher.deliver(text, { messageId, scope: W.scopeId }).catch((err) => {
-        log(`跟助手说话：投递失败（${appId}）${err?.message ?? err}`);
+        log(`小程序说一句：投递失败（${appId}）${err?.message ?? err}`);
       });
     } catch (err) {
-      log(`跟助手说话：投递抛了（${appId}）${err?.message ?? err}`);
+      log(`小程序说一句：投递抛了（${appId}）${err?.message ?? err}`);
     }
-    return { ok: true, seq: Number.isInteger(seq) ? seq : 0, at: now() };
+    return { ok: true, seq: Number.isInteger(seq) ? seq : 0, at: now(), title: appTitleOf(apps, appId) };
+  }
+
+  /**
+   * ★ **`148` §四：定时任务该干活了**（调度器把到期的交给它）。
+   *
+   * 🔴 **这一层再判一次**（声明 ＋ 他允许）：调度器那一侧也判（`dueTasks`），
+   *    但"闸只有一处"那条纪律在这儿的意思是——**能跑的唯一理由是这两样都成立**，
+   *    所以两道都留着（读一次库很便宜；万一哪条路忘了判，这里兜住）。
+   * ⚠️ **配额不在这儿**：定时任务的"每天几次"是**先记再跑**记在 `apps.recordTask` 上的，
+   *    调度器在交给它**之前**就记好了（宁可少跑，不许跑了没记）。
+   */
+  async function deliverAppTask({ sub, appId, task }) {
+    if (tenantOf(sub)) {
+      // ⚠️ 租户那一侧今天不接（要过隧道进他盒子）——**如实记一笔**，不假装跑过
+      log(`定时任务：${sub} 是租户，这一侧还没接（跳过 ${appId}）`);
+      return { ok: false, status: 503, error: 'tenant-not-ready' };
+    }
+    let apps = null;
+    try {
+      apps = appsFor(sub);
+    } catch {
+      apps = null;
+    }
+    if (!apps) return { ok: false, status: 404, error: 'no-apps' };
+    const mine = (() => {
+      try {
+        return apps.list().find((a) => a.id === appId);
+      } catch {
+        return null;
+      }
+    })();
+    if (!mine) return { ok: false, status: 404, error: 'no-app' };
+    if (!(mine.permissions ?? []).includes('tasks')) return { ok: false, status: 403, error: 'not-declared' };
+    let granted = [];
+    try {
+      granted = apps.grants(appId);
+    } catch {
+      granted = [];
+    }
+    if (!granted.includes('tasks')) return { ok: false, status: 403, error: 'not-granted' };
+    const W = roomFor(sub, appId);
+    if (!W || !W.say || !W.dispatcher) return { ok: false, status: 409, error: 'no-room' };
+    const text = `【${TASK_MARK}「${appTitleOf(apps, appId)}」· ${task.title}】${task.prompt}`;
+    return sayIntoAppRoom({ apps, W, appId, text });
   }
 
   /**
@@ -3330,15 +3470,30 @@ const TENANT_ROUTES = [
     } catch {
       apps = null;
     }
-    const gate = checkAppAgent(apps, appId);
-    // ⚠️ 回执**不再记一次账**（记账只在"问"那一下）——这里只判"还能不能看"
+    // 🔴 **`bump:false`**：取回执只判"还能不能看"，**绝不许再扣一次配额**
+    const gate = checkAppAgent(apps, appId, { bump: false });
     if (!gate.ok && gate.status !== 429) {
       return { ok: false, status: gate.status, error: gate.error, text: gate.error };
+    }
+    /**
+     * ★ **快路：进程内那本账**（问那一趟跑完就写在这儿）。
+     * ⚠️ 它**只在这一次进程的生命里**有效 ⇒ 下面还有一条**时间线兜底**
+     *    （服务重启之后那一本账没了，但那一间的对话还在 ⇒ 照样答得出）。
+     */
+    const job = appAgentJobs.get(appAgentKey(sub, appId, seq));
+    if (job) {
+      if (job.state === 'done') return { ok: true, state: 'done', text: job.text };
+      if (job.state === 'failed') return { ok: true, state: 'failed', text: null };
+      if (Number.isFinite(at) && now() - (job.at ?? at) > AGENT_WAIT_MS) {
+        return { ok: true, state: 'timeout', text: null };
+      }
+      return { ok: true, state: 'running', text: null };
     }
     const W = roomFor(sub, appId);
     if (!W || !W.timeline) {
       return { ok: false, status: 409, error: 'no-room', text: '那一间还没建好，先在对话里把它做出来。' };
     }
+    // 兜底：**重启之后**内存那本账没了 ⇒ 从那一间的时间线里把回答找回来
     let events = [];
     try {
       events = W.timeline.readAll();
@@ -3383,6 +3538,8 @@ const TENANT_ROUTES = [
     /** ★ **`148` §三：app 原点那条 `/agent` 口用它**（两个动作：问 / 取回执）。 */
     agentAsk: askAgentFor,
     agentPoll: pollAgentFor,
+    /** ★ **`148` §四：定时任务的干活口**（调度器用它把到期的那一件交进那一间）。 */
+    deliverAppTask,
     /** ★ **app 原点那条 `/ask` 口用它**（`serve.js` 把它递给制品服务）—— 见 `askForApp`。 */
     askApp: askForApp,
     /** ⚠️ 只在 127.0.0.1 上听。对外由 VPS 那条隧道走（stcp 不占公网端口）。 */

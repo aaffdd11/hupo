@@ -52,7 +52,13 @@ const String wantAgent = 'agent';
 ///    但**不给开关** —— 开关那一下要去服务端，而服务端只认白名单里那几个；
 ///    摆一个按了必被拒的开关，比不摆更坏。
 /// ⚠️ **顺序是"存东西 → 问一句 → 上网"**（三样都认得的那一份清单）。
-const List<String> knownWants = [wantStore, wantAsk, wantNet, wantAgent];
+/// ★ **"想按点自己跑一件事"**在协议里那个名字（`permissions: ["tasks"]`）。
+///
+/// ⚠️ 这一样是**注册制里最"重"的一样**：它会让助手**自己动起来**（每天/每隔一阵做一件事），
+///    所以人话要说清"**它会自己动**"，而且设置里关得掉。
+const String wantTasks = 'tasks';
+
+const List<String> knownWants = [wantStore, wantAsk, wantNet, wantAgent, wantTasks];
 
 /// 界面上认得这个名字吗。
 bool knownWant(String permission) => knownWants.contains(permission);

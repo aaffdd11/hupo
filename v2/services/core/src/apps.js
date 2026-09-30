@@ -28,6 +28,8 @@ import {
   checkAppDb,
   runDbChild,
 } from './app-db.js';
+// ★ **小程序定时任务**（`148` §四）：清单形状与"该不该跑"只在那一份里判（`checkTaskList`）
+import { checkTaskList, nextTaskState } from './app-tasks.js';
 import { reclaimScope } from './reclaim.js';
 import nodeCrypto from 'node:crypto';
 import nodeFs from 'node:fs';
@@ -119,6 +121,15 @@ export { ICONS } from './app-icons.js';
 export const AGENT_PERMISSION = 'agent';
 
 /**
+ * ★ **`tasks`：它要"按点自己跑一件小事"**（`148` §四 · 主人："这些功能都要有"）。
+ *
+ * 🔴 **注册制**：声明了（而且他没关掉）才跑 —— **每一次都跑在他自己的盒子里**、
+ *    **串行**、有**每天上限**，而且**结果回到那一间对话**（他翻得到）。
+ * ⚠️ 间隔、每天几次、最多几件那些**数只住 `app-tasks.js`**。
+ */
+export const TASKS_PERMISSION = 'tasks';
+
+/**
  * ★ **`net`：它要访问哪几个站**（主人 2026-09-30：*「这些功能都要有」*）。
  *
  * ── 形状（两样一起才算）────────────────────────────────────
@@ -143,7 +154,7 @@ export const NET_PERMISSION = 'net';
  * ⚠️ **钥匙永远不进制品**：制品只拿得到"问一句"这个动作，拿不到钥匙本身，也拿不到别人的钥匙。
  * ⚠️ **`db` 也拿不到文件**：它拿到的只是"替我执行这一条"这个动作（跨库那条路是堵死的）。
  */
-export const PERMISSIONS = Object.freeze(['ask', DB_PERMISSION, NET_PERMISSION, AGENT_PERMISSION]);
+export const PERMISSIONS = Object.freeze(['ask', DB_PERMISSION, NET_PERMISSION, AGENT_PERMISSION, TASKS_PERMISSION]);
 
 /**
  * **跟助手说一句的配额**（数只住这里）。
@@ -566,6 +577,7 @@ export class Apps {
         bytes: m.bytes,
         permissions: [...(m.permissions ?? [])],
         net: [...(m.net ?? [])],
+        tasks: (m.tasks ?? []).map((t) => ({ ...t })),
         minShellVersion: m.minShellVersion,
         createdAt: m.createdAt,
         live: false,
@@ -583,6 +595,7 @@ export class Apps {
         bytes: live.bytes ?? null,
         permissions: [...(live.permissions ?? [])],
         net: [...(live.net ?? [])],
+        tasks: (live.tasks ?? []).map((t) => ({ ...t })),
         minShellVersion: 1,
         createdAt: live.createdAt ?? null,
         live: true,
@@ -601,6 +614,7 @@ export class Apps {
       bytes: m.bytes,
       permissions: [...(live.permissions ?? [])],
       net: [...(live.net ?? [])],
+      tasks: (live.tasks ?? []).map((t) => ({ ...t })),
       minShellVersion: m.minShellVersion,
       createdAt: live.createdAt ?? m.createdAt,
       live: true,
@@ -633,6 +647,7 @@ export class Apps {
    * @param {string} o.entry
    * @param {string[]} [o.permissions]
    * @param {string[]} [o.net]        ★ 要访问的站（`148` §二）：**只有声明了 `net` 才算数**
+   * @param {object[]} [o.tasks]      ★ 定时任务（`148` §四）：**只有声明了 `tasks` 才算数**
    * @param {string} [o.createdBy]   `user` | `agent`
    * @param {number} [o.createdTurn]
    * @param {string|null} [o.rootHash] 登记那一刻工作区的指纹（**可以不带**；不带就不写）
@@ -646,6 +661,7 @@ export class Apps {
     entry,
     permissions = [],
     net = [],
+    tasks = [],
     createdBy = 'agent',
     createdTurn = null,
     description = '',
@@ -665,6 +681,12 @@ export class Apps {
     if (netCheck.ok !== true) throw new AppsError(netCheck.text);
     if (netCheck.hosts.length > 0 && !permissions.includes(NET_PERMISSION)) {
       throw new AppsError('写了要访问的站，却没说要用网 —— 两样要一起给');
+    }
+    // ★ `148` §四：定时任务的形状（同一把尺子在 `create` 那边；两处缺一不可）
+    const taskCheck = checkTaskList(tasks);
+    if (taskCheck.ok !== true) throw new AppsError(taskCheck.text);
+    if (taskCheck.tasks.length > 0 && !permissions.includes(TASKS_PERMISSION)) {
+      throw new AppsError('写了定时任务，却没说要用这个能力 —— 两样要一起给');
     }
     if (typeof title !== 'string' || title.trim().length === 0) throw new AppsError('小程序要有一个名字');
     if (title.length > MAX_TITLE_CHARS) throw new AppsError(`名字太长（上限 ${MAX_TITLE_CHARS} 个字）`);
@@ -690,6 +712,7 @@ export class Apps {
       entry,
       permissions: [...permissions],
       net: [...netCheck.hosts],
+      tasks: taskCheck.tasks.map((t) => ({ ...t })),
       version,
       rootHash: typeof rootHash === 'string' && rootHash !== '' ? rootHash : null,
       bytes: Number.isInteger(bytes) && bytes >= 0 ? bytes : null,
@@ -766,7 +789,7 @@ export class Apps {
    *      所以既有判据的**报错顺序与话都不变**（`test/app-write-gates.test.js` 那条保留 id 判据）。
    * @returns {object} 写下去的 manifest
    */
-  create({ id, title, icon, entry, files, permissions = [], net = [], createdBy = 'user', createdTurn = null, expectRootHash = null }) {
+  create({ id, title, icon, entry, files, permissions = [], net = [], tasks = [], createdBy = 'user', createdTurn = null, expectRootHash = null }) {
     checkAppId(id);
     // 🔴 **保留 id 的唯一一道闸**（`REFUSED_APP_IDS`）：主线 ＋ 桌面内置三格。
     //    写在这里 ⇒ **每一条写路都过它**（含 `apps-socket.js` 那条老路、装上、迁移）。
@@ -784,6 +807,12 @@ export class Apps {
     if (netOk.ok !== true) throw new AppsError(netOk.text);
     if (netOk.hosts.length > 0 && !permissions.includes(NET_PERMISSION)) {
       throw new AppsError('写了要访问的站，却没说要用网 —— 两样要一起给');
+    }
+    // ★ `148` §四：定时任务的形状（与 `register` 同一个纯函数）
+    const taskOk = checkTaskList(tasks);
+    if (taskOk.ok !== true) throw new AppsError(taskOk.text);
+    if (taskOk.tasks.length > 0 && !permissions.includes(TASKS_PERMISSION)) {
+      throw new AppsError('写了定时任务，却没说要用这个能力 —— 两样要一起给');
     }
     if (typeof title !== 'string' || title.trim().length === 0) throw new AppsError('小程序要有一个名字');
     if (title.length > MAX_TITLE_CHARS) throw new AppsError(`名字太长（上限 ${MAX_TITLE_CHARS} 个字）`);
@@ -837,6 +866,7 @@ export class Apps {
       rootHash: rootHashOf(checked.map((f) => ({ path: f.path, sha256: f.sha256 }))),
       permissions: [...permissions],
       net: [...netOk.hosts],
+      tasks: taskOk.tasks.map((t) => ({ ...t })),
       minShellVersion: 1,
       createdBy,
       createdTurn,
@@ -1108,6 +1138,54 @@ export class Apps {
     const next = { day, n: st.n + 1, lastAt: at };
     writeAtomic(this.fs, nodePath.join(this.appDir(id), 'agent.json'), `${JSON.stringify(next)}\n`, 0o644);
     return next;
+  }
+
+  /**
+   * ★ **定时任务的账**（`148` §四）：`<id>/tasks.json` ⇒ `{v:1, tasks:{<id>:{lastAt,nextAt,day,n}}}`。
+   *
+   * ⚠️ 读不出来 ⇒ `{}`（**当作没跑过**：那一件会被排上，但**先记再跑**那道闸还在）。
+   * ⚠️ 它**不删**：一件任务从清单里去掉之后，它那一行账留着（他哪天加回来，不会"一天跑十次"）。
+   */
+  taskState(id) {
+    checkAppId(id);
+    try {
+      const j = JSON.parse(this.fs.readFileSync(nodePath.join(this.appDir(id), 'tasks.json'), 'utf8'));
+      const out = {};
+      for (const [k, v] of Object.entries(j?.tasks ?? {})) {
+        if (typeof k !== 'string' || !v || typeof v !== 'object') continue;
+        out[k] = {
+          lastAt: Number(v.lastAt) || 0,
+          nextAt: Number(v.nextAt) || 0,
+          day: typeof v.day === 'string' ? v.day : '',
+          n: Number(v.n) || 0,
+        };
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * **记下这一趟**（`148` §四 · **先记再跑**）：调它成功之后，调度器才会去干活。
+   *
+   * @param {string} id
+   * @param {string} taskId
+   * @param {number} at
+   * @param {number} everyMs 那一件的间隔（用来算 `nextAt`）
+   */
+  recordTask(id, taskId, at, everyMs = 0) {
+    checkAppId(id);
+    const all = this.taskState(id);
+    all[String(taskId)] = nextTaskState({ entry: all[String(taskId)], at, everyMs });
+    writeAtomic(
+      this.fs,
+      nodePath.join(this.appDir(id), 'tasks.json'),
+      `${JSON.stringify({ v: 1, tasks: all })}\n`,
+      0o644,
+    );
+    this.#audit({ what: 'task-run', id, taskId: String(taskId) });
+    return all[String(taskId)];
   }
 
   /**

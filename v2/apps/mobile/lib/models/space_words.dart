@@ -256,6 +256,11 @@ String grantWantWords(String permission) {
       return '想连网取数据';
     case 'agent':
       return '想跟它的助手说话';
+    // ★ 2026-10-01：**定时任务**那一样（协议名 `tasks`，`08-SPEC.md` §14.1·戊）。
+    //   ⚠️ 人话要说清"它会自己动"（这一样最重：助手会按点替它做事）。
+    //      最容易混进来的是"定时 / 任务 / cron / 调度"那类词 —— 说"按点自己跑一件事"他听得懂。
+    case 'tasks':
+      return '想按点自己跑一件事';
     default:
       return '还想再要一样东西';
   }
