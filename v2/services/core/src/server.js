@@ -56,6 +56,8 @@ import { SIGNED_TTL_MS, liveEntryUrl } from './app-serve.js';
 import {
   BoxError,
   INTERNAL_PREFIX,
+  // ★ `147`/`148`：app 原点那条 `/ask` 口要**过隧道**进他的盒子问一句（`askForApp`）
+  requestOverSocket,
   parseArtifactQuery,
   parseInternalPath,
   parseLiveQuery,
@@ -3080,10 +3082,83 @@ const TENANT_ROUTES = [
     });
   }
 
+  /**
+   * ★ **替一个小程序问一句**（`app-ask` 那件事的**唯一实现**）。
+   *
+   * ── 为什么要有它（2026-09-30 · 契约 `docs/dev/148-APP-FULL-SET.md`）────────
+   *   原来这条路只挂在 `/api/app-ask` 上（走**壳的桥**：制品 `postMessage` → 壳 →
+   *   服务端）⇒ **只有网页那一侧有**（安卓不许装桥 ⇒ 平板上问不了）。
+   *   现在**多开一条口**：制品**对它自己那个源**发一次请求（app 原点上的 `POST /ask`，
+   *   和存东西那条 `/db` 完全同一个形状）⇒ 两端都通、而且**不再依赖壳**。
+   *   🔴 **两条口共用这一个函数**：闸、配额、"花在谁的环境里"，一处判定。
+   *
+   * ── 它在两种身份下各做什么 ────────────────────────────────
+   *   · **主人 / 单租户**：在他这台机器上问（本机小代理握着钥匙）；
+   *   · **租户**：**过隧道进他的盒子**问（钥匙在他盒里 —— `app-ask.js` 顶上那条：
+   *     "花这个动作必须发生在 b 自己的环境里"），带一个"闸已经过了"的头。
+   *
+   * @param {{sub:string, appId:string, prompt:string, tenant?:string|null}} o
+   * @returns {Promise<{ok:true,text:string,left:number|null,max:number}
+   *                   | {ok:false,status:number,error:string,text?:string}>}  **绝不抛**
+   */
+  async function askForApp({ sub, appId, prompt, tenant = null }) {
+    const gate = await gateAskFor(sub, appId, { tenant });
+    if (!gate.ok) return { ok: false, status: gate.status, error: gate.error, text: gate.text };
+    if (tenant) {
+      let sock = null;
+      try {
+        sock = proxyFor ? proxyFor(tenant) : null;
+      } catch {
+        sock = null;
+      }
+      if (!sock) return { ok: false, status: 503, error: 'tenant-not-ready', text: '你那台还在准备，稍等一下再试。' };
+      const payload = Buffer.from(JSON.stringify({ appId, prompt }), 'utf8');
+      let r = null;
+      try {
+        r = await requestOverSocket(sock, {
+          method: 'POST',
+          path: '/api/app-ask',
+          headers: {
+            'content-type': 'application/json',
+            'content-length': String(payload.length),
+            // 🔴 匣子那侧只认这个头（跨进程不认内存里的字段）：闸已经过了，你只管花
+            'x-hupo-app-ask-checked': '1',
+          },
+          body: payload,
+        });
+      } catch (err) {
+        log(`替小程序问一句：盒子没应（${sub}）${err?.message ?? err}`);
+        return { ok: false, status: 503, error: 'tenant-not-ready', text: '你那台刚才没应，等会儿再试。' };
+      }
+      if (r.status !== 200) {
+        return { ok: false, status: 503, error: 'tenant-not-ready', text: '你那台刚才没应，等会儿再试。' };
+      }
+      try {
+        const j = JSON.parse(r.body.toString('utf8'));
+        if (!j || typeof j.text !== 'string') throw new Error('形状不对');
+        return { ok: true, text: j.text, left: Number.isFinite(j.left) ? j.left : null, max: MAX_ANSWER_CHARS };
+      } catch {
+        return { ok: false, status: 502, error: 'bad-answer', text: '它答的话看不懂，等会儿再试。' };
+      }
+    }
+    const r = await askViaLocalProxy({ prompt });
+    if (!r.ok) return { ok: false, status: 502, error: r.error, text: '它这会儿没答上来，等会儿再试。' };
+    // ★ **93 §5.2·C：`ask` 自己那条也落账**（只记量；记不上账不许把这次问话弄失败）
+    try {
+      const w = worldFor(sub);
+      if (appId && r.usage) w?.usage?.note(appId, { kind: USAGE_KINDS.ask, usage: r.usage, scopeId: appId });
+    } catch {
+      /* 记账失败不影响这次回答 */
+    }
+    return { ok: true, text: r.text, left: gate.left === null ? null : gate.left - 1, max: MAX_ANSWER_CHARS };
+  }
+
   return {
     server,
     webRoot,
     listenTrusted,
+    /** ★ **app 原点那条 `/ask` 口用它**（`serve.js` 把它递给制品服务）—— 见 `askForApp`。 */
+    askApp: askForApp,
     /** ⚠️ 只在 127.0.0.1 上听。对外由 VPS 那条隧道走（stcp 不占公网端口）。 */
     listen(port, host = '127.0.0.1') {
       return new Promise((resolve) => server.listen(port, host, () => resolve(server.address())));

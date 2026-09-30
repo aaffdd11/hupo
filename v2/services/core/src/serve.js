@@ -843,6 +843,9 @@ const appsSignKey = loadSignKey(cfg.appsSignKeyPath);
 //    （规则本身在 `appsBaseOf()` 里，有判据钉着。）
 const appsBase = appsBaseOf(cfg);
 const appsOrigin = createAppServer({
+  // ★ **`148`：替小程序问一句**（app 原点那条 `/ask`）—— 与 `/api/app-ask` **同一个实现**
+  //   （`askForApp`：闸 → 配额 → 花在谁的环境里）。这里只把那条路递过去。
+  askApp: (o) => askApp(o),
   // ★ **B15**：租户的制品字节在**他的盒子里** ⇒ 这一句让"验完签之后去哪儿读"跟着人走
   //   （签名那一关一个字没动，顺序仍是"先验签、再碰库"）。
   resolveApps: (sub) => appsForSub(sub),
@@ -955,7 +958,7 @@ if (cfg.trustedSocketPath) {
   });
 }
 
-const { listen, listenTrusted, close } = createServer({
+const { listen, listenTrusted, close, askApp } = createServer({
   // ★ **多租户那一侧**：每个请求按令牌里的 `sub` 取那个人的世界。
   //   ⚠️ 上面那五个单例**不再传**了 —— 传了就等于"所有人共用一份"。
   worlds,

@@ -68,8 +68,11 @@ export function cspFor(frameAncestors) {
   ].join('; ');
 }
 
+/** ★ **"替我问一句"那条口的路**（app 原点上的 `POST /ask`）——与 `/db` 同一个形状。 */
+export const ASK_PATH = '/ask';
+
 /**
- * 这一条口**认两种凭据**（别的都不认）：
+ * ★ **app 原点上那几条口（`/db` 与 `/ask`）共用的凭据判定**（别的都不认）：
  *   · 第一次：页面把它自己那条入口 URL 里的三样（`u`/`e`/`s`）＋ 它自己是谁（`id`/`v`）报上来
  *     ⇒ **照入口签名那四道验一遍**（绑人 ＋ 绑 app ＋ 绑版本 ＋ 没过期）；
  *   · 之后：上一次换来的**会话票**（`ticket`）。
@@ -78,7 +81,7 @@ export function cspFor(frameAncestors) {
  *    票一次签发、绑同一个人同一个 app，**权限每次都重查**（撤销立刻生效）。
  * ⚠️ **票只在内存里算**（HMAC，不落盘、不上账）⇒ 重启就让所有票失效（可接受，页面刷新即可）。
  */
-export function dbTicketOf({ key, body, id, version, now = Date.now() }) {
+export function appTicketOf({ key, body, id, version, now = Date.now() }) {
   const ticket = typeof body?.ticket === 'string' ? body.ticket : '';
   if (ticket !== '') return verifyTicket({ key, ticket, id, now });
   return verifyEntry({
@@ -250,12 +253,81 @@ export function createAppServer({
   resolveLive = null,
   key,
   frameAncestors,
+  // ★ **`148`：替小程序问一句**（"app 对它自己那个源发一次请求"那条路）。
+  //   `null` ⇒ 这条口不接（如实 503），**绝不假装它答上来了**。
+  askApp = null,
   log = () => {},
   now = Date.now,
 }) {
   if (!key) throw new AppsError('签名密钥必填');
   if (!frameAncestors) throw new AppsError('frameAncestors 必填（CSP 要它）');
   const csp = cspFor(frameAncestors);
+
+  /**
+   * app 原点那几条口共用的跨源头。
+   *
+   * **为什么这里能写 `*`**：这些口不吃 cookie、不吃登录态 —— 凭据是页面自己那条
+   * **绑人绑 app 的签名**（在正文里），所以"谁都能发这个请求"不等于"谁都能读别人的数据"。
+   */
+  const APP_CORS = {
+    'access-control-allow-origin': '*',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  };
+
+  /** 一条口回 JSON 的那一下（两条口共用）。 */
+  function makeAppSender(res) {
+    return (status, obj) => {
+      const buf = Buffer.from(`${JSON.stringify(obj)}\n`, 'utf8');
+      res.writeHead(status, { ...APP_CORS, 'content-type': 'application/json; charset=utf-8', 'content-length': buf.length });
+      res.end(buf);
+    };
+  }
+
+  /**
+   * ★ **app 原点那几条口共用的前四步**（跨源头 → 读正文 → 认目标 → 验凭据）。
+   *
+   * 抽出来是为了**两条口不可能分叉**（`/db` 与 `/ask`）：改一处、两条一起改
+   * —— 和"闸只有一处"同一条纪律。
+   *
+   * @returns {Promise<{ok:true, body:object, id:string, v:string, sub:string}
+   *                   | {ok:false, done:true}>} `done:true` = 这一条**已经答过了**，调用方直接 return
+   */
+  async function readAppCall(req, res, cors, send) {
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        ...cors,
+        'access-control-allow-methods': 'POST',
+        'access-control-allow-headers': 'content-type',
+        'access-control-max-age': '600',
+      });
+      res.end();
+      return { ok: false, done: true };
+    }
+    if (req.method !== 'POST') {
+      res.writeHead(405, { ...cors, 'content-type': 'text/plain; charset=utf-8', allow: 'POST' });
+      res.end('只支持 POST。\n');
+      return { ok: false, done: true };
+    }
+    const body = await readJsonBody(req, 64 * 1024);
+    if (!body) {
+      send(400, { ok: false, error: 'bad-body', text: '这一条看不懂。' });
+      return { ok: false, done: true };
+    }
+    const id = typeof body.id === 'string' ? body.id : '';
+    const v = typeof body.v === 'string' || typeof body.v === 'number' ? String(body.v) : '';
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(id) || !(v === LIVE_VERSION || /^[1-9][0-9]*$/.test(v))) {
+      send(403, { ok: false, error: 'bad-target', text: '这一条不认。' });
+      return { ok: false, done: true };
+    }
+    const who = appTicketOf({ key, body, id, version: v, now: now() });
+    if (!who) {
+      log(`app 原点：凭据不过（${id}）`);
+      send(403, { ok: false, error: 'bad-ticket', text: '这一条不认。' });
+      return { ok: false, done: true };
+    }
+    return { ok: true, body, id, v, sub: who.sub };
+  }
 
   /**
    * ★ **"替我存一笔"那条口**（`POST /db` · 契约 `147-APP-SQLITE.md`）。
@@ -274,54 +346,17 @@ export function createAppServer({
      * 凭据是页面自己那条**绑人绑 app 的签名**（在正文里），所以"谁都能发这个请求"
      * 不等于"谁都能读别人的数据"（验签那一步是硬的）。
      */
-    const cors = {
-      'access-control-allow-origin': '*',
-      'cache-control': 'no-store',
-      'x-content-type-options': 'nosniff',
-    };
-    const send = (status, obj) => {
-      const buf = Buffer.from(`${JSON.stringify(obj)}\n`, 'utf8');
-      res.writeHead(status, { ...cors, 'content-type': 'application/json; charset=utf-8', 'content-length': buf.length });
-      res.end(buf);
-    };
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204, {
-        ...cors,
-        'access-control-allow-methods': 'POST',
-        'access-control-allow-headers': 'content-type',
-        'access-control-max-age': '600',
-      });
-      res.end();
-      return;
-    }
-    if (req.method !== 'POST') {
-      res.writeHead(405, { ...cors, 'content-type': 'text/plain; charset=utf-8', allow: 'POST' });
-      res.end('只支持 POST。\n');
-      return;
-    }
-    const body = await readJsonBody(req, 64 * 1024);
-    if (!body) {
-      send(400, { ok: false, error: 'bad-body', text: '这一条看不懂。' });
-      return;
-    }
-    const id = typeof body.id === 'string' ? body.id : '';
-    const v = typeof body.v === 'string' || typeof body.v === 'number' ? String(body.v) : '';
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(id) || !(v === LIVE_VERSION || /^[1-9][0-9]*$/.test(v))) {
-      send(403, { ok: false, error: 'bad-target', text: '这一条不认。' });
-      return;
-    }
-    const who = dbTicketOf({ key, body, id, version: v, now: now() });
-    if (!who) {
-      log(`存储口：凭据不过（${id}）`);
-      send(403, { ok: false, error: 'bad-ticket', text: '这一条不认。' });
-      return;
-    }
+    const cors = APP_CORS;
+    const send = makeAppSender(res);
+    const call = await readAppCall(req, res, cors, send);
+    if (call.ok !== true) return;
+    const { body, id, v, sub } = call;
     let apps = null;
     try {
-      apps = resolveApps(who.sub);
+      apps = resolveApps(sub);
     } catch (e) {
       // ⚠️ 与制品那条路**同一个口径**：取库这一步不许把进程带走；盒子不通 ⇒ 503
-      log(`存储口：取库那一步出错（${who.sub}）${e?.message ?? e}`);
+      log(`存储口：取库那一步出错（${sub}）${e?.message ?? e}`);
       if (e instanceof BoxError) {
         denyBox(res);
         return;
@@ -351,7 +386,11 @@ export function createAppServer({
       return;
     }
     if (!out || out.ok !== true) {
-      send(Number(out?.status) || 400, { ok: false, error: out?.error ?? 'db', text: out?.text ?? '这一条它没执行成功。' });
+      send(Number(out?.status) || 400, {
+        ok: false,
+        error: out?.error ?? 'db',
+        text: out?.text ?? out?.error ?? '这一条它没执行成功。',
+      });
       return;
     }
     send(200, {
@@ -361,7 +400,63 @@ export function createAppServer({
       lastInsertRowid: out.lastInsertRowid,
       truncated: out.truncated === true,
       // 页面把这张票留着，后面就不用反复出示入口签名了（入口 URL 只有十分钟）
-      ticket: mintTicket({ key, sub: who.sub, id, version: v, now: now() }),
+      ticket: mintTicket({ key, sub, id, version: v, now: now() }),
+    });
+  }
+
+  /**
+   * ★ **"替我问一句"那条口**（`POST /ask` · 契约 `docs/dev/148-APP-FULL-SET.md`）。
+   *
+   * ── 它补的是什么（2026-09-30）──────────────────────────────
+   *   原来 `ask` 只有**壳的桥**那一条路（制品 `postMessage` → 壳 → 服务端）⇒
+   *   **只有网页那一侧有**（安卓不许装桥 ⇒ 平板上问不了话）。
+   *   现在制品**对它自己那个源**发一次请求（和存东西 `/db` **同一个形状**）⇒
+   *   **两端都通**，而且**不再依赖壳**。
+   *
+   * ⚠️ **闸与配额不在这儿**：这一份只验"这是谁、哪个 app"，判定全交给 `askApp`
+   *    （它跑的是和 `/api/app-ask` **同一个** `askForApp`：声明 → 允许 → 配额 → 花在谁的环境里）。
+   */
+  async function handleAsk(req, res) {
+    const cors = APP_CORS;
+    const send = makeAppSender(res);
+    const call = await readAppCall(req, res, cors, send);
+    if (call.ok !== true) return;
+    const { body, id, sub } = call;
+    if (typeof askApp !== 'function') {
+      // 🔴 **认不出来就如实说"还没跟上"**（不是"你不许问"）—— 别让页面以为是他关掉了
+      send(503, { ok: false, error: 'not-ready', text: '这一台还没跟上，等一会儿再试。' });
+      return;
+    }
+    const prompt = typeof body.prompt === 'string' ? body.prompt : '';
+    if (prompt.trim() === '') {
+      send(400, { ok: false, error: 'bad-prompt', text: '这一条是空的。' });
+      return;
+    }
+    let out = null;
+    try {
+      out = await askApp({ sub, appId: id, prompt });
+    } catch (e) {
+      log(`问一句：没答上来（${id}）${e?.message ?? e}`);
+      send(502, { ok: false, error: 'ask-failed', text: '它这会儿没答上来，等会儿再试。' });
+      return;
+    }
+    if (!out || out.ok !== true) {
+      send(Number(out?.status) || 502, {
+        ok: false,
+        error: out?.error ?? 'ask-failed',
+        // ⚠️ 闸那两句人话在 `error` 里（"这个小程序没说要问话" / "你还没允许它用你的钥匙"）——
+        //    页面照 `text` 显示 ⇒ 这里**必须**兜到 `error`（不然屏幕上是那句含糊的兜底话）
+        text: out?.text ?? out?.error ?? '它这会儿没答上来，等会儿再试。',
+      });
+      return;
+    }
+    send(200, {
+      ok: true,
+      text: out.text,
+      left: out.left ?? null,
+      max: out.max ?? null,
+      // 页面把这张票留着，后面就不用反复出示入口签名了（入口 URL 只有十分钟）
+      ticket: mintTicket({ key, sub, id, version: call.v, now: now() }),
     });
   }
 
@@ -402,6 +497,22 @@ export function createAppServer({
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       // ★ **唯一的那个 POST**：小程序存它自己的那一笔（`147-APP-SQLITE.md`）。
       //   别的非 GET 一律照旧 405 —— 这一条口**只认这一条路**。
+      if ((parsed.pathname ?? '') === ASK_PATH) {
+        handleAsk(req, res).catch((e) => {
+          log(`问一句：这一条没答上来（${e?.message ?? e}）`);
+          try {
+            if (!res.headersSent) {
+              res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+              res.end('它这会儿没答上来。\n');
+            } else {
+              res.destroy();
+            }
+          } catch {
+            /* 已经断了 */
+          }
+        });
+        return;
+      }
       if ((parsed.pathname ?? '') === DB_PATH) {
         handleDb(req, res).catch((e) => {
           log(`存储口：这一条没答上来（${e?.message ?? e}）`);
