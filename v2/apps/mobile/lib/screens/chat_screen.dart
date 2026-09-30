@@ -1106,12 +1106,14 @@ class _ChatScreenState extends State<ChatScreen> {
           localOnly: !widget.space.isTenant,
           onSubmit: widget.onSendKey ?? ((_) async => KeySend.failed),
           creds: widget.space.creds,
+          // ★ 语音那屏的边界句要说实话：机器上**真有一份**才说"先收着"（见 `SpaceInfo.voiceReady`）
+          voiceReady: widget.space.voiceReady,
           onSubmitCreds: widget.onSendCreds,
           onDrawImage: widget.onDrawImage,
           // ★ 批 7：**语音那一屏的「试一下」**（主人 2026-09-26）——
           //   开麦/收手与聊天那颗话筒**共用同两个函数**（`services/hearing.dart`），
           //   地址也共用 `stream_uri.dart` 那一个；这里只是把控制器那两个动作接上。
-          //   🔴 **不碰钥匙**：那三样走 `/api/creds` ⇒ 服务端的 `voiceCredsFor`，
+          //   🔴 **不碰钥匙**：那两样走 `/api/creds` ⇒ 服务端的 `voiceCredsFor`，
           //      这颗按钮只把音频送到 `/api/asr`（钥匙只有这一条路）。
           voiceTry: VoiceTryHandlers(start: c.hearOnce, stop: c.stopHearingNow),
           // ★ **录一段（录音 ＋ 回放）**（主人 2026-09-27）：**本机那一套**，

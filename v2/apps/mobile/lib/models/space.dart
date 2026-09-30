@@ -42,13 +42,14 @@ class SpaceCreds {
   /// **聊天用的那一串**（语言那一把）—— 它决定他能不能开口说话。
   final bool model;
 
-  /// **听我说话用的那三样**（三样齐了才算有，服务端说的）。
+  /// **听我说话用的那两样**（★ 2026-10-01 换成豆包：App ID ＋ Access Token，两样齐了才算有）。
   final bool voice;
 
-  /// 画图那一把。
+  /// 画图那一把。⚠️ 与 [video] **是同一把钥匙**（2026-10-01 主人选的"甲"）——
+  /// 只填一栏时两格都会是 `true`（服务端口径：**这条路现在能不能用**）。
   final bool image;
 
-  /// 做视频那一把。
+  /// 做视频那一把。⚠️ 与 [image] **是同一把钥匙**。
   final bool video;
 
   factory SpaceCreds.fromJson(Object? raw) {
@@ -81,6 +82,7 @@ class SpaceInfo {
     this.keyBad = false,
     this.steps = const [],
     this.creds = const SpaceCreds(),
+    this.voiceReady = false,
   });
 
   /// `local` = 主人那种（本机那份，没有单独一台）；`tenant` = 有自己一台。
@@ -101,6 +103,15 @@ class SpaceInfo {
 
   /// **配置页那四样有没有**（主人 2026-09-24）。老服务端不回它 ⇒ 全 `false`。
   final SpaceCreds creds;
+
+  /// ★ **语音这条路现在能不能用**（他自己的两样 **或** 这台机器上已经配好的那一份）。
+  ///
+  /// 🔴 为什么它不是 [SpaceCreds.voice]：那个只说他**自己填没填**。
+  ///    配置页那句"现在听你说话用的是这台机器上已经配好的那一份"**只有在这为 true 时才是真话**
+  ///    —— 2026-10-01 完全切成豆包、把 `data/asr.env` 里老那几行删掉之后，
+  ///    那句话曾经变成假话（页面说"先收着"，而语音其实"没配"）。
+  /// ⚠️ **宽容解析**：缺字段（老服务端）⇒ `false` ⇒ 页面走"还没填"那一句（**不吹牛**）。
+  final bool voiceReady;
 
   /// 🔴 **他填过、但上游说那一串不灵**（服务端说的 · 契约 `48-SETTINGS-KEY.md`）。
   ///
@@ -143,6 +154,8 @@ class SpaceInfo {
       keyBad: raw['keyBad'] == true,
       steps: parseSteps(raw['steps']),
       creds: SpaceCreds.fromJson(raw['creds']),
+      // ⚠️ 宽容解析：只有**真的 true** 才算（缺字段 / 老服务端 ⇒ false ⇒ 说"还没填"）
+      voiceReady: raw['voiceReady'] == true,
     );
   }
 
@@ -153,6 +166,7 @@ class SpaceInfo {
         'keyBad': keyBad,
         'steps': steps.map((e) => e.toJson()).toList(),
         'creds': creds.toJson(),
+        'voiceReady': voiceReady,
       };
 }
 

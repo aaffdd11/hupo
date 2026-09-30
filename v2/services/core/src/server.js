@@ -481,6 +481,18 @@ export function createServer({
   /** **那四样有没有**（只看存在与否，**永远不回值**）。`credStatusOf(userId)`。 */
   credStatusOf = null,
   /**
+   * ★ **语音这条路现在能不能用**（`voiceReadyOf(userId)` ⇒ boolean）。
+   *
+   * 🔴 为什么要它：`creds.voice` 只说他**自己填没填**；而"能不能用"还要算上
+   *    **部署默认那一份**（`data/asr.env`）。配置页那句"现在听你说话用的是这台机器上
+   *    已经配好的那一份"**只有在这为 `true` 时才是真话** ——
+   *    2026-10-01 完全切成豆包、把老那几行删掉之后，它就曾经变成假话
+   *    （页面说"先收着"，而语音其实是"没配"）。
+   * ⚠️ **只读**（不许有副作用：`/api/space` 要能随便刷）。
+   * ⚠️ 缺省 `null` ⇒ 不回这个字段（老部署照旧；客户端按"不知道"处理 ⇒ 说"还没填"）。
+   */
+  voiceReadyOf = null,
+  /**
    * **画一张图**（P1-27）：`drawImage(userId, prompt)` ⇒ `{ok, urls?, why?, text?, ms?}`。
    * ⚠️ 约定：**密钥不许出现在返回值里**；这里是"用他自己的钥匙去要一张图"的唯一入口。
    */
@@ -1400,7 +1412,10 @@ export function createServer({
         //   ⚠️ 加字段是安全的（协议纪律：**加不破**，老客户端忽略它）。
         const creds = credStatusOf ? credStatusOf(claim.sub) : null;
         const space = tenantStatusOf(claim.sub);
-        return sendJson(res, 200, creds ? { ...space, creds } : space);
+        // ★ 语音**能不能用**（他自己的两样 **或** 部署默认那份）—— 只读，加字段安全。
+        const voiceReady = voiceReadyOf ? Boolean(voiceReadyOf(claim.sub)) : null;
+        const extra = voiceReady === null ? {} : { voiceReady };
+        return sendJson(res, 200, creds ? { ...space, creds, ...extra } : { ...space, ...extra });
       }
 
       // ── 配置页那四样（主人 2026-09-24：*"配置页用来配置模型，语言大模型apikey，

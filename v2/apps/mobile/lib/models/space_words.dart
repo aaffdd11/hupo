@@ -531,8 +531,13 @@ const String imageTempLink = '图是那边临时给的，想要就存下来。';
 ///     是**会变的**（2026-09-27 之前**送不进去也读不到**，那时候说"填了就真用它"是假话；
 ///     修好之后**送得进也读得到**，再那么说才是假话）。
 /// ⇒ 四种组合四句话，**一个字都不许省**（说错哪一句都是"页面在说假话"）。
-const String credVoiceBoundaryMine = '填好了。以后听你说话就用这两样，不再用这台机器上那份。';
+const String credVoiceBoundaryMine = '填好了。以后听你说话就用你自己这两样。';
+/// ⚠️ **只有机器上真有一份**（`voiceReady`）时才能说这句 —— 2026-10-01 完全切成豆包、
+///    把 `data/asr.env` 里老那几行删掉之后，它**曾经变成假话**（页面说"先收着"，
+///    而语音其实是"没配"：`/api/asr` 回 `asr/unavailable`）。
 const String credVoiceBoundaryDefault = '先收着。现在听你说话用的是这台机器上已经配好的那一份。';
+/// 🔴 **机器上那份也没有** ⇒ 只能说实话：**填了才能用**。
+const String credVoiceBoundaryNotReady = '还没有填。填上这两样，我才能听懂你说话。';
 /// ⚠️ **2026-09-27 改**（`#175`）：这两句原来是「先收着。你这台还没接上……」——
 ///    那句在**修好之前**是真的（租户账号里填的那三样，中心收下了却**从来没送进盒子**，
 ///    而且盒子那份单文件识别路也读不到，见 `docs/dev/125-TENANT-VOICE-CREDS.md`）；
@@ -542,16 +547,22 @@ const String credVoiceBoundaryTenantHas = '填好了。以后听你说话就用�
 const String credVoiceBoundaryTenantNone = '先收着。填上这两样，这台就能听你说话。';
 
 /// 语音那一屏此刻该说的那句话（**纯函数**，判据钉四种组合）。
-String credVoiceBoundary({required bool isTenant, required bool hasOwn}) {
+String credVoiceBoundary({
+  required bool isTenant,
+  required bool hasOwn,
+  bool ready = false,
+}) {
   if (isTenant) return hasOwn ? credVoiceBoundaryTenantHas : credVoiceBoundaryTenantNone;
-  return hasOwn ? credVoiceBoundaryMine : credVoiceBoundaryDefault;
+  if (hasOwn) return credVoiceBoundaryMine;
+  // 🔴 没填：**机器上真有一份**才说"先收着"，否则如实说"填了才能用"
+  return ready ? credVoiceBoundaryDefault : credVoiceBoundaryNotReady;
 }
 
 /// 某一屏的边界句（**聊天那一屏没有** —— 它是现在就在用的那一条）。
-String? credBoundaryOf(String tab, {bool isTenant = false, bool hasOwn = false}) {
+String? credBoundaryOf(String tab, {bool isTenant = false, bool hasOwn = false, bool voiceReady = false}) {
   switch (tab) {
     case credTabVoice:
-      return credVoiceBoundary(isTenant: isTenant, hasOwn: hasOwn);
+      return credVoiceBoundary(isTenant: isTenant, hasOwn: hasOwn, ready: voiceReady);
     case credTabImage:
       return credImageBoundary(isTenant: isTenant, hasOwn: hasOwn);
     case credTabVideo:

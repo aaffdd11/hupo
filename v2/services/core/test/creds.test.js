@@ -255,7 +255,7 @@ test('🔴 主人那份：先备份、写完自核；**核不过就还原**', ()
 });
 
 // ── ④ 路由 ─────────────────────────────────────────────────
-async function boot({ setCreds = null, credStatusOf = null } = {}) {
+async function boot({ setCreds = null, credStatusOf = null, voiceReadyOf = null } = {}) {
   const dataDir = tmp('hupo-creds-srv-');
   const store = new Store({ dataDir, fsync: false });
   const timeline = new Timeline({ id: 'main', store });
@@ -265,7 +265,7 @@ async function boot({ setCreds = null, credStatusOf = null } = {}) {
   const { listen, close } = createServer({
     timeline, store, auth, say, webRoot: null, buildId: 'creds-test',
     tenantStatusOf: () => ({ kind: 'local', state: 'ready' }),
-    setCreds, credStatusOf,
+    setCreds, credStatusOf, voiceReadyOf,
   });
   const addr = await listen(0);
   const token = auth.issue({ sub: 'owner' }).token;
@@ -328,5 +328,31 @@ test('★ `/api/space` 要带上那四样"有没有"（而且**只有有没有**
     assert.equal(body.kind, 'local', '老字段一个都不许少');
   } finally {
     await s.close();
+  }
+});
+
+test('★ `/api/space` 还要回**语音现在能不能用**（`voiceReady`）—— 它决定配置页那句边界话', async () => {
+  // ① 接线了 ⇒ 字段在，而且**照回调说的**（配置页靠它区分"机器上那份在用"与"还没填"）
+  const yes = await boot({ credStatusOf: () => ({ model: true, voice: false, image: false, video: false }), voiceReadyOf: () => true });
+  try {
+    const body = await (await fetch(`${yes.origin}/api/space`, { headers: yes.h })).json();
+    assert.equal(body.voiceReady, true, '机器上有一份，却没说"能用"（页面就会说反话）');
+  } finally {
+    await yes.close();
+  }
+  const no = await boot({ credStatusOf: () => ({ model: true, voice: false, image: false, video: false }), voiceReadyOf: () => false });
+  try {
+    const body = await (await fetch(`${no.origin}/api/space`, { headers: no.h })).json();
+    assert.equal(body.voiceReady, false);
+  } finally {
+    await no.close();
+  }
+  // ② 没接线（老部署）⇒ **不回这个字段**（客户端按"不知道"处理 ⇒ 说"还没填"，不吹牛）
+  const old = await boot({ credStatusOf: () => ({ model: true, voice: false, image: false, video: false }) });
+  try {
+    const body = await (await fetch(`${old.origin}/api/space`, { headers: old.h })).json();
+    assert.equal('voiceReady' in body, false, '没接线却编了一个值出来');
+  } finally {
+    await old.close();
   }
 });

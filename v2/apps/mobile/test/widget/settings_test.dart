@@ -44,6 +44,7 @@ Future<Sent> pump(
   bool localOnly = true,
   bool tenant = false,
   SpaceCreds creds = const SpaceCreds(),
+  bool voiceReady = false,
   bool hasKey = false,
   bool canCancel = false,
 }) async {
@@ -55,6 +56,8 @@ Future<Sent> pump(
           hasKey: hasKey,
           keyBad: false,
           creds: creds,
+          // ★ 语音那屏的边界句分档靠它（见 `SpaceInfo.voiceReady`）
+          voiceReady: voiceReady,
           localOnly: tenant ? false : localOnly,
           onSubmit: (k) async => KeySend.ok,
           onSubmitCreds: (tab, values) async {
@@ -190,8 +193,17 @@ void main() {
   });
 
   testWidgets('③ 🔴 语音那一句**跟着事实变**（填了就真用它 / 租户那台还没接上）', (tester) async {
-    // ① 主人（本机）**没填** ⇒ 说清"现在用的是机器上配好的那份"
+    // ① 主人（本机）**没填**、机器上那份也**没有** ⇒ 如实说"填了才能用"
+    //    🔴 2026-10-01：这句原来是 `credVoiceBoundaryDefault`（"先收着，用的是机器上那份"）
+    //       —— 完全切成豆包、`data/asr.env` 清空之后，**那句成了假话**（语音其实是"没配"）。
     await pump(tester);
+    await goTab(tester, credTabVoice);
+    expect(find.text(credVoiceBoundaryNotReady), findsOneWidget);
+    expect(find.text(credVoiceBoundaryDefault), findsNothing,
+        reason: '★ 机器上那份都没有，还敢说"先收着"就是假话');
+
+    // ①·补 主人（本机）**没填**、但机器上**真有一份**（`voiceReady`）⇒ 才说"先收着"
+    await pump(tester, voiceReady: true);
     await goTab(tester, credTabVoice);
     expect(find.text(credVoiceBoundaryDefault), findsOneWidget);
 

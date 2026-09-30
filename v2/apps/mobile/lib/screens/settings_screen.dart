@@ -57,6 +57,7 @@ class SettingsScreen extends StatelessWidget {
     required this.keyBad,
     required this.onSubmit,
     this.creds = const SpaceCreds(),
+    this.voiceReady = false,
     this.onSubmitCreds,
     this.onDrawImage,
     this.voiceTry,
@@ -85,6 +86,11 @@ class SettingsScreen extends StatelessWidget {
   /// **那四样有没有**（主人 2026-09-24：配置页就是配这四样）。
   /// ⚠️ 老服务端不回它 ⇒ 全 `false`（"没有"），四个 tab 里就都会说"还没有填"。
   final SpaceCreds creds;
+
+  /// ★ **语音这条路现在能不能用**（他自己的两样 **或** 这台机器上那份）。
+  /// 🔴 语音那一屏的边界句靠它分档：能用 ⇒"先收着（机器上那份在用）"；
+  ///    不能用 ⇒"还没有填，填上这两样我才能听懂你说话"。⚠️ 缺省 `false`（不吹牛）。
+  final bool voiceReady;
 
   /// **画一张图**（P1-27）：图片那一屏下面的「试一张」用它。
   /// ⚠️ `null` ⇒ 不画那一块（这条路没接上时**不给假按钮**）。
@@ -499,7 +505,7 @@ class SettingsScreen extends StatelessWidget {
     final t = Theme.of(context);
     final has = credsFor(tab);
     // ⚠️ 边界句要看**两件事**：是不是有自己一台（`localOnly` 的反面）、以及**他填过没有**。
-    final boundary = credBoundaryOf(tab, isTenant: !localOnly, hasOwn: has);
+    final boundary = credBoundaryOf(tab, isTenant: !localOnly, hasOwn: has, voiceReady: voiceReady);
     return ListView(
       // ⚠️ **给每一屏一个指名道姓的 key**（`credTab:<名字>`）：`TabBarView` 自己
       //    也是一个 `Scrollable`（横向翻页那一个），而且排在**前面**

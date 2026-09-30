@@ -730,6 +730,21 @@ function credStatusOf(userId) {
   return { model, voice: mine.voice, image: mine.image, video: mine.video };
 }
 
+/**
+ * ★ **语音这条路现在能不能用**（配置页那句边界话要靠它说实话）。
+ *
+ * ⚠️ 与 `creds.voice`（他自己填没填）**不是一回事**：这里算上**部署默认那一份**
+ *    （`data/asr.env`，`voiceCredsFor` 里那条"没有他自己那份 ⇒ 退回顾主那份"的路）。
+ * 🔴 **只读**：`/api/space` 会被反复刷。
+ */
+function voiceReadyOf(userId) {
+  try {
+    return Boolean(voiceCredsFor({ dataDir: cfg.dataDir, sub: userId }).configured);
+  } catch {
+    return false;
+  }
+}
+
 function setModelKey(userId, key, creds = null) {
   const tenant = tenantOf(userId);
   if (!tenant) return { ok: false, why: 'no-tenant' };
@@ -1091,6 +1106,8 @@ const { listen, listenTrusted, close, askApp, agentAsk, agentPoll, deliverAppTas
   setModelKey,
   setCreds,
   credStatusOf,
+  // ★ 语音"现在能不能用"（他自己的两样 或 部署默认那份）——只读，见 `server.js` 那个参数
+  voiceReadyOf,
   drawImage,
   tenantOf,
   // ★ **新号登录时替他申请一台**（除了改状态，这是登录路径上唯一新增的动作）

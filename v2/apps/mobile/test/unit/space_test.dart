@@ -220,9 +220,16 @@ void main() {
     expect(credImageBoundaryTenant.contains('等你这台接上'), true);
   });
 
-  test('★ 语音那句边界话：四种组合逐条对表（说错哪一句都是假话）', () {
-    // 本机 + 没填 ⇒ 说清现在用的是机器上那份
-    expect(credVoiceBoundary(isTenant: false, hasOwn: false), credVoiceBoundaryDefault);
+  test('★ 语音那句边界话：**五种组合**逐条对表（说错哪一句都是假话）', () {
+    // 本机 + 没填 + **机器上真有一份**（`voiceReady`）⇒ 才可以说"先收着，用的是机器上那份"
+    expect(credVoiceBoundary(isTenant: false, hasOwn: false, ready: true), credVoiceBoundaryDefault);
+    // 🔴 本机 + 没填 + **机器上那份也没有** ⇒ **不许**说"先收着"（那是假话：
+    //    2026-10-01 完全切成豆包、把 `data/asr.env` 里老那几行删掉之后就是这个状态）
+    expect(credVoiceBoundary(isTenant: false, hasOwn: false, ready: false), credVoiceBoundaryNotReady);
+    expect(credVoiceBoundary(isTenant: false, hasOwn: false), credVoiceBoundaryNotReady,
+        reason: '★ 缺省（不知道机器上有没有）时必须走"还没填"这一句 —— 不吹牛');
+    expect(credVoiceBoundaryNotReady.contains('填上这两样'), true);
+    expect(credVoiceBoundaryNotReady.contains('先收着'), false, reason: '★ 这句不许说"先收着"');
     // 本机 + 填了 ⇒ **真的就用它**（识别路优先读他自己那两样）
     expect(credVoiceBoundary(isTenant: false, hasOwn: true), credVoiceBoundaryMine);
     // 租户 + 填了 ⇒ **填了就真进他那台、那台也真读得到**（`#175` 两处都修好之后）
@@ -235,19 +242,30 @@ void main() {
     expect(credVoiceBoundary(isTenant: true, hasOwn: false), credVoiceBoundaryTenantNone);
     expect(credVoiceBoundaryTenantNone.contains('填上这两样'), true);
     expect(credVoiceBoundaryTenantNone.contains('还没接上'), false);
-    // 🔴 四句**互不相同**（两两相同就是把两种情况说成一件事）
+    // 🔴 五句**互不相同**（两两相同就是把两种情况说成一件事）
     final all = {
       credVoiceBoundaryMine,
       credVoiceBoundaryDefault,
+      credVoiceBoundaryNotReady,
       credVoiceBoundaryTenantHas,
       credVoiceBoundaryTenantNone,
     };
-    expect(all.length, 4, reason: '四种组合要有四句不同的话');
-    // ⚠️ 而且"本机 + 填了"那一句必须**明说"不再用"别的那份**
-    //    （只提"这台机器上那份"不算错 —— 它正是要说"不再用它"；
-    //      第一版判据就写糙在这里，自己当场红了一次。）
-    expect(credVoiceBoundaryMine.contains('不再用'), true);
-    expect(credVoiceBoundaryMine.contains('就用这两样'), true);
+    expect(all.length, 5, reason: '五种组合要有五句不同的话');
+    // ⚠️ "本机 + 填了"那一句要说清"**用你自己这两样**"（与租户那句区分开：
+    //    同义但不能同一句 —— 它们是两件事）。
+    expect(credVoiceBoundaryMine.contains('你自己这两样'), true);
+  });
+
+  test('★ `voiceReady`：只有**真的 true** 才算（缺字段/老服务端 ⇒ false ⇒ 页面说"还没填"）', () {
+    expect(SpaceInfo.fromJson({'voiceReady': true}).voiceReady, true);
+    expect(SpaceInfo.fromJson({'voiceReady': false}).voiceReady, false);
+    // 🔴 缺字段（老服务端）/ 坏类型 ⇒ `false`（**不吹牛**：不许说"机器上那份在用"）
+    expect(SpaceInfo.fromJson({}).voiceReady, false);
+    expect(SpaceInfo.fromJson({'voiceReady': 'yes'}).voiceReady, false);
+    expect(SpaceInfo.fromJson({'voiceReady': 1}).voiceReady, false);
+    expect(const SpaceInfo().voiceReady, false);
+    // 回写也带着它（`toJson` 与 `fromJson` 对称）
+    expect(SpaceInfo.fromJson(const SpaceInfo(voiceReady: true).toJson()).voiceReady, true);
   });
 
   test('★ 配置页那四样"有没有"：宽容解析（缺字段/坏类型 ⇒ 一律"没有"，不许当成有）', () {
