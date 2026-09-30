@@ -152,6 +152,16 @@ void main() {
       expect(filled == empty, false, reason: '两件事两句话（去填 vs 等接好）');
     });
 
+    test('🔴 上游在握手那关回 401（服务端说 `bad-key`）⇒ 说清"这两样它不认"', () {
+      final h = listening().broke('bad-key', code: 401);
+      expect(h.why, hearBadKey);
+      expect(h.why == hearEngineFailed, false,
+          reason: '★ 混成"识别那一头出错了，再按一次试试"就是让人白试（重取钥匙才有用）');
+      // 短、直白（主人 2026-10-01 定的写法）
+      expect(h.why.length <= 24, true, reason: '这句也要短：${h.why}');
+      expect(h.why.contains('重取'), true, reason: '要说清下一步干什么');
+    });
+
     test('没拿到麦克风权限 ⇒ 它自己那句（不是"开不了麦克风"那种含糊话）', () {
       final h = listening().broke('denied');
       expect(h.phase, HearingPhase.denied);

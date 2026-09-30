@@ -473,6 +473,37 @@ test('上限是**我们自己的**约定：几十秒就收手（豆包那边没�
   assert.ok(ASR_MAX_MS > 15_000);
 });
 
+test('🔴 上游在**握手那一关**回 401 ⇒ `reason=bad-key`（不是那句没用的"识别那一头出错"）', async () => {
+  // 真 HTTP 服务器：对任何升级**直接回 401**（豆包那边就是这么拒的）。
+  const nodeHttp = await import('node:http');
+  const srv = nodeHttp.createServer((_req, res) => {
+    res.writeHead(401, { 'content-type': 'text/plain' });
+    res.end('unauthorized');
+  });
+  srv.on('upgrade', (_req, socket) => {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nconnection: close\r\n\r\n');
+    socket.destroy();
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+
+  const s = await boot({
+    asrConfig: asrConfigFromEnv({ DOUBAO_ASR_APPID: 'a'.repeat(10), DOUBAO_ASR_TOKEN: 't'.repeat(20), DOUBAO_ASR_URL: `ws://127.0.0.1:${port}/asr` }),
+  });
+  try {
+    const c = await connectAsr(s.wsBase, s.token);
+    c.ws.send(JSON.stringify({ type: 'asr/start' }));
+    const err = await waitFor(c.events, (e) => e.type === 'asr/error');
+    assert.equal(err.reason, 'bad-key', `握手被拒必须是 bad-key（界面靠它说"这两样不认"）：${JSON.stringify(err)}`);
+    assert.equal(err.code, 401, '状态码要如实带出来');
+    assert.equal(typeof err.message, 'string');
+    c.ws.close();
+  } finally {
+    await s.close();
+    await new Promise((r) => srv.close(r));
+  }
+});
+
 test('★ P1-3：收尾那条要带 "为什么收的尾"（客户端靠它区分"按停"与"半路断了"）', async () => {
   const stub = await stubUpstream();
   const s = await boot({ asrConfig: asrConfigFromEnv({ HUPO_ASR_URL: stub.url }) });

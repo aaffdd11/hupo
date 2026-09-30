@@ -274,6 +274,14 @@ export function createDoubaoUpstream({ config, connectId = newConnectId, log = (
           onEvt.onEnd?.();
         }
       });
+      // 🔴 **握手那一关被拒**（HTTP 401/403…）单独报一类：`ws` 那条 `error` 只说
+      //    "Unexpected server response: 401"，界面照那句只能编出一句没用的话。
+      //    ⇒ 把状态码**明明白白**带出来（`kind:'auth'`），上层就能说"这两样它不认"。
+      up.on('unexpected-response', (_req, res) => {
+        const code = Number(res?.statusCode ?? 0);
+        try { res?.resume?.(); } catch { /* 已经没了 */ }
+        onEvt.onError?.({ kind: 'auth', code, message: `上游拒绝了这次连接（HTTP ${code}）` });
+      });
       up.on('error', (err) => {
         onEvt.onError?.({ kind: 'upstream', message: String(err?.message ?? err).replace(/wss?:\/\/\S+/g, '（上游地址已隐去）').slice(0, 200) });
       });

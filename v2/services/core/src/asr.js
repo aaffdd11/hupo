@@ -213,7 +213,10 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
             type: 'asr/error',
             // ⚠️ 只有"上游明说不行"（错误帧 / 鉴权）才是 `engine`；
             //    连不上、握不上手、半路断都算 `upstream`（客户端那两档的处置不一样）。
-            reason: e?.kind === 'engine' ? 'engine' : 'upstream',
+            // ★ 2026-10-01：**握手那一关被拒**（`kind:'auth'`，例如 401）单独一类
+            //   `bad-key` —— 界面照它说"这两样它不认，去控制台重取一次"，
+            //   而不是那句没用的"识别那一头出错了，再按一次试试"（重试永远不会好）。
+            reason: e?.kind === 'auth' ? 'bad-key' : e?.kind === 'engine' ? 'engine' : 'upstream',
             code: e?.code ?? null,
             message: safeAsrMessage(e?.message),
           });

@@ -216,6 +216,11 @@ class Hearing {
     if (reason == 'no-entry') {
       return _copy(phase: HearingPhase.failed, why: hearNoEntry);
     }
+    // ★ 2026-10-01：🔴 **握手那一关被拒**（服务端 `asr/error{reason:'bad-key'}`，
+    //    真上游回 401）⇒ 说清"**这两样它不认**"（重试永远不会好，要去重取一次）。
+    if (reason == 'bad-key') {
+      return _copy(phase: HearingPhase.failed, why: hearBadKey);
+    }
     // ★ 2026-09-26：上游那一头出错（服务端 `asr/error{reason:'upstream'}`）
     //     **不是**"麦克风开不了" —— 说成"识别那一头出错了"，他才知道该再试一次。
     if (reason == 'upstream') {
