@@ -99,7 +99,7 @@
 
 ## 六、实测读数（2026-09-25）
 
-### 客户端（`v2/apps/mobile`）
+### 客户端（`v2/apps/mobile`）· 实测读数
 | 动作 | 读数 |
 |---|---|
 | `flutter analyze` | `No issues found!` |
@@ -109,7 +109,7 @@
 | **变异**：把"自己按住"那套关掉（`_onDown` 直接 return）| **C11 当场红**：`Found 0 widgets with type "DesktopIconMenu"`（★ 按住没出面板 —— 手机那条真缺陷的形状）；而 **C12（短按打开）仍绿**（负向对照没被弄坏）|
 | **变异**：拿掉二次确认那道闸（`103` 那一批）| C7 红（`Expected: <0> / Actual: <1>`）＋ C8 红 |
 
-### 服务端（`v2/services/core`）
+### 服务端（`v2/services/core`）· 实测读数
 | 动作 | 读数 |
 |---|---|
 | `npm test` | **1147 过 / 0 挂**（本批 ＋8 条）|
