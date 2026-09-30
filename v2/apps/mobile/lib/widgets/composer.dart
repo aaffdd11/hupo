@@ -164,14 +164,17 @@ class _ComposerState extends State<Composer> {
     // **这一轮真的完了 ⇒ 焦点回框里**：字已经在框里、发送钮也在
     // —— 主人那句"然后将文字展示出来。用户可以选择发送"落在这儿。
     //
-    // 🔴 2026-09-24 改：原来这里还要**切一档**（语音档 ⇄ 键盘档），
-    //    现在没有那两档了（主人：*"我们做成一行"*）——
-    //    按一下话筒就开始听、字**直接落进这个框**，再按一下结束。
-    //    所以这里只剩"把光标放回去"这一件事。
-    // ⚠️ 判据是 `busy`（在听 **或** 收尾中）：按下"结束"之后还有一句要等。
-    if (old.hearing.busy && !widget.hearing.busy) {
-      _focus.requestFocus();
-    }
+    // 🔴🔴 **收尾那一下不碰焦点**（主人 2026-10-01：*"当我停下语音，键盘却被唤醒了。
+    //    我认为停止语音，就是语音结束，不需要唤醒键盘。"*）
+    //
+    //    原来这里（还有 `_toggleMic` 的"结束"那一支）都 `requestFocus()` ——
+    //    那是**照"语音档⇄键盘档"那套老形状**想的：切回键盘档 ⇒ 光标进框 ⇒
+    //    手机把**软键盘**顶上来。现在按一下就开始、字直接落进这个框，
+    //    **没有"档"要切** ⇒ 收尾把键盘顶上来就是**替用户做了一个他没要的动作**
+    //    （屏幕上凭空多出半屏键盘，还挡住了聊天）。
+    //    ⇒ **话筒那颗按钮从此不碰焦点**：字照样落进框里（他自己点框或点「发送」都行）。
+    //    ⚠️ 判据在 `test/widget/hearing_chat_test.dart` ③：停手前后
+    //      `TextField.focusNode.hasFocus` **都得是假**。
   }
 
   /// 把语音那一边现在的字写进框里。
@@ -201,8 +204,7 @@ class _ComposerState extends State<Composer> {
       _prefix = _controller.text;
       _mirror = _controller.text;
     } else {
-      // 结束：焦点回框里 —— 字马上要落在那儿，他要发就按发送
-      _focus.requestFocus();
+      // 结束：**什么都不做**（尤其不许抢焦点 —— 那会把软键盘顶上来，见 `didUpdateWidget` 那段）
     }
     widget.onMicToggle?.call();
     if (mounted) setState(() {});

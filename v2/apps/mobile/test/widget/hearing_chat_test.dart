@@ -29,6 +29,7 @@ import 'package:hupo_app/models/hearing_session.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
+import 'package:hupo_app/widgets/composer.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/hearing.dart' as hs;
 import 'package:hupo_app/services/token_store.dart';
@@ -111,6 +112,12 @@ Future<void> _say(WidgetTester tester, _Rig r, {required String words}) async {
 String _boxText(WidgetTester tester) =>
     tester.widget<TextField>(find.byType(TextField).first).controller?.text ?? '';
 
+String _boxText0(WidgetTester tester) => _boxText(tester);
+
+/// 输入框有没有焦点（＝**软键盘会不会被顶上来**）。`Composer` 把它的 `_focus` 传给了 `TextField`。
+bool _focused(WidgetTester tester) =>
+    tester.widget<TextField>(find.byType(TextField).first).focusNode?.hasFocus ?? false;
+
 void main() {
   setUp(() => hs.nativeHearingApi = _FakeNative());
   tearDown(() => hs.clearNativeHearing());
@@ -124,6 +131,36 @@ void main() {
     expect(r.c.hearing.phase, HearingPhase.listening);
     await _say(tester, r, words: '今天天气怎么样');
     expect(_boxText(tester), contains('今天天气怎么样'), reason: '★ 听到了字就该在框里');
+  });
+
+  testWidgets('③ 🔴 停下语音**不许唤醒键盘**（话筒那颗按钮不碰焦点）', (tester) async {
+    // 主人 2026-10-01：*"当我停下语音，键盘却被唤醒了。我认为停止语音，就是语音结束，
+    // 不需要唤醒键盘。"*
+    final r = _make();
+    await _pump(tester, r.c);
+    expect(_focused(tester), false, reason: '一开始键盘就该是收着的');
+
+    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.pumpAndSettle();
+    expect(_focused(tester), false, reason: '开麦也不该把键盘顶上来');
+
+    // 说半句（还在听），然后**按第二下停手**
+    r.feeds.last({'type': 'asr/ready'});
+    r.feeds.last({'type': 'asr/partial', 'text': '今天天气', 'index': 0});
+    await tester.pump();
+    expect(_focused(tester), false, reason: '听着的时候更不该抢焦点');
+
+    // 正在录时那颗按钮画的是脉动条（不是话筒图形）⇒ 按 key 点它
+    await tester.tap(find.byKey(chatMicButtonKey));
+    await tester.pumpAndSettle();
+    expect(_focused(tester), false, reason: '★ 按停那一下**不许**唤醒键盘');
+
+    // 最后那句回来 ⇒ 字留着、键盘**还是收着**
+    r.feeds.last({'type': 'asr/final', 'text': '今天天气怎么样', 'index': 0});
+    r.feeds.last({'type': 'asr/end', 'text': '今天天气怎么样', 'index': 0, 'reason': 'user-stop'});
+    await tester.pumpAndSettle();
+    expect(_boxText0(tester), contains('今天天气怎么样'), reason: '字还是要落进框里');
+    expect(_focused(tester), false, reason: '★ 收尾那一下也不许唤醒键盘');
   });
 
   testWidgets('② 展开档：先展开再按话筒 ⇒ 一样要进框', (tester) async {
