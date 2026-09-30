@@ -29,6 +29,10 @@ const REPORT = process.argv.includes('--report');
 /** ① 必须干净的文件（棘轮：只增不减） */
 const RATCHET = [
   'docs/INDEX.md',
+  // ⚠️ 2026-10-01：改动速查卡**出生就进名单**（同一条纪律）。
+  //    它是"我要改个小东西 ⇒ 碰哪几个文件、跑哪条闸"的唯一入口 ——
+  //    它断了，下一批人就会回到"每次通读手册"那条路（那正是它被写出来的原因）。
+  'docs/CHANGE-MAP.md',
   'docs/dev/00-PROGRESS.md',
   'docs/dev/PROGRESS-HISTORY.md',
   // 新写的分层文档从出生就进名单（只增不减：旧的哪天清干净了也加进来）
