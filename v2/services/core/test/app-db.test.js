@@ -345,6 +345,39 @@ test('D4 频率闸：一分钟里超过那个数 ⇒ 429（拒绝也要说清是
   nodeFs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('D8 清空它存的东西：库真没了、**制品与工作区一个字没动**、幂等、留一行审计', async () => {
+  const dir = tmpdir();
+  const apps = makeApps(dir, 'u1');
+  apps.create({
+    id: 'jizhang',
+    title: '记账',
+    icon: 'dice',
+    entry: 'index.html',
+    files: { 'index.html': '<p>x</p>' },
+    permissions: ['db'],
+  });
+  await apps.dbExec('jizhang', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
+  await apps.dbExec('jizhang', { op: 'run', sql: 'INSERT INTO t VALUES (?)', params: ['甲'] });
+  assert.equal(nodeFs.existsSync(apps.dbPath('jizhang')), true, '前提：库在');
+
+  const r = apps.dbClear('jizhang');
+  assert.equal(r.ok, true);
+  assert.equal(nodeFs.existsSync(apps.dbPath('jizhang')), false, '★ 库要真没了');
+  assert.equal(nodeFs.existsSync(nodePath.join(dir, 'hupo', 'apps', 'jizhang', 'versions', '1', 'index.html')), true, '制品不许动');
+  assert.equal(apps.has('jizhang'), true, '★ 那个 app 还在桌上（清的是内容，不是壳）');
+  // ⚠️ 幂等：没存过 / 已经清了 ⇒ 也算成了（连点两次不该看到报错）
+  assert.equal(apps.dbClear('jizhang').ok, true);
+  // 留一行审计
+  const audit = nodeFs.readFileSync(nodePath.join(dir, 'hupo', 'apps', 'audit.jsonl'), 'utf8');
+  assert.match(audit, /"what":"db-clear"/, '清空要留痕（拿不回来的动作必须可倒查）');
+  // 他"关掉存储"不影响清空（清空是"我的东西我拿走"）
+  apps.setGrants('jizhang', []);
+  assert.equal(apps.dbClear('jizhang').ok, true, '关掉存储也照样能清');
+  // 不在他这儿的 app ⇒ 抛（调用方如实回一句人话）
+  assert.throws(() => apps.dbClear('nope'), /不在你这儿/);
+  nodeFs.rmSync(dir, { recursive: true, force: true });
+});
+
 // ── D7 · 那条 HTTP 口（真起一个 app 原点）─────────────────────────
 
 function startAppOrigin(apps) {

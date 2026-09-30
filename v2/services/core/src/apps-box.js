@@ -99,6 +99,12 @@ export const BOX_APP_COPY_PATH = '/internal/app-copy';
 export const BOX_APP_DB_PATH = '/internal/app-db';
 
 /**
+ * ★ **`148` §五：清空那个 app 存的东西** —— 租户的库在**他盒子里**，所以这一下也在盒里落。
+ * 🔴 失败就说失败（盒子不通 ⇒ `BoxError` ⇒ 调用方如实 503），**绝不动宿主那一份**。
+ */
+export const BOX_APP_DB_CLEAR_PATH = '/internal/app-db-clear';
+
+/**
  * ★ **`147`：读/写"他允许了哪几样"**（`grant.json`）—— 租户的那份**在他盒子里**。
  *
  * ⚠️ 一个口两种用法（**按正文分岔，不按方法分**）：
@@ -162,6 +168,7 @@ export function parseInternalPath(pathname) {
   if (pathname === BOX_APP_RENAME_PATH) return { kind: 'app-rename' };
   if (pathname === BOX_APP_COPY_PATH) return { kind: 'app-copy' };
   if (pathname === BOX_APP_DB_PATH) return { kind: 'app-db' };
+  if (pathname === BOX_APP_DB_CLEAR_PATH) return { kind: 'app-db-clear' };
   if (pathname === BOX_APP_GRANT_PATH) return { kind: 'app-grant' };
   if (pathname === BOX_APP_REGISTER_PATH) return { kind: 'app-register' };
   if (pathname === BOX_ROOM_REMOVE_PATH) return { kind: 'room-remove' };
@@ -420,6 +427,33 @@ export function createBoxApps({ sub = 'owner', dial, log = () => {} } = {}) {
       // ⚠️ 形状**逐字段核**：认不出就是认不出，不许当成"允许了"（fail-closed）。
       if (!j || typeof j.ok !== 'boolean') throw new BoxError('盒子里那条"允许"答的话看不懂', 'bad-json');
       if (j.ok === true) return { ok: true, permissions: Array.isArray(j.permissions) ? j.permissions : [] };
+      return {
+        ok: false,
+        status: Number.isFinite(j.status) ? j.status : 403,
+        error: typeof j.error === 'string' && j.error !== '' ? j.error : 'not-done',
+        text: typeof j.text === 'string' && j.text !== '' ? j.text : '没做成，等会儿再试。',
+      };
+    },
+    /**
+     * ★ **`148` §五：清空那个 app 存的东西 —— 交给盒子那份权威来动**。
+     *
+     * @returns {Promise<{ok:true, removed:number} | {ok:false, status:number, error:string, text?:string}>}
+     */
+    async clearDb(appId) {
+      const payload = Buffer.from(JSON.stringify({ appId: String(appId ?? '') }), 'utf8');
+      const r = await requestOverSocket(dialOnce(dial), {
+        method: 'POST',
+        path: BOX_APP_DB_CLEAR_PATH,
+        headers: { 'content-type': 'application/json', 'content-length': String(payload.length) },
+        body: payload,
+      });
+      if (r.status !== 200) {
+        log(`盒子里那条"清空"没答（HTTP ${r.status}）`);
+        throw new BoxError(`盒子里那条"清空"没答（HTTP ${r.status}）`, 'bad-status');
+      }
+      const j = parseJson(r.body);
+      if (!j || typeof j.ok !== 'boolean') throw new BoxError('盒子里那条"清空"答的话看不懂', 'bad-json');
+      if (j.ok === true) return { ok: true, removed: Number.isFinite(j.removed) ? j.removed : 0 };
       return {
         ok: false,
         status: Number.isFinite(j.status) ? j.status : 403,

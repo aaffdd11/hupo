@@ -271,6 +271,68 @@ test('G5 ★ 老格式 `{permissions:[…]}` 现算成"关掉清单"：当年关
 });
 
 // ════════════════════════════════════════════════════════════
+// G6 —— **清空它存的东西**（`148` §五 · 设置页那颗按钮背后那一条）
+// ════════════════════════════════════════════════════════════
+
+const postClear = (host, token, id) =>
+  fetch(`${host.origin}/api/app-db-clear`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+
+test('G6 主人：清空 ⇒ 库真没了、制品还在；没令牌拒；幂等', async (t) => {
+  const dir = tmp();
+  const apps = new Apps({ dir, sub: 'main', now: () => NOW });
+  apps.register({ id: 'jizhang', title: '记账', entry: 'index.html', permissions: ['db'] });
+  const host = await bootHost(t, { hostDirs: { main: dir } });
+  const token = host.tokenFor('main');
+  // 先存一笔
+  const w = await apps.dbExec('jizhang', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
+  assert.equal(w.ok, true, JSON.stringify(w));
+  assert.equal(exists(dbFileOf(dir, 'main', 'jizhang')), true);
+
+  const r = await postClear(host, token, 'jizhang');
+  assert.equal(r.status, 200, JSON.stringify(await r.clone().json()));
+  assert.equal((await r.json()).ok, true);
+  assert.equal(exists(dbFileOf(dir, 'main', 'jizhang')), false, '★ 库要真没了');
+  assert.equal(apps.has('jizhang'), true, '★ 那个 app 还在（清的是内容，不是壳）');
+  // 幂等：再点一次也算成了
+  assert.equal((await postClear(host, token, 'jizhang')).status, 200);
+  // 没令牌 ⇒ 拒（这一条是**他**签的字）
+  const anon = await fetch(`${host.origin}/api/app-db-clear`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: 'jizhang' }),
+  });
+  assert.ok(anon.status === 401 || anon.status === 403, `没令牌要拒（实际 ${anon.status}）`);
+  // 没说清是哪一个 ⇒ 400 一句人话
+  const noId = await postClear(host, token, '');
+  assert.equal(noId.status, 400);
+});
+
+test('G6 租户：清空**在盒里落**（宿主那格一个字节都没有）', async (t) => {
+  const hostDir = tmp();
+  const boxDir = tmp();
+  const boxApps = new Apps({ dir: boxDir, sub: 'owner', now: () => NOW });
+  boxApps.register({ id: 'jizhang', title: '记账', entry: 'index.html', permissions: ['db'] });
+  // 盒里先真存一笔
+  await boxApps.dbExec('jizhang', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
+  assert.equal(exists(dbFileOf(boxDir, 'owner', 'jizhang')), true, '前提：盒里有库');
+  const box = await bootBox(t, { dir: boxDir });
+  const host = await bootHost(t, {
+    hostDirs: { u2: hostDir },
+    boxUds: { 'hupo-b': box.uds },
+    tenants: { u2: 'hupo-b' },
+  });
+  const r = await postClear(host, host.tokenFor('u2'), 'jizhang');
+  assert.equal(r.status, 200, JSON.stringify(await r.clone().json()));
+  assert.equal(exists(dbFileOf(boxDir, 'owner', 'jizhang')), false, '★ 盒里那份要真没了');
+  assert.equal(exists(dbFileOf(hostDir, 'u2', 'jizhang')), false, '★ 宿主那格始终不该有它');
+  assert.ok((host.dials.get('hupo-b') ?? 0) >= 1, '★ 这一下必须过隧道去盒里落');
+});
+
+// ════════════════════════════════════════════════════════════
 // G3 —— 租户：字与库都落在**他盒子里**
 // ════════════════════════════════════════════════════════════
 

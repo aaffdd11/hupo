@@ -1021,6 +1021,32 @@ export class Apps {
   }
 
   /**
+   * ★ **把他这个 app 的数据清掉**（`148` §五 · 设置页那颗按钮背后就这一下）。
+   *
+   * 🔴 **它清的是"内容"，不是"壳"**：只删那个库文件（连它旁边的 `-wal`/`-shm`），
+   *    **不动制品、不动工作区、也不动那个 app 本身**（它还在桌上，下次打开是一个空库）。
+   * ⚠️ **拿不回来** —— 调用方（那条 HTTP 口）必须让界面**二次确认**，这一层只负责删干净。
+   * ⚠️ 没有库（从没存过）⇒ 也算成了（**幂等**）：他点"清空"两次不该看到报错。
+   * ⚠️ **关掉存储（`denied`）不影响这一下**：清空是"我的东西我拿走"，与"给不给它用"无关。
+   */
+  dbClear(id) {
+    checkAppId(id);
+    if (!this.has(id)) throw new AppsError('这个小程序不在你这儿');
+    const file = this.dbPath(id);
+    let removed = 0;
+    for (const one of [file, `${file}-wal`, `${file}-shm`, `${file}-journal`]) {
+      try {
+        this.fs.rmSync(one, { force: true });
+        removed += 1;
+      } catch {
+        /* 没有就算了（幂等） */
+      }
+    }
+    this.#audit({ what: 'db-clear', id, files: removed });
+    return { ok: true, removed };
+  }
+
+  /**
    * ★ **一个小程序那一格存储在哪**（主人 2026-09-30 拍板 · 契约 `147-APP-SQLITE.md`）。
    *
    * 🔴 **一个 app 一个文件**，而且落在 `appDir(id)` 里、**`versions/` 外面**：

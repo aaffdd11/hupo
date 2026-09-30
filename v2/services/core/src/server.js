@@ -1163,6 +1163,48 @@ export function createServer({
         }
       }
 
+      /**
+       * ★ **`148` §五：把他这个 app 存的东西清掉**（设置页那颗按钮）。
+       *
+       * 🔴 **签字的是他**：清空是"我的东西我拿走" —— 走**登录态**（和 `/api/app-grant` 同一条规矩），
+       *    制品、助手那几条口都碰不到它。
+       * 🔴 **以盒子为准**（同 `/api/app-remove`）：租户的库在**他盒子里** ⇒ 这一下**在盒里落**；
+       *    盒子不通 ⇒ **如实 503**，**绝不**去动宿主那份（那会"清了个空的"）。
+       * ⚠️ **幂等**：没存过也算成了（他连点两次不该看到报错）。
+       */
+      if (path === '/api/app-db-clear' && req.method === 'POST') {
+        let body;
+        try {
+          body = await readJson(req, 16 * 1024);
+        } catch {
+          return sendJson(res, 400, { ok: false, error: 'bad-body', text: '这一条看不懂。' });
+        }
+        const appId = typeof body?.id === 'string' ? body.id : '';
+        if (appId === '') return sendJson(res, 400, { ok: false, error: 'no-id', text: '没说清是哪一个。' });
+        const src = appsFor(claim.sub);
+        if (!src) {
+          return tenant
+            ? sendJson(res, 503, { ok: false, error: 'tenant-not-ready', text: '你那台还在准备，稍等一下再试。' })
+            : sendJson(res, 404, { ok: false, error: 'no-apps', text: '这台部署还没开小程序。' });
+        }
+        try {
+          if (src.isBox === true) {
+            if (typeof src.clearDb !== 'function') {
+              return sendJson(res, 503, { ok: false, error: 'not-ready', text: '你那台还没跟上，等一会儿再试。' });
+            }
+            const r = await src.clearDb(appId);
+            if (!r.ok) return sendJson(res, r.status, { ok: false, error: r.error, text: r.text ?? r.error });
+            return sendJson(res, 200, { ok: true, removed: r.removed ?? 0 });
+          }
+          const got = src.dbClear(appId);
+          return sendJson(res, 200, { ok: true, removed: got.removed ?? 0 });
+        } catch (err) {
+          const msg = err instanceof AppsError ? err.message : '没做成，等会儿再试。';
+          log(`[app-db-clear] 没做成（${String(appId).slice(0, 40)}）：${err?.message ?? err}`);
+          return sendJson(res, 400, { ok: false, error: 'not-done', text: msg });
+        }
+      }
+
       if (path === '/api/app-rename' && req.method === 'POST') {
         let body;
         try {
@@ -2754,6 +2796,28 @@ const TENANT_ROUTES = [
         return sendJson(res, 200, { ok: true, permissions: kept });
       } catch (err) {
         log(`[app-grant] 没写成：${err?.message ?? err}`);
+        const msg = err instanceof AppsError ? err.message : '没做成，等会儿再试。';
+        return sendJson(res, 200, { ok: false, status: 400, error: 'not-done', text: msg });
+      }
+    }
+
+    // ── ★ **`148` §五：把他这个 app 存的东西清掉**（在**权威那份**上落）────────
+    if (hit.kind === 'app-db-clear') {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'method' });
+      if (src.isBox === true || typeof src.dbClear !== 'function') {
+        return sendJson(res, 500, { ok: false, status: 500, error: 'wrong-source', text: '这条"清空"的取值来源接错了' });
+      }
+      let body;
+      try {
+        body = await readJson(req, 16 * 1024);
+      } catch {
+        return sendJson(res, 400, { ok: false, status: 400, error: 'bad-body', text: '这一条看不懂。' });
+      }
+      try {
+        const out = src.dbClear(String(body?.appId ?? ''));
+        return sendJson(res, 200, { ok: true, removed: out.removed ?? 0 });
+      } catch (err) {
+        log(`[app-db-clear] 没做成：${err?.message ?? err}`);
         const msg = err instanceof AppsError ? err.message : '没做成，等会儿再试。';
         return sendJson(res, 200, { ok: false, status: 400, error: 'not-done', text: msg });
       }
