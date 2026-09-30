@@ -8,7 +8,12 @@
 //   ③ 🔴 **点一下**：真的去说了（`/api/app-grant`）＋ **成了屏幕才变**；
 //      **没成 ⇒ 开关一动不动 ＋ 如实说一句**（服务端那句人话优先）；
 //   ④ 老服务端不回 `granted` ⇒ **不给开关**（不给假状态）；
-//   ⑤ 关闭**只是"现在不给"** —— 界面上没有"删掉 / 清空"那类东西。
+//   ⑤ 关闭**只是"现在不给"** —— 界面上没有"删掉"那种东西；
+//   ⑥ ★ **"清空它存下来的东西"**（2026-10-01 · `POST /api/app-db-clear`）：
+//      只在声明了存东西的 app 上有那颗按钮 · 点一下**先弹二次确认** ·
+//      **点"取消"不许发请求** · 点"清掉"才真发（正文 `{id}`）＋ 屏幕跟着变 ·
+//      服务端回错时**照它说**、**不许**显示成清掉了 · 等回执时按钮按不动 ·
+//      **跟开关无关**（关掉存储也能清）。
 //
 // ⚠️ 判据不写"控件存在就算完"：每一条都走真入口 / 真手势，并带**负向对照**
 //    （改回旧行为它得当场红）。
@@ -34,6 +39,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// 一次"他点了开关"的记录。
 typedef GrantCall = ({String id, String permission, bool allow});
 
+/// 一次"他确认清空了"的记录（就是那个 appId）。
+typedef ClearCall = String;
+
 MiniApp _app({
   String id = 'notes',
   String title = '随手记',
@@ -54,6 +62,7 @@ Future<void> pumpSettings(
   WidgetTester tester, {
   List<MiniApp> apps = const [],
   Future<GrantOutcome> Function(String, String, bool)? onGrant,
+  Future<ClearOutcome> Function(String)? onClear,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -65,6 +74,7 @@ Future<void> pumpSettings(
           onLogout: () {},
           apps: apps,
           onGrant: onGrant,
+          onClear: onClear,
         ),
       ),
     ),
@@ -81,6 +91,15 @@ Future<void> scrollToCard(WidgetTester tester) async {
         .descendant(of: find.byKey(settingsListKey), matching: find.byType(Scrollable))
         .first,
   );
+  await tester.pumpAndSettle();
+}
+
+/// **像用户那样点那颗「清空它存下来的东西」**（先滚到它、再点）。
+Future<void> tapClear(WidgetTester tester, {String id = 'notes'}) async {
+  final f = find.byKey(appDbClearKey(id));
+  await tester.ensureVisible(f);
+  await tester.pumpAndSettle();
+  await tester.tap(f);
   await tester.pumpAndSettle();
 }
 
@@ -192,11 +211,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(calls, [(id: 'notes', permission: 'db', allow: false)]);
     expect(switchOf(tester).value, false, reason: '★ 成了 ⇒ 关');
-    // 🔴 关闭只是"现在不给"：屏幕上说的是这一句，而且**没有**删除/清空那种按钮
+    // 🔴 关闭只是"现在不给"：屏幕上说的是这一句，而且这一趟**没有**删除/清空那种按钮
+    //    ⚠️ 2026-10-01：那张卡上**多了一颗「清空它存下来的东西」**（另一件事，见下面 ⑩–⑭），
+    //       但它**只在接线了 `onClear` 时才摆**；这一条泵的没接线 ⇒ 屏幕上不该有它。
+    //       ⚠️ **"关掉 ≠ 删掉"这一条本身没松**：它说的仍是"关一下不会动他存的东西"。
     expect(find.text(settingsGrantsHint), findsOneWidget);
     for (final bad in ['删掉', '清空', '清除']) {
       expect(find.textContaining(bad), findsNothing,
-          reason: '★ 关掉不是删东西（`147` §五）：屏幕上不该有「$bad」');
+          reason: '★ 关掉不是删东西（`147` §五）：这一趟屏幕上不该有「$bad」');
     }
   });
 
@@ -336,6 +358,221 @@ void main() {
     expect(grantBody, {'id': 'notes', 'permission': 'db', 'allow': true},
         reason: '★ 那一下必须真的走到 `/api/app-grant`（正文三样）');
     expect(switchOf(tester).value, true, reason: '★ 服务端明说成了 ⇒ 屏幕跟着变了');
+  });
+
+  // ── ★ 2026-10-01：**清空它存下来的东西**（`POST /api/app-db-clear`）──────────
+  //
+  // 契约 `docs/dev/147-APP-SQLITE.md` §五那笔欠账。🔴 那一步**拿不回来** ⇒
+  // 判据里最要命的两条是"**点取消不许发**"与"**没成不许显示成清掉了**"。
+
+  /// ★ 从**真入口**走一遍（桌面 → 设置 → 那张卡），并把 `/api/app-db-clear`
+  /// 那一条**原样**记下来。
+  ///
+  /// ⚠️ 与 ⑨ 同一条理由：只有走真入口，量的才是"用户真会看到的那棵树"；
+  ///    而且**只有真的发出去**才算数（`MockClient`：不开端口、不碰真网）。
+  Future<void> pumpGrantsViaChat(
+    WidgetTester tester, {
+    required List<http.Request> clearCalls,
+    required http.Response Function(http.Request req) onClear,
+    List<String> permissions = const ['db'],
+    List<String> granted = const [],
+  }) async {
+    final api = Api(
+      client: MockClient((r) async {
+        if (r.url.path == '/api/apps') {
+          return _json(jsonEncode({
+            'apps': [
+              {
+                'id': 'notes',
+                'title': '随手记',
+                'icon': 'book',
+                'version': 1,
+                'entryUrl': 'https://apps.example/notes/index.html?sig=x',
+                'expiresAt': 0,
+                'permissions': permissions,
+                'granted': granted,
+              },
+            ],
+          }));
+        }
+        if (r.url.path == '/api/app-db-clear') {
+          clearCalls.add(r);
+          return onClear(r);
+        }
+        return _json('{}');
+      }),
+    );
+    final c = ChatController(api: api, tokens: TokenStore(), token: 'tok');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          controller: c,
+          onLoggedOut: () {},
+          space: const SpaceInfo(kind: 'tenant', state: 'ready', hasKey: false),
+          onSendKey: (_) async => KeySend.ok,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle(); // 等 `/api/apps` 回来
+    await tester.tap(find.text(settingsAppLabel));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsScreen), findsOneWidget, reason: '★ 没进设置那一屏');
+    await scrollToCard(tester);
+  }
+
+  testWidgets('⑩ ★ 点清空⇒弹确认；点【取消】**不许发请求**；再点一次、点【清掉】⇒ 真发了 POST ＋ 屏幕跟着变',
+      (tester) async {
+    final calls = <http.Request>[];
+    await pumpGrantsViaChat(
+      tester,
+      clearCalls: calls,
+      onClear: (_) => _json(jsonEncode({'ok': true, 'removed': 2})),
+    );
+    // ⚠️ 这一趟存储那一颗是**关着的**（`granted` 空）—— 下面要证明"清空跟开关无关"
+    expect(switchOf(tester).value, false, reason: '这一趟 granted 是空的');
+    expect(find.byKey(appDbClearKey('notes')), findsOneWidget,
+        reason: '★ 声明了存东西 ⇒ 那颗按钮必须在（跟开关无关）');
+
+    // ① 点一下 ⇒ **先弹二次确认**（这一刻一个请求都不许发）
+    await tapClear(tester);
+    expect(find.text(settingsClearDbTitle), findsOneWidget, reason: '★ 没弹二次确认层');
+    expect(find.text(settingsClearDbWhat), findsOneWidget,
+        reason: '★ 那句"拿不回来"必须说清（不然二次确认是走过场）');
+    expect(calls, isEmpty, reason: '★ 只是弹了确认层 —— 一个请求都不许发');
+
+    // ② 点【取消】⇒ 什么都不发，也不许冒出任何"清掉了"的话
+    await tester.tap(find.byKey(appDbClearNoKey));
+    await tester.pumpAndSettle();
+    expect(calls, isEmpty, reason: '★ 点"取消"不许发出那一条请求');
+    expect(find.text(settingsClearDbDone), findsNothing,
+        reason: '★ 取消了还冒出"清掉了" ⇒ 那是页面在说假话');
+    expect(find.byKey(appDbClearNoteKey('notes')), findsNothing);
+
+    // ③ 再点一次 ⇒ 点【清掉】⇒ **只有这一刻**才真发
+    await tapClear(tester);
+    await tester.tap(find.byKey(appDbClearYesKey));
+    await tester.pumpAndSettle();
+    expect(calls.length, 1, reason: '★ 确认之后那一下必须真的走到 `/api/app-db-clear`');
+    expect(calls.single.method, 'POST', reason: '★ 是 POST');
+    expect(calls.single.url.path, '/api/app-db-clear');
+    expect(calls.single.headers['authorization'], 'Bearer tok',
+        reason: '★ 签字走登录态（照 appRename / appGrant 那条）');
+    expect(jsonDecode(calls.single.body), {'id': 'notes'},
+        reason: '★ 正文只有那个 app 的 id');
+
+    // ④ 屏幕跟着变：如实说一句（`removed` 不必显示）
+    expect(find.text(settingsClearDbDone), findsOneWidget,
+        reason: '★ 服务端明说成了 ⇒ 屏幕上必须有一句"清掉了"');
+  });
+
+  testWidgets('⑪ ★ 服务端回错 ⇒ **照它那句说**，而且**不许**显示成清掉了', (tester) async {
+    const serverWords = '你那台还在准备，稍等一下再试。';
+    final calls = <http.Request>[];
+    await pumpGrantsViaChat(
+      tester,
+      clearCalls: calls,
+      onClear: (_) => http.Response(
+        jsonEncode({'ok': false, 'error': 'tenant-not-ready', 'text': serverWords}),
+        503,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      ),
+    );
+    await tapClear(tester);
+    await tester.tap(find.byKey(appDbClearYesKey));
+    await tester.pumpAndSettle();
+    expect(calls.length, 1);
+    expect(find.text(serverWords), findsOneWidget, reason: '★ 服务端有人话 ⇒ 照它说');
+    expect(find.byKey(appDbClearNoteKey('notes')), findsOneWidget,
+        reason: '★ 不许静默（他点了一下，屏幕上必须有一句话）');
+    expect(find.text(settingsClearDbDone), findsNothing,
+        reason: '★ 没成却显示成"清掉了" ⇒ 那是这个项目最忌的那种假话');
+  });
+
+  testWidgets('⑪·补 ★ **200 但 `ok` 不是 true** ⇒ 一样算没成（最容易写成"200 就成"）', (tester) async {
+    // ⚠️ 单开一条用例（不跟 ⑪ 挤在同一个 `pumpWidget` 里）：
+    //    同一个用例里连泵两棵 `ChatScreen`，`Navigator` 会把上一条路由留着，
+    //    于是 `find.text('设置')` 撞到的是**退到幕后**那一棵 —— 那一下点了个空，
+    //    而下面的断言照样绿（"闸变弱了"的形状）。一条用例一棵树最稳。
+    final calls = <http.Request>[];
+    await pumpGrantsViaChat(
+      tester,
+      clearCalls: calls,
+      onClear: (_) => _json(jsonEncode({'error': 'not-done'})),
+    );
+    await tapClear(tester);
+    await tester.tap(find.byKey(appDbClearYesKey));
+    await tester.pumpAndSettle();
+    expect(calls.length, 1);
+    expect(find.text(settingsClearDbDone), findsNothing,
+        reason: '★ 200 但没有明说 ok ⇒ 一个字节都不当成功');
+    expect(find.text(settingsClearDbFailed), findsOneWidget,
+        reason: '★ 它没说人话 ⇒ 用兜底那句（仍然不许静默）');
+  });
+
+  testWidgets('⑫ ★ 等回执的时候那颗按钮按不动（别让他连点）', (tester) async {
+    final calls = <ClearCall>[];
+    final gate = Completer<ClearOutcome>();
+    await pumpSettings(
+      tester,
+      apps: [_app()],
+      onClear: (id) {
+        calls.add(id);
+        return gate.future;
+      },
+    );
+    await scrollToCard(tester);
+    await tapClear(tester);
+    await tester.tap(find.byKey(appDbClearYesKey));
+    await tester.pump();
+    expect(calls, ['notes'], reason: '★ 确认之后才发');
+    final btn = tester.widget<TextButton>(find.byKey(appDbClearKey('notes')));
+    expect(btn.onPressed, isNull, reason: '★ 回执还没回来 ⇒ 那颗按钮按不动');
+
+    // 连点也不许多发一条
+    await tester.tap(find.byKey(appDbClearKey('notes')), warnIfMissed: false);
+    await tester.pump();
+    expect(calls, ['notes'], reason: '★ 按不动就是按不动（别让他连点）');
+
+    gate.complete(const ClearOk(1));
+    await tester.pumpAndSettle();
+    expect(find.text(settingsClearDbDone), findsOneWidget);
+  });
+
+  testWidgets('⑬ ★ 没声明存东西的 app 上**没有**那颗按钮；这条路没接上也不给', (tester) async {
+    // ① 声明了 ask / net，但**没声明**存东西 ⇒ 不许摆一个"清空"
+    await pumpSettings(
+      tester,
+      apps: [_app(permissions: const ['ask', 'net'], granted: const [])],
+      onClear: (_) async => const ClearOk(0),
+    );
+    await scrollToCard(tester);
+    expect(find.text(grantWantWords('net')), findsOneWidget,
+        reason: '★ "想连网取数据"那一句要在屏幕上（认得 = 给开关）');
+    expect(grantSwitchOn(_app(permissions: const ['ask', 'net']), 'net'), false,
+        reason: '★ net 认得 ⇒ 开关的值只看 granted');
+    expect(find.byKey(appDbClearKey('notes')), findsNothing,
+        reason: '★ 它没声明存东西 ⇒ 摆一个"清空"就是假按钮');
+
+    // ② 声明了存东西，但这一条路没接上 ⇒ 也不给（同"不给假按钮"那条纪律）
+    await pumpSettings(tester, apps: [_app()]);
+    await scrollToCard(tester);
+    expect(find.byKey(appDbClearKey('notes')), findsNothing,
+        reason: '★ 按了也没人接 ⇒ 不许摆一颗按不动的"清空"');
+  });
+
+  testWidgets('⑭ ★ 幂等：没存过（`removed:0`）也算成了 —— 如实说"清掉了"，不许报错', (tester) async {
+    final calls = <http.Request>[];
+    await pumpGrantsViaChat(
+      tester,
+      clearCalls: calls,
+      onClear: (_) => _json(jsonEncode({'ok': true, 'removed': 0})),
+    );
+    await tapClear(tester);
+    await tester.tap(find.byKey(appDbClearYesKey));
+    await tester.pumpAndSettle();
+    expect(calls.length, 1);
+    expect(find.text(settingsClearDbDone), findsOneWidget,
+        reason: '★ 幂等：没存过也回 200 ⇒ 他连点两次不该看到报错');
   });
 }
 

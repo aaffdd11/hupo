@@ -379,8 +379,27 @@ void main() {
       // ⚠️ 拼出来的那句也要扫（`permission` 是协议名，**人话在映射表里**）
       grantWantWords('db'),
       grantWantWords('ask'),
+      // ★ 2026-10-01：**第三样"想连网取数据"**（协议名 `net` · `08-SPEC.md` §14.1·丙）——
+      //    ⚠️ 这一批最容易混进来的是"网络 / 联网 / 域名 / API"那类词；
+      //       允许的是他说得懂的话："想连网取数据"。
+      grantWantWords('net'),
+      // ★ 2026-10-01：**第四样"想跟它的助手说话"**（协议名 `agent` · `08-SPEC.md` §14.1·丁）——
+      //    ⚠️ 这一批最容易混进来的是"agent / 智能体 / 助手接口 / 对话接口"那类词；
+      //       允许的是他说得懂的话："想跟它的助手说话"。
+      grantWantWords('agent'),
       // 认不出来的那一档也有一句人话（不许把协议名摆到屏幕上）
       grantWantWords('something-new'),
+      // ★ 2026-10-01：那张卡上**新加的那颗「清空」**（`POST /api/app-db-clear`）
+      //    ＋ 它那一层二次确认 ＋ 成/没成那两句 —— **直接引数据源**（手抄会漂）。
+      //    ⚠️ 这一批最容易混进来的是"数据库 / 数据 / db / SQLite / 清空数据"那类词；
+      //       允许的是他说得懂的话："它存下来的东西"、"拿不回来"、"清掉了"。
+      settingsClearDbAction,
+      settingsClearDbTitle,
+      settingsClearDbWhat,
+      settingsClearDbNo,
+      settingsClearDbYes,
+      settingsClearDbDone,
+      settingsClearDbFailed,
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

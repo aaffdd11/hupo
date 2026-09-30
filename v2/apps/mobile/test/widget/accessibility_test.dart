@@ -530,11 +530,13 @@ Future<void> _openWallpaper(WidgetTester tester, double scale) async {
 }
 
 /// ★ 2026-09-30（契约 `docs/dev/147-APP-SQLITE.md` §二「册子」）：
-/// **注册制那张卡**用的假服务端 —— 那一条小程序**声明了两样**（`db` / `ask`）。
+/// **注册制那张卡**用的假服务端 —— 那一条小程序**声明了三样**（`db` / `ask` / `net`）。
 ///
 /// ⚠️ 为什么非要单独一份：一个都没声明时那张卡**一个像素都不画**
 ///    （`_controller()` 那一份 `/api/apps` 是拉不到的 ⇒ 卡不在树上）——
 ///    直接拿 `_openConfig` 量，这道闸扫的就还是那一列，而它照样绿。
+/// ⚠️ 2026-10-01：**`net` 那一行**（"想连网取数据"）也加进来 —— 它是这一轮新加的
+///    一行字，不摆出来的话"五档不溢出"就漏了它（同壁纸那一页那条理由）。
 ChatController _grantsController() {
   final api = Api(
     client: MockClient((r) async {
@@ -549,7 +551,7 @@ ChatController _grantsController() {
                 'version': 1,
                 'entryUrl': 'https://apps.example/notes/index.html?sig=x',
                 'expiresAt': 0,
-                'permissions': ['db', 'ask'],
+                'permissions': ['db', 'ask', 'net'],
                 'granted': <String>[],
               },
             ],
@@ -598,6 +600,31 @@ Future<void> _openConfigWithGrants(WidgetTester tester, double scale) async {
   // 负向对照：那张卡**真的进了树**才算数（不在的话下面量的是设置列表）
   expect(find.byKey(appGrantsCardKey), findsOneWidget, reason: '★ 注册制那张卡没进这棵树');
   expect(find.text(grantWantWords('db')), findsOneWidget, reason: '★ "它想要什么"没画出来');
+}
+
+/// ★ 2026-10-01（契约 `docs/dev/147-APP-SQLITE.md` §五 那笔"清空那颗按钮没做"的欠账 ·
+/// 服务端那条口 `POST /api/app-db-clear`）：
+/// **像用户那样**点那颗「清空它存下来的东西」⇒ 出**二次确认**（不可逆那一步）。
+///
+/// ⚠️ 同删除确认 / 改名那一层同一条理由：**新加的界面必须也过这两道硬闸**
+///    （五档不溢出 ＋ 命中区 ≥44），不然它们会随时间失效。
+/// ⚠️ 大字号下那颗按钮在卡的下面（折叠线以下）⇒ **像用户那样先把它滚出来**再点
+///    （`ensureVisible`；`docs/dev/119` §八 那条"折叠线很脆"的教训 —— 不许硬点屏幕外的坐标）。
+/// ⚠️ 这一下**不会**发出清空请求（确认层只是提醒）—— "点【清掉】才真发那一条"的判据在
+///    `test/widget/settings_grants_test.dart` ⑩（`MockClient` 记那一条 POST）。
+Future<void> _openGrantsClearConfirm(WidgetTester tester, double scale) async {
+  await _openConfigWithGrants(tester, scale);
+  final f = find.byKey(appDbClearKey('notes'));
+  // 负向对照：那颗按钮真的在树上（它只在声明了存东西的 app 上才有）
+  expect(f, findsOneWidget, reason: '★ 那颗"清空"没进这棵树');
+  await tester.ensureVisible(f);
+  await tester.pumpAndSettle();
+  await tester.tap(f);
+  await tester.pumpAndSettle();
+  // 负向对照：**那一层真的出来了**才算数（没出来的话这道闸扫的是设置那一列）
+  expect(find.text(settingsClearDbTitle), findsOneWidget, reason: '★ 二次确认没进这棵树');
+  expect(find.text(settingsClearDbWhat), findsOneWidget, reason: '★ 那句"拿不回来"没画出来');
+  expect(find.byKey(appDbClearYesKey), findsOneWidget, reason: '★ 那个"清掉"没画出来');
 }
 
 /// **像用户那样**打开「配置」：主界面顶栏那个齿轮。
@@ -1406,6 +1433,13 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '注册制那张卡在 ${s}x 溢出了');
       });
 
+      testWidgets('配置页·清空那层的二次确认（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-10-01（契约 `docs/dev/147-APP-SQLITE.md` §五）：**新加的那一层**
+        //    （一句"拿不回来" ＋ 两个按钮）必须也过五档不溢出 —— 同删除确认那条理由。
+        await _openGrantsClearConfirm(tester, s);
+        expect(_drain(tester), isEmpty, reason: '清空确认层在 ${s}x 溢出了');
+      });
+
       testWidgets('配置页·图片那一屏（含「试一张」）@ ${s}x', (tester) async {
         // ⚠️ 2026-09-24（P1-27）：**新加的那一块**（P1-27 的「试一张」＋真图）也要过五档。
         //    真入口那一趟拿到的 `creds` 全是"没有" ⇒ 那一块**不画**（负向对照见 widget 判据），
@@ -1683,6 +1717,18 @@ void main() {
             reason: '注册制那张卡 @${s}x：开关的命中区是 $size，小于 $minTouch×$minTouch',
           );
         }
+        // ★ 2026-10-01：那颗「清空它存下来的东西」**也得真的在树上** ——
+        //    不摆出来的话 `sweep` 扫的是别的按钮，而它照样绿（"闸变弱了"）。
+        //    ⚠️ 它是 `TextButton`（`ButtonStyleButton` 那一类）⇒ `sweep` 已经量了它的命中区。
+        expect(find.byKey(appDbClearKey('notes')), findsOneWidget,
+            reason: '★ 那颗"清空"没进这棵树 ⇒ 这道闸漏了它');
+      });
+
+      testWidgets('配置页·清空那层的二次确认（从真入口进）@ ${s}x', (tester) async {
+        // ⚠️ 2026-10-01（契约 `docs/dev/147-APP-SQLITE.md` §五）：【取消】/【清掉】
+        //    两个按钮都要进这份扫描 —— 破坏性动作那一下的命中区更不许小。
+        await _openGrantsClearConfirm(tester, s);
+        await sweep(tester, '清空确认层 @${s}x');
       });
 
       testWidgets('配置页·语音那一屏那颗「试一下」（直接泵）@ ${s}x', (tester) async {

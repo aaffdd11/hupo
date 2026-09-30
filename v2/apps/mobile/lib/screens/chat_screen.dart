@@ -1134,6 +1134,9 @@ class _ChatScreenState extends State<ChatScreen> {
           //   "答应它 / 现在不给"那一下由这一屏去说（见 `_grantMyApp`）。
           apps: _myApps,
           onGrant: _grantMyApp,
+          // ★ 2026-10-01：**清空它存下来的东西**（`POST /api/app-db-clear`）——
+          //   同"答应它"那条：由这一屏去说（见 `_clearMyApp`）。
+          onClear: _clearMyApp,
         ),
         title: configTitle,
       );
@@ -1581,6 +1584,29 @@ class _ChatScreenState extends State<ChatScreen> {
         // 没成 ⇒ 清单**一个字都不动**（卡片那边也只说一句、不拨开关）。
         break;
     }
+    return out;
+  }
+
+  /// ★ **清空它存下来的东西**（2026-10-01 · 契约 `docs/dev/147-APP-SQLITE.md` §五）。
+  ///
+  /// 设置页那张卡把"他确认过的那一下"交到这儿 ⇒ 去说一声（`POST /api/app-db-clear`）。
+  ///   · **服务端明说成了** ⇒ 卡片说一句"清掉了"（这一屏手上那份清单**一个字都不用改** ——
+  ///     被清掉的是那个小程序自己存的东西，不是"它要什么 / 你给了没有"）；
+  ///   · 令牌不行 ⇒ 走既有那条"该回登录页"的路（**不在这儿**说成"没清掉"）；
+  ///   · 其余（网 / 非 200 / `ok` 不是 true）⇒ **一个字节都不许当成功**，
+  ///     把服务端那句人话**原样交回**给卡片去说。
+  ///
+  /// ⚠️ 返回的是**那个结果本身**（卡片拿它决定说什么）—— 这一层不替它编话。
+  /// ⚠️ 确认那一步在卡片那边（`_confirmClear`）：走到这儿 = 他已经点过"清掉"。
+  Future<ClearOutcome> _clearMyApp(String id) async {
+    final token = widget.controller.token;
+    if (token == null) {
+      _unauthorized();
+      return const ClearFailed('');
+    }
+    final out = await widget.controller.api.appDbClear(token: token, id: id);
+    if (!mounted) return out;
+    if (out is ClearUnauthorized) _unauthorized();
     return out;
   }
 

@@ -76,6 +76,7 @@ class SettingsScreen extends StatelessWidget {
     this.wallpaperLive,
     this.apps = const [],
     this.onGrant,
+    this.onClear,
   });
 
   /// 现在有没有一串能用的钥匙（服务端说的）。
@@ -185,6 +186,10 @@ class SettingsScreen extends StatelessWidget {
   final Future<GrantOutcome> Function(String id, String permission, bool allow)?
   onGrant;
 
+  /// ★ **清空它存下来的东西**那一下（`POST /api/app-db-clear` · 2026-10-01）。
+  /// ⚠️ `null` = 这条路没接上 ⇒ 那颗按钮**不给**（同"不给假按钮"那条纪律）。
+  final Future<ClearOutcome> Function(String id)? onClear;
+
   @override
   Widget build(BuildContext context) {
     // ⚠️ **没有 `Scaffold` / `AppBar`**：顶上那一条由**小程序容器**给
@@ -263,7 +268,7 @@ class SettingsScreen extends StatelessWidget {
             //    ⚠️ 位置在"这块窗口"之后、"这个助手"那一组之前 —— 它是**小程序那一类**
             //       的配置，不是"关于/退出登录"那一类。
             //    ⚠️ 一个声明了东西的小程序都没有时它自己画零个像素（卡片内部判）。
-            AppGrantsCard(apps: apps, onGrant: onGrant),
+            AppGrantsCard(apps: apps, onGrant: onGrant, onClear: onClear),
             const SizedBox(height: d.gapL),
             // ⑤ 关于 / 退出登录 / 注销账号（各是一条 —— 同一次定的形状）
             _row(

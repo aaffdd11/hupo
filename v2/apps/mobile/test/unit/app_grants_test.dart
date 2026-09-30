@@ -8,7 +8,9 @@
 //   ③ 🔴 **只有服务端明说 `{ok:true}` 才算成了** —— 其余一律"没成"，
 //      而且要把服务端那句**人话**带回来（没成不许静默）；
 //   ④ 🔴 **关掉只是"现在不给"**：文案里一个"删 / 清空"的字都不许有；
-//   ⑤ 名字（`db` / `ask`）是**协议名**，屏幕上那几个字住在 `space_words.dart`。
+//   ⑤ 名字（`db` / `ask` / `net`）是**协议名**，屏幕上那几个字住在 `space_words.dart`；
+//   ⑥ ★ **清空它存下来的东西**（`POST /api/app-db-clear`）：回执映射同一条纪律
+//      （只有明说 `{ok:true}` 才算成了），而且**跟开关无关**（`canClearStored` 只看声明）。
 
 import 'dart:convert';
 
@@ -85,6 +87,33 @@ void main() {
       // ⚠️ 关掉**不移除别的**，也不产生第二份
       expect(nextGranted(const ['db'], 'db', true), ['db']);
     });
+
+    test('★ 认得的四样与**顺序**：存东西 → 问一句 → 上网 → 跟助手说话', () {
+      // ⚠️ 顺序就是那张卡上摆出来的顺序（`148` §二/§三）。
+      expect(knownWants, ['db', 'ask', 'net', 'agent']);
+      expect(knownWants, [wantStore, wantAsk, wantNet, wantAgent]);
+      // 负向对照：四样都得认得（少一样 ⇒ 那一样就没有开关，而它本来是服务端认的）
+      for (final p in ['db', 'ask', 'net', 'agent']) {
+        expect(knownWant(p), true, reason: '★ $p 是服务端白名单里的，界面上必须认得');
+      }
+      expect(knownWant('something-new'), false);
+    });
+
+    test('★ 那一颗"清空"的按钮只看**声明**（关掉存储照样能清）', () {
+      // 声明了存东西 ⇒ 有那颗按钮（不管 `granted` 里有没有它）
+      final declared = MiniApp.parse(_raw(permissions: const ['db'], granted: const []))!;
+      expect(canClearStored(declared), true, reason: '★ 声明了 = 它自己有一格库');
+      final off = MiniApp.parse(_raw(permissions: const ['db'], granted: const []))!;
+      expect(off.permissions.contains('db'), true);
+      expect(grantSwitchOn(off, 'db'), false, reason: '存储那一颗是关着的');
+      expect(canClearStored(off), true,
+          reason: '★ 跟开关无关：关掉存储也能清（"我的东西我拿走"）');
+      // 负向对照：**没声明存东西**的 app ⇒ 不许摆那颗按钮（摆了就是假按钮）
+      final noStore = MiniApp.parse(_raw(permissions: const ['ask', 'net'], granted: const []))!;
+      expect(canClearStored(noStore), false, reason: '★ 它没声明存东西 ⇒ 不许有"清空"');
+      final nothing = MiniApp.parse(_raw(permissions: const [], granted: const []))!;
+      expect(canClearStored(nothing), false);
+    });
   });
 
   group('回执 → 结果（纯函数，逐码对表）', () {
@@ -131,6 +160,54 @@ void main() {
       expect(grantFailedLine(const GrantFailed('这个东西现在还不给。')), '这个东西现在还不给。');
       expect(grantFailedLine(const GrantFailed('   ')), settingsGrantsFailed);
       expect(grantFailedLine(const GrantFailed('')), settingsGrantsFailed);
+    });
+  });
+
+  group('★ 清空它存下来的东西：回执 → 结果（纯函数，逐码对表）', () {
+    test('200 且明说 ok ⇒ 成了（`removed` 带回来，但界面不显示它）', () {
+      final o = clearOutcomeOf(200, jsonEncode({'ok': true, 'removed': 3}));
+      expect(o, isA<ClearOk>());
+      expect((o as ClearOk).removed, 3);
+      // ⚠️ **幂等**：没存过也回 200（`removed:0`）⇒ 一样算成了 —— 他连点两次不该看到报错
+      final none = clearOutcomeOf(200, jsonEncode({'ok': true, 'removed': 0}));
+      expect(none, isA<ClearOk>());
+      // 回执里没带 `removed` ⇒ `null`（界面**不必**显示它，所以这不影响任何判断）
+      expect((clearOutcomeOf(200, jsonEncode({'ok': true})) as ClearOk).removed, isNull);
+    });
+
+    test('🔴 401 ⇒ 令牌不行（那是另一件事，不是"没清掉"）', () {
+      expect(clearOutcomeOf(401, jsonEncode({'error': 'unauthorized'})),
+          isA<ClearUnauthorized>());
+    });
+
+    test('🔴 其余（含 400 / 503 与"200 但 ok 不是 true"）⇒ 没成，并带回服务端那句人话', () {
+      final bad = clearOutcomeOf(
+        400,
+        jsonEncode({'ok': false, 'error': 'not-done', 'text': '没做成，等会儿再试。'}),
+      );
+      expect(bad, isA<ClearFailed>());
+      expect((bad as ClearFailed).text, '没做成，等会儿再试。', reason: '★ 原话要能上屏');
+
+      // 🔴 **200 但 `ok` 不是 true ⇒ 一个字节都不当成功**（这一条最容易写成"200 就成"）
+      expect(clearOutcomeOf(200, jsonEncode({'error': 'not-done'})), isA<ClearFailed>());
+      // 盒子不通那一条（503）：服务器给的人话照带
+      expect(
+        (clearOutcomeOf(503, jsonEncode({'ok': false, 'text': '你那台还在准备，稍等一下再试。'}))
+                as ClearFailed)
+            .text,
+        '你那台还在准备，稍等一下再试。',
+      );
+      // 读不出来的回执 / 网络那一条的兜底 ⇒ 空串（界面用自己那句）
+      expect((clearOutcomeOf(502, '<html>') as ClearFailed).text, '');
+      expect((clearOutcomeOf(500, '') as ClearFailed).text, '');
+    });
+
+    test('★ 没清成时该说的那句：服务端有人话就照它说，没有才用兜底', () {
+      expect(clearFailedLine(const ClearFailed('没做成，等会儿再试。')), '没做成，等会儿再试。');
+      expect(clearFailedLine(const ClearFailed('   ')), settingsClearDbFailed);
+      expect(clearFailedLine(const ClearFailed('')), settingsClearDbFailed);
+      // 🔴 兜底那句**不是**"清掉了"（不许把没成说成成了）
+      expect(clearFailedLine(const ClearFailed('')), isNot(settingsClearDbDone));
     });
   });
 
@@ -189,6 +266,61 @@ void main() {
     });
   });
 
+  group('★ 那条口：`POST /api/app-db-clear`（头与正文照 `appRename` 走）', () {
+    test('★ 真的发的是那一条：方法 / 地址 / Bearer 头 / 正文只有 id', () async {
+      http.Request? seen;
+      final api = Api(
+        base: 'http://127.0.0.1:1',
+        client: MockClient((r) async {
+          seen = r;
+          return http.Response(
+            jsonEncode({'ok': true, 'removed': 2}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      );
+      final out = await api.appDbClear(token: 'tok-1', id: 'notes');
+      expect(out, isA<ClearOk>());
+      expect((out as ClearOk).removed, 2);
+      expect(seen!.method, 'POST');
+      expect(seen!.url.path, '/api/app-db-clear');
+      expect(seen!.headers['authorization'], 'Bearer tok-1',
+          reason: '★ 签字那一下走**登录态**（照 appRename 那条）');
+      expect(jsonDecode(seen!.body), {'id': 'notes'},
+          reason: '★ 正文只有那个 app 的 id（协议就这一样）');
+    });
+
+    test('服务端回错 ⇒ `ClearFailed` 并带回那句人话（界面照它说）', () async {
+      final api = Api(
+        base: 'http://127.0.0.1:1',
+        client: MockClient((_) async => http.Response(
+              jsonEncode({'ok': false, 'error': 'tenant-not-ready', 'text': '你那台还在准备，稍等一下再试。'}),
+              503,
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            )),
+      );
+      final out = await api.appDbClear(token: 't', id: 'notes');
+      expect(out, isA<ClearFailed>());
+      expect((out as ClearFailed).text, '你那台还在准备，稍等一下再试。');
+      expect(clearFailedLine(out), '你那台还在准备，稍等一下再试。');
+    });
+
+    test('网不通 ⇒ 什么都没发生（`ClearFailed`，界面不许当成功）', () async {
+      var hit = 0;
+      final api = Api(
+        base: 'http://127.0.0.1:1',
+        client: MockClient((_) async {
+          hit += 1;
+          throw const SocketExceptionStub();
+        }),
+      );
+      final out = await api.appDbClear(token: 't', id: 'notes');
+      expect(out, isA<ClearFailed>());
+      expect(hit, 1, reason: '假服务端只被打了一次（判据不许真打网络）');
+    });
+  });
+
   group('文案（词表硬闸扫的就是这几句）', () {
     test('★ 每一句都干净（没有 权限 / 数据库 / db / SQLite 那类内部词）', () {
       final copies = [
@@ -197,7 +329,16 @@ void main() {
         settingsGrantsFailed,
         grantWantWords('db'),
         grantWantWords('ask'),
+        grantWantWords('net'),
         grantWantWords('something-new'),
+        // ★ 2026-10-01：那颗「清空」的按钮 ＋ 确认层 ＋ 成/没成那两句
+        settingsClearDbAction,
+        settingsClearDbTitle,
+        settingsClearDbWhat,
+        settingsClearDbNo,
+        settingsClearDbYes,
+        settingsClearDbDone,
+        settingsClearDbFailed,
       ];
       for (final c in copies) {
         final hits = scanForbidden(c);
@@ -214,6 +355,25 @@ void main() {
       expect(grantWantWords('something-new').contains('something-new'), false,
           reason: '★ 兜底那句必须是**人话**，不是把协议名复述一遍');
       expect(settingsGrantsHint.toLowerCase().contains('sqlite'), false);
+      // ★ 清空那几句一样：`db` / `sqlite` / `数据库` 一个都不许上屏
+      for (final c in [settingsClearDbAction, settingsClearDbTitle, settingsClearDbWhat]) {
+        expect(c.toLowerCase().contains('db'), false, reason: '「$c」里有协议名');
+        expect(c.toLowerCase().contains('sqlite'), false, reason: '「$c」里有技术词');
+        expect(c.contains('数据库'), false, reason: '「$c」里有技术词');
+      }
+    });
+
+    test('🔴 清空那一层**必须说清拿不回来**（不然二次确认就是走过场）', () {
+      // 那一步没有回收站（`147` §五）⇒ 那句话里必须有"没掉 / 拿不回来"这样的实话
+      expect(settingsClearDbWhat.contains('没掉'), true,
+          reason: '★ 要说清"东西会没掉"');
+      expect(settingsClearDbWhat.contains('拿不回来'), true,
+          reason: '★ 要说清"拿不回来"（不可逆）');
+      // 两个按钮各自有字（不许画一个没字的确认框）
+      expect(settingsClearDbNo.trim().isNotEmpty, true);
+      expect(settingsClearDbYes.trim().isNotEmpty, true);
+      // 成了那句与没成那句**不许是同一句**（混了就是把没成说成成了）
+      expect(settingsClearDbDone, isNot(settingsClearDbFailed));
     });
 
     test('🔴 关掉只是"现在不给"：文案里不许有"删 / 清空"那种说法', () {

@@ -47,6 +47,14 @@ import { ADMIT_RATIO, readAdmission } from './admission.js';
 import { CATCHUP_RENDER, markCatchUp, planBackfill, planResume } from './resume.js';
 import { buildExport } from './export.js';
 import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
+
+/**
+ * **等那一间的助手答多久**（`148` §三）。
+ *
+ * ⚠️ 等过头**不编答案**：回一句"还在想，你去那一间看"（页面照它说）。
+ *    一轮本来就可能跑上百秒（卡住收口那道闸就在那个量级）。
+ */
+const AGENT_WAIT_MS = 150_000;
 import { liveEntryOf } from './app-live.js';
 // ★ **建一个空的小程序**（桌面上那颗加号）：工作区 ＋ 登记，**不打成包**（`#177`）。
 import { registerBlankApp } from './workspace.js';
@@ -2646,6 +2654,31 @@ const TENANT_ROUTES = [
     return { ok: true, left: q.left };
   }
 
+  /**
+   * **`148` §三：跟助手说话的那道闸**（声明 → 他允许 → 配额）。
+   *
+   * ⚠️ 与 `checkAppAsk` **同形但不是同一个函数**：判的是另一名字（`agent`）、
+   *    另一本配额（`agentQuota`）。**不许**把两样混成一个开关（那是两种不同的能力：
+   *    `ask` = 直连模型问一句；`agent` = 请动那一间的助手）。
+   */
+  function checkAppAgent(apps, appIdRaw) {
+    const appId = typeof appIdRaw === 'string' ? appIdRaw : '';
+    if (!apps) return { ok: false, status: 404, error: '这台部署还没开小程序' };
+    const mine = apps.list().find((a) => a.id === appId);
+    if (!mine) return { ok: false, status: 404, error: '没有这个小程序' };
+    if (!(mine.permissions ?? []).includes('agent')) {
+      return { ok: false, status: 403, error: '这个小程序没说要跟你的助手说话' };
+    }
+    if (!apps.grants(appId).includes('agent')) {
+      return { ok: false, status: 403, error: '你还没允许它跟你的助手说话' };
+    }
+    const q = apps.agentQuota(appId);
+    if (!q.ok) return { ok: false, status: 429, error: q.reason };
+    // ⚠️ **先记再花**：投递那一步可能失败，但"它说过一次"这笔账已经记下了
+    apps.bumpAgent(appId);
+    return { ok: true, left: q.left };
+  }
+
   /** 拒绝时回给客户端的那一小坨（人话在 `error` 里；`text` 有就一起带上）。 */
   function gateBody(gate) {
     const out = { error: gate.error };
@@ -3217,10 +3250,139 @@ const TENANT_ROUTES = [
     return { ok: true, text: r.text, left: gate.left === null ? null : gate.left - 1, max: MAX_ANSWER_CHARS };
   }
 
+  /**
+   * ★ **`148` §三：替小程序问"那一间的助手"**（第一次调用 = 把问题送进去）。
+   *
+   * ── 它和 `askForApp` 的差别（别读成一条）────────────────────
+   *   · `askForApp` = **直连模型**问一句：没工具、没记忆、不改东西；
+   *   · 这一个  = 把问题送进**那个 app 那一间**，由**那一间的助手**来答（**它有手**）。
+   * ⇒ 所以多两道：**配额更紧**（`apps.js` 里那两个数）＋ 🔴 **每次都看得见**
+   *   （问题以"来自小程序"的样子**落进那一间的对话**，助手怎么答也在那儿）。
+   *
+   * ⚠️ **租户今天不接**（要过隧道进他盒子，那是另一片）：**如实 503**，不许假装。
+   *
+   * @returns {Promise<{ok:true, seq:number, at:number} | {ok:false, status:number, error:string, text?:string}>}
+   */
+  async function askAgentFor({ sub, appId, prompt }) {
+    if (tenantOf(sub)) {
+      return { ok: false, status: 503, error: 'tenant-not-ready', text: '你那台还没跟上这一样，等一会儿再试。' };
+    }
+    let apps = null;
+    try {
+      apps = appsFor(sub);
+    } catch (err) {
+      log(`跟助手说话：库取不到（${sub}）${err?.message ?? err}`);
+      apps = null;
+    }
+    const gate = checkAppAgent(apps, appId);
+    if (!gate.ok) return { ok: false, status: gate.status, error: gate.error, text: gate.error };
+    const W = roomFor(sub, appId);
+    if (!W || !W.say || !W.dispatcher) {
+      // ⚠️ 那一间还没建好 ⇒ **如实说**（不许悄悄落到主线 —— 那会让"小程序问的话"混进主对话）
+      return { ok: false, status: 409, error: 'no-room', text: '那一间还没建好，先在对话里把它做出来。' };
+    }
+    const title = (() => {
+      try {
+        return apps.list().find((a) => a.id === appId)?.title ?? appId;
+      } catch {
+        return appId;
+      }
+    })();
+    // 🔴 **看得见**：这一句以"来自小程序"的样子落进那一间（他翻得到）
+    const text = `【来自小程序「${title}」】${prompt}`;
+    const messageId = `app_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    let seq = null;
+    try {
+      const r = W.say.say({ messageId, text });
+      seq = r?.event?.seq ?? null;
+    } catch (err) {
+      log(`跟助手说话：落盘没成（${appId}）${err?.message ?? err}`);
+      return { ok: false, status: 503, error: 'say-failed', text: '这一句没送出去，等会儿再试。' };
+    }
+    try {
+      W.dispatcher.deliver(text, { messageId, scope: W.scopeId }).catch((err) => {
+        log(`跟助手说话：投递失败（${appId}）${err?.message ?? err}`);
+      });
+    } catch (err) {
+      log(`跟助手说话：投递抛了（${appId}）${err?.message ?? err}`);
+    }
+    return { ok: true, seq: Number.isInteger(seq) ? seq : 0, at: now() };
+  }
+
+  /**
+   * ★ **`148` §三：那一间答了没有**（第二次起 = 取回执）。
+   *
+   * 判法（都在**那条时间线**上，不另建一套状态）：
+   *   · 问题那一号之后出现 `message/end` ⇒ **答完了**，把它的 `message/text` 拼起来给他；
+   *   · 还没出现 ⇒ `running`；
+   *   · 等过头了（`AGENT_WAIT_MS`，从问那一刻算）⇒ `timeout` —— 如实说"还在想"，
+   *     **不编一个答案**（他去那一间看得到进展）。
+   *
+   * ⚠️ 回执**只给正文**，不带工具流水（页面不需要，也不该拿到内部的东西）。
+   */
+  function pollAgentFor({ sub, appId, seq, at }) {
+    if (tenantOf(sub)) {
+      return { ok: false, status: 503, error: 'tenant-not-ready', text: '你那台还没跟上这一样，等一会儿再试。' };
+    }
+    let apps = null;
+    try {
+      apps = appsFor(sub);
+    } catch {
+      apps = null;
+    }
+    const gate = checkAppAgent(apps, appId);
+    // ⚠️ 回执**不再记一次账**（记账只在"问"那一下）——这里只判"还能不能看"
+    if (!gate.ok && gate.status !== 429) {
+      return { ok: false, status: gate.status, error: gate.error, text: gate.error };
+    }
+    const W = roomFor(sub, appId);
+    if (!W || !W.timeline) {
+      return { ok: false, status: 409, error: 'no-room', text: '那一间还没建好，先在对话里把它做出来。' };
+    }
+    let events = [];
+    try {
+      events = W.timeline.readAll();
+    } catch (err) {
+      log(`跟助手说话：时间线读不出来（${appId}）${err?.message ?? err}`);
+      return { ok: false, status: 503, error: 'read-failed', text: '这会儿读不到，等会儿再试。' };
+    }
+    const after = events.filter((e) => Number.isInteger(e?.seq) && e.seq > seq);
+    const answer = (() => {
+      let id = null;
+      let text = '';
+      for (const e of after) {
+        if (e.type === 'message/start' && id === null) {
+          id = e.messageId;
+          continue;
+        }
+        if (id !== null && e.messageId === id) {
+          if (e.type === 'message/text') text += typeof e.text === 'string' ? e.text : '';
+          if (e.type === 'message/end') return { id, text, reason: e.reason ?? 'completed' };
+        }
+        // ⚠️ 只有**第一条**助手消息算这一问的回答（后面那些可能是别的事）
+        if (id !== null && e.type === 'message/start' && e.messageId !== id) break;
+      }
+      return null;
+    })();
+    if (answer) {
+      if (answer.reason !== 'completed' && answer.text.trim() === '') {
+        return { ok: true, state: 'failed', text: null };
+      }
+      return { ok: true, state: 'done', text: answer.text };
+    }
+    if (Number.isFinite(at) && now() - at > AGENT_WAIT_MS) {
+      return { ok: true, state: 'timeout', text: null };
+    }
+    return { ok: true, state: 'running', text: null };
+  }
+
   return {
     server,
     webRoot,
     listenTrusted,
+    /** ★ **`148` §三：app 原点那条 `/agent` 口用它**（两个动作：问 / 取回执）。 */
+    agentAsk: askAgentFor,
+    agentPoll: pollAgentFor,
     /** ★ **app 原点那条 `/ask` 口用它**（`serve.js` 把它递给制品服务）—— 见 `askForApp`。 */
     askApp: askForApp,
     /** ⚠️ 只在 127.0.0.1 上听。对外由 VPS 那条隧道走（stcp 不占公网端口）。 */

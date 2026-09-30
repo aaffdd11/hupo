@@ -112,6 +112,17 @@ export async function netHostsFor(apps, id) {
 export const ASK_PATH = '/ask';
 
 /**
+ * ★ **`148` §三："跟它的助手说一句"那条口**（app 原点上的 `POST /agent`）。
+ *
+ * 同一条路两个动作（**按正文分岔**）：
+ *   · `{…, prompt}`          ⇒ **问**（送进那一间，回一张 `jobId` 票）；
+ *   · `{…, jobId}`           ⇒ **取回执**（`running` / `done` / `failed` / `timeout`）。
+ * ⚠️ `jobId` 就是那张会话票（绑人绑 app ＋ 里面记着"问的是哪一号、什么时候问的"）——
+ *    页面**伪造不出**别人的回执（改一个字符验不过）。
+ */
+export const AGENT_PATH = '/agent';
+
+/**
  * ★ **app 原点上那几条口（`/db` 与 `/ask`）共用的凭据判定**（别的都不认）：
  *   · 第一次：页面把它自己那条入口 URL 里的三样（`u`/`e`/`s`）＋ 它自己是谁（`id`/`v`）报上来
  *     ⇒ **照入口签名那四道验一遍**（绑人 ＋ 绑 app ＋ 绑版本 ＋ 没过期）；
@@ -296,6 +307,9 @@ export function createAppServer({
   // ★ **`148`：替小程序问一句**（"app 对它自己那个源发一次请求"那条路）。
   //   `null` ⇒ 这条口不接（如实 503），**绝不假装它答上来了**。
   askApp = null,
+  // ★ **`148` §三：跟它的助手说一句**（问 ＋ 取回执）。`null` ⇒ 同上（如实 503）。
+  agentAsk = null,
+  agentPoll = null,
   log = () => {},
   now = Date.now,
 }) {
@@ -508,6 +522,87 @@ export function createAppServer({
     });
   }
 
+  /**
+   * ★ **`148` §三："跟它的助手说一句"**（`POST /agent`）。
+   *
+   * 🔴 **它比 `/ask` 重**：`/ask` 是直连模型问一句；这一条是**请动那一间的助手**
+   *    （它有手：能读文件、能查网）⇒ 所以：**配额更紧** ＋ **每次都看得见**
+   *    （问题以"来自小程序"的样子落进那一间，他翻得到）。
+   * ⚠️ 闸与配额**不在这一份里**：全交给 `agentAsk`（它与 `/api/app-ask` 那条**同源**的判定）。
+   */
+  async function handleAgent(req, res) {
+    const cors = APP_CORS;
+    const send = makeAppSender(res);
+    const call = await readAppCall(req, res, cors, send);
+    if (call.ok !== true) return;
+    const { body, id, v, sub } = call;
+
+    // ── 取回执那一路（`jobId` 在时就只干这个）──────────────────
+    const jobId = typeof body.jobId === 'string' ? body.jobId : '';
+    if (jobId !== '') {
+      if (typeof agentPoll !== 'function') {
+        send(503, { ok: false, error: 'not-ready', text: '这一台还没跟上，等一会儿再试。' });
+        return;
+      }
+      // 🔴 回执那张票**绑的是同一个 app**（换一个 app 拿它问 ⇒ 验不过）
+      const t = verifyTicket({ key, ticket: jobId, id, now: now() });
+      if (!t) {
+        send(403, { ok: false, error: 'bad-job', text: '这一条不认。' });
+        return;
+      }
+      const m = /^agent-([0-9]+)-([0-9]+)$/.exec(String(t.version ?? ''));
+      if (!m) {
+        send(403, { ok: false, error: 'bad-job', text: '这一条不认。' });
+        return;
+      }
+      let out = null;
+      try {
+        out = agentPoll({ sub, appId: id, seq: Number(m[1]), at: Number(m[2]) });
+      } catch (e) {
+        log(`跟助手说话：取回执没成（${id}）${e?.message ?? e}`);
+        send(502, { ok: false, error: 'poll-failed', text: '这会儿取不到，等会儿再试。' });
+        return;
+      }
+      if (!out || out.ok !== true) {
+        send(Number(out?.status) || 502, { ok: false, error: out?.error ?? 'poll-failed', text: out?.text ?? '这会儿取不到，等会儿再试。' });
+        return;
+      }
+      send(200, { ok: true, state: out.state, text: out.text ?? null });
+      return;
+    }
+
+    // ── 问那一路 ───────────────────────────────────────────
+    if (typeof agentAsk !== 'function') {
+      send(503, { ok: false, error: 'not-ready', text: '这一台还没跟上，等一会儿再试。' });
+      return;
+    }
+    const prompt = typeof body.prompt === 'string' ? body.prompt : '';
+    if (prompt.trim() === '') {
+      send(400, { ok: false, error: 'bad-prompt', text: '这一条是空的。' });
+      return;
+    }
+    let out = null;
+    try {
+      out = await agentAsk({ sub, appId: id, prompt });
+    } catch (e) {
+      log(`跟助手说话：没送出去（${id}）${e?.message ?? e}`);
+      send(502, { ok: false, error: 'agent-failed', text: '这一句没送出去，等会儿再试。' });
+      return;
+    }
+    if (!out || out.ok !== true) {
+      send(Number(out?.status) || 502, {
+        ok: false,
+        error: out?.error ?? 'agent-failed',
+        // 闸那几句人话在 `error` 里（页面照 `text` 显示 ⇒ 必须兜到它）
+        text: out?.text ?? out?.error ?? '这一句没送出去，等会儿再试。',
+      });
+      return;
+    }
+    // 回执那张票：**绑人绑 app**，而且里面记着"问的是哪一号、什么时候问的"
+    const token = mintTicket({ key, sub, id, version: `agent-${out.seq}-${out.at}`, now: now() });
+    send(200, { ok: true, jobId: token, state: 'running' });
+  }
+
   /** 读一小段 JSON 正文（**超了就当读不懂**，不许把内存吃光）。 */
   function readJsonBody(req, limit) {
     return new Promise((resolve) => {
@@ -545,6 +640,22 @@ export function createAppServer({
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       // ★ **唯一的那个 POST**：小程序存它自己的那一笔（`147-APP-SQLITE.md`）。
       //   别的非 GET 一律照旧 405 —— 这一条口**只认这一条路**。
+      if ((parsed.pathname ?? '') === AGENT_PATH) {
+        handleAgent(req, res).catch((e) => {
+          log(`跟助手说话：这一条没答上来（${e?.message ?? e}）`);
+          try {
+            if (!res.headersSent) {
+              res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+              res.end('这一句没送出去。\n');
+            } else {
+              res.destroy();
+            }
+          } catch {
+            /* 已经断了 */
+          }
+        });
+        return;
+      }
       if ((parsed.pathname ?? '') === ASK_PATH) {
         handleAsk(req, res).catch((e) => {
           log(`问一句：这一条没答上来（${e?.message ?? e}）`);

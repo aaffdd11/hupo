@@ -6,17 +6,21 @@
 //   ① **它想要什么**（人话，`grantWantWords`）；
 //   ② **你给了没有**（一个开关，开＝`granted` 里有那一项）。
 //
-// ── 四条不许破 ────────────────────────────────────────────
+// ── 五条不许破 ────────────────────────────────────────────
 //   ① 🔴 **声明了东西的才列**（`permissions` 非空）；一个都没有 ⇒ **一个像素都不画**；
 //   ② 🔴 **老服务端没回 `granted` ⇒ 不给开关**（不知道的事不许画成一个假状态）；
 //   ③ 🔴 **成了才改屏幕上的状态** —— 点下去先等回执，服务端**明说** ok 才把开关拨过去。
 //      没成 ⇒ 开关**一动不动**，并如实说一句（服务端那句 `text`，没有就用兜底那句）。
 //      **不许**先拨过去再回滚，也**不许**静默；
-//   ④ ⚠️ **关掉只是"现在不给"**：这件事由文案说清（`settingsGrantsHint`），
-//      界面上**没有**"删掉 / 清空"那种按钮（`147` §五：清空那颗按钮没做）。
+//   ④ ⚠️ **关掉只是"现在不给"**：这件事由文案说清（`settingsGrantsHint`）。
+//   ⑤ ★ **"清空它存下来的东西"**（2026-10-01 做的 · `148` §五那笔欠账）：
+//      它**只在那个 app 声明了存东西（`db`）时**才摆出来（摆给没存过东西的 app = 假按钮）；
+//      🔴 **拿不回来** ⇒ 点一下**先过二次确认**，**只有确认之后**才发那一条请求；
+//      🔴 它**跟开关无关**（存储关掉了也能清 —— "我的东西我拿走"）；
+//      ⚠️ 等回执的时候那颗按钮按不动（免得连点两下）。
 //
-// ⚠️ 楼层闸：这一份在 `widgets/` ⇒ **只许看 `models/`**（结果类型 `GrantOutcome`
-//    与纯逻辑都住在 `models/app_grants.dart`，同 `key_outcome.dart` 那条先例）。
+// ⚠️ 楼层闸：这一份在 `widgets/` ⇒ **只许看 `models/`**（结果类型 `GrantOutcome` /
+//    `ClearOutcome` 与纯逻辑都住在 `models/app_grants.dart`，同 `key_outcome.dart` 那条先例）。
 
 import 'package:flutter/material.dart';
 
@@ -32,9 +36,19 @@ const ValueKey<String> appGrantsCardKey = ValueKey('settings:grants');
 Key grantSwitchKey(String appId, String permission) =>
     ValueKey('grant:$appId:$permission');
 
+/// ★ **"清空它存下来的东西"**那颗按钮的 key（每个 app 一颗）。
+Key appDbClearKey(String appId) => ValueKey('clear-db:$appId');
+
+/// 清完（成 / 没成）在那一块下面那句话的 key。
+Key appDbClearNoteKey(String appId) => ValueKey('clear-db-note:$appId');
+
+/// 确认层两个按钮的 key（判据要**像用户那样点**它们）。
+const ValueKey<String> appDbClearNoKey = ValueKey('clear-db:confirm-no');
+const ValueKey<String> appDbClearYesKey = ValueKey('clear-db:confirm-yes');
+
 /// 设置页里那张「小程序要用的东西」。
 class AppGrantsCard extends StatefulWidget {
-  const AppGrantsCard({super.key, required this.apps, this.onGrant});
+  const AppGrantsCard({super.key, required this.apps, this.onGrant, this.onClear});
 
   /// 「我的小程序」那一份清单（`/api/apps` 回来的，含 `permissions` 与 `granted`）。
   final List<MiniApp> apps;
@@ -44,6 +58,11 @@ class AppGrantsCard extends StatefulWidget {
   /// ⚠️ `null` = 这一条路没接上 ⇒ **不给开关**（不给假按钮那条纪律）。
   final Future<GrantOutcome> Function(String id, String permission, bool allow)?
   onGrant;
+
+  /// ★ **清空它存下来的东西**（`POST /api/app-db-clear`）。
+  ///
+  /// ⚠️ `null` = 这一条路没接上 ⇒ **不给那颗按钮**（同"不给假按钮"那条纪律）。
+  final Future<ClearOutcome> Function(String id)? onClear;
 
   @override
   State<AppGrantsCard> createState() => _AppGrantsCardState();
@@ -58,6 +77,12 @@ class _AppGrantsCardState extends State<AppGrantsCard> {
 
   /// 正在等回执的那几个（等的时候那颗开关按不动 —— 免得连点两下）。
   final Set<String> _busy = {};
+
+  /// 正在等**清空**回执的那几个 app（等的时候那颗按钮按不动）。
+  final Set<String> _clearing = {};
+
+  /// 清完之后那块下面那句人话（`appId` → 成/没成那句）；**空 = 没点过**。
+  final Map<String, String> _clearNote = {};
 
   /// 上一次没成时那句人话（空串 = 没有话要说）。
   String _error = '';
@@ -100,6 +125,53 @@ class _AppGrantsCardState extends State<AppGrantsCard> {
           _error = grantFailedLine(out);
         });
     }
+  }
+
+  /// ★ **清空它存下来的东西**：**先二次确认**，只有确认之后才发那一条请求。
+  ///
+  /// 🔴 那一步**拿不回来**：反过来的话（先发再问）用户是"点了才知道会删"，
+  ///    而这一下连回收站都没有（`147` §五）。
+  Future<void> _confirmClear(MiniApp app) async {
+    final cb = widget.onClear;
+    if (cb == null) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        // ⚠️ `scrollable`：字放到 3.1 倍时那句话＋两个按钮最容易顶出屏幕
+        //    （同删除确认那一层的摆法）。
+        scrollable: true,
+        title: const Text(settingsClearDbTitle),
+        content: const Text(settingsClearDbWhat),
+        actions: [
+          TextButton(
+            key: appDbClearNoKey,
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text(settingsClearDbNo),
+          ),
+          FilledButton(
+            key: appDbClearYesKey,
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text(settingsClearDbYes),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+    setState(() {
+      _clearing.add(app.id);
+      _clearNote.remove(app.id);
+    });
+    final out = await cb(app.id);
+    if (!mounted) return;
+    // 🔴 只有服务端**明说成了**才说"清掉了"；其余一律照它那句人话（没有就用兜底）。
+    setState(() {
+      _clearing.remove(app.id);
+      _clearNote[app.id] = switch (out) {
+        ClearOk() => settingsClearDbDone,
+        ClearUnauthorized() => clearFailedLine(const ClearFailed('')),
+        ClearFailed() => clearFailedLine(out),
+      };
+    });
   }
 
   @override
@@ -145,7 +217,8 @@ class _AppGrantsCardState extends State<AppGrantsCard> {
     );
   }
 
-  /// 一个 app 那一小块：**名字 ＋ 它想要的那几样（各带一个开关）**。
+  /// 一个 app 那一小块：**名字 ＋ 它想要的那几样（各带一个开关）**，
+  /// 声明了存东西的话再带**那颗"清空它存下来的东西"**。
   Widget _appBlock(MiniApp app) {
     final t = Theme.of(context);
     return Padding(
@@ -161,6 +234,29 @@ class _AppGrantsCardState extends State<AppGrantsCard> {
             ),
           ),
           for (final p in app.permissions) _wantRow(app, p),
+          // 🔴 只在**声明了存东西**、而且这条路接上了的时候才摆（不给假按钮）。
+          if (canClearStored(app) && widget.onClear != null) ...[
+            const SizedBox(height: d.gapXs),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                key: appDbClearKey(app.id),
+                // 等回执的时候按不动（免得连点两下）。
+                onPressed: _clearing.contains(app.id) ? null : () => _confirmClear(app),
+                style: TextButton.styleFrom(minimumSize: const Size(48, 44)),
+                child: const Text(settingsClearDbAction),
+              ),
+            ),
+          ],
+          // 清完之后那句话（成 / 没成各一句；没点过时一个字都不画）。
+          if (_clearNote[app.id] != null) ...[
+            const SizedBox(height: d.gapXs),
+            Text(
+              _clearNote[app.id]!,
+              key: appDbClearNoteKey(app.id),
+              style: t.textTheme.bodySmall?.copyWith(color: d.muted),
+            ),
+          ],
         ],
       ),
     );

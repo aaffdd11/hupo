@@ -422,6 +422,34 @@ class Api {
     }
   }
 
+  /// ★ **清空它存下来的东西**（契约 `docs/dev/147-APP-SQLITE.md` §五那笔欠账；
+  /// 服务端那条口 = `POST /api/app-db-clear`，正文 `{"id":"<appId>"}`）。
+  ///
+  /// 🔴 **签字的是他**：头照 [appRename] / [appGrant] 那条走
+  ///    （`authorization: Bearer <token>`）—— 我的东西我拿走。
+  /// 🔴 **拿不回来** ⇒ 调用方（那张卡）**必须先过二次确认**才走到这儿。
+  /// ⚠️ 回执**只有服务端明说 `{ok:true}` 才算成了**：非 200 / `ok` 不是 true ⇒
+  ///    带回 `{ok:false,text}` 里那句**人话**（界面照它说，**不许**先说成"清掉了"）。
+  /// ⚠️ **幂等**：没存过也回 200 ⇒ 他连点两次不该看到报错。
+  Future<ClearOutcome> appDbClear({
+    required String token,
+    required String id,
+  }) async {
+    try {
+      final r = await _c
+          .post(
+            _u('/api/app-db-clear'),
+            headers: {'content-type': 'application/json', 'authorization': 'Bearer $token'},
+            body: jsonEncode({'id': id}),
+          )
+          .timeout(const Duration(seconds: 20));
+      return clearOutcomeOf(r.statusCode, r.body);
+    } catch (_) {
+      // 网不通 / 超时 / 请求根本没发出去 ⇒ **什么都没发生**（界面不许当成功）
+      return const ClearFailed('');
+    }
+  }
+
   /// **复制出一个新的一格**（契约 `docs/dev/104-APP-MENU.md` §三）。
   ///
   /// ⚠️ 回执规纪同 [appRename]。⚠️ 新那一格的名字与 id 由**服务端**定（客户端不猜），

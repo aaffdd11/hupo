@@ -148,13 +148,17 @@ const TOOLS = [
          */
         permissions: {
           type: 'array',
-          items: { type: 'string', enum: ['db', 'ask', 'net'] },
+          items: { type: 'string', enum: ['db', 'ask', 'net', 'agent'] },
           description:
             '这个小程序要用到的东西（**声明的意思 = 它就能用**，不用他去点任何开关）。\n'
             + '· `db` —— **它要记住东西**（翻到第几题、他填过的表、一份清单）：它自己一格独立的库，'
             + '别的小程序碰不到。要存储就加上它。\n'
             + '· `ask` —— **它要用他的钥匙问一句**（出题、起名字、翻译这种要动脑子的一句话）：'
             + '每问一次花他一次钱，每天有上限。真要问话才加。\n'
+            + '· `agent` —— **它要跟"它的助手"说一句话**（问一件需要动脑子、甚至要查一下的事）：'
+            + '⚠️ 这一样会**请动那一间的助手**（它有手：能读文件、能查网），所以**每天有上限**、'
+            + '两次之间也要隔一会儿；🔴 **每一次都看得见**（问题以"来自小程序"的样子落进那一间，'
+            + '他随时翻得到）。真要问"一件需要查/需要想的事"才加；随口一句用 `ask` 就够。\n'
             + '· `net` —— **它要访问几个网站取数据**（比如查天气、查价）：光加这一样还不够，'
             + '**同时要在 `net` 里把域名一个一个写出来**（只写域名本身，不许通配、端口、路径）。'
             + '⚠️ 域名**你自己先去访问确认过**再写进去 —— 他要的是"能拿到数据"，不是"看起来配了"。\n'
@@ -312,7 +316,7 @@ async function callTool(name, args) {
     //   （`apps-socket.js` 的 `ctx.turnInputFor`；2026-09-26 修）。
     // ★ 2026-09-30：**声明的能力要真的带下去**（内部口那两个分支都认 `permissions`）
     const permissions = Array.isArray(args?.permissions)
-      ? args.permissions.filter((p) => p === 'db' || p === 'ask' || p === 'net')
+      ? args.permissions.filter((p) => p === 'db' || p === 'ask' || p === 'net' || p === 'agent')
       : [];
     // ★ `148` §二：**要访问的站**（白名单）。形状由 `Apps` 那一层严查（这里只搬过去）
     const net = Array.isArray(args?.net) ? args.net.filter((h) => typeof h === 'string') : [];

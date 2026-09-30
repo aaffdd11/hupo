@@ -105,6 +105,20 @@ export const MAX_COPY_TRIES = 50;
 export { ICONS } from './app-icons.js';
 
 /**
+ * ★ **`agent`：它要跟"它的助手"说一句话**（`148` §三 · 主人："这些功能都要有"）。
+ *
+ * 🔴 **它比 `ask` 重**：`ask` 是"直连模型问一句"（没工具、没记忆、不改东西）；
+ *    这一样是把问题送进**那个 app 那一间**，由**那一间的助手**来答 ——
+ *    那个助手**是有手的**（能读文件、能查网）。所以三道一起：
+ *    ① **它必须先在设置里被允许**（跟别的能力一样，声明了默认就给，他能关掉）；
+ *    ② **配额**（每天几次 ＋ 两次之间最小间隔 —— 见下面那两个常量）；
+ *    ③ 🔴 **每一次都看得见**：问题以"**来自小程序**"的样子落进那一间的对话里，
+ *       助手怎么答也在那儿 ⇒ 他随时翻得到（**不许**做成一条他看不见的暗线）。
+ * ⚠️ 条数、字节、时长这些**数只住代码**（手册纪律 1）。
+ */
+export const AGENT_PERMISSION = 'agent';
+
+/**
  * ★ **`net`：它要访问哪几个站**（主人 2026-09-30：*「这些功能都要有」*）。
  *
  * ── 形状（两样一起才算）────────────────────────────────────
@@ -129,7 +143,16 @@ export const NET_PERMISSION = 'net';
  * ⚠️ **钥匙永远不进制品**：制品只拿得到"问一句"这个动作，拿不到钥匙本身，也拿不到别人的钥匙。
  * ⚠️ **`db` 也拿不到文件**：它拿到的只是"替我执行这一条"这个动作（跨库那条路是堵死的）。
  */
-export const PERMISSIONS = Object.freeze(['ask', DB_PERMISSION, NET_PERMISSION]);
+export const PERMISSIONS = Object.freeze(['ask', DB_PERMISSION, NET_PERMISSION, AGENT_PERMISSION]);
+
+/**
+ * **跟助手说一句的配额**（数只住这里）。
+ *
+ * ⚠️ 比 `ask` 紧得多：这一样会**真的请动那一间的助手**（它可能去读文件、查网），
+ *    所以"每天几次"要小。⚠️ 超了要**说清是哪一道**（今天问得够多了 / 问得太快了）。
+ */
+export const AGENT_PER_DAY = 20;
+export const AGENT_MIN_INTERVAL_MS = 10_000;
 
 /** 一个 app 最多声明几个站（防呆：这不是给人手写的长名单）。 */
 export const MAX_NET_HOSTS = 8;
@@ -1044,6 +1067,47 @@ export class Apps {
     }
     this.#audit({ what: 'db-clear', id, files: removed });
     return { ok: true, removed };
+  }
+
+  /**
+   * ★ **跟助手说一句的配额**（`148` §三）：和 `ask` 那一对同形（状态住 `<id>/agent.json`）。
+   *
+   * ⚠️ **拒绝也要说清是哪一道**（今天说得够多了 / 说得太快了）——
+   *    混成一句，用户会一直重试。
+   *
+   * @returns {{ok:true, left:number} | {ok:false, reason:string}}
+   */
+  agentQuota(id, now = null) {
+    checkAppId(id);
+    const at = now ?? this.now();
+    const day = new Date(at).toISOString().slice(0, 10);
+    let st = { day, n: 0, lastAt: 0 };
+    try {
+      const j = JSON.parse(this.fs.readFileSync(nodePath.join(this.appDir(id), 'agent.json'), 'utf8'));
+      if (j && j.day === day) st = { day, n: Number(j.n) || 0, lastAt: Number(j.lastAt) || 0 };
+    } catch {
+      /* 没有就是今天还没说过 */
+    }
+    if (st.n >= AGENT_PER_DAY) return { ok: false, reason: '今天这个小程序跟你的助手说得够多了，明天再来' };
+    if (at - st.lastAt < AGENT_MIN_INTERVAL_MS) return { ok: false, reason: '说得太快了，等一下再说' };
+    return { ok: true, left: AGENT_PER_DAY - st.n };
+  }
+
+  /** 记一次"跟助手说话"（**先记再花**：宁可少说一次，也不许漏账）。 */
+  bumpAgent(id, now = null) {
+    checkAppId(id);
+    const at = now ?? this.now();
+    const day = new Date(at).toISOString().slice(0, 10);
+    let st = { day, n: 0, lastAt: 0 };
+    try {
+      const j = JSON.parse(this.fs.readFileSync(nodePath.join(this.appDir(id), 'agent.json'), 'utf8'));
+      if (j && j.day === day) st = { day, n: Number(j.n) || 0, lastAt: Number(j.lastAt) || 0 };
+    } catch {
+      /* 同上 */
+    }
+    const next = { day, n: st.n + 1, lastAt: at };
+    writeAtomic(this.fs, nodePath.join(this.appDir(id), 'agent.json'), `${JSON.stringify(next)}\n`, 0o644);
+    return next;
   }
 
   /**

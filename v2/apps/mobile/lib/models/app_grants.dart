@@ -10,8 +10,11 @@
 //      界面据此**不给开关**（画一个假的开/关就是"页面在说假话"）；
 //   ② 🔴 **回执只有服务端明说 `{ok:true}` 才算成了**（同 `appEditOutcomeOf` 那条纪律）：
 //      非 200 与"200 但读不出来"**都算没成**，没成时把服务端那句**人话**带回去；
-//   ③ ⚠️ 认得出来的名字只有今天那两个（`db` / `ask`）—— **技术名一个都不许上屏**
-//      （人话住在 `space_words.dart`，词表硬闸扫它）。
+//   ③ ⚠️ 认得出来的名字只有今天那三个（`db` / `ask` / `net`）—— **技术名一个都不许上屏**
+//      （人话住在 `space_words.dart`，词表硬闸扫它）；
+//   ④ 🔴 **"清空它存下来的东西"那条口是另一件事**（`POST /api/app-db-clear`）：
+//      它**跟开关无关**（关掉存储也能清："我的东西我拿走"），只有"服务端明说
+//      `{ok:true}`"才算成了 —— 回执映射同 [grantOutcomeOf] 那条纪律，**一个字节都不许猜**。
 //
 // ⚠️ **纯逻辑**：不 import material、不做 I/O（`dart:convert` 只用来读回执）。
 //    进 `test/unit` 硬闸。
@@ -19,7 +22,7 @@
 import 'dart:convert';
 
 import 'app_spec.dart';
-import 'space_words.dart' show settingsGrantsFailed;
+import 'space_words.dart' show settingsGrantsFailed, settingsClearDbFailed;
 
 /// **"想把东西存下来"**在协议里那个名字（`permissions: ["db"]`）。
 ///
@@ -30,12 +33,26 @@ const String wantStore = 'db';
 /// **"想用你的钥匙问一句"**在协议里那个名字（`permissions: ["ask"]`）。
 const String wantAsk = 'ask';
 
+/// ★ **"想连网取数据"**在协议里那个名字（`permissions: ["net"]` ·
+/// 手册 `08-SPEC.md` §14.1·丙）。
+///
+/// 🔴 它比另外两样多一份**域名白名单**（清单里 `net: [...]`）—— 但那是**声明侧**的事，
+///    这张卡只说"它想要什么"这一件；白名单**不摆到屏幕上**（摆一列域名只会让人看不懂）。
+const String wantNet = 'net';
+
+/// ★ **"想跟它的助手说一句话"**在协议里那个名字（`permissions: ["agent"]`）。
+///
+/// ⚠️ 它和 `ask` **不是一样**：`ask` 是"用你的钥匙问一句"（直连模型）；
+///    这一样是"请动**那一间的助手**"（它有手：能读文件、能查网）⇒ 人话要分开说。
+const String wantAgent = 'agent';
+
 /// 界面上**认得**的那几样（顺序＝摆出来的顺序）。
 ///
 /// ⚠️ 认不出来的名字**照样要如实说**（那句人话由 `grantWantWords` 兜底），
 ///    但**不给开关** —— 开关那一下要去服务端，而服务端只认白名单里那几个；
 ///    摆一个按了必被拒的开关，比不摆更坏。
-const List<String> knownWants = [wantStore, wantAsk];
+/// ⚠️ **顺序是"存东西 → 问一句 → 上网"**（三样都认得的那一份清单）。
+const List<String> knownWants = [wantStore, wantAsk, wantNet, wantAgent];
 
 /// 界面上认得这个名字吗。
 bool knownWant(String permission) => knownWants.contains(permission);
@@ -147,4 +164,74 @@ GrantOutcome grantOutcomeOf(int status, String body) {
 String grantFailedLine(GrantFailed out) {
   final t = out.text.trim();
   return t.isEmpty ? settingsGrantsFailed : t;
+}
+
+// ── ★ 2026-10-01：**清空它存下来的东西**（`POST /api/app-db-clear`）──────────
+//
+// 契约 `docs/dev/147-APP-SQLITE.md` §五那笔欠账；服务端那条口在这一轮刚做完。
+// 🔴 只有**声明了 [wantStore]** 的那个 app 才给这颗按钮（摆一个"清空"给没存过东西的
+//    小程序 = 假按钮）。🔴 **跟开关无关**：关掉存储也照样能清。
+
+/// **这个 app 该不该有"清空它存下来的东西"那颗按钮**：只在它**声明了存东西**时。
+///
+/// ⚠️ 判的是 `permissions`（它想要什么），**不是** `granted`（你给了没有）——
+///    存储关掉了也能清（"我的东西我拿走"）。
+bool canClearStored(MiniApp app) => app.permissions.contains(wantStore);
+
+/// `/api/app-db-clear` 的回执 —— 三种，**不许混**（同 [GrantOutcome] 那条纪律）。
+sealed class ClearOutcome {
+  const ClearOutcome();
+}
+
+/// 服务端**明说** `{ok:true}`（`removed` = 删掉几个文件；**界面不必显示**）。
+class ClearOk extends ClearOutcome {
+  const ClearOk(this.removed);
+
+  /// 服务端回的 `removed`（不是整数 / 没带 ⇒ `null`）。
+  /// ⚠️ 它**不参与任何判断**：成没成只看 `ok:true`（"没存过也回 200"是幂等）。
+  final int? removed;
+}
+
+/// 令牌不行 ⇒ 该回登录页（**不是**"没清掉"）。
+class ClearUnauthorized extends ClearOutcome {
+  const ClearUnauthorized();
+}
+
+/// 没成：网 / 非 200 / `ok` 不是 true / 回执读不出来 ⇒ **一个字节都不当成功**。
+class ClearFailed extends ClearOutcome {
+  const ClearFailed(this.text);
+
+  /// 服务端给的**人话**（给用户看的那一句）；空串 = 它没说 ⇒ 界面用兜底那句。
+  final String text;
+}
+
+/// 回执 → 结果。**纯函数**（不起网络、不碰界面、不看钟）。
+///
+/// 状态码的分工（**不许互相串**）：
+///   `401` ⇒ 令牌不行；
+///   `200` **且** `{ok:true}` ⇒ 成了（**幂等**：没存过也是这个）；
+///   其余（含"200 但回执不是明说的 ok"）⇒ **没成**，并带回服务端那句 `text`。
+ClearOutcome clearOutcomeOf(int status, String body) {
+  if (status == 401) return const ClearUnauthorized();
+  Object? parsed;
+  try {
+    parsed = jsonDecode(body);
+  } catch (_) {
+    parsed = null;
+  }
+  final j = parsed is Map ? parsed : null;
+  if (status == 200 && j != null && j['ok'] == true) {
+    final removed = j['removed'];
+    return ClearOk(removed is int ? removed : null);
+  }
+  final text = (j != null && j['text'] is String) ? (j['text'] as String) : '';
+  return ClearFailed(text);
+}
+
+/// 没清成时**该说的那一句**：服务端有人话就照它说，没有就用兜底那句。
+///
+/// ⚠️ **不许静默**，也**不许**先说成"清掉了"（同 [grantFailedLine] 那条纪律）。
+String clearFailedLine(ClearFailed out) {
+  final t = out.text.trim();
+  return t.isEmpty ? settingsClearDbFailed : t;
 }
