@@ -540,6 +540,17 @@ class ChatFloaterState extends State<ChatFloater> {
                                   FloaterTier.collapsed,
                                   auto: false,
                                 ),
+                                // ★ 2026-10-01（主人："右侧那颗「收起」太大/占地方"）：
+                                //   图形 24 → 18、外框收到 44 —— **可点区域仍 ≥44**（D3.6）。
+                                iconSize: DshChatSpace.headerIconSize,
+                                padding: EdgeInsets.zero,
+                                // ⚠️ 同上：把触控框从 48 收到 44（正好 ≥ D3.6 那条线）
+                                style: IconButton.styleFrom(
+                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  minimumSize: const Size(44, 44),
+                                  maximumSize: const Size(44, 44),
+                                  padding: EdgeInsets.zero,
+                                ),
                                 icon: const Icon(Icons.keyboard_arrow_down),
                                 color: p.labelTertiary,
                               ),

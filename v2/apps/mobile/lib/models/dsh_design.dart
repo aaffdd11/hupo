@@ -345,6 +345,39 @@ abstract final class DshTypes {
   static const DshType chatQuietStrong = DshType(size: 11, weight: 500, lineHeight: 14);
 }
 
+/// ★ **聊天那一面的"空当"**（2026-10-01 · 主人：*「聊天内容里面字体变小了，但是间距有问题」*）。
+///
+/// 字缩小之后，**围在它周围的那些空当也按同一比例收过一遍** —— 这几个数就是那几处。
+/// 🔴 **两档的行高（20 / 14）不在这一组里**：那是他自己点的那两档（`chatBody` / `chatQuiet`），
+///    这一组只管**气泡内外、条目之间、时间线上下**那几处空当。
+/// ⚠️ 命中区那一条（D3.6 ≥44）**不受影响**：按钮的**可点区域**照旧 ≥44，
+///    这里收的是**看得见的空当**（行内上下留白、图标大小），不是命中区。
+abstract final class DshChatSpace {
+  /// 气泡里上下那一条（原 `10`）。
+  static const double bubblePadV = 8;
+
+  /// 气泡里左右那一条（原 `14`；主人这次说的是"间距"，左右**没动**）。
+  static const double bubblePadH = 14;
+
+  /// **每一条之间**的上下空当（原 `4` —— 上下各一次，所以两条之间是它的两倍）。
+  static const double bubbleGap = 2;
+
+  /// 时间线**上下**的留白（原 `8`）。
+  static const double listPadV = 6;
+
+  /// 气泡**内部**那几处小空当（正文与出处之间、状态字之前 —— 原 `10` / `4`）。
+  static const double innerGap = 6;
+
+  /// **工具行 / 过程行**那种"非主要"行的上下留白（原 `DshSpace.s4` 加一个 48 高的按钮）。
+  static const double rowPadV = 3;
+
+  /// 那一行右边那颗展开箭头**图形**的大小（可点区域仍是 ≥44 —— D3.6）。
+  static const double rowIconSize = 18;
+
+  /// 标题行右边那颗「收起」的图形大小（同上：可点区域仍 ≥44）。
+  static const double headerIconSize = 18;
+}
+
 // ── 内容字号轴（用户设置 12–17）────────────────────────────────
 //
 /// 用户能设的正文最小字号（DSH 设置项 `Font size` 的下限）。

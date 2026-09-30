@@ -309,6 +309,32 @@ void main() {
     });
   });
 
+  // ── ★ 2026-10-01：聊天那一面的**空当**（主人："字体变小了，但是间距有问题"）────
+  group('聊天那一面的空当（`DshChatSpace`）', () {
+    test('★ 那几个数就是定下来的那些；而且**比它替掉的那几个更紧**', () {
+      expect(DshChatSpace.bubblePadV, 8);
+      expect(DshChatSpace.bubblePadH, 14, reason: '左右这次**没动**（主人说的是"间距"）');
+      expect(DshChatSpace.bubbleGap, 2);
+      expect(DshChatSpace.listPadV, 6);
+      expect(DshChatSpace.innerGap, 6);
+      expect(DshChatSpace.rowPadV, 3);
+      // 负向对照：别退回 DSH 那一套（我们**刻意**更紧 —— 字已经从 16/24 收到 14/20）
+      expect(DshChatSpace.bubblePadV, lessThan(dshUserBubblePaddingV));
+      expect(DshChatSpace.listPadV, lessThan(DshSpace.s8));
+      expect(DshChatSpace.bubbleGap, lessThan(DshSpace.s6));
+      expect(DshChatSpace.rowPadV, lessThan(DshSpace.s4 + 1));
+    });
+
+    test('🔴 图形收小了，但**可点区域那条线（44）没动**', () {
+      expect(DshChatSpace.rowIconSize, lessThan(24), reason: '默认那颗是 24');
+      expect(DshChatSpace.headerIconSize, lessThan(24));
+      // ⚠️ 这一条是**意思**上的：那两个按钮的实现里写死 44（`IconButton.styleFrom`
+      //    的 `minimumSize/maximumSize`）—— 屏幕上真量在 `test/widget/chat_spacing_test.dart`
+      //    与 a11y 那道硬闸里。这里只钉"图形确实比默认小"。
+      expect(DshChatSpace.rowIconSize > 0 && DshChatSpace.headerIconSize > 0, true);
+    });
+  });
+
   group('圆角 / 间距', () {
     test('★ 圆角那一套数都在（含胶囊），且语义名指对了', () {
       expect(

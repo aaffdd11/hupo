@@ -92,7 +92,7 @@ class ReasoningBlock extends StatelessWidget {
                 //   `look.quietStrong` / `look.quiet`（11/14）—— 行高比原来紧得多。
                 style: dshTextStyle(DshLook.of(context).quietStrong, theme.hintColor),
               ),
-              const SizedBox(height: DshSpace.s4),
+              const SizedBox(height: DshChatSpace.bubbleGap),
               Text(
                 text,
                 style: dshTextStyle(DshLook.of(context).quiet, theme.hintColor)

@@ -2211,7 +2211,8 @@ class _ChatScreenState extends State<ChatScreen> {
         key: _transcriptKey,
         controller: _scroll,
         // ★ 主人 2026-09-22："聊天浮窗的 padding 减少一些"（里面这一圈）：12 → 8
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        // ★ 2026-10-01（主人："间距有问题"）：上下那一条跟着字一起收（8 → 6）
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: DshChatSpace.listPadV),
         itemCount: header + slots.length + (c.hasProcess ? 1 : 0),
         itemBuilder: (context, i) {
           if (header == 1 && i == 0) return olderLine!;

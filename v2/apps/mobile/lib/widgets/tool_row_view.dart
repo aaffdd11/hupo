@@ -77,7 +77,9 @@ class _ToolRowViewState extends State<ToolRowView> {
     };
     final title = row.title;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: DshSpace.s4),
+      // ★ 2026-10-01（主人："间距有问题"）：这一行是**非主要**，字缩到 11 之后
+      //   它原来那圈空当（`s4` ＋ 一个 48 高的按钮）就显得很空 ⇒ 一起收。
+      padding: const EdgeInsets.symmetric(vertical: DshChatSpace.rowPadV),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -118,6 +120,19 @@ class _ToolRowViewState extends State<ToolRowView> {
               IconButton(
                 onPressed: () => setState(() => _open = !_open),
                 tooltip: _open ? toolRowCollapseLabel : toolRowExpandLabel,
+                // ★ 2026-10-01：图形收小、**可点区域仍是 44**（D3.6 那条硬闸没放宽）——
+                //   原来它是一个默认 48 的按钮，把 11 号字那一行撑得很空。
+                iconSize: DshChatSpace.rowIconSize,
+                padding: EdgeInsets.zero,
+                // ⚠️ 光给 `constraints` 不够：M3 的 `IconButton` 默认还要
+                //    `MaterialTapTargetSize.padded`（48 的触控框）⇒ 那一行仍是 54。
+                //    这里显式收成"就 44"（正好卡在 D3.6 那条线上）。
+                style: IconButton.styleFrom(
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  minimumSize: const Size(44, 44),
+                  maximumSize: const Size(44, 44),
+                  padding: EdgeInsets.zero,
+                ),
                 icon: Icon(_open ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right),
                 color: p.labelTertiary,
               ),
@@ -320,7 +335,7 @@ class TurnProcessControl extends StatelessWidget {
     final p = look.palette;
     final label = dshTurnProcessLabel(counts, turnProcessChatWords);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: DshSpace.s4),
+      padding: const EdgeInsets.symmetric(vertical: DshChatSpace.rowPadV),
       child: SizedBox(
         width: double.infinity,
         child: TextButton(

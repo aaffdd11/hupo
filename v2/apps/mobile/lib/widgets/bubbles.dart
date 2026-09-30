@@ -113,7 +113,8 @@ class UserBubble extends StatelessWidget {
       alignment: Alignment.centerRight,
       child: Container(
         constraints: const BoxConstraints(maxWidth: 520),
-        margin: const EdgeInsets.symmetric(vertical: 4),
+        // ★ 2026-10-01：空当跟着字一起收（见 `DshChatSpace`）
+        margin: const EdgeInsets.symmetric(vertical: DshChatSpace.bubbleGap),
         // ⚠️ 气泡本体改成 `Material` + `InkWell`（为了长按），
         //    底色 / 圆角 / 失败时那圈边**照旧**：
         //    四态必须一眼可辨，而且不许只靠颜色（下面还是图标 + 文字）。
@@ -133,13 +134,16 @@ class UserBubble extends StatelessWidget {
             onTap: onTap,
             onLongPress: onLongPress,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(
+                horizontal: DshChatSpace.bubblePadH,
+                vertical: DshChatSpace.bubblePadV,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   if (selected) _SelectedMark(theme: theme),
                   Text(utterance.text, style: bodyStyle),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: DshChatSpace.bubbleGap),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -319,7 +323,8 @@ class AnswerBubble extends StatelessWidget {
       child: Container(
         // 限宽：太宽的长行没人读得下去（平板上一行 70 个字）
         constraints: const BoxConstraints(maxWidth: 760),
-        margin: const EdgeInsets.symmetric(vertical: 4),
+        // ★ 2026-10-01：同上（每一条之间那一条空当）
+        margin: const EdgeInsets.symmetric(vertical: DshChatSpace.bubbleGap),
         child: Material(
           color: selected ? Color.alphaBlend(d.selectWash, base) : base,
           clipBehavior: Clip.antiAlias,
@@ -331,7 +336,10 @@ class AnswerBubble extends StatelessWidget {
             onTap: onTap,
             onLongPress: onLongPress,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(
+                horizontal: DshChatSpace.bubblePadH,
+                vertical: DshChatSpace.bubblePadV,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -351,7 +359,7 @@ class AnswerBubble extends StatelessWidget {
                     ..._imageRows(look, text),
                   ],
                   if (message.sources.isNotEmpty) ...[
-                    const SizedBox(height: 10),
+                    const SizedBox(height: DshChatSpace.innerGap),
                     Text(sourcesHeadWords, style: smallStyle),
                     const SizedBox(height: 2),
                     ..._sourceRows(look),
@@ -389,7 +397,7 @@ class AnswerBubble extends StatelessWidget {
                   ],
                   if (message.ended && message.reason != null && message.reason != 'completed')
                     Padding(
-                      padding: const EdgeInsets.only(top: 6),
+                      padding: const EdgeInsets.only(top: DshChatSpace.bubbleGap),
                       child: Text('（这条没说完）', style: smallStyle),
                     ),
                 ],
