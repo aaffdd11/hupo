@@ -1,8 +1,10 @@
 // **桌面那一墙图标怎么排**（契约 `docs/dev/137-ICON-GRID.md`）。
 //   主人 2026-09-29：*"app排布要根据页面宽度等宽排列"* ＋ 他选的**每行都铺满**。
+//   🔴 主人 2026-10-01：*「一行根据屏幕大小，不要放超过6个app。而且app都有位置。
+//      要模拟苹果的桌面排布。」* ⇒ 他选**甲**：**列数只由屏幕定** ＋ **末行贴左**。
 //
 // 纯逻辑（`models/desktop_grid.dart`）⇒ 在 VM 上直接量：一行几格、每格多宽。
-// ⚠️ 这一份钉的是"**铺满**"这件事的数学，不是"看起来像"。
+// ⚠️ 这一份钉的是**那条数学**，不是"看起来像"。
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/desktop_grid.dart';
@@ -33,30 +35,34 @@ void main() {
     }
   });
 
-  test('② 🔴 宽屏：图标少也**一行排开铺满**（不是挤在左边）', () {
-    // 1280 宽、7 个 —— 这正是主人看到的那一屏（改前它们只占左边三分之一）
-    final g = at(1280, 7);
-    expect(g.columns, 7, reason: '7 个该在一行里');
-    expect(g.slot, greaterThan(100), reason: '每格该明显宽于图标格（距离被拉开）');
+  test('② 🔴 **一行不超过 6 格**（主人 2026-10-01：「不要放超过6个app」）', () {
+    expect(at(1280, 7).columns, 6, reason: '1280 宽也**只排 6 格**（改前是 7）');
+    expect(at(1920, 7).columns, 6, reason: '再宽也是 6 —— 这是**上限**');
+    expect(at(1920, 40).columns, 6);
   });
 
-  test('③ 手机（窄屏）仍然是**四列左右**', () {
+  test('③ 🔴 **列数与格宽只跟屏幕走，不跟个数走** —— 这一条就是"app 都有位置"', () {
+    // 同一块屏上，1 个 / 3 个 / 7 个 / 20 个 —— 列数与格宽**必须是同一个数**。
+    // （改前：1 个 ⇒ 那一格 = 整条宽；3 个 ⇒ 各 1/3 ⇒ **加一个 app 前面的就挪位**。）
+    final one = at(1280, 1);
+    for (final n in <int>[3, 7, 20]) {
+      final g = at(1280, n);
+      expect(g.columns, one.columns, reason: '$n 个时列数变了 ⇒ 已有的 app 会挪位');
+      expect(g.slot, closeTo(one.slot, 0.001), reason: '$n 个时格宽变了 ⇒ 已有的 app 会挪位');
+    }
+    // 一个图标**不再摊满整条宽**（苹果上放一个 app 也不会把它拉到屏幕中间）
+    expect(one.slot, lessThan(300), reason: '一个图标也占**一格**那么宽（改前是整条 1280）');
+  });
+
+  test('④ 手机（窄屏）仍然是**四列左右**（6 是上限，不是"永远 6"）', () {
     expect(at(390, 7).columns, 4, reason: '390 宽放不下 5 格（按最小间距算）');
     expect(at(360, 7).columns, 4, reason: '360 也是一行四格');
-    // 而且换行之后**每一行的格宽是同一个数**（两行观感一致）
-    final g = at(390, 7);
-    expect(used(g), closeTo(390, 0.001));
-  });
-
-  test('④ 图标很多 ⇒ 一行的格数**自己变多**（放得下几格就放几格）', () {
-    expect(at(1280, 20).columns, greaterThan(at(390, 20).columns));
-    // 但一行**绝不超过放得下的格数**（不挤：每格至少 iconBox 宽）
-    final g = at(1280, 20);
-    expect(g.slot >= box, true, reason: '每格比图标格还窄 ⇒ 挤了');
+    // 换行之后**每一行的格宽是同一个数**（两行观感一致）
+    expect(used(at(390, 7)), closeTo(390, 0.001));
   });
 
   test('⑤ 每格**永远不窄于图标格**（挤不下就换行，不许压扁）', () {
-    for (final w in <double>[200, 240, 300, 390, 600, 1280]) {
+    for (final w in <double>[200, 240, 300, 390, 600, 1280, 1920]) {
       for (final n in <int>[1, 2, 5, 9, 17]) {
         final g = at(w, n);
         expect(g.slot >= box - 0.001, true,
@@ -68,12 +74,13 @@ void main() {
   test('⑥ 边界：0 个 / 1 个 / 可用宽为 0 —— 不抛，也不出现负数', () {
     expect(at(1280, 0).slot, 0);
     expect(at(1280, 0).columns, 1);
-    expect(at(1280, 1).columns, 1);
-    expect(at(1280, 1).slot, closeTo(1280, 0.001), reason: '一个图标 ⇒ 那一格就是整条宽');
+    // 🔴 这一条是**旧行为的反面**：1 个图标时那一格**不再是整条宽**
+    expect(at(1280, 1).columns, desktopGridMaxCols);
+    expect(at(1280, 1).slot, closeTo((1280 - 5 * gap) / 6, 0.001));
     expect(at(0, 3).slot >= 0, true, reason: '可用宽 0 时不许出负数');
   });
 
-  test('⑦ 格数**只跟"放得下几格"与个数有关**，跟顺序无关', () {
+  test('⑦ 纯函数：同样的输入给同样的结果（判据自己不许带随机/状态）', () {
     expect(at(800, 5).columns, at(800, 5).columns);
     expect(at(800, 5).slot, at(800, 5).slot);
   });

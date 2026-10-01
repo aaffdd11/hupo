@@ -220,9 +220,13 @@ class AppDesktop extends StatelessWidget {
                           Padding(
                             padding: const EdgeInsets.only(bottom: d.gapL),
                             child: Row(
-                              // 满行 ⇒ 正好铺满（居中与铺满在这时是同一件事）；
-                              // 末行不满 ⇒ 那一组居中（间距照旧，不拉大）
-                              mainAxisAlignment: MainAxisAlignment.center,
+                              // 🔴 **2026-10-01 改成贴左**（主人：「app 都有位置。要模拟苹果的
+                              //   桌面排布。」）—— 满行时"贴左"与"居中"是同一件事
+                              //   （`cols*slot + (cols-1)*gap == 可用宽`，一行正好铺满）；
+                              //   末行不满时，苹果是**从左边接着排**，不是把那一组摆到中间。
+                              //   ⚠️ 列数现在只由屏幕定（`desktop_grid.dart`）⇒ 加一个 app
+                              //     已有的那几个**一格都不动**。
+                              mainAxisAlignment: MainAxisAlignment.start,
                               children: [
                                 for (var k = 0; k < row.length; k++) ...[
                                   if (k > 0)

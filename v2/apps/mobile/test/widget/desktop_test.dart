@@ -101,8 +101,10 @@ void main() {
     expect(dec.color, Colors.transparent, reason: '加号那一格是"空位"，不是一个小程序 ⇒ 不许上色');
   });
 
-  testWidgets('🔴 一行**铺满**那一条的宽（2026-09-29 主人："根据页面宽度等宽排列"）', (tester) async {
-    // 1280 宽（宽屏）＋ 7 个 —— 改前它们只占左边三分之一（右边空着一大半）
+  testWidgets('🔴 一行**铺满**那一条的宽 ＋ **不超过 6 格**（2026-10-01 主人改的这一条）', (tester) async {
+    // 2026-09-29 主人：*"根据页面宽度等宽排列"* ⇒ 铺满（这一半照旧）。
+    // 🔴 2026-10-01 主人：*「一行根据屏幕大小，不要放超过6个app。而且app都有位置。」*
+    //    ⇒ **1280 宽也只排 6 格**（改前是 7 格），第 7 个落到第二行**贴左**。
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -111,29 +113,27 @@ void main() {
         app('应用$i', onOpen: () {}),
     ]);
 
-    // 那 7 格的外框（`_DesktopIcon` 那个 SizedBox）—— 量它们的左右端
-    final boxes = find
-        .ancestor(of: find.text('应用0'), matching: find.byType(SizedBox))
-        .evaluate()
-        .map((e) => e.widget)
-        .toList();
-    expect(boxes.isNotEmpty, true);
     Rect cell(String label) => tester.getRect(
       find
           .ancestor(of: find.text(label), matching: find.byType(SizedBox))
           .first,
     );
     final first = cell('应用0');
-    final last = cell('应用6');
-    // ① **一行里**（高度一样 ⇒ 没换行）
-    expect(first.top, last.top, reason: '7 个该在一行里（1280 宽放得下）');
-    // ② 左端贴着左边留白、右端贴着右边留白 ⇒ **铺满**
+    final sixth = cell('应用5');
+    final seventh = cell('应用6');
+    // ① **前 6 个在一行里**；第 7 个**必须在第二行**（一行最多 6 个）
+    expect(first.top, sixth.top, reason: '前 6 个该在一行里');
+    expect(seventh.top, greaterThan(first.top), reason: '★ 第 7 个必须在第二行（上限 6）');
+    // ② 这一行**铺满**：左端贴左边留白、第 6 格的右端贴右边留白
     expect(first.left, closeTo(d.gapL, 0.5), reason: '★ 没贴左边：${first.left}');
-    expect(last.right, closeTo(1280 - d.gapL, 0.5),
-        reason: '★ 右边空着（改前就是"全挤在左边"）：${1280 - last.right}');
-    // ③ 相邻两格的**间距一样**（等宽排列）
+    expect(sixth.right, closeTo(1280 - d.gapL, 0.5),
+        reason: '★ 右边空着（改前就是"全挤在左边"）：${1280 - sixth.right}');
+    // ③ 末行**贴左**（苹果是从左边接着排）：第 7 个落在第一列
+    expect(seventh.left, closeTo(first.left, 0.5),
+        reason: '★ 末行该贴左；居中的话它会往右偏（改前就是居中）');
+    // ④ 相邻两格的**间距一样**（等宽排列）
     final gaps = <double>[];
-    for (var i = 0; i < 6; i++) {
+    for (var i = 0; i < 5; i++) {
       gaps.add(cell('应用${i + 1}').left - cell('应用$i').right);
     }
     for (final g in gaps) {
@@ -250,4 +250,28 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('🔴 加一个 app ⇒ 已有那几个**一格都不动**（"app 都有位置"·苹果那套）', (tester) async {
+    // 主人 2026-10-01：*「一行根据屏幕大小，不要放超过6个app。而且app都有位置。
+    //   要模拟苹果的桌面排布。」* —— 问过之后他选**甲**：
+    //   **列数只由屏幕定** ＋ **末行贴左**（见 `models/desktop_grid.dart`）。
+    //   ⇒ 这一条钉的就是那个感觉：**加一个 app，前面的一个都不许挪**。
+    final names = [for (var i = 0; i < 6; i++) '应用$i'];
+    await pump(tester, [for (final n in names) app(n)]);
+    final before = [for (final n in names) tester.getRect(find.text(n))];
+
+    await pump(tester, [for (final n in [...names, '应用6']) app(n)]);
+    for (var i = 0; i < names.length; i++) {
+      expect(tester.getRect(find.text(names[i])), before[i],
+          reason: '★ 第 7 个进来之后「${names[i]}」挪位了 —— 那就不是"app 都有位置"'
+              '（旧算法：列数跟着**个数**走 ⇒ 1 个时那一格是整条宽）');
+    }
+    // 一行最多 6 个 ⇒ 第 7 个必须落到**第二行**
+    expect(tester.getRect(find.text('应用6')).top, greaterThan(before[0].top),
+        reason: '★ 第 7 个该在第二行（「不要放超过6个app」）');
+    // 末行**贴左**（苹果是从左边接着排）：第 7 个落在**第一列**上 ⇒ 与第 1 个同一 x
+    expect(tester.getRect(find.text('应用6')).left, closeTo(before[0].left, 0.001),
+        reason: '★ 末行该贴左；居中的话它会往右偏（改前就是居中）');
+  });
+
 }
