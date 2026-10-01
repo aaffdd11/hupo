@@ -174,4 +174,20 @@ void main() {
       );
     }
   });
+
+  test('🔴 小程序那一层的底边内缩**不许跟着浮窗当前高度走**（每帧 resize 一个 iframe = 卡死）', () {
+    // 2026-10-01 主人报：*「性能变得非常差，开关动效全没了。」* ——
+    //   `onHeight` 是**每帧**都会报一次的；那个数一旦成了**平台视图的布局输入**，
+    //   真 `<iframe>` 的 DOM 盒子就每帧被 resize 一次（Web 上最贵的一件事），
+    //   而"开一个小程序"那一下浮窗自己也在收（两个动画叠着）⇒ 整段动画直接卡没。
+    //   ⇒ 钉死：它只许用**只往下记**的 `_barH`，一个字节都不许提到 `_floaterH`。
+    final src = File('lib/screens/chat_screen.dart').readAsStringSync();
+    final line = src.split('\n').firstWhere((l) => l.trimLeft().startsWith('bottomInset:'), orElse: () => '');
+    expect(line, isNotEmpty, reason: '找不到 `bottomInset:` 那一行（这一条判据要跟着它走）');
+    expect(line.contains('_floaterH'), false,
+        reason: '★ 那一行提到了 `_floaterH` —— 它是**每帧都变**的浮窗高度，'
+            '喂给平台视图 = 每帧 resize 一个真 iframe（2026-10-01 那次"动效全没了"就是这么来的）');
+    expect(line.contains('_barH'), true, reason: '★ 用的是**收起档那个稳定值**（只往下记）');
+  });
+
 }

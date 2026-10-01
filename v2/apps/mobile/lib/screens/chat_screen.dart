@@ -236,7 +236,18 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// 浮窗现在**占多高**（含它自己那条）。收起档的高度是**内容算出来**的（D3.5）
   /// ⇒ 只能等它画完再报；这里拿它给小程序内容做**底部内缩**（§6.4 规则 1）。
-  double _floaterH = 0;
+  /// **收起档那一条的高度**（只往下记 ⇒ 一旦量到就不再变）。
+  ///
+  /// 🔴 **它必须是个"稳定值"**（2026-10-01 主人报：*「性能变得非常差，开关动效全没了。」*）：
+  ///    小程序那一层（Web 上是**真的 `<iframe>`**）的底边内缩**不能跟着浮窗当前高度走** ——
+  ///    `onHeight` 是**每帧**都会报一次的，一旦那个数成了平台视图的**布局输入**，
+  ///    那个 iframe 的 DOM 盒子就**每帧被 resize 一次**（Web 上最贵的一件事）；
+  ///    而"开一个小程序"那一下**浮窗自己也在收**（两个动画叠着）⇒ 整段动画直接卡没。
+  ///    ⇒ 这里取**历次报数里的最小值**（= 收起档那一条），它不随档位/拖动变。
+  ///    ⚠️ **展开档不用管**：那一下 `covered` 为真 ⇒ 这一层**本来就不收指针事件**
+  ///      （`mini_runtime_web.dart` 的 `setMiniAppsInteractive(false)`），
+  ///      而且展开档是**不透明**的（`chat_floater.dart`）—— 它自己就把底下挡严了。
+  double _barH = 0;
 
   /// 用户**自己往上翻过**没有。
   ///
@@ -922,7 +933,7 @@ class _ChatScreenState extends State<ChatScreen> {
               //    而规矩是反过来的（**Z1：聊天永远最上** —— 桌面之上、小程序之上）。
               //    ⇒ **平台视图的矩形不许盖到聊天浮窗的矩形**，制品也一样：
               //      底下那一条照旧让出来（判据 `test/widget/safe_area_test.dart`）。
-              bottomInset: FloaterMetrics.margin + _floaterH,
+              bottomInset: FloaterMetrics.margin + _barH,
               child: _appView(c)?.view ?? _lastAppView ?? const SizedBox.shrink(),
             ),
           ),
@@ -977,8 +988,15 @@ class _ChatScreenState extends State<ChatScreen> {
                 }
               },
               onHeight: (h) {
-                // ⚠️ 只在**真的变了**的时候 setState（它每帧都会报一次，不然会抖）
-                if ((h - _floaterH).abs() > 0.5) setState(() => _floaterH = h);
+                // 🔴 **只往下记** —— 这个数**唯一**的去处是小程序那一层的底边内缩
+                //    （下面 `bottomInset`），而那个内缩是**平台视图的布局输入**：
+                //    跟着"浮窗当前高度"走 ⇒ 那个真 `<iframe>` 的 DOM 盒子**每帧被 resize
+                //    一次** ⇒ 开关小程序那一下直接卡没（主人 2026-10-01 报的
+                //    *「性能变得非常差，开关动效全没了。」*）。详见 `_barH` 那段注释。
+                //    ⚠️ 它每帧都会被叫一次，所以这里**不许**写成"h 变了就 setState"。
+                if (h > 0 && (_barH == 0 || h < _barH - 0.5)) {
+                  setState(() => _barH = h);
+                }
               },
               child: _sheetBody(c),
             ),

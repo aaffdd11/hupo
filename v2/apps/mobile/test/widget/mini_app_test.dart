@@ -364,9 +364,18 @@ void main() {
     // ★ 关键：**矩形还是整屏**（缩了的话这里会变小）
     expect(revealed().size, screen.size,
         reason: '★ 被盖住时露出来的矩形必须还是整屏（实测 ${revealed().size}）—— 缩小就是把桌面露出来');
-    // 直角：那一层里带圆角的 `Material` 一个都不许有（圆角同样会露桌面）
+    // 直角：**容器自己那一层**不许有圆角（圆角同样会露桌面）。
+    // 🔴 **2026-10-01 收窄**：这里原来扫的是 `MiniAppHost` 的**整棵子树** ——
+    //    那会把**制品自己的界面**一起扫进来（`SettingsScreen` 自己就有一张 radius 12 的卡片），
+    //    而它一直绿只是因为**视口太矮、那张卡根本没被建出来** ⇒
+    //    **判据在赌"建没建出来"，不是在赌"容器有没有圆角"**（把视口改对之后当场红了）。
+    //    ⇒ 只查 **`Navigator` 的祖先**：容器自己那几层 —— 当年那个真缺陷
+    //      （`AnimatedScale` 包着页面）正好就在这几层里，所以它照样抓得住。
+    final navInHost = find
+        .descendant(of: find.byType(MiniAppHost), matching: find.byType(Navigator))
+        .first;
     for (final m in tester.widgetList<Material>(
-      find.descendant(of: find.byType(MiniAppHost), matching: find.byType(Material)),
+      find.ancestor(of: navInHost, matching: find.byType(Material)),
     )) {
       final shape = m.shape;
       if (shape is RoundedRectangleBorder) {
