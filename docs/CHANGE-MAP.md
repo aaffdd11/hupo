@@ -55,8 +55,19 @@
 | **给做小程序的 agent 的规矩** | `src/app-lint.js` | `test/app-lint.test.js` | [`dev/149-APP-DEV-STANDARD.md`](dev/149-APP-DEV-STANDARD.md) |
 | **人格** ⚠️ **strict** | `v2/services/core/hupo-persona.yml` | `bash scripts/check-persona.sh` | [`dev/09-PERSONA.md`](dev/09-PERSONA.md) · [`dev/97-PERSONA-V0.md`](dev/97-PERSONA-V0.md) |
 | **加一样小程序能力 / 改沙箱边界** | ⚠️ **先读手册再动手**，别直接改 | — | [`dev/146-MINIAPP-REDESIGN.md`](dev/146-MINIAPP-REDESIGN.md) |
+| **一条协议事件 / 一个 wire token** ⚠️ **冻结** | **先看它落在哪**：`scripts/where.sh 'message/text'`（服务端 / 客户端 / 文档 / 测试分组列出来） | 两边一起改 ＋ 补判据 | [`handbook/03-DEVELOPMENT.md`](handbook/03-DEVELOPMENT.md) §三 · [`handbook/08-SPEC.md`](handbook/08-SPEC.md) |
 
 **找不到对应的一格 ⇒ 加一格，而不是回去通读手册。**（怎么加见 §四）
+
+> ⚠️ **协议这一格为什么要先跑 `where.sh`**：2026-10-01 实测，一条事件**平均散在 45–90 个文件**里
+> （`message/text` 落在 **73 个文件 / 168 处**：服务端 67 · 客户端 59 · 文档 30）。
+> 手册里**没有**"它落在哪"这张表，所以每次都要重新考古 —— 这就是"小改动也要长时间阅读"的一个大头。
+>
+> ⚠️ **为什么没有"协议两边一致"的自动闸**（我试过，故意没做）：
+> 静态提取抓不全**发点**（事件名有 `type:` 赋值、模板串、常量、共用 helper 多种写法）
+> ⇒ 拿它判红会**误报**（实测把 `turn/start` 这种服务端明明在发的事件判成"客户端单方认的"）。
+> **会撒谎的闸比没有闸更坏**（`scripts/check-docs.mjs` 的头注就是这么写的）——
+> 所以这一格给的是**查落点的工具**，不是判据。
 
 ---
 
