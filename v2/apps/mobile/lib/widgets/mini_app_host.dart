@@ -44,7 +44,6 @@ class MiniAppHost extends StatefulWidget {
     required this.covered,
     required this.onCoveredTap,
     required this.bottomInset,
-    this.bleed = false,
     required this.child,
     this.fromRect,
     this.icon,
@@ -73,14 +72,11 @@ class MiniAppHost extends StatefulWidget {
 
   /// ★ **2026-10-01（主人报的"没铺满、底色不同"）：这一屏的页面要铺满整屏**。
   ///
-  /// `true` ⇒ **壳不在这外面留任何东西**（页面自己的底色铺到四边），
-  /// "别被聊天条压住"由**页面自己身上的内边距**做 —— 那两条内边距是壳写进
-  /// 入口 URL、app 原点注入到页面 `body` 上的（`src/app-serve.js` 的 `injectShellInset`）。
-  /// ⇒ 老页面也一起对（不必重发、不必作者记得）。
-  /// `false`（默认）⇒ 内置那几屏（设置 / 发现 /「我自己那台」）照旧由壳内缩。
-  final bool bleed;
-
-  /// app 自己的内容（跑在容器自己的 `Navigator` 里）。
+  /// 🔴 **`bleed` 这个参数 2026-10-01 删掉了** —— 它当年是"制品那一屏铺满整屏"（让页面
+  /// 自己留白）。**那个方向是错的**：Web 上小程序是**真的 DOM 元素**、压在画布**上面**，
+  /// 一铺满就把聊天浮窗整个盖住（主人报"所有小程序打开后都无法点击聊天了"）。
+  /// 规矩是 **Z1：聊天永远最上**（桌面之上、小程序之上）⇒ **平台视图的矩形不许盖到
+  /// 聊天浮窗的矩形**，制品也一样。删掉它之后，"留白"只有**一处出处**：下面那个 `Padding`。
   final Widget child;
 
   /// **它是从哪儿打开的**（那个图标在屏幕上的矩形）。
@@ -237,10 +233,7 @@ class _MiniAppHostState extends State<MiniAppHost>
                   //    ⚠️ 网页（含手机浏览器）那条内边距是 0 ⇒ 一个像素都不变。
                   //    ⚠️ 它和底部那条内缩（`_inset`）走**同一个 `Padding`**：一处口径，
                   //      免得页面高度被两处各算一遍。
-                  padding: widget.bleed
-                      // 铺满：页面自己铺到四边（留白已经写进它的 URL 了）
-                      ? EdgeInsets.zero
-                      : EdgeInsets.only(top: safe.top, bottom: _inset),
+                  padding: EdgeInsets.only(top: safe.top, bottom: _inset),
                   child: Navigator(
                     key: _nav,
                     onGenerateRoute: (_) =>

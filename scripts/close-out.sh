@@ -128,15 +128,21 @@ fi
 
 # ④ 线上漂移
 step "④ 线上那份客户端产物 ⇄ 仓库"
-if bash scripts/check-web-drift.sh; then echo "  ✓ 一致"; else echo "  ✗ **落后**（第 ⑤ 件就是为了这个）"; bad=1; fi
+DRIFT_OK=0
+if bash scripts/check-web-drift.sh; then echo "  ✓ 一致"; DRIFT_OK=1; else echo "  ✗ **落后**（第 ⑤ 件就是为了这个）"; bad=1; fi
 
-# ⑤ 部署（只在 --deploy 时）
+# ⑤ 部署（部署期的动作，只在 --deploy 时做）
 step "⑤ 部署（部署期的动作，只在 --deploy 时做）"
 if [ "$DEPLOY" = "1" ]; then
   if bash scripts/deploy-web-v2.sh; then echo "  ✓ 已部署"; else echo "  ✗ **部署失败**"; bad=1; fi
-elif [ "$CLIENT_CHANGED" = "1" ]; then
-  echo "  ⛔ 客户端源码改了 ⇒ **§5.0 第 2 件没做完**（要么加 --deploy，要么自己跑 scripts/deploy-web-v2.sh）"
+elif [ "$CLIENT_CHANGED" = "1" ] && [ "$DRIFT_OK" != "1" ]; then
+  echo "  ⛔ 客户端源码改了、而线上**还不是这一版** ⇒ **§5.0 第 2 件没做完**"
+  echo "     （要么加 --deploy，要么自己跑 scripts/deploy-web-v2.sh）"
   bad=1
+elif [ "$CLIENT_CHANGED" = "1" ]; then
+  # ⚠️ 漂移闸刚才**已经量过**"线上就是仓库这一版" ⇒ 这一件已经做完了，**不必再部署一遍**。
+  #    （2026-10-01：第一版这里只看"客户端改了没有"，于是刚部署完的人会被要求再部署一次。）
+  echo "  ✓ 线上已经就是这一版（上面 ④ 的读数）⇒ 第 2 件算做完，不必再部署"
 else
   echo "  ⏭ 客户端没改 ⇒ 不必部署"
 fi

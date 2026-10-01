@@ -38,7 +38,6 @@ import '../models/app_spec.dart';
 import '../models/app_words.dart';
 import '../models/harness.dart';
 import '../models/harness_words.dart';
-import '../models/mini_frame.dart';
 import '../models/mini_update.dart';
 import '../models/scope.dart';
 import '../models/space_words.dart';
@@ -916,13 +915,14 @@ class _ChatScreenState extends State<ChatScreen> {
               covered: _floaterExpanded,
               onCoveredTap: () => _floaterKey.currentState?.collapse(),
               // 收起那条压住多少 ⇒ 内容底部内缩（规则 1：不是简单覆盖，否则最后一行永远点不到）
-              // ⚠️ 2026-10-01：**制品那一屏不用这一条**（`bleed`）—— 它的留白由
-              //    app 原点注入到页面自己身上（见上面 `miniEntryUrlWithInsets`）；
-              //    内置那几屏（设置 / 发现 /「我自己那台」）还是壳自己留。
+              // 🔴 **2026-10-01 更正（主人报"所有小程序打开后都无法点击聊天了"）**：
+              //    这里原来给"制品那一屏"开了一个 `bleed` —— 平台视图**铺满整屏**。
+              //    那是**做反了**：Web 上小程序是**真的 DOM 元素**、压在画布**上面**，
+              //    铺满之后它把聊天浮窗整个盖住 ⇒ **小程序凌驾于聊天之上**，
+              //    而规矩是反过来的（**Z1：聊天永远最上** —— 桌面之上、小程序之上）。
+              //    ⇒ **平台视图的矩形不许盖到聊天浮窗的矩形**，制品也一样：
+              //      底下那一条照旧让出来（判据 `test/widget/safe_area_test.dart`）。
               bottomInset: FloaterMetrics.margin + _floaterH,
-              // ⚠️ 用 `_openMine()`（`mine` 是 `_appView` 里的局部量，这一层看不到）：
-              //    非空 = 现在开的是一个**制品**（不是内置那几屏）。
-              bleed: _openMine() != null,
               child: _appView(c)?.view ?? _lastAppView ?? const SizedBox.shrink(),
             ),
           ),
@@ -1059,16 +1059,14 @@ class _ChatScreenState extends State<ChatScreen> {
         //   版本换了 ⇒ 服务端现签一条新的 ⇒ 这里换一帧 ⇒ Web 那一侧换 iframe。
         //   旧那一帧的收尾（退订 + 销号）在 `MiniAppFrame` 里（判据 U5）。
         view: MiniAppFrame(
-          // ★ 2026-10-01（主人报的"没铺满、底色不同"）：**页面铺满整屏**，
-          //   把"别被聊天条压住"那两条内边距**写进 URL**（app 原点把它注入到
-          //   页面 `body` 上，见 `src/app-serve.js` 的 `injectShellInset`）——
-          //   本机量得出来：`MediaQuery.padding.top`（状态栏）＋ 收起档聊天条那一条。
-          //   ⚠️ 追加而不是重建：签名（`u`/`e`/`s`）一个字节都不许动。
-          entryUrl: miniEntryUrlWithInsets(
-            mine.entryUrl,
-            padTop: MediaQuery.paddingOf(context).top.round(),
-            padBottom: (FloaterMetrics.margin + _floaterH).round(),
-          ),
+          // 🔴 **2026-10-01 更正**：这条 URL 原来还带 `pt`/`pb`（让**页面自己**留出
+          //   状态栏与聊天条那两条边距，为的是"页面铺满整屏还能不被压住"）。
+          //   可**只要平台视图铺满，聊天浮窗就被它盖住** —— 见上面 `bottomInset` 那一段。
+          //   ⇒ 现在**不往 URL 上带边距**：那两条由**壳**让（`MiniAppHost` 的 `Padding`），
+          //     页面拿到的就是**已经被让好的**那个矩形，它自己不用再留。
+          //   ⚠️ 服务端那条注入（`app-serve.js` 的 `injectShellInset`）因此暂时用不上 ——
+          //     **留着不动**（老客户端还在带 `pt`/`pb`，它照旧要认）；真要删它是另一批的事。
+          entryUrl: mine.entryUrl,
           title: mine.title,
           // ★ **那条唯一的回话通道**（乙-4b）：页面说"我要问一句"，
           //   壳替它去问 —— **花的是看的人自己的钥匙**（服务端送进他自己的环境里花）。
