@@ -24,8 +24,9 @@ import 'package:hupo_app/widgets/app_grants_ask.dart';
 MiniApp _app({
   String id = 'tianqi',
   String title = '看天气',
-  List<String> permissions = const ['db', 'net'],
-  List<String>? unanswered = const ['db', 'net'],
+  // ⚠️ ★ 2026-10-02：`db` **不再进这张窗** ⇒ 量的是另外几样（存储默认有）
+  List<String> permissions = const ['ask', 'net'],
+  List<String>? unanswered = const ['ask', 'net'],
   List<String> net = const ['api.example.com'],
 }) => MiniApp(
   id: id,
@@ -70,9 +71,9 @@ void main() {
     // 抬头带上它的名字（"「看天气」想用几样东西"）
     expect(find.textContaining('看天气'), findsWidgets);
     // 两样都在，而且是**人话**（协议名一个都不许上屏）
-    expect(find.text(grantWantWords('db')), findsOneWidget);
+    expect(find.text(grantWantWords('ask')), findsOneWidget);
     expect(find.text(grantWantWords('net')), findsOneWidget);
-    expect(find.text('db'), findsNothing);
+    expect(find.text('ask'), findsNothing);
     expect(find.text('net'), findsNothing);
     // ★ 只有 `net` 那一样多一句要连的站
     expect(find.textContaining('api.example.com'), findsOneWidget);
@@ -102,14 +103,14 @@ void main() {
     await tester.tap(find.text('开'));
     await tester.pumpAndSettle();
     // 两颗开关都是开的（默认），而且旁边那个字写着"允许"
-    for (final p in ['db', 'net']) {
+    for (final p in ['ask', 'net']) {
       final sw = tester.widget<Switch>(find.byKey(askOnOpenSwitchKey(p)));
       expect(sw.value, true, reason: '★ $p 默认要给（傻瓜式）');
     }
     expect(find.text(askOnOpenOn), findsNWidgets(2));
     await tester.tap(find.byKey(askOnOpenGoKey));
     await tester.pumpAndSettle();
-    expect(got, {'db': true, 'net': true}, reason: '★ 一个字都没改 ⇒ 全给');
+    expect(got, {'ask': true, 'net': true}, reason: '★ 一个字都没改 ⇒ 全给');
     expect(find.byKey(askOnOpenKey), findsNothing, reason: '按完就该收起来');
   });
 
@@ -122,7 +123,7 @@ void main() {
             body: Center(
               child: ElevatedButton(
                 onPressed: () async {
-                  got = await askOnOpen(ctx, _app(permissions: const ['db', 'net'], unanswered: const ['db', 'net']));
+                  got = await askOnOpen(ctx, _app(permissions: const ['ask', 'net'], unanswered: const ['ask', 'net']));
                 },
                 child: const Text('开'),
               ),
@@ -134,15 +135,15 @@ void main() {
     await tester.tap(find.text('开'));
     await tester.pumpAndSettle();
     // 像用户那样按一下存储那一颗开关（关掉它）
-    await tester.tap(find.byKey(askOnOpenSwitchKey('db')));
+    await tester.tap(find.byKey(askOnOpenSwitchKey('ask')));
     await tester.pumpAndSettle();
     // 那颗开关旁边那个字跟着变成"不给"（现状要看得见）
-    expect(tester.widget<Switch>(find.byKey(askOnOpenSwitchKey('db'))).value, false);
+    expect(tester.widget<Switch>(find.byKey(askOnOpenSwitchKey('ask'))).value, false);
     expect(tester.widget<Switch>(find.byKey(askOnOpenSwitchKey('net'))).value, true,
         reason: '★ 负向对照：关一样不许把别的也关了');
     await tester.tap(find.byKey(askOnOpenGoKey));
     await tester.pumpAndSettle();
-    expect(got, {'db': false, 'net': true});
+    expect(got, {'ask': false, 'net': true});
   });
 
   testWidgets('🔴 「都不给」：每一样都是 false（他表过态 ⇒ 之后不再自动问）', (tester) async {
@@ -167,7 +168,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(askOnOpenNoneKey));
     await tester.pumpAndSettle();
-    expect(got, {'db': false, 'net': false});
+    expect(got, {'ask': false, 'net': false});
     expect(find.byKey(askOnOpenKey), findsNothing);
   });
 

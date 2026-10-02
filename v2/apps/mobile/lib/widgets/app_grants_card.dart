@@ -10,17 +10,21 @@
 //    （一次把还没问过的问完 · 2026-10-01 主人定的），这张卡跟那张弹窗**同一本账**。
 //
 // ── 五条不许破 ────────────────────────────────────────────
-//   ① 🔴 **声明了东西的才列**（`permissions` 非空）；一个都没有 ⇒ **一个像素都不画**；
+//   ① 🔴 **每个小程序都列一行**（★ 2026-10-02 改的：存储默认就有 ⇒ 每个 app 都有
+//      一颗"清空它存下来的东西"，卡不能只在"声明了东西"时才画）；**一个小程序都没有
+//      ⇒ 这张卡一个像素都不画**；
 //   ② 🔴 **老服务端没回 `granted` ⇒ 不给开关**（不知道的事不许画成一个假状态）；
 //   ③ 🔴 **成了才改屏幕上的状态** —— 点下去先等回执，服务端**明说** ok 才把开关拨过去。
 //      没成 ⇒ 开关**一动不动**，并如实说一句（服务端那句 `text`，没有就用兜底那句）。
 //      **不许**先拨过去再回滚，也**不许**静默；
 //   ④ ⚠️ **关掉只是"现在不给"**：这件事由文案说清（`settingsGrantsHint`）。
 //   ⑤ ★ **"清空它存下来的东西"**（2026-10-01 做的 · `148` §五那笔欠账）：
-//      它**只在那个 app 声明了存东西（`db`）时**才摆出来（摆给没存过东西的 app = 假按钮）；
+//      🔴 **每个小程序都有这一颗**（存储默认有 ⇒ 不声明也存得进去，见
+//      `canClearStored`），只有"这条路没接上（`onClear == null`）"时才不摆；
 //      🔴 **拿不回来** ⇒ 点一下**先过二次确认**，**只有确认之后**才发那一条请求；
-//      🔴 它**跟开关无关**（存储关掉了也能清 —— "我的东西我拿走"）；
 //      ⚠️ 等回执的时候那颗按钮按不动（免得连点两下）。
+//   ⑥ ★ **`db` 不摆成一行**（2026-10-02）：存储不是"要他允许的一样"
+//      ⇒ 行只画 `wantRowsOf(app)`（认不出来的名字**照样画**，只是没开关）。
 //
 // ⚠️ 楼层闸：这一份在 `widgets/` ⇒ **只许看 `models/`**（结果类型 `GrantOutcome` /
 //    `ClearOutcome` 与纯逻辑都住在 `models/app_grants.dart`，同 `key_outcome.dart` 那条先例）。
@@ -180,8 +184,9 @@ class _AppGrantsCardState extends State<AppGrantsCard> {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
-    final list = wantsApps(widget.apps);
-    // 🔴 **一个都没声明 ⇒ 这张卡一个像素都不画**（不是画一个空框）。
+    // 🔴 **每个小程序都列**（存储默认就有 ⇒ 那颗"清空"每个 app 都要够得着）。
+    final list = widget.apps;
+    // 🔴 **一个小程序都没有 ⇒ 这张卡一个像素都不画**（不是画一个空框）。
     if (list.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(top: d.gapS),
@@ -221,7 +226,7 @@ class _AppGrantsCardState extends State<AppGrantsCard> {
   }
 
   /// 一个 app 那一小块：**名字 ＋ 它想要的那几样（各带一个开关）**，
-  /// 声明了存东西的话再带**那颗"清空它存下来的东西"**。
+  /// 再加**那颗"清空它存下来的东西"**（★ 每个小程序都有 —— 存储默认有）。
   Widget _appBlock(MiniApp app) {
     final t = Theme.of(context);
     return Padding(
@@ -236,8 +241,9 @@ class _AppGrantsCardState extends State<AppGrantsCard> {
               fontWeight: FontWeight.w600,
             ),
           ),
-          for (final p in app.permissions) _wantRow(app, p),
-          // 🔴 只在**声明了存东西**、而且这条路接上了的时候才摆（不给假按钮）。
+          // ⚠️ `db` 不在里面（存储不是"要他允许的一样"，见 `wantRowsOf`）。
+          for (final p in wantRowsOf(app)) _wantRow(app, p),
+          // 🔴 只有"这条路没接上"时才不摆（按了也没人接 = 假按钮）。
           if (canClearStored(app) && widget.onClear != null) ...[
             const SizedBox(height: d.gapXs),
             Align(

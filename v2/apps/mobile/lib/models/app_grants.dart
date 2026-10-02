@@ -9,6 +9,12 @@
 //   · `unanswered`  = **还没问过他的那几样** —— **打开时那张弹窗问的就是它**，
 //     问过（允许 / 不给）之后那一样就从这儿挪走（之后在设置里能改）。
 //
+// 🔴 ★ **2026-10-02：存储不再是"要问的一样"**（主人原话：*「我发现做的小程序都不会有
+//    存储。这个应该默认有存储。」*）—— 每个小程序**天生就有**自己那一格库：
+//      · 它**不进** [knownWants]（那张卡上不给开关、打开时也不问）；
+//      · 老制品清单里带着的那个 `db` **照样认得**，只是**不上屏**（见 [wantRowsOf]）；
+//      · **"清空它存下来的东西"**那颗按钮**每个小程序都有**（[canClearStored]）。
+//
 // ── 这一份守什么 ──────────────────────────────────────────
 //   ① 🔴 **老服务端不回 `granted` ⇒ 不知道**（`null`，**不是**空数组）——
 //      界面据此**不给开关**（画一个假的开/关就是"页面在说假话"）；
@@ -32,6 +38,12 @@ import 'space_words.dart' show settingsGrantsFailed, settingsClearDbFailed;
 ///
 /// ⚠️ 这一串是**协议名**，不是屏幕上那几个字（人话住 `space_words.dart`）——
 ///    两处别混：屏幕上出现 `db` 就是内部词泄漏（词表硬闸会拦）。
+///
+/// 🔴 ★ **2026-10-02：这一样不再需要声明、也不再要他点头**（主人原话：
+///    *「我发现做的小程序都不会有存储。这个应该默认有存储。」*）——
+///    存储是**基本能力**：每个小程序天生就有自己那一格库，打开就能存。
+///    ⇒ 它**不进** [knownWants]（不上那张卡、不进弹窗）；老清单里那个 `db`
+///    只是"当年写下的声明"，今天不再代表"它要申请什么"。
 const String wantStore = 'db';
 
 /// **"想用你的钥匙问一句"**在协议里那个名字（`permissions: ["ask"]`）。
@@ -62,18 +74,19 @@ const String wantAgent = 'agent';
 ///    所以人话要说清"**它会自己动**"，而且设置里关得掉。
 const String wantTasks = 'tasks';
 
-const List<String> knownWants = [wantStore, wantAsk, wantNet, wantAgent, wantTasks];
+const List<String> knownWants = [wantAsk, wantNet, wantAgent, wantTasks];
 
 /// 界面上认得这个名字吗。
 bool knownWant(String permission) => knownWants.contains(permission);
 
-/// 🔴 **这一条要不要摆出来**：只在它**声明了东西**的时候摆。
-bool hasWants(MiniApp app) => app.permissions.isNotEmpty;
-
-/// 摆出来的那几条（顺序照服务端给的清单）。
-List<MiniApp> wantsApps(List<MiniApp> apps) => [
-  for (final a in apps)
-    if (hasWants(a)) a,
+/// ★ **它"想要什么"里该摆到屏幕上的那几样**（顺序照服务端给的清单）。
+///
+/// 🔴 **只有 `db` 不算**（2026-10-02）：存储默认就有 ⇒ 摆一行"想把东西存下来"
+///    会让它看起来像一件**要他允许**的事（那一行今天要么没有开关、要么画成关着）。
+/// ⚠️ 认不出来的名字**照样摆**（"它想要点什么"这件事不许藏起来，见 [knownWant]）。
+List<String> wantRowsOf(MiniApp app) => [
+  for (final p in app.permissions)
+    if (p != wantStore) p,
 ];
 
 /// ★ **还没问过他的那几样**（`unanswered`）：`null` = 服务端**没回**（老服务端）⇒
@@ -206,14 +219,18 @@ String grantFailedLine(GrantFailed out) {
 // ── ★ 2026-10-01：**清空它存下来的东西**（`POST /api/app-db-clear`）──────────
 //
 // 契约 `docs/dev/147-APP-SQLITE.md` §五那笔欠账；服务端那条口在这一轮刚做完。
-// 🔴 只有**声明了 [wantStore]** 的那个 app 才给这颗按钮（摆一个"清空"给没存过东西的
-//    小程序 = 假按钮）。🔴 **跟开关无关**：关掉存储也照样能清。
+// 🔴 ★ **2026-10-02 起：每个小程序都有这颗按钮** —— 存储默认就有（主人原话：
+//    *「我发现做的小程序都不会有存储。这个应该默认有存储。」*）⇒ "它声明了存东西没有"
+//    不再是判据（今天的制品**根本不声明**也照样能存）。🔴 它**跟"停用"无关**：
+//    那颗按钮说的是"我的东西我拿走"。
 
-/// **这个 app 该不该有"清空它存下来的东西"那颗按钮**：只在它**声明了存东西**时。
+/// **这个 app 该不该有"清空它存下来的东西"那颗按钮**。
 ///
-/// ⚠️ 判的是 `permissions`（它想要什么），**不是** `granted`（你给了没有）——
-///    存储关掉了也能清（"我的东西我拿走"）。
-bool canClearStored(MiniApp app) => app.permissions.contains(wantStore);
+/// 🔴 **每个小程序都有**（`permissions` 里写着什么**不看** —— 2026-10-02 改的）：
+///    存储是基本能力，制品**不声明也存得进去** ⇒ 只按"声明了 `db`"来摆，
+///    今天做出来的小程序就**永远够不着**清空那颗按钮（那是让"我的东西我拿走"落空）。
+/// ⚠️ 参数留着是**故意的**：判据那一侧读的是"这一个 app"，不是"它声明了什么"。
+bool canClearStored(MiniApp app) => app.id.isNotEmpty;
 
 /// `/api/app-db-clear` 的回执 —— 三种，**不许混**（同 [GrantOutcome] 那条纪律）。
 sealed class ClearOutcome {

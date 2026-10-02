@@ -1006,7 +1006,10 @@ export class Apps {
     const { allowed, denied } = this.#grantBook(id);
     // ★ **默认不给**（主人 2026-10-01）：**清单里声明 = "它想要什么"**（弹窗的依据），
     //   真正生效要**他点头**（`allowed`）。他点过"不给"的一样不生效（`denied`）。
-    return this.#declaredOf(id).filter((p) => allowed.includes(p) && !denied.includes(p));
+    // ⚠️ 同上：`db` 不算"他允许的那几样"（它本来就一直能用）。
+    return this.#declaredOf(id)
+      .filter((p) => p !== DB_PERMISSION)
+      .filter((p) => allowed.includes(p) && !denied.includes(p));
   }
 
   /**
@@ -1019,7 +1022,10 @@ export class Apps {
   unanswered(id) {
     checkAppId(id);
     const { allowed, denied } = this.#grantBook(id);
-    return this.#declaredOf(id).filter((p) => !allowed.includes(p) && !denied.includes(p));
+    // ⚠️ 存储（`db`）**不进这张表**：它默认就有、不用他表态（2026-10-02）。
+    return this.#declaredOf(id)
+      .filter((p) => p !== DB_PERMISSION)
+      .filter((p) => !allowed.includes(p) && !denied.includes(p));
   }
 
   /**
@@ -1271,10 +1277,9 @@ export class Apps {
     checkAppId(id);
     const m = this.meta(id);
     if (m === null) throw new AppsError('这个小程序不在你这儿');
-    const permissions = Array.isArray(m.permissions) ? m.permissions : [];
-    const declared = permissions.includes(DB_PERMISSION);
-    const granted = this.grants(id).includes(DB_PERMISSION);
-    const verdict = checkAppDb({ declared, granted, op: req?.op, sql: req?.sql, params: req?.params });
+    // ★ **2026-10-02：存储是基本能力** —— 不再看"声明了没有/他点头了没有"
+    //   （见 `app-db.js` 的 `checkAppDb` 那段批注）。
+    const verdict = checkAppDb({ op: req?.op, sql: req?.sql, params: req?.params });
     if (verdict.ok !== true) {
       // 拒的那几档**留痕**（"谁想干什么被拦了"要查得到；成了的不写，量太大）
       this.#audit({ what: 'db-deny', id, error: verdict.error });

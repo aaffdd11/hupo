@@ -81,8 +81,14 @@ if [ -z "$SYSTEM" ]; then
 fi
 
 bad=0
+# ⚠️ **别用 `printf … | grep -q`**（2026-10-02 修的）：`grep -q` 一找到就退出 ⇒
+#    那一头 `printf` 撞上 EPIPE，而本脚本是 `set -o pipefail` **开着的** ⇒
+#    明明找到了也判成失败（真发生过：同一条命令两次跑出两个结果，
+#    而且总是**第一个** check 中招 —— 它要找的字在最前面）。
+#    ⇒ 用 bash 自己的模式匹配：没有管道，就没有这个race。
+has() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
 check() { # check <描述> <要找的子串>
-  if printf '%s' "$SYSTEM" | grep -qF "$2"; then
+  if has "$SYSTEM" "$2"; then
     echo "  ✓ $1"
   else
     echo "  ✗ $1 —— 系统提示里找不到「$2」"
@@ -90,7 +96,7 @@ check() { # check <描述> <要找的子串>
   fi
 }
 uncheck() { # uncheck <描述> <不该有的子串>
-  if printf '%s' "$SYSTEM" | grep -qF "$2"; then
+  if has "$SYSTEM" "$2"; then
     echo "  ✗ $1 —— 系统提示里**有**「$2」"
     bad=1
   else

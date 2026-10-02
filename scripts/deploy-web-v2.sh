@@ -231,7 +231,23 @@ echo "▶ 引用图检查（本地，0 个 404 才继续）"
   echo "✗ 引用图里有找不到的文件 ⇒ 没有部署（线上仍是上一版）"; exit 1; }
 
 echo "▶ 重启服务（构建指纹 $STAMP）"
-HUPO_BUILD_ID="$STAMP" bash "$ROOT/scripts/restart-core.sh" 2>&1 | grep -E "构建|监听|上次退出" | sed 's/^/  /'
+# 🔴 **这一段的退出码必须查**（2026-10-02 修的）：`restart-core.sh` 有一道**预检** ——
+#   开机清单（`strict`：人格 / 手册 / `AGENTS.md`…）对不上时它**故意不停旧服务**、
+#   打印那一条补救命令、**退出 3**。原来的写法是
+#   `… bash restart-core.sh 2>&1 | grep -E "构建|监听|上次退出" | sed …` ——
+#   预检那几行**不在那个 grep 的名单里** ⇒ 整段**一个字都不显示**，
+#   而它又不是 `set -e` 的失败点 ⇒ 脚本**照常往下走**，最后在公网那一步
+#   报一句"线上构建指纹不是 X"（症状对了，原因看不见）。
+#   ⇒ 收进一个临时文件：**原样留下退出码** ＋ 把"该看的那几行"打出来（含预检与错误）。
+RESTART_OUT="$(mktemp)"
+HUPO_BUILD_ID="$STAMP" bash "$ROOT/scripts/restart-core.sh" >"$RESTART_OUT" 2>&1
+RESTART_RC=$?
+grep -E "构建|监听|上次退出|预检|清单|✗|失败" "$RESTART_OUT" | sed 's/^/  /' || true
+rm -f "$RESTART_OUT"
+[ "$RESTART_RC" = "0" ] || {
+  echo "  ✗ 重启**没成功**（退出码 $RESTART_RC）⇒ 线上还是上一版；上面那几行就是原因"
+  exit 1
+}
 
 echo "▶ 公网验证"
 sleep 1

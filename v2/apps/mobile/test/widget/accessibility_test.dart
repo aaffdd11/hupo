@@ -599,7 +599,8 @@ Future<void> _openConfigWithGrants(WidgetTester tester, double scale) async {
   await tester.pumpAndSettle();
   // 负向对照：那张卡**真的进了树**才算数（不在的话下面量的是设置列表）
   expect(find.byKey(appGrantsCardKey), findsOneWidget, reason: '★ 注册制那张卡没进这棵树');
-  expect(find.text(grantWantWords('db')), findsOneWidget, reason: '★ "它想要什么"没画出来');
+  // ⚠️ 量的是 `ask`（★ 2026-10-02：存储默认有 ⇒ 那一行不摆，见 `wantRowsOf`）
+  expect(find.text(grantWantWords('ask')), findsOneWidget, reason: '★ "它想要什么"没画出来');
 }
 
 /// ★ 2026-10-01（契约 `docs/dev/147-APP-SQLITE.md` §五 那笔"清空那颗按钮没做"的欠账 ·
@@ -615,7 +616,7 @@ Future<void> _openConfigWithGrants(WidgetTester tester, double scale) async {
 Future<void> _openGrantsClearConfirm(WidgetTester tester, double scale) async {
   await _openConfigWithGrants(tester, scale);
   final f = find.byKey(appDbClearKey('notes'));
-  // 负向对照：那颗按钮真的在树上（它只在声明了存东西的 app 上才有）
+  // 负向对照：那颗按钮真的在树上（★ 2026-10-02：每个小程序都有它 —— 存储默认有）
   expect(f, findsOneWidget, reason: '★ 那颗"清空"没进这棵树');
   await tester.ensureVisible(f);
   await tester.pumpAndSettle();

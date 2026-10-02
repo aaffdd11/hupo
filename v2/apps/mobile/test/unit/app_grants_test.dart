@@ -10,7 +10,11 @@
 //   ④ 🔴 **关掉只是"现在不给"**：文案里一个"删 / 清空"的字都不许有；
 //   ⑤ 名字（`db` / `ask` / `net`）是**协议名**，屏幕上那几个字住在 `space_words.dart`；
 //   ⑥ ★ **清空它存下来的东西**（`POST /api/app-db-clear`）：回执映射同一条纪律
-//      （只有明说 `{ok:true}` 才算成了），而且**跟开关无关**（`canClearStored` 只看声明）。
+//      （只有明说 `{ok:true}` 才算成了）；
+//   ⑦ 🔴 ★ **2026-10-02：存储不再是"要他点头的一样"**（主人原话：*「我发现做的小程序
+//      都不会有存储。这个应该默认有存储。」*）—— `db` **不进** [knownWants]、
+//      **不摆成一行**（[wantRowsOf]）、**不进弹窗**（[pendingWantsOf]），
+//      而"清空"那颗按钮**每个小程序都有**（[canClearStored]）。
 
 import 'dart:convert';
 
@@ -45,38 +49,48 @@ Map<String, Object?> _raw({
 
 void main() {
   group('清单一侧：它想要什么 / 你给了没有（两件事）', () {
-    test('★ 只列**声明了东西**的；没声明的一个字都不出现', () {
+    test('★ 每一行都要有"它想要什么"；**存储（`db`）不算一行**', () {
       final plain = MiniApp.parse(_raw(id: 'dice', permissions: const []))!;
-      final wants = MiniApp.parse(_raw())!;
-      expect(wantsApps([plain, wants]).map((a) => a.id), ['notes']);
-      // 负向对照：**没有声明** ⇒ 这一条不进那张卡（这正是"一个都没有就不画"的判据底）
-      expect(hasWants(plain), false);
-      expect(wantsApps([plain]), isEmpty);
+      final wants = MiniApp.parse(_raw())!; // permissions: ['db']
+      // ★ 2026-10-02：存储默认就有 ⇒ 那一行**不摆**（摆了就像一件要他允许的事）
+      expect(wantRowsOf(wants), isEmpty, reason: '★ `db` 不该摆成一行（存储默认有）');
+      expect(wantRowsOf(plain), isEmpty);
+      // ⚠️ 老清单里那个 `db` **照样认得**（只是不上屏）
+      expect(wants.permissions, ['db'], reason: '清单照实读（读的是服务端给的）');
+      // 真"要问的东西"照样摆
+      final ask = MiniApp.parse(_raw(permissions: const ['db', 'ask']))!;
+      expect(wantRowsOf(ask), ['ask'], reason: '★ `db` 滤掉，其余照摆');
     });
 
     test('🔴 `granted` 缺了 = **不知道**（`null`），空数组 = "一样都没给"', () {
-      final unknown = MiniApp.parse(_raw(granted: null))!;
-      final nothing = MiniApp.parse(_raw(granted: const []))!;
+      // ⚠️ 声明里必须有 `ask`（判的是"这一样他给了没有"；没声明的一律不给开关）
+      final unknown = MiniApp.parse(_raw(permissions: const ['ask'], granted: null))!;
+      final nothing = MiniApp.parse(_raw(permissions: const ['ask'], granted: const []))!;
       expect(unknown.granted, isNull, reason: '老服务端没回这个字段');
       expect(nothing.granted, isEmpty, reason: '回话了，一样都没给');
       expect(grantedOf(unknown), isNull);
       expect(grantedOf(nothing), isEmpty);
       // ★ 这两种在界面上**长得不一样**：前者不给开关，后者给一个关着的开关
-      expect(grantSwitchOn(unknown, 'db'), isNull, reason: '★ 不知道 ⇒ 不许画开关');
-      expect(grantSwitchOn(nothing, 'db'), false, reason: '知道，而且没给');
-      expect(grantSwitchOn(MiniApp.parse(_raw(granted: const ['db']))!, 'db'), true);
+      //    （`db` 那一颗 2026-10-02 撤了 ⇒ 这里换成 `ask` —— 判的是同一件事）
+      expect(grantSwitchOn(unknown, 'ask'), isNull, reason: '★ 不知道 ⇒ 不许画开关');
+      expect(grantSwitchOn(nothing, 'ask'), false, reason: '知道，而且没给');
+      expect(
+        grantSwitchOn(MiniApp.parse(_raw(permissions: const ['ask'], granted: const ['ask']))!, 'ask'),
+        true,
+      );
     });
 
     test('🔴 开关的值只看 `granted` 里有没有那一项（声明不等于允许）', () {
-      final declaredNotGranted = MiniApp.parse(_raw(granted: const ['ask']))!;
-      expect(declaredNotGranted.permissions, ['db']);
-      expect(grantSwitchOn(declaredNotGranted, 'db'), false, reason: '★ 声明了 ≠ 给了');
-      expect(grantSwitchOn(declaredNotGranted, 'ask'), isNull, reason: '它没声明这一样');
+      final declaredNotGranted = MiniApp.parse(_raw(permissions: const ['ask'], granted: const []))!;
+      expect(declaredNotGranted.permissions, ['ask']);
+      expect(grantSwitchOn(declaredNotGranted, 'ask'), false, reason: '★ 声明了 ≠ 给了');
+      expect(grantSwitchOn(declaredNotGranted, 'net'), isNull, reason: '它没声明这一样');
     });
 
     test('认不出来的那一档：**照样要有一句人话**，但**不给开关**', () {
       final other = MiniApp.parse(_raw(permissions: const ['something-new']))!;
-      expect(wantsApps([other]).length, 1, reason: '"它想要点什么"这件事不许藏起来');
+      expect(wantRowsOf(other), ['something-new'],
+          reason: '"它想要点什么"这件事不许藏起来');
       expect(grantWantWords('something-new'), isNotEmpty);
       expect(knownWant('something-new'), false);
       expect(grantSwitchOn(other, 'something-new'), isNull,
@@ -84,39 +98,39 @@ void main() {
     });
 
     test('成了之后的账：允许就记上、关掉就只把它拿掉（别的没动）', () {
-      expect(nextGranted(const [], 'db', true), ['db']);
-      expect(nextGranted(const ['ask'], 'db', true), ['ask', 'db']);
-      expect(nextGranted(const ['ask', 'db'], 'db', false), ['ask']);
-      expect(nextGranted(const [], 'db', false), isEmpty);
+      expect(nextGranted(const [], 'ask', true), ['ask']);
+      expect(nextGranted(const ['net'], 'ask', true), ['net', 'ask']);
+      expect(nextGranted(const ['net', 'ask'], 'ask', false), ['net']);
+      expect(nextGranted(const [], 'ask', false), isEmpty);
       // ⚠️ 关掉**不移除别的**，也不产生第二份
-      expect(nextGranted(const ['db'], 'db', true), ['db']);
+      expect(nextGranted(const ['ask'], 'ask', true), ['ask']);
     });
 
-    test('★ 认得的五样与**顺序**：存东西 → 问一句 → 上网 → 跟助手说话 → 按点跑', () {
+    test('★ 认得的**四样**与**顺序**：问一句 → 上网 → 跟助手说话 → 按点跑', () {
       // ⚠️ 顺序就是那张卡上摆出来的顺序（`148` §二/§三）。
-      expect(knownWants, ['db', 'ask', 'net', 'agent', 'tasks']);
-      expect(knownWants, [wantStore, wantAsk, wantNet, wantAgent, wantTasks]);
+      // 🔴 **存储（`db`）不在里面**（2026-10-02：默认就有、不问他，见 `wantStore` 那段）。
+      expect(knownWants, ['ask', 'net', 'agent', 'tasks']);
+      expect(knownWants, [wantAsk, wantNet, wantAgent, wantTasks]);
+      expect(knownWants.contains(wantStore), false,
+          reason: '★ 存储不再是要他点头的一样');
       // 负向对照：四样都得认得（少一样 ⇒ 那一样就没有开关，而它本来是服务端认的）
-      for (final p in ['db', 'ask', 'net', 'agent', 'tasks']) {
+      for (final p in ['ask', 'net', 'agent', 'tasks']) {
         expect(knownWant(p), true, reason: '★ $p 是服务端白名单里的，界面上必须认得');
       }
       expect(knownWant('something-new'), false);
     });
 
-    test('★ 那一颗"清空"的按钮只看**声明**（关掉存储照样能清）', () {
-      // 声明了存东西 ⇒ 有那颗按钮（不管 `granted` 里有没有它）
-      final declared = MiniApp.parse(_raw(permissions: const ['db'], granted: const []))!;
-      expect(canClearStored(declared), true, reason: '★ 声明了 = 它自己有一格库');
-      final off = MiniApp.parse(_raw(permissions: const ['db'], granted: const []))!;
-      expect(off.permissions.contains('db'), true);
-      expect(grantSwitchOn(off, 'db'), false, reason: '存储那一颗是关着的');
-      expect(canClearStored(off), true,
-          reason: '★ 跟开关无关：关掉存储也能清（"我的东西我拿走"）');
-      // 负向对照：**没声明存东西**的 app ⇒ 不许摆那颗按钮（摆了就是假按钮）
-      final noStore = MiniApp.parse(_raw(permissions: const ['ask', 'net'], granted: const []))!;
-      expect(canClearStored(noStore), false, reason: '★ 它没声明存东西 ⇒ 不许有"清空"');
-      final nothing = MiniApp.parse(_raw(permissions: const [], granted: const []))!;
-      expect(canClearStored(nothing), false);
+    test('★ 那一颗"清空"的按钮**每个小程序都有**（存储默认就有）', () {
+      // ★ 2026-10-02：判据从"声明了存东西没有"改成"这是不是一个 app"
+      for (final perms in [const ['db'], const ['ask', 'net'], const <String>[]]) {
+        final a = MiniApp.parse(_raw(permissions: perms, granted: const []))!;
+        expect(canClearStored(a), true,
+            reason: '★ 存储默认有 ⇒ ${perms.join('+')} 也要有那颗"清空"');
+      }
+      // ⚠️ **跟"停用"无关**：别的那些一样都没给，照样能清（"我的东西我拿走"）
+      final off = MiniApp.parse(_raw(permissions: const ['ask'], granted: const []))!;
+      expect(grantSwitchOn(off, 'ask'), false, reason: '这一颗是关着的');
+      expect(canClearStored(off), true, reason: '★ 关不关都清得掉');
     });
   });
 
@@ -394,30 +408,38 @@ void main() {
   group('打开时那张弹窗：该问哪几样 / 不许问哪几样', () {
     test('🔴 该问的 = **声明了 ＋ 他还没表过态 ＋ 界面认得**（顺序照清单）', () {
       final app = MiniApp.parse(_raw(
-        permissions: const ['db', 'net', 'agent'],
+        permissions: const ['net', 'agent'],
         granted: const [],
-        unanswered: const ['db', 'net', 'agent'],
+        unanswered: const ['net', 'agent'],
       ))!;
       expect(needsAskOnOpen(app), true);
-      expect(pendingWantsOf(app), ['db', 'net', 'agent'],
+      expect(pendingWantsOf(app), ['net', 'agent'],
           reason: '★ 一次问完：还没表态的几样都在这一张窗里');
       // 表过态的（`granted` 里有）不许再问
       final partly = MiniApp.parse(_raw(
-        permissions: const ['db', 'net'],
-        granted: const ['db'],
-        unanswered: const ['net'],
+        permissions: const ['net', 'agent'],
+        granted: const ['net'],
+        unanswered: const ['agent'],
       ))!;
-      expect(pendingWantsOf(partly), ['net'], reason: '★ 给过的那些不再问');
+      expect(pendingWantsOf(partly), ['agent'], reason: '★ 给过的那些不再问');
+      // 🔴 ★ 负向对照：**存储（`db`）不进这张窗** —— 就算老服务端把它放进了
+      //    `unanswered`，界面也不问它（2026-10-02：存储默认有、不用他表态）
+      final withStore = MiniApp.parse(_raw(
+        permissions: const ['db', 'net'],
+        granted: const [],
+        unanswered: const ['db', 'net'],
+      ))!;
+      expect(pendingWantsOf(withStore), ['net'], reason: '★ 存储不该出现在弹窗里');
     });
 
     test('🔴 他**不给**过的那一样：也从"该问的"里挪走（`unanswered` 里没有它）', () {
       final app = MiniApp.parse(_raw(
-        permissions: const ['db', 'net'],
+        permissions: const ['ask', 'net'],
         granted: const [],
         unanswered: const ['net'],
       ))!;
       expect(pendingWantsOf(app), ['net']);
-      expect(grantSwitchOn(app, 'db'), false, reason: '★ 不给过 ⇒ 设置页那颗开关是关着的');
+      expect(grantSwitchOn(app, 'ask'), false, reason: '★ 不给过 ⇒ 设置页那颗开关是关着的');
       expect(needsAskOnOpen(app), true, reason: '还有一样没问过 ⇒ 照样得问');
     });
 
@@ -429,7 +451,7 @@ void main() {
       expect(needsAskOnOpen(old), false,
           reason: '★ 弹一张问不出结果的窗，只会白挡他一下');
       // 负向对照：回了**空数组** = 都问过了 ⇒ 也不弹
-      final answered = MiniApp.parse(_raw(granted: const ['db'], unanswered: const []))!;
+      final answered = MiniApp.parse(_raw(granted: const ['net'], unanswered: const []))!;
       expect(needsAskOnOpen(answered), false);
     });
 

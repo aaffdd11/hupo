@@ -27,8 +27,6 @@ import {
   DB_TIMEOUT_TEXT,
   DB_TOO_BIG_TEXT,
   DB_TOO_MANY_TEXT,
-  DB_NOT_GRANTED_TEXT,
-  DB_DECLARED_TEXT,
   checkAppDb,
   guardParams,
   guardSql,
@@ -95,17 +93,18 @@ test('D1 参数只认 null / 字符串 / 数字 / 布尔（认不出来就拒，
   }
 });
 
-test('D5 三道闸：没声明 403 · 没允许 403 · 动作/语句不认 400', () => {
-  const base = { declared: true, granted: true, op: 'all', sql: 'SELECT 1', params: [] };
+test('★ D5 🔴 **存储默认就有**：不声明、不点头也照样能跑；动作/语句/参数不认 ⇒ 400', () => {
+  // 主人 2026-10-02：*"我发现做的小程序都不会有存储。这个应该默认有存储。"*
+  // ⇒ 存储是沙箱的基本能力（一个 app 一个自己的库、在他那一格里、有配额）——
+  //   **不是"它想要什么"**，所以 `declared`/`granted` 两个入参**不再参与判定**。
+  const base = { op: 'all', sql: 'SELECT 1', params: [] };
   assert.equal(checkAppDb(base).ok, true);
-  const d = checkAppDb({ ...base, declared: false });
-  assert.deepEqual([d.ok, d.status, d.text], [false, 403, DB_DECLARED_TEXT]);
-  const g = checkAppDb({ ...base, granted: false });
-  assert.deepEqual([g.ok, g.status, g.text], [false, 403, DB_NOT_GRANTED_TEXT]);
+  assert.equal(checkAppDb({ ...base, declared: false, granted: false }).ok, true, '★ 没声明、没点头也该能跑');
+  assert.equal(checkAppDb({ ...base, declared: true, granted: false }).ok, true);
+  // 真正的闸照旧：动作、语句、参数
   assert.equal(checkAppDb({ ...base, op: 'drop' }).status, 400);
   assert.equal(checkAppDb({ ...base, sql: 'SELECT 1; SELECT 2' }).status, 400);
-  // 声明与授予**都**要（缺一个就拒）—— 顺序：先声明后授予
-  assert.equal(checkAppDb({ declared: false, granted: false, op: 'all', sql: 'SELECT 1' }).error, 'not-declared');
+  assert.equal(checkAppDb({ ...base, params: [[]] }).status, 400);
 });
 
 // ── D2 / D3 / D4 · 真库那几条（每条都开一次真子进程）──────────────
@@ -274,50 +273,28 @@ function makeApps(dir, sub) {
   return new Apps({ dir, sub, now: () => NOW });
 }
 
-test('D5 Apps.dbExec：没声明 403 · **声明了也要他点头**（弹窗那条路）· 他关掉 ⇒ 403', async () => {
+test('★ D5 🔴 `Apps.dbExec`：**没声明、没点头也照样能存**（存储默认有）；它也不在"他点的那张表"里', async () => {
   const dir = tmpdir();
   const apps = makeApps(dir, 'u1');
-  // ① 先注册一个**没声明** db 的 app
+  // ① **没声明 db 的 app** —— 以前 403，现在照常能存（主人 2026-10-02 定的）
   apps.register({ id: 'coin', title: '硬币', entry: 'index.html' });
-  const r1 = await apps.dbExec('coin', { op: 'run', sql: 'CREATE TABLE t(a)' });
-  assert.equal(r1.ok, false);
-  assert.equal(r1.status, 403);
-  assert.equal(r1.text, DB_DECLARED_TEXT);
-  // ② ★ **声明只是"它想要什么"**（主人 2026-10-01 翻回来：**默认不给**，要**他点头**）
+  const r1 = await apps.dbExec('coin', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
+  assert.equal(r1.ok, true, JSON.stringify(r1));
+  const w = await apps.dbExec('coin', { op: 'run', sql: 'INSERT INTO t VALUES (?)', params: ['甲'] });
+  assert.equal(w.ok, true);
+  assert.deepEqual((await apps.dbExec('coin', { op: 'all', sql: 'SELECT a FROM t' })).rows, [{ a: '甲' }]);
+  // ② 声明了 db 的 app：**不进"要他表态"那张表**（`unanswered` 里没有它 ⇒ 打开时不问这一样）
   apps.register({ id: 'dice', title: '骰子', entry: 'index.html', permissions: ['db'] });
-  assert.deepEqual(apps.grants('dice'), [], '🔴 光声明还不算数（默认不给）');
-  assert.deepEqual(apps.unanswered('dice'), ['db'], '它还没问过他 ⇒ 打开时要弹那张窗');
-  const before = await apps.dbExec('dice', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
-  assert.equal(before.ok, false);
-  assert.equal(before.status, 403);
-  //     他点头了 ⇒ 才生效
-  apps.setGrants('dice', ['db']);
-  assert.deepEqual(apps.grants('dice'), ['db'], '他点头之后才生效');
-  assert.deepEqual(apps.unanswered('dice'), [], '表过态了 ⇒ 不再弹');
-  const r3 = await apps.dbExec('dice', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' });
-  assert.equal(r3.ok, true, JSON.stringify(r3));
-  const r4 = await apps.dbExec('dice', { op: 'run', sql: 'INSERT INTO t VALUES (?)', params: ['甲'] });
-  assert.equal(r4.ok, true);
-  assert.equal(r4.changes, 1);
-  const r5 = await apps.dbExec('dice', { op: 'all', sql: 'SELECT a FROM t' });
-  assert.deepEqual(r5.rows, [{ a: '甲' }]);
-  // ③ 🔴 **他关掉 ⇒ 立刻进不去**（票 / 缓存都不该让它绕过"他关掉了"这件事）
+  assert.deepEqual(apps.unanswered('dice'), [], '★ 存储不用问他 ⇒ 不该进"打开时那张弹窗"');
+  assert.deepEqual(apps.grants('dice'), [], '★ 也不该出现在"他允许了哪几样"里');
+  assert.equal((await apps.dbExec('dice', { op: 'run', sql: 'CREATE TABLE t(a TEXT)' })).ok, true);
+  // ③ 他就算把 db 写进"关掉"那张表（老客户端/老文件干得出来）⇒ **存储照旧能用**
   apps.setGrants('dice', []);
-  assert.deepEqual(apps.grants('dice'), [], '关掉之后一样都不给');
-  const r6 = await apps.dbExec('dice', { op: 'all', sql: 'SELECT a FROM t' });
-  assert.equal(r6.ok, false);
-  assert.equal(r6.status, 403);
-  assert.equal(r6.text, DB_NOT_GRANTED_TEXT);
-  // ④ 再打开 ⇒ 又行了（关掉是"现在不给"，不是"以后都不给"）
-  apps.setGrants('dice', ['db']);
-  const r7 = await apps.dbExec('dice', { op: 'all', sql: 'SELECT a FROM t' });
-  assert.equal(r7.ok, true, JSON.stringify(r7));
-  assert.deepEqual(r7.rows, [{ a: '甲' }], '关掉再打开，数据还在');
-  // 🔴 **一个 app 一个文件**：两个 app 的路径不一样，而且 coin 那份**根本不存在**
-  assert.notEqual(apps.dbPath('dice'), apps.dbPath('coin'));
-  assert.equal(nodeFs.existsSync(apps.dbPath('coin')), false, '没跑过的那个 app 不许有库');
-  assert.equal(nodeFs.existsSync(apps.dbPath('dice')), true);
-  nodeFs.rmSync(dir, { recursive: true, force: true });
+  const r6 = await apps.dbExec('dice', { op: 'all', sql: 'SELECT 1' });
+  assert.equal(r6.ok, true, '★ 存储不该被他那张表关掉（它是基本能力）');
+  // ④ 数据一直都在
+  const back = await apps.dbExec('coin', { op: 'all', sql: 'SELECT a FROM t' });
+  assert.deepEqual(back.rows, [{ a: '甲' }]);
 });
 
 test('D5 两个 app 的库是**两个文件**：写进 A 的东西在 B 里查不到', async () => {

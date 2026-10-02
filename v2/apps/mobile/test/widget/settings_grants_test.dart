@@ -3,17 +3,19 @@
 // 主人原话：*「注册制，在设置里可以看到也可以关闭」*。
 //
 // ── 这一份要像用户那样按下去 ────────────────────────────────
-//   ① 只列**声明了东西**的；一个都没有 ⇒ **这张卡一个像素都不画**；
+//   ① 🔴 **每个小程序都列一行**（★ 2026-10-02：存储默认有 ⇒ 每个 app 都要够得着那颗
+//      "清空"）；**一个小程序都没有 ⇒ 这张卡一个像素都不画**；
 //   ② 开关开不开 ＝ `granted` 里有没有那一项（声明 ≠ 允许）；
 //   ③ 🔴 **点一下**：真的去说了（`/api/app-grant`）＋ **成了屏幕才变**；
 //      **没成 ⇒ 开关一动不动 ＋ 如实说一句**（服务端那句人话优先）；
 //   ④ 老服务端不回 `granted` ⇒ **不给开关**（不给假状态）；
 //   ⑤ 关闭**只是"现在不给"** —— 界面上没有"删掉"那种东西；
 //   ⑥ ★ **"清空它存下来的东西"**（2026-10-01 · `POST /api/app-db-clear`）：
-//      只在声明了存东西的 app 上有那颗按钮 · 点一下**先弹二次确认** ·
+//      ★ 2026-10-02 起**每个小程序都有**那颗按钮 · 点一下**先弹二次确认** ·
 //      **点"取消"不许发请求** · 点"清掉"才真发（正文 `{id}`）＋ 屏幕跟着变 ·
-//      服务端回错时**照它说**、**不许**显示成清掉了 · 等回执时按钮按不动 ·
-//      **跟开关无关**（关掉存储也能清）。
+//      服务端回错时**照它说**、**不许**显示成清掉了 · 等回执时按钮按不动；
+//   ⑦ 🔴 ★ **存储不摆成一行**（2026-10-02）：老清单里的 `db` **不上屏**
+//      （不摆"想把东西存下来"，也没有存储的开关）。
 //
 // ⚠️ 判据不写"控件存在就算完"：每一条都走真入口 / 真手势，并带**负向对照**
 //    （改回旧行为它得当场红）。
@@ -113,45 +115,68 @@ double listExtent(WidgetTester tester) {
   return s.position.maxScrollExtent;
 }
 
-Switch switchOf(WidgetTester tester, {String id = 'notes', String permission = 'db'}) =>
+Switch switchOf(WidgetTester tester, {String id = 'notes', String permission = 'ask'}) =>
     tester.widget<Switch>(find.byKey(grantSwitchKey(id, permission)));
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues(<String, Object>{}));
 
-  testWidgets('① 只列**声明了东西**的；一个都没有 ⇒ 这张卡一个像素都不画', (tester) async {
+  testWidgets('① 一个小程序都没有 ⇒ 一个像素都不画；有 ⇒ 每个都列（**存储不摆成一行**）', (tester) async {
     // ① 一条都没有
     await pumpSettings(tester);
     expect(find.byKey(appGrantsCardKey), findsNothing, reason: '★ 没有小程序 ⇒ 不许画卡');
     expect(find.text(settingsGrantsTitle), findsNothing);
     final bare = listExtent(tester);
 
-    // ② 有小程序，但**一个都没声明** ⇒ 照样一个像素都不画
-    await pumpSettings(tester, apps: [_app(permissions: const [], granted: const [])]);
-    expect(find.byKey(appGrantsCardKey), findsNothing,
-        reason: '★ 它什么都没要 ⇒ 不许画卡');
-    expect(find.text(settingsGrantsTitle), findsNothing);
-    expect(find.text('随手记'), findsNothing, reason: '★ 没声明的 app 一个字都不许出现');
-    // ⚠️ "一个像素"不是修辞：这一列**一点都不许多出来**
-    expect(listExtent(tester), bare, reason: '★ 没声明东西时那张卡占了位置 ⇒ 不是"一个像素都不画"');
-
-    // 负向对照：**声明了** ⇒ 它必须在（不然上面那两条是空转的）
-    await pumpSettings(tester, apps: [_app()]);
+    // ② 🔴 ★ 有 app，哪怕**它什么都没声明** ⇒ 这张卡也在
+    //    （2026-10-02：存储默认有 ⇒ 每个 app 都有一颗"清空"要够得着）
+    await pumpSettings(
+      tester,
+      apps: [_app(permissions: const [], granted: const [])],
+      onClear: (_) async => const ClearOk(0),
+    );
     await scrollToCard(tester);
-    expect(find.byKey(appGrantsCardKey), findsOneWidget, reason: '★ 声明了东西却不画卡');
+    expect(find.byKey(appGrantsCardKey), findsOneWidget,
+        reason: '★ 有小程序就得有这张卡（存储默认有 ⇒ 那颗"清空"要够得着）');
     expect(find.text('随手记'), findsOneWidget);
-    expect(find.text(grantWantWords('db')), findsOneWidget, reason: '★ 它想要什么要看得到');
+    // ⚠️ 它没声明任何"要问的东西" ⇒ 一行都不摆（不是画一行假的）
+    expect(find.text(grantWantWords('db')), findsNothing, reason: '★ 存储不摆成一行');
+    expect(find.text(grantWantWords('ask')), findsNothing);
+    expect(listExtent(tester) > bare, true, reason: '★ 有小程序 ⇒ 这一列真的长了');
+
+    // ③ 负向对照：**声明了 `ask`** ⇒ 那一行必须在（不然上面"没有行"是空转的）
+    await pumpSettings(
+      tester,
+      apps: [_app(permissions: const ['db', 'ask'], granted: const [])],
+      onGrant: (id, p, allow) async => const GrantOk(<String>[]),
+    );
+    await scrollToCard(tester);
+    expect(find.text('随手记'), findsOneWidget);
+    expect(find.text(grantWantWords('ask')), findsOneWidget, reason: '★ 它想要什么要看得到');
+    expect(find.text(grantWantWords('db')), findsNothing,
+        reason: '★ 老清单里那个 `db` 也不许上屏（存储默认有）');
+    expect(find.byKey(grantSwitchKey('notes', 'db')), findsNothing,
+        reason: '★ 存储没有开关（它不是"要他允许的一样"）');
   });
 
   testWidgets('② 开关开不开 ＝ `granted` 里有没有那一项（声明 ≠ 允许）', (tester) async {
     // ⚠️ 这一组要量**开关** ⇒ 必须把那条路接上（没接线时**不给开关**，见 ⑦·补）
+    // ⚠️ 量的是 `ask`（`db` 那一颗 2026-10-02 撤了：存储默认有、不给开关）
     Future<GrantOutcome> grant(String id, String p, bool allow) async =>
         const GrantOk(<String>[]);
-    await pumpSettings(tester, apps: [_app(granted: const [])], onGrant: grant);
+    await pumpSettings(
+      tester,
+      apps: [_app(permissions: const ['ask'], granted: const [])],
+      onGrant: grant,
+    );
     await scrollToCard(tester);
     expect(switchOf(tester).value, false, reason: '声明了、但还没给 ⇒ 关着');
 
-    await pumpSettings(tester, apps: [_app(granted: const ['db'])], onGrant: grant);
+    await pumpSettings(
+      tester,
+      apps: [_app(permissions: const ['ask'], granted: const ['ask'])],
+      onGrant: grant,
+    );
     await scrollToCard(tester);
     expect(switchOf(tester).value, true, reason: '★ 允许了 ⇒ 开着');
 
@@ -159,12 +184,12 @@ void main() {
     //（`grantSwitchOn` 判的是"它声明了这一样没有"）
     await pumpSettings(
       tester,
-      apps: [_app(permissions: const ['ask'], granted: const ['db'])],
+      apps: [_app(permissions: const ['net'], granted: const ['ask'])],
       onGrant: grant,
     );
     await scrollToCard(tester);
-    expect(find.byKey(grantSwitchKey('notes', 'db')), findsNothing,
-        reason: '它没声明 db ⇒ 不许摆一个 db 的开关');
+    expect(find.byKey(grantSwitchKey('notes', 'ask')), findsNothing,
+        reason: '它没声明 ask ⇒ 不许摆一个 ask 的开关');
   });
 
   testWidgets('③ 🔴 像用户那样点一下：**成了屏幕才变**（先等回执，不许先拨过去）', (tester) async {
@@ -172,7 +197,7 @@ void main() {
     final gate = Completer<GrantOutcome>();
     await pumpSettings(
       tester,
-      apps: [_app(granted: const [])],
+      apps: [_app(permissions: const ['ask'], granted: const [])],
       onGrant: (id, p, allow) {
         calls.add((id: id, permission: p, allow: allow));
         return gate.future;
@@ -181,15 +206,15 @@ void main() {
     await scrollToCard(tester);
     expect(switchOf(tester).value, false);
 
-    await tester.tap(find.byKey(grantSwitchKey('notes', 'db')));
+    await tester.tap(find.byKey(grantSwitchKey('notes', 'ask')));
     await tester.pump();
     // ★ 负向对照：回执还没回来 ⇒ **屏幕上不许已经是"已允许"**
     expect(switchOf(tester).value, false,
         reason: '★ 服务端还没说成，开关就拨过去了 ⇒ 那是"先说改好了"');
-    expect(calls, [(id: 'notes', permission: 'db', allow: true)],
+    expect(calls, [(id: 'notes', permission: 'ask', allow: true)],
         reason: '★ 点下去要真的去说那一声（正文三样：id / permission / allow）');
 
-    gate.complete(const GrantOk(['db']));
+    gate.complete(const GrantOk(['ask']));
     await tester.pumpAndSettle();
     expect(switchOf(tester).value, true, reason: '★ 明说成了 ⇒ 屏幕才跟着变');
   });
@@ -198,7 +223,7 @@ void main() {
     final calls = <GrantCall>[];
     await pumpSettings(
       tester,
-      apps: [_app(granted: const ['db'])],
+      apps: [_app(permissions: const ['ask'], granted: const ['ask'])],
       onGrant: (id, p, allow) async {
         calls.add((id: id, permission: p, allow: allow));
         return const GrantOk(<String>[]);
@@ -207,9 +232,9 @@ void main() {
     await scrollToCard(tester);
     expect(switchOf(tester).value, true);
 
-    await tester.tap(find.byKey(grantSwitchKey('notes', 'db')));
+    await tester.tap(find.byKey(grantSwitchKey('notes', 'ask')));
     await tester.pumpAndSettle();
-    expect(calls, [(id: 'notes', permission: 'db', allow: false)]);
+    expect(calls, [(id: 'notes', permission: 'ask', allow: false)]);
     expect(switchOf(tester).value, false, reason: '★ 成了 ⇒ 关');
     // 🔴 关闭只是"现在不给"：屏幕上说的是这一句，而且这一趟**没有**删除/清空那种按钮
     //    ⚠️ 2026-10-01：那张卡上**多了一颗「清空它存下来的东西」**（另一件事，见下面 ⑩–⑭），
@@ -226,11 +251,11 @@ void main() {
     const serverWords = '这个小程序要的东西现在还不给。';
     await pumpSettings(
       tester,
-      apps: [_app(granted: const [])],
+      apps: [_app(permissions: const ['ask'], granted: const [])],
       onGrant: (id, p, allow) async => const GrantFailed(serverWords),
     );
     await scrollToCard(tester);
-    await tester.tap(find.byKey(grantSwitchKey('notes', 'db')));
+    await tester.tap(find.byKey(grantSwitchKey('notes', 'ask')));
     await tester.pumpAndSettle();
     // ★ 负向对照：没成却把开关拨过去（或拨过去又回滚）⇒ 这里当场红
     expect(switchOf(tester).value, false, reason: '★ 没成不许假装成了');
@@ -249,11 +274,11 @@ void main() {
   testWidgets('⑤·补 服务端没给人话 ⇒ 用兜底那句（**不许静默**）', (tester) async {
     await pumpSettings(
       tester,
-      apps: [_app(granted: const [])],
+      apps: [_app(permissions: const ['ask'], granted: const [])],
       onGrant: (id, p, allow) async => const GrantFailed(''),
     );
     await scrollToCard(tester);
-    await tester.tap(find.byKey(grantSwitchKey('notes', 'db')));
+    await tester.tap(find.byKey(grantSwitchKey('notes', 'ask')));
     await tester.pumpAndSettle();
     expect(switchOf(tester).value, false);
     expect(find.text(settingsGrantsFailed), findsOneWidget,
@@ -263,11 +288,11 @@ void main() {
   testWidgets('⑥ 令牌不行 ⇒ 照样一动不动、也不说成"给了"', (tester) async {
     await pumpSettings(
       tester,
-      apps: [_app(granted: const [])],
+      apps: [_app(permissions: const ['ask'], granted: const [])],
       onGrant: (id, p, allow) async => const GrantUnauthorized(),
     );
     await scrollToCard(tester);
-    await tester.tap(find.byKey(grantSwitchKey('notes', 'db')));
+    await tester.tap(find.byKey(grantSwitchKey('notes', 'ask')));
     await tester.pumpAndSettle();
     expect(switchOf(tester).value, false);
     expect(find.text(settingsGrantsFailed), findsOneWidget);
@@ -276,21 +301,21 @@ void main() {
   testWidgets('⑦ 老服务端不回 `granted` ⇒ **不给开关**（但"它想要什么"照说）', (tester) async {
     await pumpSettings(
       tester,
-      apps: [_app(granted: null)],
-      onGrant: (id, p, allow) async => const GrantOk(['db']),
+      apps: [_app(permissions: const ['ask'], granted: null)],
+      onGrant: (id, p, allow) async => const GrantOk(['ask']),
     );
     await scrollToCard(tester);
-    expect(find.text(grantWantWords('db')), findsOneWidget,
+    expect(find.text(grantWantWords('ask')), findsOneWidget,
         reason: '"它想要什么"是真话，照样说');
-    expect(find.byKey(grantSwitchKey('notes', 'db')), findsNothing,
+    expect(find.byKey(grantSwitchKey('notes', 'ask')), findsNothing,
         reason: '★ 不知道"你给了没有" ⇒ 一个开关都不许画（不给假开关）');
   });
 
   testWidgets('⑦·补 这一条路没接上 ⇒ 也**不给开关**（同"不给假按钮"那条纪律）', (tester) async {
-    await pumpSettings(tester, apps: [_app(granted: const [])]); // onGrant 没接线
+    await pumpSettings(tester, apps: [_app(permissions: const ['ask'], granted: const [])]); // onGrant 没接线
     await scrollToCard(tester);
-    expect(find.text(grantWantWords('db')), findsOneWidget);
-    expect(find.byKey(grantSwitchKey('notes', 'db')), findsNothing,
+    expect(find.text(grantWantWords('ask')), findsOneWidget);
+    expect(find.byKey(grantSwitchKey('notes', 'ask')), findsNothing,
         reason: '★ 按了也没人接 ⇒ 不许摆一个按不动的开关');
   });
 
@@ -321,7 +346,7 @@ void main() {
                 'version': 1,
                 'entryUrl': 'https://apps.example/notes/index.html?sig=x',
                 'expiresAt': 0,
-                'permissions': ['db'],
+                'permissions': ['ask'],
                 'granted': <String>[],
               },
             ],
@@ -329,7 +354,7 @@ void main() {
         }
         if (r.url.path == '/api/app-grant') {
           grantBody = jsonDecode(r.body) as Map<String, dynamic>;
-          return _json(jsonEncode({'ok': true, 'permissions': ['db']}));
+          return _json(jsonEncode({'ok': true, 'permissions': ['ask']}));
         }
         return _json('{}');
       }),
@@ -353,9 +378,9 @@ void main() {
     expect(find.byType(SettingsScreen), findsOneWidget, reason: '★ 没进设置那一屏');
     await scrollToCard(tester);
 
-    await tester.tap(find.byKey(grantSwitchKey('notes', 'db')));
+    await tester.tap(find.byKey(grantSwitchKey('notes', 'ask')));
     await tester.pumpAndSettle();
-    expect(grantBody, {'id': 'notes', 'permission': 'db', 'allow': true},
+    expect(grantBody, {'id': 'notes', 'permission': 'ask', 'allow': true},
         reason: '★ 那一下必须真的走到 `/api/app-grant`（正文三样）');
     expect(switchOf(tester).value, true, reason: '★ 服务端明说成了 ⇒ 屏幕跟着变了');
   });
@@ -426,12 +451,13 @@ void main() {
     await pumpGrantsViaChat(
       tester,
       clearCalls: calls,
+      permissions: const ['ask'],
       onClear: (_) => _json(jsonEncode({'ok': true, 'removed': 2})),
     );
-    // ⚠️ 这一趟存储那一颗是**关着的**（`granted` 空）—— 下面要证明"清空跟开关无关"
+    // ⚠️ 这一趟另一颗开关是**关着的**（`granted` 空）—— 下面要证明"清空跟那些开关无关"
     expect(switchOf(tester).value, false, reason: '这一趟 granted 是空的');
     expect(find.byKey(appDbClearKey('notes')), findsOneWidget,
-        reason: '★ 声明了存东西 ⇒ 那颗按钮必须在（跟开关无关）');
+        reason: '★ 每个小程序都有那颗按钮（存储默认有；跟别的开关无关）');
 
     // ① 点一下 ⇒ **先弹二次确认**（这一刻一个请求都不许发）
     await tapClear(tester);
@@ -538,24 +564,27 @@ void main() {
     expect(find.text(settingsClearDbDone), findsOneWidget);
   });
 
-  testWidgets('⑬ ★ 没声明存东西的 app 上**没有**那颗按钮；这条路没接上也不给', (tester) async {
-    // ① 声明了 ask / net，但**没声明**存东西 ⇒ 不许摆一个"清空"
+  testWidgets('⑬ ★ 没声明任何东西的 app 也**有**那颗按钮；这条路没接上才不给', (tester) async {
+    // ① 🔴 ★ 2026-10-02：**什么都没声明** ⇒ 照样有那颗"清空"
+    //    （存储默认有、制品不声明也存得进去 ⇒ 按"声明过没有"来摆就永远够不着它）
     await pumpSettings(
       tester,
-      apps: [_app(permissions: const ['ask', 'net'], granted: const [])],
+      apps: [_app(permissions: const [], granted: const [])],
       onClear: (_) async => const ClearOk(0),
     );
     await scrollToCard(tester);
-    expect(find.text(grantWantWords('net')), findsOneWidget,
-        reason: '★ "想连网取数据"那一句要在屏幕上（认得 = 给开关）');
-    expect(grantSwitchOn(_app(permissions: const ['ask', 'net']), 'net'), false,
-        reason: '★ net 认得 ⇒ 开关的值只看 granted');
-    expect(find.byKey(appDbClearKey('notes')), findsNothing,
-        reason: '★ 它没声明存东西 ⇒ 摆一个"清空"就是假按钮');
+    expect(find.byKey(appDbClearKey('notes')), findsOneWidget,
+        reason: '★ 存储默认有 ⇒ 没声明也要能清（"我的东西我拿走"）');
+    // ⚠️ 它没有"要问的东西" ⇒ 一行都不摆，也没有任何开关
+    expect(find.byType(Switch), findsNothing, reason: '★ 没声明的 app 上不许有开关');
 
-    // ② 声明了存东西，但这一条路没接上 ⇒ 也不给（同"不给假按钮"那条纪律）
-    await pumpSettings(tester, apps: [_app()]);
+    // ② 声明了要问的东西、那条路**没接上** ⇒ 不给开关（同"不给假按钮"那条纪律）；
+    //    但"清空"这条路也没接上 ⇒ 那颗按钮同样不给
+    await pumpSettings(tester, apps: [_app(permissions: const ['ask'])]);
     await scrollToCard(tester);
+    expect(find.text(grantWantWords('ask')), findsOneWidget);
+    expect(find.byKey(grantSwitchKey('notes', 'ask')), findsNothing,
+        reason: '★ 按了也没人接 ⇒ 不许摆一个按不动的开关');
     expect(find.byKey(appDbClearKey('notes')), findsNothing,
         reason: '★ 按了也没人接 ⇒ 不许摆一颗按不动的"清空"');
   });

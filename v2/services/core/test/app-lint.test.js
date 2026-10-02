@@ -47,16 +47,19 @@ test('③ 禁原生桥：webkit.messageHandlers / HupoNative / Android.* ⇒ **�
   }
 });
 
-test('④ 声明与用途要对上：用了没声明 ⇒ **报错**（带改法）；声明了没用 ⇒ 提示', () => {
+test('★ ④ 🔴 **存储默认有**：用 `/db` 不报"没声明"；"声明了没用"也不再提；别的照旧要对上', () => {
+  // 主人 2026-10-02：*"我发现做的小程序都不会有存储。这个应该默认有存储。"*
+  // ⇒ 存储是基本能力 ⇒ ① 用了 `/db` **不用声明**（不再报错）；② "声明了 db 却没用"**也不再提**
+  //   （他不用为此操心）；③ 别的那几样（ask/agent/net）**照旧**"用了就得声明"。
   const dbUse = page('<script>fetch("/db",{method:"POST"})</script>');
   const r1 = lintApp(dbUse);
-  assert.equal(r1.errors.some((e) => e.code === 'db-not-declared'), true, '用了 /db 没声明 ⇒ 报');
-  assert.match(r1.errors.find((e) => e.code === 'db-not-declared').text, /permissions/);
-  assert.deepEqual(lintApp({ ...dbUse, permissions: ['db'] }).errors, [], '声明了就没事');
-
-  // 声明了却没用 ⇒ 提示（不是错）
-  const r2 = lintApp({ files: { 'index.html': '<p>纯静态</p>' }, permissions: ['db'] });
-  assert.equal(r2.warnings.some((w) => w.code === 'db-unused'), true);
+  assert.equal(r1.errors.some((e) => e.code === 'db-not-declared'), false, '★ 用了 /db 不该再报"没声明"');
+  assert.deepEqual(lintApp({ ...dbUse, permissions: ['db'] }).errors, [], '声明了当然也没事');
+  assert.equal(
+    lintApp({ files: { 'index.html': '<p>纯静态</p>' }, permissions: ['db'] }).warnings.some((w) => w.code === 'db-unused'),
+    false,
+    '★ "声明了 db 却没用"不该再提醒（它默认就有，不是他操心的事）',
+  );
 
   // ask / agent 各一条
   assert.equal(lintApp(page('<script>fetch("/ask")</script>')).errors.some((e) => e.code === 'ask-not-declared'), true);

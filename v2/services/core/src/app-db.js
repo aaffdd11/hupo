@@ -84,6 +84,8 @@ export const DB_RUNNER = nodePath.join(nodePath.dirname(nodeUrl.fileURLToPath(im
 
 // ── 人话（页面会照原样显示，所以不许出现内部词）────────────────
 
+// ⚠️ **2026-10-02 起这两句不再会被用到**：存储是**基本能力**（见下面 `checkAppDb` 那段）——
+//    留着常量只是为了老判据/老日志还能引用（历史里那两条 403 是真发生过的）。
 export const DB_DECLARED_TEXT = '这个小程序没说要存东西。';
 export const DB_NOT_GRANTED_TEXT = '你还没允许它存东西。';
 export const DB_BUSY_TEXT = '这个小程序刚存完上一笔，等一下再试。';
@@ -202,26 +204,29 @@ export function guardParams(raw) {
 }
 
 /**
- * **这一条该不该跑**（声明 ＋ 授予 ＋ 语句 ＋ 参数 ＋ 频率，纯逻辑）。
+ * **这一条该不该跑**（语句 ＋ 参数 ＋ 频率，纯逻辑）。
  *
- * ⚠️ 它和 `ask` 那四道闸**同一个形状**：`ok:false` 时 `status` 就是该回的那个码。
+ * ★ **2026-10-02：存储是"默认就有"的基本能力**（主人原话：*"我发现做的小程序都不会有存储。
+ *   这个应该默认有存储。"*）⇒ **不要声明、不要他点头**：
+ *   一个小程序**一个自己的库**（在他那一格里、按 app 隔离、跟着 app 一起删、有配额与频率闸），
+ *   那是沙箱的一部分，**不是"它想要什么"**。
+ *   ⚠️ 以前那两道（`not-declared` / `not-granted`）**删掉了** —— 它们让"记住东西"变成
+ *      要他表态的一件事，而做 app 的 agent 按"只用真正需要的"那条指导**往往就不声明** ⇒
+ *      结果就是**做出来的小程序一个都不会存**。
+ *   ⚠️ `declared` / `granted` 两个入参**仍然收**（老调用方还传），但**不参与判定**。
+ *
+ * ⚠️ 它和 `ask` 那几道闸**同一个形状**：`ok:false` 时 `status` 就是该回的那个码。
  * ⚠️ 宿主与盒子**调的都是这一个函数**（`Apps.dbExec` 里那一句）⇒ 两端不可能分叉。
  *
  * @param {object} o
- * @param {boolean} o.declared 制品清单里声明了 `db` 没有
- * @param {boolean} o.granted  看的人允许了没有
+ * @param {boolean} [o.declared] 老入参（**已不参与判定**）
+ * @param {boolean} [o.granted]  老入参（**已不参与判定**）
  * @param {string} o.op
  * @param {unknown} o.sql
  * @param {unknown} o.params
  * @returns {{ok:true, sql:string, params:any[]} | {ok:false, status:number, error:string, text:string}}
  */
-export function checkAppDb({ declared, granted, op, sql, params } = {}) {
-  if (declared !== true) {
-    return { ok: false, status: 403, error: 'not-declared', text: DB_DECLARED_TEXT };
-  }
-  if (granted !== true) {
-    return { ok: false, status: 403, error: 'not-granted', text: DB_NOT_GRANTED_TEXT };
-  }
+export function checkAppDb({ op, sql, params } = {}) {
   if (!DB_OPS.includes(op)) {
     return { ok: false, status: 400, error: 'bad-op', text: DB_ERROR_TEXT };
   }

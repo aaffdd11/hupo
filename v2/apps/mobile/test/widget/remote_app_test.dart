@@ -165,7 +165,7 @@ void main() {
         }
         if (req.url.path == '/api/app-grant') {
           grants.add(jsonDecode(req.body) as Map<String, Object?>);
-          return http.Response(jsonEncode({'ok': true, 'permissions': ['db']}), 200,
+          return http.Response(jsonEncode({'ok': true, 'permissions': ['ask']}), 200,
               headers: {'content-type': 'application/json'});
         }
         return http.Response('', 404);
@@ -178,9 +178,10 @@ void main() {
     final h = apiWithWants([
       {
         ..._entry(id: 'jizhang', title: '记账'),
-        'permissions': ['db'],
+        // ★ 2026-10-02：`db` 不进这张窗 ⇒ 用 `ask` 量"打开前先问一句"
+        'permissions': ['ask'],
         'granted': <String>[],
-        'unanswered': ['db'],
+        'unanswered': ['ask'],
       },
     ]);
     await _pump(tester, h.api);
@@ -198,7 +199,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(h.grants.length, 1, reason: '★ 点了「就这样」就得真去说一声');
     expect(h.grants.single['id'], 'jizhang');
-    expect(h.grants.single['permission'], 'db');
+    expect(h.grants.single['permission'], 'ask');
     expect(h.grants.single['allow'], true);
 
     // ③ 问完就照开（"那一样用不了，别的照旧"—— 他就算不给也照开）
