@@ -324,7 +324,13 @@ class _FileChangeRowState extends State<FileChangeRow> {
     final f = widget.change;
     // ⚠️ 名字那一格**可以是空的**（那次调用的 `name` 本站就不知道）：
     //    空的就**不画那一句**，绝不编一个占位名（N10：沉默优于编造）。
-    final tools = f.tools.where((t) => t.isNotEmpty).toList(growable: false);
+    // ★ 2026-10-02（契约 `154` §2.1）：这一格也走**人话**（`edit` → 「改文件」）——
+    //   那一栏是给人看的一栏，内部名和别处一样不许上屏；认不出的**如实说认不出**
+    //   （`filePanelUnknownTool`），不是把内部名摆出来。
+    final tools = [
+      for (final t in f.tools)
+        if (t.isNotEmpty) (toolHumanName(t) ?? filePanelUnknownTool),
+    ];
     return Padding(
       padding: const EdgeInsets.only(bottom: DshSpace.s4),
       // 🔴 **一整行要占满那一栏的宽**：`TextButton` 的宽度本来**跟内容算**，

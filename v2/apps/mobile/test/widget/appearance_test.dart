@@ -26,6 +26,7 @@ import 'package:hupo_app/models/dsh_design.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/space_words.dart';
+import 'package:hupo_app/models/tool_row_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
 import 'package:hupo_app/services/api.dart';
@@ -214,9 +215,10 @@ double _composerFontSize(WidgetTester tester) => tester
 /// ⚠️ `style.fontSize` 是**没缩放**的那个值 ⇒ 显式把 `textScaler` 用上
 ///    （与 `accessibility_test.dart` 那条"不封顶"同一个量法）。
 double _rowFontSize(WidgetTester tester) {
-  expect(find.text('bash'), findsOneWidget,
+  // ★ 2026-10-02（`154` §2.1）：那一格现在是**人话**（`bash` → 「跑命令」）
+  expect(find.text(toolHumanName('bash')!), findsOneWidget,
       reason: '★ 工具行不在树里 ⇒ 量不到聊天里的字（这一条会红）');
-  final p = tester.renderObject<RenderParagraph>(find.text('bash'));
+  final p = tester.renderObject<RenderParagraph>(find.text(toolHumanName('bash')!));
   return p.textScaler.scale(p.text.style!.fontSize!);
 }
 
@@ -349,8 +351,9 @@ void main() {
     expect(mainLine, closeTo(20, 0.01), reason: '★ 主要那一档的行高（绝对值）');
 
     // ② **非主要**：那一行工具名 ⇒ 11 / 行高 14
-    expect(find.text('bash'), findsOneWidget);
-    final rowStyle = tester.widget<Text>(find.text('bash')).style!;
+    //   ★ 2026-10-02：那一格是人话（`toolHumanName`），不再是内部名
+    expect(find.text(toolHumanName('bash')!), findsOneWidget);
+    final rowStyle = tester.widget<Text>(find.text(toolHumanName('bash')!)).style!;
     final rowSize = rowStyle.fontSize!;
     final rowLine = rowSize * rowStyle.height!;
     expect(rowSize, 11, reason: '★ 非主要那一档的字号（工具行）');

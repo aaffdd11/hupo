@@ -957,7 +957,11 @@ class ChatController extends ChangeNotifier {
     final saved = await drafts.load();
     if (!identical(room, _room)) return;
     for (final d in saved) {
-      room.timeline.addLocalUtterance(d.text, d.messageId);
+      room.timeline.addLocalUtterance(
+        d.text,
+        d.messageId,
+        at: DateTime.now().millisecondsSinceEpoch,
+      );
       // 回到它原来的态（`sent` 读回来是 `failed`，理由见 [storableState]）
       room.timeline.setLocalState(d.messageId, d.state);
     }
@@ -1471,7 +1475,12 @@ class ChatController extends ChangeNotifier {
 
     _localSeq += 1;
     final messageId = 'u_${DateTime.now().millisecondsSinceEpoch}_$_localSeq';
-    room.timeline.addLocalUtterance(text, messageId);
+    room.timeline.addLocalUtterance(
+      text,
+      messageId,
+      // ★ 本地这一条的时刻：**只用来显示**那一行时间；服务端认领时换成它的钟。
+      at: DateTime.now().millisecondsSinceEpoch,
+    );
     _lastError = null;
     // ⚠️ **在发出去之前先落存档**（欠账 18）：用户按下发送之后马上切出去、
     //    或者这一次请求就挂在网上，那这句话也必须还在。

@@ -73,13 +73,16 @@ String _foldLabel() => dshTurnProcessLabel(
 );
 
 void main() {
-  testWidgets('★ 工具行：工具名 + 人话标题 + 状态；展开才看得见入参/输出/截断那句', (tester) async {
+  testWidgets('★ 工具行：人话名字 + 人话标题 + 状态；原始名与正文**展开才看得见**', (tester) async {
     final c = _open();
     await _pump(tester, c);
-    expect(find.text('bash'), findsOneWidget);
+    // ★ 2026-10-02（契约 `154` §2.1）：那一格是**人话**（`bash` → 「跑命令」）
+    expect(find.text(toolHumanName('bash')!), findsOneWidget, reason: '行上要有人话名字');
     expect(find.text('跑一下测试'), findsOneWidget);
     expect(find.text(toolStatusWord(ToolStatus.ok)), findsOneWidget);
 
+    // 🔴 **负向对照**：内部名**不许**出现在收起那一行上（那是"内部词上屏"）
+    expect(find.text('bash'), findsNothing, reason: '内部名不许上屏（它在展开那一块里）');
     // 收起时：正文**一个像素都不画**（不在树里）
     expect(find.text('{\n  "command": "ls -la"\n}'), findsNothing);
     expect(find.text(toolTruncatedLine(1234)), findsNothing);
@@ -87,7 +90,12 @@ void main() {
     await tester.tap(find.byIcon(Icons.keyboard_arrow_right).first);
     await tester.pumpAndSettle();
 
-    // 展开：入参**换行原样**、输出**纯文本**（`<b>` 不被当 HTML）、截断那句**如实说**
+    // 展开：**原始名那一行在**（要核对时找得到）＋ 入参换行原样 ＋ 输出纯文本 ＋ 截断如实说
+    expect(
+      find.text('$toolRowRawNameLabel：bash'),
+      findsOneWidget,
+      reason: '展开那一块里要有原始名（"全部开放"那一条没丢）',
+    );
     expect(find.text('{\n  "command": "ls -la"\n}'), findsOneWidget);
     expect(find.text('<b>结果</b>\na.txt'), findsOneWidget);
     expect(find.text('… 已截断，共 1234 字节'), findsOneWidget);
@@ -105,7 +113,7 @@ void main() {
 
     await tester.tap(find.text(_foldLabel()));
     await tester.pumpAndSettle();
-    expect(find.text('bash'), findsOneWidget, reason: '点开之后那一行要回来');
+    expect(find.text(toolHumanName('bash')!), findsOneWidget, reason: '点开之后那一行要回来');
   });
 
   testWidgets('🔴 自动折叠**不许吃掉键盘焦点**（焦点还在那一行上就不折）', (tester) async {
@@ -124,7 +132,7 @@ void main() {
     c.ingest({'type': 'message/end', 'seq': 6, 'messageId': 'm_1', 'reason': 'completed'});
     await tester.pumpAndSettle();
     expect(
-      find.text('bash'),
+      find.text(toolHumanName('bash')!),
       findsOneWidget,
       reason: '焦点还在那一行上，收口却把它收走了 —— 键盘用户会当场失去焦点',
     );

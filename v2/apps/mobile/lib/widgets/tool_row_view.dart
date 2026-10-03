@@ -76,6 +76,8 @@ class _ToolRowViewState extends State<ToolRowView> {
       ToolStatus.interrupted => (Icons.remove, p.labelTertiary),
     };
     final title = row.title;
+    // ★ 2026-10-02：认得出就翻人话，认不出留空（见 `toolHumanName` 那段）。
+    final humanName = toolHumanName(row.name);
     return Padding(
       // ★ 2026-10-01（主人："间距有问题"）：这一行是**非主要**，字缩到 11 之后
       //   它原来那圈空当（`s4` ＋ 一个 48 高的按钮）就显得很空 ⇒ 一起收。
@@ -100,13 +102,14 @@ class _ToolRowViewState extends State<ToolRowView> {
                   runSpacing: DshSpace.s4,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    // ⚠️ **名字可以是空的**：`tool/call` 那条配不上时（合同 `116` §一
-                    //    规矩 4）只画结果那一行，那时**我们不知道是哪个工具** ——
-                    //    名字那一格就空着，绝不编一个占位名（N10：沉默优于编造）。
-                    if (row.name.isNotEmpty)
-                      Text(row.name, style: _styleOf(look.quiet, p.labelSecondary, family: _monoFamily)),
+                    // ★ 2026-10-02（契约 `154` §2.1）：左边那一格是**人话**
+                    //   （`toolHumanName`），**内部名不上屏**；认不出的工具**留空**
+                    //   （原来那一格是把 `mcp__apps__app_create` 这种原样摆出来的）。
+                    //   🔴 原始名没丢：它在**展开的那一块**里（`toolRowRawNameLabel`）。
+                    if (humanName != null)
+                      Text(humanName, style: _styleOf(look.quiet, p.labelSecondary)),
                     if (title != null && title.isNotEmpty) ...[
-                      if (row.name.isNotEmpty) Text('·', style: _styleOf(look.quiet, p.labelCaption)),
+                      if (humanName != null) Text('·', style: _styleOf(look.quiet, p.labelCaption)),
                       Text(title, style: _styleOf(look.quiet, p.labelSecondary)),
                     ],
                     Text(
@@ -165,6 +168,15 @@ class _ToolRowViewState extends State<ToolRowView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // ★ 2026-10-02：**原始名字住在这一层**（契约 `154` §2.1）——
+                //   行上那一格是给人看的人话，这一格是"要核对时找得到"。
+                if (row.name.isNotEmpty) ...[
+                  Text(
+                    '$toolRowRawNameLabel：${row.name}',
+                    style: _styleOf(look.caption, p.labelTertiary),
+                  ),
+                  const SizedBox(height: DshSpace.s4),
+                ],
                 if (args != null && args.isNotEmpty)
                   SelectableText(args, style: _styleOf(look.mono, p.labelSecondary, family: _monoFamily)),
                 // ⚠️ 结果**绝不**当 Markdown/HTML 画：走 `SelectableText`（纯文本、保留换行）。

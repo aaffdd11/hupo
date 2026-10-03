@@ -18,6 +18,7 @@ import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/models/job_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
 import 'package:hupo_app/models/login_words.dart';
+import 'package:hupo_app/models/chat_time_words.dart';
 import 'package:hupo_app/models/notice_words.dart';
 import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/process_words.dart';
@@ -25,6 +26,8 @@ import 'package:hupo_app/models/queue_words.dart';
 import 'package:hupo_app/models/source_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/speak_words.dart';
+import 'package:hupo_app/models/tool_row_words.dart';
+import 'package:hupo_app/models/trash.dart';
 import 'package:hupo_app/models/trash_words.dart';
 
 void main() {
@@ -202,6 +205,25 @@ void main() {
       noticeUndoLabel,
       noticeDismissLabel,
       noticeNotKeptLine,
+      // ★ 2026-10-02（`154` §2.3）：回收站那一页新写的每一句（一条一张卡上那三行）
+      trashHeadLine(3),
+      trashHeadHint,
+      trashAtLine(1758400000000),
+      trashAtLine(null),
+      trashCanRestoreUntilLine(1758400000000),
+      trashCanRestoreUntilLine(null),
+      trashLineOf(TrashEntry(messageIds: const ['u_1'], say: '他说的一句话')),
+      trashEmptyLine,
+      trashEmptyHint,
+      // ★ 2026-10-02（`154` §2.1）：连着同样几句合成一行时末尾那个次数
+      noticeRepeatSuffix(4),
+      // ★ 2026-10-02：时间那一行那两个字
+      timeMarkToday,
+      timeMarkYesterday,
+      // ★ 2026-10-02：工具行翻出来的人话 ＋ 展开那一块里“原始名”那个标签
+      toolRowRawNameLabel,
+      ...['bash', 'read', 'write', 'edit', 'web_search', 'app_create', 'app_list']
+          .map((n) => toolHumanName(n)!),
       // ⚠️ 出处（`67-SOURCES.md`）：抬头与"还有 N 处" —— **直接引数据源**（手抄会漂）
       sourcesHeadWords,
       sourcesMoreWords(2),

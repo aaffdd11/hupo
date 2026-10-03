@@ -219,15 +219,23 @@ export function renderExport(items, { hiddenCount = 0 } = {}) {
 /**
  * 取数口用的那一下：读事件 → 折条 → 渲染。
  *
+ * ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.2）：
+ *    除了那段成品 `text`，**顺手把折好的条目也带上**（`items`）。
+ *    它就是 [exportItems] 折出来、[renderExport] 用的**同一份**列表 ——
+ *    过滤规则与 `text` 逐条一致（隐藏的、空的不进），客户端据此按天分组重排；
+ *    拿不到它的老客户端/老盒子照旧只看 `text`，行为一个字节不变。
+ *    ⚠️ **`text` 必须一个字节都不变**（判据 `test/export.test.js`）——
+ *       `items` 只是**新增字段**，不许顺手改渲染。
+ *
  * @param {object[]} events
  * @param {object} [opts]
  * @param {Iterable<string>} [opts.hiddenIds]  回收站里的 id（§三）
  * @param {number} [opts.hiddenCount]          回收站里有几条（§三）
- * @returns {{text:string, hiddenCount:number}}
+ * @returns {{text:string, hiddenCount:number, items:{seq:number, at:number|null, who:'me'|'it', text:string}[]}}
  */
 export function buildExport(events, { hiddenIds = [], hiddenCount = 0 } = {}) {
   const items = exportItems(events, { hiddenIds });
   const n = Math.max(0, Math.floor(Number(hiddenCount) || 0));
   const text = renderExport(items, { hiddenCount: n });
-  return { text, hiddenCount: n };
+  return { text, hiddenCount: n, items };
 }

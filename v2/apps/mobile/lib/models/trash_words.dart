@@ -10,6 +10,11 @@
 //
 // ⚠️ 纯逻辑，**不许 import flutter/material**。
 
+// ⚠️ 只为了 `trashMomentWords`（毫秒 → `10月1日 21:33`，纯函数，住 `trash.dart`）。
+//    那一份在 `models/trash.dart`（同层，import 方向合法）——**日期格式化只有那一处**，
+//    这里只负责把它拼成给人读的整句。
+import 'trash.dart';
+
 /// 顶栏那个入口，以及那一页的标题。
 const trashTitle = '回收站';
 const trashTooltip = '回收站';
@@ -95,11 +100,51 @@ String verdictLabel(String verdict) => verdict == 'delete' ? '会删掉' : '删�
 
 // ── 回收站那一页 ────────────────────────────────────────────
 
-const trashEmptyLine = '回收站是空的';
+/// 空的时候那两句：一句实话 ＋ 一句"删掉的话会先来这儿"（§2.3）。
+const trashEmptyLine = '这儿是空的';
+const trashEmptyHint = '删掉的东西会先来这儿，过一阵子才真的没了。';
+
 const trashNoPreviewLine = '（这一条没有能看的字）';
 const trashLoadFailedLine = '没读到回收站，过一会儿再试';
 const trashRetry = '再试一次';
-const trashRestore = '恢复';
+
+// ── ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.3）：一条一张卡上的三行 ──
+
+/// 抬头下面那句：**这 N 次删掉的还能放回来**。
+///
+/// 🔴 **这里一个天数都不许有**：留多久由服务端算（`ttlDays` / 每条的 `purgeAt`），
+///    客户端自己写一个数就是编（手册第一条纪律：阈值只住服务端与手册）。
+///    ⇒ 具体到哪一天，由每张卡上的 [trashCanRestoreUntilLine] 说。
+String trashHeadLine(int n) => '这 $n 次删掉的还能放回来';
+
+/// 紧跟着抬头的下半句：**过了那个时间就真的没了**。
+const trashHeadHint = '过了每一条写的时间，就真的没了。';
+
+/// 什么时候删的（`at`，本机时区）。
+///
+/// ⚠️ 服务端没给这个数 ⇒ **如实说没记下来**，不许拿"现在"顶上（那就是编）。
+String trashAtLine(int? at) =>
+    at == null ? '什么时候删的没记下来' : '${trashMomentWords(at)} 删的';
+
+/// 还能放到什么时候（`purgeAt`，本机时区）。
+///
+/// 🔴 服务端没给 ⇒ 只说"过一阵子"，**不许编一个日期**（判据在 `trash_test.dart`）。
+String trashCanRestoreUntilLine(int? purgeAt) =>
+    purgeAt == null ? '过一阵子就没了' : '还能放到 ${trashMomentWords(purgeAt)}';
+
+/// 一张卡上那一行字：**他自己那句话**（新键 `say`）⇒ 老盒子没有就退回
+/// 已上线的 `preview` ⇒ 两样都没有才说"没有能看的字"。
+///
+/// 🔴 **照实显示**：服务端给什么就是什么，这里一个字都不截、不改写
+///    （契约 §2.3：客户端不许自己截取/改写）。
+/// ⚠️ 退回那一条是**负向对照**要钉的：新客户端 + 老盒子（不给 `say`）也不许空白。
+String trashLineOf(TrashEntry e) {
+  if (e.say.isNotEmpty) return e.say;
+  if (e.preview.isNotEmpty) return e.preview;
+  return trashNoPreviewLine;
+}
+
+const trashRestore = '放回来';
 const trashPurge = '彻底删掉';
 
 /// 彻底删要**二次确认**（契约 §8.2：破坏性动作不许手滑就触发）。

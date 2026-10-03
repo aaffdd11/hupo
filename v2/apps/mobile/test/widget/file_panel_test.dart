@@ -19,6 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:hupo_app/models/file_panel_words.dart';
+import 'package:hupo_app/models/tool_row_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -185,8 +186,9 @@ void main() {
     // 一行行：路径原样 ＋ 是哪个工具碰的
     expect(find.text('/w/账本.txt'), findsNWidgets(2), reason: '两轮各改过一次 ⇒ 各一行（跨轮不合并）');
     expect(find.text('/w/摘要.md'), findsOneWidget);
-    expect(find.text(filePanelToolLine(['write'])), findsNWidgets(2));
-    expect(find.text(filePanelToolLine(['edit'])), findsOneWidget);
+    // ★ 2026-10-02（`154` §2.1）：那一栏也走人话（`write` → 「写文件」）
+    expect(find.text(filePanelToolLine([toolHumanName('write')!])), findsNWidgets(2));
+    expect(find.text(filePanelToolLine([toolHumanName('edit')!])), findsOneWidget);
 
     // 🔴 最新那一轮在上：第 2 轮那个分组头要在第 1 轮上面
     final y2 = tester.getTopLeft(find.byKey(filePanelTurnKey(2))).dy;

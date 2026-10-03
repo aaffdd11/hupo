@@ -21,13 +21,22 @@ import 'tool_row.dart';
 
 /// 一条时间线条目。`seq` 是服务端发的号；本地乐观发言借用"当前最大号"。
 sealed class TimelineItem {
-  const TimelineItem({required this.seq, this.tie = 0});
+  const TimelineItem({required this.seq, this.tie = 0, this.at});
 
   /// 服务端的排队号。
   final int seq;
 
   /// 同一号内的次序。本地发言用 1（排在已收到事件之后、下一条服务端事件之前）。
   final int tie;
+
+  /// ★ **这一条是什么时候的事**（毫秒；服务端给每个事件都盖了这个字段）。
+  ///
+  /// 🔴 **它只用来"显示"**（时间线上那一行「今天 14:32」那种时间分隔），
+  ///    **绝不参与排序** —— 排序键仍然是 [order]（理由见下面那条禁令：
+  ///    本地发言是客户端钟、服务端事件是服务端钟，混钟排序会乱）。
+  /// ⚠️ 读不到就是 `null`（老日志 / 还没被服务端认领的本地发言）⇒ 界面上
+  ///    **不画那一行**，而不是编一个时间（N10：沉默优于编造）。
+  final int? at;
 
   /// 排序键。**不许用时间戳当排序键**——
   /// 本地发言是客户端钟、服务端事件是服务端钟，混钟排序会乱。
@@ -47,6 +56,7 @@ class UserUtterance extends TimelineItem {
     required this.text,
     required super.seq,
     super.tie,
+    super.at,
     this.state = MessageState.queued,
   });
 
@@ -57,18 +67,19 @@ class UserUtterance extends TimelineItem {
   final String text;
   MessageState state;
 
-  UserUtterance copyWith({int? seq, int? tie, MessageState? state}) => UserUtterance(
+  UserUtterance copyWith({int? seq, int? tie, MessageState? state, int? at}) => UserUtterance(
         messageId: messageId,
         text: text,
         seq: seq ?? this.seq,
         tie: tie ?? this.tie,
+        at: at ?? this.at,
         state: state ?? this.state,
       );
 }
 
 /// 助手说的一条（快答 + 深答**在同一个气泡里**，协议 R2）。
 class AssistantMessage extends TimelineItem {
-  AssistantMessage({required this.messageId, required super.seq});
+  AssistantMessage({required this.messageId, required super.seq, super.at});
 
   /// ⚠️ `@override`：理由同 [UserUtterance.messageId]。
   @override
@@ -151,7 +162,13 @@ class AssistantMessage extends TimelineItem {
 /// ⚠️ 它**是持久事件**（取号、落盘、有位置），不是瞬态——
 ///    "不占号 = 不上时间线"，而它**要上时间线**（决策 P-g）。
 class TimelineMarker extends TimelineItem {
-  const TimelineMarker({required this.kind, required super.seq, this.label, this.catchUp = false});
+  const TimelineMarker({
+    required this.kind,
+    required super.seq,
+    super.at,
+    this.label,
+    this.catchUp = false,
+  });
 
   final String kind; // away / enter / leave
   final String? label;
@@ -170,11 +187,12 @@ class TimelineMarker extends TimelineItem {
 /// ⚠️ 它**没有 `messageId`**（不是一轮对话，删的是"话"，不是通知本身）⇒
 ///    长按删除那条路天然够不着它（`_visible` 那一处说得一样）。
 class TimelineNotice extends TimelineItem {
-  const TimelineNotice({
+  // ⚠️ **不是 `const`**：`at` 从 `notice.at` 取（const 构造函数里做不了这件事）。
+  TimelineNotice({
     required this.notice,
     required super.seq,
     this.catchUp = false,
-  });
+  }) : super(at: notice.at);
 
   final Notice notice;
 
@@ -195,6 +213,17 @@ class TimelineNotice extends TimelineItem {
   NoticeUndo? get undo => (notice.undo?.usable ?? false) ? notice.undo : null;
 }
 
+/// ★ **连着同样几句通知**能不能合成一行（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.1）。
+///
+/// 三条都要满足：
+///   ① 两条都是通知（调用处保证，这里判内容）；
+///   ② `kind` 与**服务端给的那句话**逐字相同 —— 合成一行**一个字节都不改**那句话，
+///      只多一个"重复了几次"（[noticeRepeatSuffix]）；
+///   ③ 🔴 **两条都没有撤销按钮**：合并会把"按一下撤销"藏起来，而撤销是有时限的
+///      （藏一次就可能错过）⇒ 有撤销的**一律不合并**。
+bool mergeableNotices(TimelineNotice a, TimelineNotice b) =>
+    a.notice.kind == b.notice.kind && a.notice.text == b.notice.text && a.undo == null && b.undo == null;
+
 // ── 开出来的那三样（`116` · 主人 2026-09-26：*"首先全部开放"*）──────
 //
 // 服务端把**工具调用 / 模型看到的系统提示词 / 每一轮的 token** 也发上来了
@@ -209,7 +238,7 @@ class TimelineNotice extends TimelineItem {
 
 /// 时间线上的一次**工具调用**（`tool/call` → 一行；`tool/result` 回来就地补上）。
 class TimelineToolCall extends TimelineItem {
-  TimelineToolCall({required this.row, required super.seq});
+  TimelineToolCall({required this.row, required super.seq, super.at});
 
   /// 那一行的全部内容（`ToolRow.parse` 出来的纯值）。
   ///
@@ -229,7 +258,7 @@ class TimelineToolCall extends TimelineItem {
 /// ⚠️ 它是"**模型看到了什么**"的唯一凭据 ⇒ 逐字存着，一个字都不改
 ///    （`SystemPromptRow` 顶上那条：截断/改写的提示词行比没有更坏）。
 class TimelineSystemPrompt extends TimelineItem {
-  const TimelineSystemPrompt({required this.row, required super.seq});
+  const TimelineSystemPrompt({required this.row, required super.seq, super.at});
 
   final SystemPromptRow row;
 
@@ -241,7 +270,7 @@ class TimelineSystemPrompt extends TimelineItem {
 /// ⚠️ 它自己**不直接画**：账要**折过**才画（`foldTurnUsage`：任何一次没报准 ⇒ 整块不画），
 ///    由界面那一层在"这一轮的页脚"画一行。它进日志是为了**取号、落盘、翻页拿得到**。
 class TimelineTurnUsage extends TimelineItem {
-  const TimelineTurnUsage({required this.attempt, required super.seq});
+  const TimelineTurnUsage({required this.attempt, required super.seq, super.at});
 
   final TurnUsageAttempt attempt;
 
@@ -746,8 +775,17 @@ class Timeline {
   ///
   /// 号借 `_lastSeq`、tie=1 ⇒ 排在"已收到的最后一条"之后、
   /// "下一条服务端事件"之前。**这样它不会跳来跳去。**
-  String addLocalUtterance(String text, String messageId) {
-    _items.add(UserUtterance(messageId: messageId, text: text, seq: _lastSeq, tie: 1));
+  ///
+  /// ★ [at]：本地这一条的时刻（**客户端钟**，只用来显示那一行时间）。
+  ///   服务端认领它时（`user/echo`）会换成服务端那个时刻 —— 见 [_applyEcho]。
+  String addLocalUtterance(String text, String messageId, {int? at}) {
+    _items.add(UserUtterance(
+      messageId: messageId,
+      text: text,
+      seq: _lastSeq,
+      tie: 1,
+      at: at,
+    ));
     return messageId;
   }
 
@@ -785,14 +823,17 @@ class Timeline {
 
     final catchUp = event['catchUp'] == true;
     final messageId = event['messageId'] as String?;
+    // ★ `at` = 服务端给每一条盖的那个时刻（毫秒）。**只给显示用**（见 [TimelineItem.at]）。
+    final atRaw = event['at'];
+    final at = atRaw is int ? atRaw : null;
 
     switch (type) {
       case 'user/echo':
-        _applyEcho(messageId, event, rawSeq, catchUp);
+        _applyEcho(messageId, event, rawSeq, catchUp, at);
       case 'message/start':
         if (messageId == null) return;
         if (_findMessage(messageId) != null) return;
-        final fresh = AssistantMessage(messageId: messageId, seq: rawSeq)
+        final fresh = AssistantMessage(messageId: messageId, seq: rawSeq, at: at)
           ..catchUp = catchUp;
         // ★ 推理段可能**先于正文**到（服务端先发 reasoning 再发 text）⇒
         //   把先存着的那一段挂到这条气泡上。
@@ -851,13 +892,13 @@ class Timeline {
         final p = SystemPromptRow.parse(event);
         // 空的那条**不占一行**（DSH：非空的 `system/message` 才有一行）
         if (p == null || p.text.isEmpty) return;
-        _items.add(TimelineSystemPrompt(row: p, seq: rawSeq));
+        _items.add(TimelineSystemPrompt(row: p, seq: rawSeq, at: at));
       case 'turn/usage':
         final u = TurnUsageAttempt.parse(event);
         // `usage:null, complete:false` 那条是**合法的**（"这一轮没报用量"）——
         // 它照样进日志（取号、落盘），只是折出来是 `null` ⇒ 界面上一行都不画。
         if (u == null) return;
-        _items.add(TimelineTurnUsage(attempt: u, seq: rawSeq));
+        _items.add(TimelineTurnUsage(attempt: u, seq: rawSeq, at: at));
       // ── 系统通知（契约 `29-NOTICE.md` 约束 2：**时间线里必须有那一条**）──
       //
       // ⚠️ `text` **由服务端给、客户端照抄**（§五 🔴）——这里一个字都不重写。
@@ -887,7 +928,7 @@ class Timeline {
     }
   }
 
-  void _applyEcho(String? messageId, Map<String, dynamic> event, int seq, bool catchUp) {
+  void _applyEcho(String? messageId, Map<String, dynamic> event, int seq, bool catchUp, int? at) {
     if (messageId == null) return;
     // ★ 认领本地那条乐观发言——**不是再插一条**
     for (var i = 0; i < _items.length; i += 1) {
@@ -902,11 +943,13 @@ class Timeline {
         //    位置一动不动。两半的位置就错开了，屏幕上"问答"会看着像反的。
         //    ⇒ 只在"本地那条还没被认领"时把号换成服务端的（那一步是必须的：
         //      本地借的是 `_lastSeq`，不换就排错地方）。
+        // ★ `at`：本地那条盖的是**客户端钟**，认领这一下换成**服务端那个时刻**
+        //    （显示用的那一行要跟服务端一致；⚠️ 排序键照旧不动）。
         if (it.state == MessageState.confirmed) {
           if (next != it.state) _items[i] = it.copyWith(state: next);
           return;
         }
-        _items[i] = it.copyWith(seq: seq, tie: 0, state: next);
+        _items[i] = it.copyWith(seq: seq, tie: 0, state: next, at: at);
         return;
       }
     }
@@ -915,6 +958,7 @@ class Timeline {
       messageId: messageId,
       text: event['text'] as String? ?? '',
       seq: seq,
+      at: at,
       state: MessageState.confirmed,
     ));
   }
@@ -924,6 +968,8 @@ class Timeline {
   /// ⚠️ `ToolRow.parse` 认不出来（缺 `callId`/`name`/`turn`/`step`）⇒ **不画**
   ///    （fail-closed：猜一个成败/名字画到屏幕上比少一行更坏）。
   void _applyToolCall(Map<String, dynamic> event, int seq) {
+    final atRaw = event['at'];
+    final at = atRaw is int ? atRaw : null;
     final callId = event['callId'];
     final pending = callId is String ? _pendingToolResults.remove(callId) : null;
     final row = ToolRow.parse(event, pending);
@@ -934,10 +980,10 @@ class Timeline {
     for (var i = 0; i < _items.length; i += 1) {
       final it = _items[i];
       if (it is! TimelineToolCall || it.callId != row.callId) continue;
-      if (it.row.name.isEmpty) _items[i] = TimelineToolCall(row: row, seq: seq);
+      if (it.row.name.isEmpty) _items[i] = TimelineToolCall(row: row, seq: seq, at: at);
       return;
     }
-    _items.add(TimelineToolCall(row: row, seq: seq));
+    _items.add(TimelineToolCall(row: row, seq: seq, at: at));
   }
 
   /// `tool/result`：**就地补上结果**（认领身份，不是再插一行 —— 见那三样顶上那段）。
@@ -947,6 +993,8 @@ class Timeline {
   ///    [_pendingToolResults]，等调用那条晚一步到了再换成一整行。
   ///    直接丢的后果是那一行**永远看不见**，而屏幕上那句话是**真发生过**的。
   void _applyToolResult(Map<String, dynamic> event, int seq) {
+    final atRaw = event['at'];
+    final at = atRaw is int ? atRaw : null;
     final callId = event['callId'];
     if (callId is! String || callId.isEmpty) return;
     for (final it in _items) {
@@ -966,7 +1014,7 @@ class Timeline {
     }
     // 还没有那一行：**先画结果那一行**（名字那一格空着 —— 不猜），并记着等调用那条。
     final only = ToolRow.parseResultOnly(event);
-    if (only != null) _items.add(TimelineToolCall(row: only, seq: seq));
+    if (only != null) _items.add(TimelineToolCall(row: only, seq: seq, at: at));
     // ⚠️ 有界（先来先丢），坏帧不许把内存撑爆。
     _pendingToolResults[callId] = event;
     while (_pendingToolResults.length > maxPendingToolResults) {

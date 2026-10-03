@@ -177,6 +177,14 @@ class UserBubble extends StatelessWidget {
 }
 
 /// 助手说的一条。快答与深答**在同一个气泡里**（协议 R2）。
+///
+/// 🔴 ★ **2026-10-02：它现在是一张看得见的卡**（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.1）。
+///    改之前它的底色是 `surfaceContainerHighest`，而在聊天那一套主题里那**就是纯白**
+///    （`appearance_scope.dart` 的 `chatThemeOf`：亮色 `bg-layer-2` = 白）——
+///    于是它那一大段话**是裸文字**：一轮到哪里结束、下一句从哪儿开始，只能靠读内容猜
+///    （我登录拍的截图里就是这个样子）。
+///    ⇒ 按 `design.dart` 那条老规矩"**平面用描边**"：白底 ＋ **发丝描边** ＋ `radiusField`，
+///      **不画阴影**（浮起来的东西才用阴影）。
 class AnswerBubble extends StatelessWidget {
   const AnswerBubble({
     super.key,
@@ -381,7 +389,12 @@ class AnswerBubble extends StatelessWidget {
           clipBehavior: Clip.antiAlias,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(d.radiusField),
-            side: selected ? BorderSide(color: d.accent, width: 2) : BorderSide.none,
+            // ★ 2026-10-02：**没选中时也画一圈发丝描边** —— 卡的底是白、聊天窗口的底
+            //   也是白，不描边就等于没有卡（见这个类顶上那段）。选中那一档的
+            //   `accent` 两像素照旧（它是批 3 那条"选中看得出来"的第二个通道）。
+            side: selected
+                ? BorderSide(color: d.accent, width: 2)
+                : BorderSide(color: p.borderL2, width: dshHairline),
           ),
           child: InkWell(
             onTap: onTap,

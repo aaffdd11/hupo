@@ -111,6 +111,63 @@ test('⚠️ §二：**"导不出它记忆那一层"这句话必须出现在导�
   assert.ok(text.split('\n\n').includes(MEMORY_NOTE));
 });
 
+// ── ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.2）：多带一份 `items` ──
+//
+// 客户端要按天分组重排那一页，但它**不许重算那段文字**（契约 §六）⇒
+// 服务端把折好的条目**原样带上**（`items`）。两条硬要求：
+//   ① `text` **一个字节都不变**（`items` 只是新增字段，不是换一种渲染）；
+//   ② `items` 的**过滤规则与 `text` 完全一致**（隐藏的、空的不进）——
+//      否则屏幕上会多出那段文字里没有的话，那就是两处在说不同的话。
+
+/** `bench()` 那一组输入下，`text` 应该**逐字**长这样（钉死，防"顺手改渲染"）。 */
+const BENCH_TEXT = [
+  '—— 9月21日 ——',
+  `我：${T_A}`,
+  `它：${A_A}`,
+  `我：${T_B}`,
+  `它：${B_B}`,
+  '—— 9月22日 ——',
+  `我：${T_C}`,
+  `它：${C_C}`,
+  MEMORY_NOTE,
+].join('\n\n');
+
+test('★ `buildExport` 多带一份 `items`，而 `text` **逐字不变**', () => {
+  const { text, hiddenCount, items } = buildExport(raw(bench()));
+  // ① text 一个字节都没变（同一组输入下的成品，逐字对）
+  assert.equal(text, BENCH_TEXT, '★ items 是新增字段，不许顺手改渲染');
+  assert.equal(hiddenCount, 0);
+  // ② items 的**形状与顺序**
+  assert.deepEqual(
+    items.map((i) => i.who),
+    ['me', 'it', 'me', 'it', 'me', 'it'],
+    '★ who 只许是 me / it，而且按时间顺序',
+  );
+  assert.deepEqual(items.map((i) => i.text), [T_A, A_A, T_B, B_B, T_C, C_C]);
+  for (const i of items) {
+    assert.equal(typeof i.seq, 'number', '`seq` 是数字');
+    assert.ok(i.at === null || typeof i.at === 'number', '`at` 是数字或 null');
+  }
+  // ③ 它就是 `renderExport` 用的那份（同一套过滤）——不是另折一遍
+  assert.equal(renderExport(items), BENCH_TEXT);
+});
+
+test('★ `items` 与 `text` 是**同一套过滤**（隐藏的 / 空的一个都不进）', () => {
+  const b = bench();
+  b.trash.remove(b.idsB);
+  const bin = b.trash.list();
+  const { text, items } = buildExport(raw(b), {
+    hiddenIds: bin.flatMap((t) => t.messageIds),
+    hiddenCount: bin.length,
+  });
+  // 负向对照：不筛的话那两句本来在 items 里（证明下面"不在"是筛在起作用）
+  assert.ok(exportItems(raw(b)).some((i) => i.text === T_B));
+  assert.ok(!items.some((i) => i.text === T_B || i.text === B_B), '★ 回收站里的不进 items');
+  assert.ok(items.every((i) => i.text.trim() !== ''), '★ 空的不进 items');
+  assert.equal(text, renderExport(items, { hiddenCount: bin.length }), '★ 两处是同一份输入');
+  assert.ok(text.includes(trashNote(1)));
+});
+
 // ── ① 🔴 回收站里的不算 + 条数对得上 ─────────────────────────
 
 test('🔴 回收站里的**一个字节都不许出现**，而且末尾条数对得上', () => {
@@ -317,6 +374,11 @@ test('`GET /api/export` 把被删的筛掉、把条数报出来', async (t) => {
   assert.equal(j.hiddenCount, 2);
   assert.ok(j.text.includes(T_A) && !j.text.includes(T_B), '只读口也得守住 §三');
   assert.ok(j.text.includes(trashNote(2)));
+  // ★ 154 §2.2：回执里**多带一份 items**（新增字段）——删掉的那两句一个都不许在里面
+  assert.ok(Array.isArray(j.items), '★ 回执要带上 items');
+  assert.deepEqual(j.items.map((i) => i.who), ['me', 'it']);
+  assert.deepEqual(j.items.map((i) => i.text), [T_A, A_A]);
+  assert.ok(!j.items.some((i) => i.text === T_B || i.text === B_B));
   // 只读就是只读：盘上一个字节都没动
   assert.equal(raw(b).length, before, '导出不许往盘上写东西');
   await s.close();

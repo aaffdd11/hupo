@@ -25,6 +25,7 @@ import 'package:flutter/services.dart';
 import '../models/appearance.dart';
 import '../models/dev_harness.dart';
 import '../models/image_outcome.dart';
+import '../models/chat_time.dart';
 import '../models/conn_state.dart';
 import '../models/chat_select.dart';
 import '../models/design.dart' as d;
@@ -78,6 +79,7 @@ import '../widgets/notice.dart';
 import '../widgets/process_level_menu.dart';
 import '../widgets/queue_strip.dart';
 import '../widgets/process_view.dart';
+import '../widgets/time_mark.dart';
 import '../widgets/tool_row_view.dart';
 import '../widgets/trash_plan_sheet.dart';
 import 'discover_screen.dart';
@@ -2242,14 +2244,18 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// **这一屏画哪几格**：真条目 + "折起来的那一轮"那一个控件。
+  /// **这一屏画哪几格**：真条目 + 时间那一行 + 合起来的通知 + "折起来的那一轮"那一个控件。
   ///
-  /// 规矩三条（都来自 DSH，见 `docs/dev/115-raw/B-render.md` §2.3）：
+  /// 规矩（前三条来自 DSH，见 `docs/dev/115-raw/B-render.md` §2.3；
+  /// ★ 后两条是 `154` 这一批加的）：
   ///   · **还在跑的那一轮不折**（过程行照画）；
   ///   · **收口之后**同一轮的工具行折成一个控件 —— 控件画在**第一条**那个位置
   ///     （哪一条是"答案"我们这一侧认不出来，见 `turn/usage` 那段：`message/*` 不带 step）；
-  ///   · **系统提示词行不参与折叠**（DSH：它是 `TURN_PROCESS_INDEPENDENT_KINDS`），
-  ///     用量行也不（它是这一轮的页脚）。
+  ///   · **系统提示词行不参与折叠**（DSH：它是 `TURN_PROCESS_INDEPENDENT_KINDS`）；
+  ///   · ★ **用量那一行也收进"过程"里**（`154` §2.1）：它是"过程"的一半，
+  ///     不是"他说的话"的一半 —— 收起来之后屏幕上那一串 `tok` 默认就不见了；
+  ///   · ★ **时间那一行**：跨天 / 隔得够久（`chat_time.needsTimeMark`）才插一条；
+  ///   · ★ **连着同样几句通知合成一行**（`154` §2.1，判据在 `timeline.mergeableNotices`）。
   List<_Slot> _planSlots(ChatController c) {
     final closed = c.closedThrough;
     final slots = <_Slot>[];
@@ -2260,20 +2266,82 @@ class _ChatScreenState extends State<ChatScreen> {
       if (it is TimelineTurnUsage) lastUsageSeq[it.turn] = it.seq;
     }
     final placed = <int>{};
+    final now = DateTime.now().millisecondsSinceEpoch;
+    // 「上一处画过的时间」：只由**画得出来**的条目推进（工具行/用量/系统提示词不推进，
+    // 它们是那一轮的内部细节，不该把时间那一行拉到它们头上）。
+    int? prevAt;
+    TimelineNotice? runNotice;
+    var runCount = 0;
+    void flushRun() {
+      if (runNotice == null) return;
+      slots.add(_NoticeRunSlot(notice: runNotice!, count: runCount));
+      runNotice = null;
+      runCount = 0;
+    }
     for (final it in c.items) {
+      // ── 折起来的那一轮：工具行换成那一个控件（用量也一起收进去）──
       if (it is TimelineToolCall && _processFolded(it.turn, closed)) {
+        flushRun();
         if (placed.add(it.turn)) slots.add(_FoldSlot(it.turn));
         continue;
       }
-      if (it is TimelineTurnUsage && lastUsageSeq[it.turn] != it.seq) continue;
+      if (it is TimelineTurnUsage) {
+        if (lastUsageSeq[it.turn] != it.seq) continue;
+        // ★ 收起来的那一轮：用量进"过程"（默认一个 `tok` 都不上屏）。
+        // 🔴 **一轮只说了话、一个工具行都没有时，也要给它一个控件** ——
+        //    不然那一串 token 收起来之后**再也点不出来**（"全部开放"那条不许
+        //    靠"藏起来"实现）。控件那一行就是 DSH 那个「已思考」
+        //    （零段的兜底，见 `turnProcessFallback`）。
+        if (_processFolded(it.turn, closed)) {
+          flushRun();
+          if (placed.add(it.turn)) slots.add(_FoldSlot(it.turn));
+          continue;
+        }
+        flushRun();
+        slots.add(_ItemSlot(it));
+        continue;
+      }
+      // ── 通知：连着同样几句合成一行（有撤销的**不合并**，见 `mergeableNotices`）──
+      if (it is TimelineNotice) {
+        if (runNotice != null && mergeableNotices(runNotice!, it)) {
+          runCount += 1;
+          prevAt = it.at ?? prevAt;
+          continue;
+        }
+        flushRun();
+        runNotice = it;
+        runCount = 1;
+        if (needsTimeMark(prevAt: prevAt, at: it.at, now: now)) {
+          slots.add(_TimeMarkSlot(it.at!));
+        }
+        prevAt = it.at ?? prevAt;
+        continue;
+      }
+      flushRun();
+      // ── 时间那一行（只在"说得上话"的那几种之前插）──
+      final showTime = (it is UserUtterance || it is AssistantMessage || it is TimelineMarker) &&
+          needsTimeMark(prevAt: prevAt, at: it.at, now: now);
+      if (showTime) slots.add(_TimeMarkSlot(it.at!));
+      if (it is UserUtterance || it is AssistantMessage || it is TimelineMarker) {
+        if (it.at != null) prevAt = it.at;
+      }
       slots.add(_ItemSlot(it));
     }
+    flushRun();
     return slots;
   }
 
-  /// 画一格（真条目走 [_render]；折叠控件走它自己那一个）。
+  /// 画一格（真条目走 [_render]；另外三种各有自己的画法）。
   Widget _renderSlot(_Slot slot, ChatController c) => switch (slot) {
     _ItemSlot(:final item) => _render(item, c),
+    _TimeMarkSlot(:final at) => TimeMarkLine(
+      label: timeMarkLabel(at, now: DateTime.now().millisecondsSinceEpoch),
+    ),
+    _NoticeRunSlot(:final notice, :final count) => NoticeLine(
+      notice: notice.notice,
+      count: count,
+      onUndo: notice.undo == null ? null : () => _undoNotice(notice),
+    ),
     _FoldSlot(:final turn) => TurnProcessControl(
       counts: c.processOfTurn(turn),
       expanded: !_processFolded(turn, c.closedThrough),
@@ -2632,6 +2700,26 @@ class _ItemSlot extends _Slot {
 class _FoldSlot extends _Slot {
   const _FoldSlot(this.turn);
   final int turn;
+}
+
+/// ★ 一格**时间那一行**（`154` §2.1）：跨天 / 隔得够久才出现。
+class _TimeMarkSlot extends _Slot {
+  const _TimeMarkSlot(this.at);
+
+  /// 那一条的时刻（毫秒）—— **画什么字由 `_renderSlot` 现算**
+  /// （「今天」这种东西跟"现在是哪一天"有关，不该在规划的那一步定死）。
+  final int at;
+}
+
+/// ★ 一格**合起来的通知**（连着同样几句合成一行；`154` §2.1）。
+///
+/// ⚠️ 里面装的仍是那**一条** `TimelineNotice`（撤销要按它走那条路），
+///    外加"它重复了几次"。服务端给的那句话**逐字照抄**，只多一个次数。
+class _NoticeRunSlot extends _Slot {
+  const _NoticeRunSlot({required this.notice, required this.count});
+
+  final TimelineNotice notice;
+  final int count;
 }
 
 /// 顶部状态条。**只在"需要用户知道点什么"的时候出现**——

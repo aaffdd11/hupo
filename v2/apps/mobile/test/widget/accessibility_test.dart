@@ -68,6 +68,7 @@ import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/models/notice_words.dart';
 import 'package:hupo_app/widgets/notice.dart';
+import 'package:hupo_app/widgets/tool_row_view.dart';
 import 'package:hupo_app/widgets/wallpaper_picker.dart';
 import 'package:hupo_app/widgets/queue_strip.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -1323,7 +1324,7 @@ void main() {
         await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
         await _toTop(tester);
         // 负向对照：**那一行真的画出来了**才算数（没画出来的话这道闸扫的是别的屏）
-        expect(find.text('bash'), findsOneWidget, reason: '★ 工具行没进这棵树 ⇒ 这道闸扫错了屏');
+        expect(find.byType(ToolRowView), findsOneWidget, reason: '★ 工具行没进这棵树 ⇒ 这道闸扫错了屏');
         await _expandToolRow(tester);
         expect(_drain(tester), isEmpty, reason: '工具行（展开）在 ${s}x 溢出了');
       });
@@ -1350,7 +1351,7 @@ void main() {
         await _toTop(tester);
         expect(find.text(_foldLabel()), findsOneWidget, reason: '★ 折叠控件没进这棵树');
         // 负向对照：折起来就必须**真的少画**（不然量的是"没折"的样子）
-        expect(find.text('bash'), findsNothing, reason: '★ 折起来之后那一行不该还在树里');
+        expect(find.byType(ToolRowView), findsNothing, reason: '★ 折起来之后那一行不该还在树里');
         expect(_drain(tester), isEmpty, reason: '折叠控件在 ${s}x 溢出了');
       });
 
@@ -1915,7 +1916,7 @@ void main() {
         final c = _toolRowOnly();
         await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
         await _toTop(tester);
-        expect(find.text('bash'), findsOneWidget, reason: '★ 工具行没进这棵树');
+        expect(find.byType(ToolRowView), findsOneWidget, reason: '★ 工具行没进这棵树');
         await sweep(tester, '工具行 @${s}x');
       });
 
@@ -2087,7 +2088,7 @@ void main() {
         );
         await _toTop(tester);
         // 负向对照：**那一行真的画出来了**才算数
-        expect(find.text('bash'), findsOneWidget, reason: '★ 工具行没进这棵树 ⇒ 这道闸扫错了屏');
+        expect(find.byType(ToolRowView), findsOneWidget, reason: '★ 工具行没进这棵树 ⇒ 这道闸扫错了屏');
         await _expandToolRow(tester);
         expect(_drain(tester), isEmpty, reason: '工具行（展开）在用户字号 $u 溢出了');
       });

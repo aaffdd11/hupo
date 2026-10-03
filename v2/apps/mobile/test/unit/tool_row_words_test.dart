@@ -9,6 +9,7 @@
 // 这一份钉的是**形状**（数对不对、缺的桶在不在、有没有自己编一个总数/金额/百分比）。
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hupo_app/models/forbidden_words.dart';
 import 'package:hupo_app/models/tool_row.dart';
 import 'package:hupo_app/models/tool_row_words.dart';
 
@@ -111,6 +112,60 @@ void main() {
       expect(systemPromptCollapseLabel.trim(), isNotEmpty);
       expect(toolRowExpandLabel.trim(), isNotEmpty);
       expect(toolRowCollapseLabel.trim(), isNotEmpty);
+    });
+  });
+
+  // ── ★ 2026-10-02：**工具名翻人话**（契约 `154` §2.1）──
+  //
+  // 改之前那一格是把内部名原样摆上屏的（我登录拍到的截图里就是
+  // `mcp__apps__app_create · 飞行棋 在跑`）。主人让我重做界面，
+  // 而"界面上出现内部词 = 缺陷"是手册那条没被撤掉的规矩。
+  group('工具名 ⇒ 人话', () {
+    test('★ 认得的那几件都翻得出来，而且**不夹内部词**', () {
+      final pairs = {
+        'bash': '跑命令',
+        'edit': '改文件',
+        'read': '看文件',
+        'write': '写文件',
+        'web_search': '查网',
+        'app_create': '做一个小程序',
+        'mcp__apps__app_create': '做一个小程序',
+        'mcp__apps__app_list': '看有哪些小程序',
+      };
+      for (final e in pairs.entries) {
+        expect(toolHumanName(e.key), e.value, reason: '${e.key} 该翻成「${e.value}」');
+      }
+    });
+
+    test('★ 前缀不同但同一件工具 ⇒ 同一个说法（`app_create` ＝ `mcp__apps__app_create`）', () {
+      expect(toolHumanName('mcp__apps__app_create'), toolHumanName('app_create'));
+    });
+
+    test('🔴 认不出 / 空 ⇒ **null**（不编一个更像样的说法 —— N10）', () {
+      expect(toolHumanName('something-new'), isNull);
+      expect(toolHumanName(''), isNull);
+      expect(toolHumanName('   '), isNull);
+      expect(toolHumanName('mcp__未知__unknown_tool'), isNull);
+    });
+
+    test('翻出来的每一句都**干净**（拿真那份禁用词表扫）', () {
+      for (final n in [
+        'bash', 'read', 'write', 'edit', 'glob', 'grep', 'web_search', 'web_fetch',
+        'subagent', 'subagent_fork', 'todo_write', 'send_message', 'job_output',
+        'job_kill', 'app_create', 'app_list', 'app_publish', 'app_unpublish',
+        'app_discover', 'app_install', 'app_grant', 'app_revoke', 'app_uninstall',
+      ]) {
+        final human = toolHumanName(n);
+        expect(human, isNotNull, reason: '$n 没翻出来（列表漏了？）');
+        expect(scanForbidden(human!), isEmpty, reason: '「$human」里有禁用词');
+        // 负向对照：人话里**不许**还留着工具名那串
+        expect(human.contains(n), isFalse, reason: '「$human」把内部名留下了');
+      }
+    });
+
+    test('原始名那个标签自己有字（展开那一块要标出来）', () {
+      expect(toolRowRawNameLabel.trim(), isNotEmpty);
+      expect(scanForbidden(toolRowRawNameLabel), isEmpty);
     });
   });
 }

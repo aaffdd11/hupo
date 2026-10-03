@@ -338,6 +338,12 @@ test('走一遍：plan → remove → 回收站里看得见 → restore 回来',
   })).json();
   assert.equal(list.items.length, 1);
   assert.equal(list.ttlDays, 30);
+  // ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.3）：那一条里
+  //   **多了一个新键 `say`** —— 他自己那句话（回收站那一页靠它让用户看见
+  //   "这几条到底是什么"）。🔴 `preview` **一个字节都没动**（已上线字段冻结）：
+  //   它仍然是「N 条」那种摘要（负向对照就在下面那一行）。
+  assert.equal(list.items[0].say, SECRET, '★ 新键要是他自己说的那句话');
+  assert.equal(list.items[0].preview, '2 条', '★ 老字段一个字节都不许变');
 
   const rs = await s.post('/api/trash/restore', { messageIds: b.ids });
   assert.equal((await rs.json()).ok, true);

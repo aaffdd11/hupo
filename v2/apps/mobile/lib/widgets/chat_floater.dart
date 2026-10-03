@@ -45,6 +45,7 @@ import '../models/design.dart' as d;
 import '../models/dsh_design.dart';
 import '../models/space_words.dart';
 import 'appearance_scope.dart';
+import 'dsh_look.dart';
 
 /// 三档（手册 §6.2）。
 enum FloaterTier {
@@ -397,7 +398,6 @@ class ChatFloaterState extends State<ChatFloater> {
 
   /// 浮窗那一层底 ＋ 它里面那一列（抽出来只因为上面那个 `BackdropFilter` 要包一层）。
   Widget _barSurface(bool collapsed, DshPalette p) {
-    final t = Theme.of(context);
     return Listener(
                 // 🔴 **点浮窗自己不许漏到下面**（§6.3）：opaque 吃掉所有指针事件。
                 // ⚠️ 这里**不接手势**（没有 onPointerXxx）—— 它只负责"挡住"。
@@ -482,10 +482,12 @@ class ChatFloaterState extends State<ChatFloater> {
                                   // ★ 2026-09-23：`titleSmall`(≈14) → `titleMedium`(≈16)
                                   //   —— 它是这一屏的名字，原来和旁边那排图标一样大。
                                   // ★ 批次 4：字色跟色板走（暗色下 `d.ink` 是黑字）。
-                                  style: t.textTheme.titleMedium?.copyWith(
-                                    color: p.labelPrimary,
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                                  // ★ 2026-10-02（契约 `154` §2.1）：改用 `DshTypes.title`
+                                  //   （20 / **600** / 28）—— 与导出页、回收站那两处抬头
+                                  //   **同一个 token**（"同一份数字不许两处"）。原来那个
+                                  //   `titleMedium` ＋ 就地 `copyWith(fontWeight: 600)`
+                                  //   正是那条纪律不许的形状。
+                                  style: dshTextStyle(DshTypes.title, p.labelPrimary),
                                 ),
                               ),
                               // ★ 会话头上、动作那条横滚串**前面**那一格

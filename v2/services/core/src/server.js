@@ -1601,7 +1601,11 @@ export function createServer({
       }
       if (path === '/api/export' && req.method === 'GET') {
         const bin = W.trash ? W.trash.list() : [];
-        return sendJson(res, 200, buildExport(W.timeline.readAll(), {
+        // ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.2）：回执里
+        //    **多带一份 `items`**（`buildExport` 折好的那条 `{seq, at, who, text}` 列表，
+        //    与 `text` **同一套过滤规则**：隐藏的、空的不进）——**新增字段**，
+        //    老客户端看不见就当没有；`text` 一个字节都没变（判据 `test/export.test.js`）。
+        const doc = buildExport(W.timeline.readAll(), {
           hiddenIds: bin.flatMap((t) => t.messageIds),
           // ⚠️ **这个数 = 删除次数**，而它**恰好等于"删掉的轮数"** ——
           //    因为客户端**一次只删一轮**（`turnMessageIds(id)` ⇒ 一次 remove 调用）。
@@ -1611,13 +1615,26 @@ export function createServer({
           //    那时末尾那句会**少报**（说"1 条"）—— 现在 UI 走不到那条路，
           //    记在账 #46 上（哪天真做多选删除，就得把"轮数"存进回收站里）。
           hiddenCount: bin.length,
-        }));
+        });
+        return sendJson(res, 200, doc);
       }
       // ── 回收站（批 3 第二件 · 契约 `docs/dev/28-DELETE.md` §8.2）────────
       // ⚠️ 键是 `messageIds`（不是轮号）：盘上没有轮号，见契约 §三·补。
       if (W.trash) {
         if (path === '/api/trash' && req.method === 'GET') {
-          return sendJson(res, 200, { items: W.trash.list(), ttlDays: W.trash.ttlDays });
+          // ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.3）：每一条
+          //    **另加一个键 `say` = 他自己那句话** —— 回收站那一页就靠它让用户
+          //    看见"那几条到底是什么"。
+          // 🔴 `preview` **一个字节都不动**（它已上线：手册纪律"协议字段一旦上线
+          //    就冻结"，老客户端拿它当这一条的一句话摘要在画）。新增键按老规矩：
+          //    老客户端看不见就当没有，行为逐字不变。
+          //    没有那句话时**不放这个键**（客户端"没有就不画"，退回 `preview`）。
+          const events = W.timeline.readAll();
+          const items = W.trash.list().map((t) => {
+            const say = trashSayOf(events, t.messageIds);
+            return say === '' ? t : { ...t, say };
+          });
+          return sendJson(res, 200, { items, ttlDays: W.trash.ttlDays });
         }
         if (path === '/api/trash/plan' && req.method === 'POST') {
           // ⚠️ **只读**：少 `confirm` 也能调 —— "先看清单"这一步不许有门槛。
@@ -1757,6 +1774,32 @@ const TENANT_ROUTES = [
       req.pipe(up);
     }
     return undefined;
+  }
+
+  /**
+   * 回收站那一条里**他自己说的那句话**（新键 `say`）
+   * （契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.3）。
+   *
+   * ⚠️ 为什么在服务端取：被删的那一轮在客户端是**藏起来**的，而且删除时本机缓存
+   *    跟着清了（`28-DELETE.md` §四）⇒ 冷启动之后客户端手上没有那句话，只有
+   *    服务端盘上还留着它。所以"这一条到底是什么"只能在这边定。
+   * ⚠️ **只新增这一个键**：`preview`（已上线）与别的字段一个字节都不动
+   *    （手册纪律：协议字段一旦上线就冻结）。老客户端看不见 `say` 就当没有。
+   * ⚠️ 顺序是"宁可少说，不可瞎说"：他自己那句话（`user/echo`）⇒ 第一条正文
+   *    （`message/text`）⇒ **空串**（调用处**不放这个键**，客户端退回 `preview`）。
+   *
+   * @returns {string} 空串 = 这两样都没读到（**不编**）。
+   */
+  function trashSayOf(events, messageIds) {
+    const want = new Set(Array.isArray(messageIds) ? messageIds : []);
+    let fallback = '';
+    for (const e of events) {
+      if (!e || typeof e.messageId !== 'string' || !want.has(e.messageId)) continue;
+      if (typeof e.text !== 'string' || e.text.trim() === '') continue;
+      if (e.type === 'user/echo') return e.text.trim();
+      if (fallback === '' && e.type === 'message/text') fallback = e.text.trim();
+    }
+    return fallback;
   }
 
   async function handleTrashWrite(req, res, kind, W) {

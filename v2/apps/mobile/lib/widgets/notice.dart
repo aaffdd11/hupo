@@ -20,6 +20,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import '../models/dsh_design.dart';
 import '../models/notice.dart';
 import '../models/notice_words.dart';
 import 'dsh_look.dart';
@@ -28,18 +29,24 @@ import 'dsh_look.dart';
 ///
 /// ⚠️ 它由 `chat_screen._render` 摆在对话流里 ⇒ **占一个位置**，
 ///    而且冷启动重放（本机缓存里那一屏）也画得出来。
+/// ⚠️ [count] > 1 = 这是**连着同样几句合成的一行**（契约 `154` §2.1）：
+///    那句话**逐字是服务端给的**，只在末尾多一个次数。
 class NoticeLine extends StatelessWidget {
-  const NoticeLine({super.key, required this.notice, this.onUndo});
+  const NoticeLine({super.key, required this.notice, this.onUndo, this.count = 1});
 
   final Notice notice;
 
   /// 按撤销。`null` = 这一条没有撤销（或那条路今天走不通）⇒ 不画按钮。
   final VoidCallback? onUndo;
 
+  /// 连着几句合成一行的次数（`1` = 就是一条）。
+  final int count;
+
   @override
   Widget build(BuildContext context) => NoticeCard(
         notice: notice,
         onUndo: onUndo,
+        count: count,
       );
 }
 
@@ -86,6 +93,13 @@ class NoticeStrip extends StatelessWidget {
 
 /// 一条通知长什么样。**两处共用**——于是"浮窗里那个撤销"和"时间线里那个撤销"
 /// 不可能长得不一样、更不可能变成两套动作。
+///
+/// 🔴 ★ **2026-10-02 改过形状**（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.1）：
+///    主人让我重做聊天窗口，我登录拍到的屏幕上是**连着九张一模一样的粉色卡**
+///    （`accentTint` 底 ＋ 描边 ＋ ⓘ）—— 真正说的话被压在中间，一眼看过去像满屏报错。
+///    ⇒ 通知回到它本来的分量：**一行安静的字**（小图标 ＋ 次要色，**不铺底、不描边**）。
+///    🔴 **只有"出事"那两档仍占一块底**（`crash` / `diskFull`）——
+///       那两件值得占眼睛；别的（"我去做，做完叫你""做完了"）不值得。
 class NoticeCard extends StatelessWidget {
   const NoticeCard({
     super.key,
@@ -93,6 +107,7 @@ class NoticeCard extends StatelessWidget {
     this.onUndo,
     this.onDismiss,
     this.footnote,
+    this.count = 1,
   });
 
   final Notice notice;
@@ -102,16 +117,94 @@ class NoticeCard extends StatelessWidget {
   /// 底下补的一句话（今天只有瞬态那条用：[noticeNotKeptLine]）。
   final String? footnote;
 
+  /// ★ **连着同样几句**合成一行时，它一共出现了几次（契约 `154` §2.1）。
+  ///
+  /// ⚠️ 服务端给的那句话**照抄**，这里只在末尾挂一个次数（`（4 次）`）；
+  ///    `count <= 1` 时**一个字都不加**。合并判据在 `timeline.mergeableNotices`。
+  final int count;
+
+  /// 这一条是不是"出事"那一档（值得占一块底）。
+  bool get _loud =>
+      notice.kind == NoticeKind.crash || notice.kind == NoticeKind.diskFull;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final look = DshLook.of(context);
+    final p = look.palette;
     // 图标跟着字算（**不写死尺寸**，D3）
     // ★ 2026-10-01：通知是"非主要"⇒ 走非主要那一档（`look.quiet` = 11/14）
     final iconSize = look.quiet.size + 4;
     final undo = notice.undo;
     final note = footnote;
 
+    final row = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          // 出事那两条用一个"注意"的图标，别的用"信息"——
+          // ⚠️ 图标**只是补充**：不许只靠它承载信息（四态那条纪律同理）。
+          _loud ? Icons.warning_amber_outlined : Icons.info_outline,
+          size: iconSize,
+          // ⚠️ 安静那一档的图标也要**看得见**：用次要色，不用最淡那一级
+          color: _loud ? d.accent : p.labelTertiary,
+        ),
+        const SizedBox(width: DshSpace.s8),
+        Expanded(
+          child: Text.rich(
+            TextSpan(
+              // ★ **服务端给的那句话，照抄**（契约 §五 🔴）——一个字节都不改
+              text: notice.text,
+              children: [
+                if (count > 1)
+                  TextSpan(
+                    text: ' ${noticeRepeatSuffix(count)}',
+                    style: dshTextStyle(look.caption, p.labelCaption),
+                  ),
+              ],
+            ),
+            style: dshTextStyle(
+              look.quiet,
+              _loud ? theme.colorScheme.onSecondaryContainer : p.labelSecondary,
+            ),
+          ),
+        ),
+        if (onDismiss != null) ...[
+          const SizedBox(width: DshSpace.s4),
+          TextButton(
+            onPressed: onDismiss,
+            style: TextButton.styleFrom(
+              // 触控 ≥44（D3.6 那道硬闸扫的就是这些按钮）
+              minimumSize: const Size(44, 44),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            child: const Text(noticeDismissLabel),
+          ),
+        ],
+      ],
+    );
+
+    // ── 安静那一档：**一行字**，不铺底、不描边（它就是"顺口说一声"）──
+    if (!_loud) {
+      return Padding(
+        // ⚠️ 上下留白跟着字走（`look.quiet` 那一档的 4）
+        padding: const EdgeInsets.symmetric(vertical: DshSpace.s4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            row,
+            if (note != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2, left: DshSpace.s4),
+                child: Text(note, style: dshTextStyle(look.quiet, p.labelTertiary)),
+              ),
+            if (undo != null && undo.usable) _undoRow(undo.label),
+          ],
+        ),
+      );
+    }
+
+    // ── "出事"那一档：留一块底（原来那块形状不变，只把文案换成上面那个）──
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       // ★ 2026-09-23 整理 UI（E）：原来这里用的是 **Material 自带的那两个色**
@@ -126,61 +219,28 @@ class NoticeCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                // 出事那两条用一个"注意"的图标，别的用"信息"——
-                // ⚠️ 图标**只是补充**：不许只靠它承载信息（四态那条纪律同理）。
-                notice.kind == NoticeKind.crash || notice.kind == NoticeKind.diskFull
-                    ? Icons.warning_amber_outlined
-                    : Icons.info_outline,
-                size: iconSize,
-                color: d.accent,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  // ★ **服务端给的那句话，照抄**（契约 §五 🔴）
-                  notice.text,
-                  style: dshTextStyle(look.quiet, theme.colorScheme.onSecondaryContainer),
-                ),
-              ),
-              if (onDismiss != null) ...[
-                const SizedBox(width: 4),
-                TextButton(
-                  onPressed: onDismiss,
-                  style: TextButton.styleFrom(
-                    // 触控 ≥44（D3.6 那道硬闸扫的就是这些按钮）
-                    minimumSize: const Size(44, 44),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                  ),
-                  child: const Text(noticeDismissLabel),
-                ),
-              ],
-            ],
-          ),
+          row,
           if (note != null)
             Padding(
               padding: const EdgeInsets.only(top: 2, left: 4),
               child: Text(note, style: dshTextStyle(look.quiet, look.palette.labelTertiary)),
             ),
-          if (undo != null && undo.usable) ...[
-            // ⚠️ `Wrap` 不是 `Row`：字放到最大时按钮要能折行（D3.5 五档那道闸）
-            Wrap(
-              children: [
-                TextButton(
-                  onPressed: onUndo,
-                  style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
-                  // ⚠️ 按钮上的字**用服务端给的那份**（`undo.label`）：
-                  //    客户端不另编一个说法，否则两边会漂。
-                  child: Text(undo.label),
-                ),
-              ],
-            ),
-          ],
+          if (undo != null && undo.usable) _undoRow(undo.label),
         ],
       ),
     );
   }
+
+  /// 撤销那一下（两档共用；⚠️ `Wrap` 不是 `Row`：字放到最大时按钮要能折行 —— D3.5）。
+  Widget _undoRow(String label) => Wrap(
+        children: [
+          TextButton(
+            onPressed: onUndo,
+            style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
+            // ⚠️ 按钮上的字**用服务端给的那份**（`undo.label`）：
+            //    客户端不另编一个说法，否则两边会漂。
+            child: Text(label),
+          ),
+        ],
+      );
 }

@@ -40,6 +40,83 @@ String toolStatusWord(ToolStatus status) => switch (status) {
 const String toolRowExpandLabel = '看它做了什么';
 const String toolRowCollapseLabel = '收起这一行';
 
+/// ★ **一次工具调用那一行左边那个名字**（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.1）。
+///
+/// 🔴 **2026-10-02 改的口径**：原来这一格把**内部名原样摆上屏**
+/// （我登录拍的截图里就是 `mcp__apps__app_create · 飞行棋 在跑`）——
+/// 那是 `115` 那批"聊天窗口内放开 D1.1"留下的形状。主人这次让我重做界面，
+/// 而"界面上出现内部词 = 缺陷"是**手册那条没被撤掉的规矩**（`AGENTS.md` §六 第 4 条）。
+/// ⇒ 认得出的工具**翻成人话**；🔴 **认不出的留空** —— 不编一个更像样的说法
+///    （N10：沉默优于编造）。原来那个内部名**没丢**：它在**展开的那一块**里逐字还在
+///    （`toolRowRawNameLabel`），"要核对时找得到"这条一点没少。
+String? toolHumanName(String name) {
+  final n = name.trim();
+  if (n.isEmpty) return null;
+  // ⚠️ 认名字时**只看结尾那一段**：模型手上那件工具的名字在各处长得不一样
+  //    （`app_create` / `mcp__apps__app_create`），同一次调用不许因为写法不同就翻不出来。
+  final tail = n.contains('__') ? n.split('__').last : n;
+  switch (tail) {
+    // ── 小程序那一套（`mcp-apps-server.mjs` 的九件）──
+    case 'app_create':
+      return '做一个小程序';
+    case 'app_list':
+      return '看有哪些小程序';
+    case 'app_publish':
+      return '把小程序发出去';
+    case 'app_unpublish':
+      return '把小程序收回来';
+    case 'app_discover':
+      return '逛逛大家的小程序';
+    case 'app_install':
+      return '装一个小程序';
+    case 'app_grant':
+      return '让小程序用一样东西';
+    case 'app_revoke':
+      return '不让小程序用了';
+    case 'app_uninstall':
+      return '从桌面撤掉那个小程序';
+    // ── 手上那几件常用的 ──
+    case 'bash':
+      return '跑命令';
+    case 'read':
+      return '看文件';
+    case 'write':
+      return '写文件';
+    case 'edit':
+      return '改文件';
+    case 'glob':
+      return '找文件';
+    case 'grep':
+      return '翻文件里的字';
+    case 'web_search':
+      return '查网';
+    case 'web_fetch':
+      return '打开一个网页';
+    case 'subagent':
+    case 'subagent_fork':
+      return '派一件活';
+    case 'todo_write':
+      return '记一下要做的事';
+    case 'send_message':
+      return '给那边说一句';
+    case 'job_output':
+    case 'job_list':
+      return '看那件事怎么样了';
+    case 'job_kill':
+      return '把那件事停下';
+    default:
+      // 🔴 认不出 ⇒ **留空**（不编）
+      return null;
+  }
+}
+
+/// 展开那一块里"这一行的原始名字"那个小标签（契约 `154` §2.1）。
+///
+/// ⚠️ 它是**核对层**：`115` 那批"全部开放"要的就是"找得到"，
+///    而这一格正是那个"找得到"—— 名字逐字、不改写。
+const String toolRowRawNameLabel = '它手上的名字';
+
+
 /// **截断那句实话**（有 `bytes` 才说得出口径）。
 ///
 /// 🔴 用词逐字照派活单：`… 已截断，共 {bytes} 字节`。

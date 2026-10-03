@@ -1,13 +1,18 @@
-// 「导出」页的**界面断言**（契约 `docs/dev/30-EXPORT.md` §四）。
+// 「导出」页的**界面断言**（契约 `docs/dev/30-EXPORT.md` §四 ·
+// 重做契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.2）。
 //
 // ⚠️ 项目纪律：纯逻辑进 `test/unit`（`test/unit/export_test.dart`），
 //    界面断言放 `test/widget`（这一份）。可访问性那两条硬闸在
 //    `test/widget/accessibility_test.dart` 里、**从真入口进**。
 //
-// 这一份量三件契约明说的事：
-//   ① **空对话** ⇒ 只给那句实话，**不给空白框、不给复制按钮**（§四）；
-//   ② **有东西** ⇒ 一个可全选的字框 + 一个"复制"按钮，按下去真的把**那一段字**复制走；
-//   ③ 复制**没成**也要说（N11：不许沉默，别让用户以为复制好了）。
+// 这一份量四件契约明说的事：
+//   ① **空对话** ⇒ 只给那句实话（＋一句"能干什么"），**不给空白框、不给复制按钮**；
+//   ② ★ **有 `items`** ⇒ **按天分组** ＋ 每条前一行 `我` / `它` 的标签；
+//   ③ ★ **按「复制全部」** ⇒ 复制到的字符串**等于服务端那段 `text`**（不重拼）；
+//   ④ ★ **不给 `items`**（老服务端）⇒ 屏幕上是**原来那段文字**（负向对照）。
+//   另加：复制没成也要说（N11）、令牌不行要回登录页、网不好给重试。
+
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -44,48 +49,91 @@ Future<void> _pump(
   await tester.pumpAndSettle();
 }
 
+/// 服务端那段成品原文（客户端**原样显示、原样复制**，一个字都不改写）。
 const _sample = '—— 9月21日 ——\n\n我：帮我把这周工时记一下\n\n它：这周 7 小时。\n\n'
     '（这儿只是这条对话里你我互相说过的话。它自己记在记忆里的那一层不在里面。）';
+
+/// 两天的四条话（★ 154：`items` 那份 `{seq, at, who, text}`）＋ 服务端原文。
+String _withItems() {
+  final d1 = DateTime(2026, 9, 21, 9).millisecondsSinceEpoch;
+  final d2 = DateTime(2026, 9, 22, 10).millisecondsSinceEpoch;
+  return jsonEncode({
+    'text': _sample,
+    'hiddenCount': 2,
+    'items': [
+      {'seq': 1, 'at': d1, 'who': 'me', 'text': '帮我把这周工时记一下'},
+      {'seq': 2, 'at': d1, 'who': 'it', 'text': '这周 7 小时。'},
+      {'seq': 3, 'at': d2, 'who': 'me', 'text': '那下周呢'},
+      {'seq': 4, 'at': d2, 'who': 'it', 'text': '下周一并给你。'},
+    ],
+  });
+}
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  testWidgets('① 空对话 ⇒ 那句实话，**不给框、不给复制按钮**', (tester) async {
+  testWidgets('① 空对话 ⇒ 那句实话（＋能干什么），**不给框、不给复制按钮**', (tester) async {
     final c = _controller('{"text":"","hiddenCount":0}');
     addTearDown(c.dispose);
     await _pump(tester, c);
 
     expect(find.text(exportEmptyLine), findsOneWidget);
+    expect(find.text(exportEmptyHint), findsOneWidget, reason: '★ 别把人晾在一句话上');
     expect(find.byType(SelectableText), findsNothing, reason: '★ 空的时候不许出现一个空白框');
-    expect(find.text(exportCopy), findsNothing, reason: '★ 没东西可复制就不该给按钮');
+    expect(find.text(exportCopyAll), findsNothing, reason: '★ 没东西可复制就不该给按钮');
   });
 
-  testWidgets('② 有东西 ⇒ 可全选的字框 + 复制按钮；按下去复制的是**那一段字**', (tester) async {
+  testWidgets('② 有 items ⇒ **按天分组** ＋ 每条前一行 `我` / `它` 标签', (tester) async {
+    final c = _controller(_withItems());
+    addTearDown(c.dispose);
+    await _pump(tester, c);
+
+    final d1 = DateTime(2026, 9, 21, 9).millisecondsSinceEpoch;
+    final d2 = DateTime(2026, 9, 22, 10).millisecondsSinceEpoch;
+    expect(find.text(exportDayLabel(d1)), findsOneWidget, reason: '★ 第一天的小标题');
+    expect(find.text(exportDayLabel(d2)), findsOneWidget, reason: '★ 第二天的小标题');
+    expect(find.text(exportWhoMe), findsNWidgets(2));
+    expect(find.text(exportWhoIt), findsNWidgets(2));
+    // 每一条自己是一块可选的正文（不是那一大段等宽字）
+    expect(find.byType(SelectableText), findsNWidgets(4));
+    expect(find.text(exportHintLine), findsNothing, reason: '★ items 那一档不再退回文字块');
+  });
+
+  testWidgets('③ 按「复制全部」⇒ 复制到的**等于服务端那段 text**（不重拼）', (tester) async {
     String? copied;
-    final c = _controller(
-      '{"text":${_jsonString(_sample)},"hiddenCount":2}',
-    );
+    final c = _controller(_withItems());
     addTearDown(c.dispose);
     await _pump(tester, c, copy: (t) async => copied = t);
 
-    expect(find.byType(SelectableText), findsOneWidget);
-    expect(find.text(exportHintLine), findsOneWidget);
-    // ⚠️ 那段字是**服务端给的成品**，客户端原样显示（一个字都不改写）。
-    final shown = tester.widget<SelectableText>(find.byType(SelectableText));
-    expect(shown.data, _sample);
-
-    await tester.tap(find.text(exportCopy));
+    await tester.tap(find.text(exportCopyAll));
     await tester.pumpAndSettle();
-    expect(copied, _sample, reason: '★ 复制的必须是整段成品，不是屏幕上截了一半');
+    expect(copied, _sample, reason: '★ 复制的必须是服务端拼好的那段原文，不是拿 items 重拼');
     expect(find.text(exportCopiedLine), findsOneWidget);
   });
 
-  testWidgets('③ 复制没成 ⇒ 如实说（不许沉默）', (tester) async {
-    final c = _controller('{"text":"我：在","hiddenCount":0}');
+  testWidgets('④ 不给 items（老服务端）⇒ 屏幕上是**原来那段文字**', (tester) async {
+    String? copied;
+    final c = _controller(jsonEncode({'text': _sample, 'hiddenCount': 2}));
+    addTearDown(c.dispose);
+    await _pump(tester, c, copy: (t) async => copied = t);
+
+    // 负向对照：退回那条路真的没断 —— 整段成品**原样**在
+    expect(find.byType(SelectableText), findsOneWidget);
+    final shown = tester.widget<SelectableText>(find.byType(SelectableText));
+    expect(shown.data, _sample);
+    expect(find.text(exportHintLine), findsOneWidget);
+    // 抬眼那颗「复制全部」照样复制得走（这才是 §2.2 说的"常驻"）
+    await tester.tap(find.text(exportCopyAll));
+    await tester.pumpAndSettle();
+    expect(copied, _sample);
+  });
+
+  testWidgets('⑤ 复制没成 ⇒ 如实说（不许沉默）', (tester) async {
+    final c = _controller(_withItems());
     addTearDown(c.dispose);
     await _pump(tester, c, copy: (_) async => throw Exception('平台通道不在'));
 
-    await tester.tap(find.text(exportCopy));
+    await tester.tap(find.text(exportCopyAll));
     await tester.pumpAndSettle();
     expect(find.text(exportCopyFailedLine), findsOneWidget);
   });
@@ -123,27 +171,4 @@ void main() {
     expect(find.text(trashUnauthorizedLine), findsNothing);
     expect(find.text(trashRetry), findsOneWidget);
   });
-}
-
-/// 把一个 Dart 字符串编成 JSON 字符串字面量（测试里手拼 JSON 时用）。
-String _jsonString(String s) {
-  final b = StringBuffer('"');
-  for (final r in s.runes) {
-    switch (r) {
-      case 0x22:
-        b.write(r'\"');
-      case 0x5C:
-        b.write(r'\\');
-      case 0x0A:
-        b.write(r'\n');
-      case 0x0D:
-        b.write(r'\r');
-      case 0x09:
-        b.write(r'\t');
-      default:
-        b.writeCharCode(r);
-    }
-  }
-  b.write('"');
-  return b.toString();
 }

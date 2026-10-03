@@ -314,4 +314,47 @@ void main() {
       expect(noticeNotKeptLine.contains(w), isFalse, reason: '★ 「$w」是时间承诺（§一 第 4 条）');
     }
   });
+
+  // ── ★ 2026-10-02：**连着同样几句通知合成一行**（契约 `154` §2.1）──
+  //
+  // 为什么：主人让我重做聊天窗口，我登录拍到的屏幕上是**连着九张一模一样的粉色卡**
+  // （「我去做，做完叫你。」×4 之类），真正说的话被压在中间。
+  // 合成一行**一个字节都不改**服务端那句话，只多一个次数。
+  group('连着同样几句 ⇒ 合成一行（判据在这儿）', () {
+    TimelineNotice one({String kind = 'resumed', String text = _expiringText, Object? undo, int seq = 7}) {
+      final t = Timeline();
+      t.apply(_noticeEvent(kind: kind, text: text, undo: undo, seq: seq));
+      return t.items.whereType<TimelineNotice>().first;
+    }
+
+    test('★ 同样的话 ⇒ 能合并', () {
+      expect(mergeableNotices(one(), one(seq: 8)), isTrue);
+    });
+
+    test('🔴 话不一样 / 档不一样 ⇒ 不合并（不许把两件事揉成一句）', () {
+      expect(mergeableNotices(one(), one(text: '$_expiringText（别的）', seq: 8)), isFalse);
+      expect(mergeableNotices(one(kind: 'resumed'), one(kind: 'expiring', seq: 8)), isFalse);
+    });
+
+    test('🔴 有撤销的**一律不合并**（合并会把"按一下撤销"藏起来）', () {
+      final undo = {'action': 'trash/restore', 'label': '撤销', 'messageIds': <String>['u_1', 'm_1']};
+      expect(
+        mergeableNotices(one(undo: undo), one(seq: 8)),
+        isFalse,
+        reason: '左边有撤销 ⇒ 不合并',
+      );
+      expect(
+        mergeableNotices(one(), one(undo: undo, seq: 8)),
+        isFalse,
+        reason: '右边有撤销 ⇒ 不合并',
+      );
+    });
+
+    test('次数那句话：1 次不画、N 次带上数字（文案不出现在 1 次那一档）', () {
+      expect(noticeRepeatSuffix(4), contains('4'));
+      expect(noticeRepeatSuffix(4), isNot(contains('1')));
+      // ⚠️ 这句话本身要干净（拿真那份表扫）
+      expect(scanForbidden(noticeRepeatSuffix(4)), isEmpty);
+    });
+  });
 }

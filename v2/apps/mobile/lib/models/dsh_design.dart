@@ -281,6 +281,17 @@ abstract final class DshTypes {
   /// `--dsw-font-l-20`：500 20/28。
   static const DshType l20 = DshType(size: 20, weight: 500, lineHeight: 28);
 
+  /// ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.1 / §2.2 / §2.3）：
+  /// **一屏抬头**那一档标题（**回收站页 · 聊天窗口顶栏 · 导出页**共用这一个）。
+  ///
+  /// 🔴 它与 [l20] **同字号、不同字重**（20/**600**）：主人这一批点名
+  ///    「抬头：返回箭头 ＋ 标题（20/w600）」——DSH 那套阶梯里没有 600 的 20 号
+  ///    （[xl24] 是 600，但它是 24），所以在这一档上**另立一个 token**，
+  ///    而不是在界面里就地 `copyWith(fontWeight: …)`（手册 D3：数值只住这里）。
+  /// ⚠️ 三个数（字号/字重/行高）与 [l20] 只差字重：行高照旧 28（DSH 的 20 号那一档）。
+  /// ⚠️ **三个调用处共用它**（同一份数字不许有两处）——要改就一起改。
+  static const DshType title = DshType(size: 20, weight: 600, lineHeight: 28);
+
   /// `--dsw-font-m-18`：500 **16**/28（名字里的 18 是骗人的）。
   static const DshType m = DshType(size: 16, weight: 500, lineHeight: 28);
 

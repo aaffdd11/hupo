@@ -39,11 +39,16 @@ void main() {
       exportTooltip,
       exportTitle,
       exportHintLine,
-      exportCopy,
+      exportCopyAll,
       exportCopiedLine,
       exportCopyFailedLine,
       exportEmptyLine,
+      exportEmptyHint,
       exportLoadFailedLine,
+      // ★ 154 §2.2：标签与按天那个小标题也要过（它们也是屏幕上真会出现的字）。
+      exportWhoMe,
+      exportWhoIt,
+      exportDayLabel(1700000000000),
     ];
 
     test('🔴 一条都不许带内部词（拿真那份禁用词表扫）', () {
@@ -91,6 +96,66 @@ void main() {
     test('🔴 空白正文也算"没有"（不许给一个只有空白的框）', () {
       expect(const ExportDoc(text: '   \n\n ').hasText, false);
       expect(const ExportDoc(text: '我：在').hasText, true);
+    });
+
+    // ── ★ 154 §2.2：`items` 的宽容解析 ─────────────────────────
+    //
+    // 客户端拿它**按天分组**排版；拿不到（老服务端 / 坏形状）⇒ **空列表**
+    // ⇒ 界面退回原来那段文字块。**绝不抛**。
+
+    test('★ items：好形状 ⇒ 逐条（含 who / at / seq / text）', () {
+      final d = exportFrom(const {
+        'text': '我：你好',
+        'items': [
+          {'seq': 1, 'at': 1758400000000, 'who': 'me', 'text': '你好'},
+          {'seq': 2, 'at': null, 'who': 'it', 'text': '在'},
+        ],
+      });
+      expect(d.items.length, 2);
+      expect(d.items[0].isMe, true);
+      expect(d.items[0].at, 1758400000000);
+      expect(d.items[0].seq, 1);
+      expect(d.items[0].text, '你好');
+      expect(d.items[1].isMe, false);
+      expect(d.items[1].at, isNull, reason: '`at` 可以是 null（那一组不带小标题）');
+      expect(d.items[1].text, '在');
+      // 顺序就是服务端给的顺序（客户端不重排）
+      expect(d.items.map((i) => i.seq).toList(), [1, 2]);
+    });
+
+    test('★ items：缺字段 ⇒ 空列表（老服务端那条路）', () {
+      expect(exportFrom(const {}).items, isEmpty);
+      expect(exportFrom(const {'text': '我：在'}).items, isEmpty);
+      expect(exportFrom(const {'items': null}).items, isEmpty);
+    });
+
+    test('🔴 items：坏形状 ⇒ 空列表，**绝不抛**', () {
+      // 不是数组
+      expect(exportFrom(const {'items': 'nope'}).items, isEmpty);
+      expect(exportFrom(const {'items': 42}).items, isEmpty);
+      expect(exportFrom(const {'items': <Object>{}}).items, isEmpty);
+      // 元素不是对象 / 缺字段 / 类型不对 / who 认不出
+      expect(exportFrom(const {'items': ['x']}).items, isEmpty);
+      expect(exportFrom(const {'items': [{'who': 'me'}]}).items, isEmpty);
+      expect(exportFrom(const {'items': [{'text': '在'}]}).items, isEmpty);
+      expect(exportFrom(const {
+        'items': [{'who': 'weird', 'text': '在'}],
+      }).items, isEmpty);
+      expect(exportFrom(const {'items': [{'who': 'me', 'text': 42}]}).items, isEmpty);
+      expect(exportFrom(const {'items': [{'who': 'me', 'text': '在', 'at': 'x'}]}).items,
+          isEmpty);
+      // 一个坏元素 ⇒ **整份**不要（宁可整段退回，也不许屏幕上少几条）
+      expect(exportFrom(const {
+        'items': [
+          {'who': 'me', 'text': '在'},
+          {'who': 'nope', 'text': '坏'},
+        ],
+      }).items, isEmpty);
+    });
+
+    test('★ 按天那个小标题：形状与服务端那段原文一致（M月D日）', () {
+      final at = DateTime(2026, 10, 1, 21, 33).millisecondsSinceEpoch;
+      expect(exportDayLabel(at), '10月1日');
     });
   });
 
