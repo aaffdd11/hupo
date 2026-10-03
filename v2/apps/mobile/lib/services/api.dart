@@ -17,7 +17,6 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/dev_harness.dart';
-import '../models/export.dart';
 import '../models/app_grants.dart';
 import '../models/app_spec.dart';
 import '../models/scope.dart';
@@ -957,55 +956,6 @@ extension TrashApi on Api {
     required String token,
   }) =>
       _post('/api/trash/remove', {'messageIds': messageIds, 'confirm': true}, token, (_) => true);
-
-  /// 回收站里现在有什么。
-  Future<TrashAnswer<List<TrashEntry>>> trashList({required String token}) async {
-    try {
-      final r = await _c
-          .get(_u('/api/trash'), headers: {'authorization': 'Bearer $token'})
-          .timeout(const Duration(seconds: 20));
-      return trashAnswerOf<List<TrashEntry>>(r.statusCode, r.body, trashEntriesFrom);
-    } catch (e) {
-      return TrashFailed<List<TrashEntry>>('$e');
-    }
-  }
-
-  /// 从回收站拿回来。
-  Future<TrashAnswer<bool>> trashRestore({
-    required List<String> messageIds,
-    required String token,
-  }) =>
-      _post('/api/trash/restore', {'messageIds': messageIds}, token, (_) => true);
-
-  /// 彻底删掉。⚠️ 同样必须 `confirm:true`。
-  Future<TrashAnswer<bool>> trashPurge({
-    required List<String> messageIds,
-    required String token,
-  }) =>
-      _post('/api/trash/purge', {'messageIds': messageIds, 'confirm': true}, token, (_) => true);
-}
-
-/// **导出**那一条路（契约 `docs/dev/30-EXPORT.md`）。
-///
-/// ⚠️ 它复用 [TrashAnswer] 那套三态（401 / 网 / 成功）——和回收站**同一把尺子**：
-///    没有令牌就是 401（该回登录页），网不通就是失败（**什么都没发生**），
-///    只有服务端明说 200 才算拿到。导出是只读的，所以**没有**"以为导出了其实没有"
-///    那种破坏性后果，但"把 401 说成网不好"照样会把用户带去一个永远转圈的页面。
-extension ExportApi on Api {
-  /// 拿这一段能粘走的文字。**只读** ⇒ `GET`、**没有 `confirm`**
-  /// （和 `trashPlan` 同一条规矩：能白看的东西不许有门槛）。
-  ///
-  /// ⚠️ 令牌**只走 `Authorization` 头**，绝不进 URL（和别的口子同一条规矩）。
-  Future<TrashAnswer<ExportDoc>> exportText({required String token}) async {
-    try {
-      final r = await _c
-          .get(_u('/api/export'), headers: {'authorization': 'Bearer $token'})
-          .timeout(const Duration(seconds: 20));
-      return trashAnswerOf<ExportDoc>(r.statusCode, r.body, exportFrom);
-    } catch (e) {
-      return TrashFailed<ExportDoc>('$e');
-    }
-  }
 }
 
 /// **往前取一页**的回执（批 C）。

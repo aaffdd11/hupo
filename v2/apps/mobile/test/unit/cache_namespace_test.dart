@@ -23,12 +23,10 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/token_sub.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/draft_store.dart';
-import 'package:hupo_app/services/process_level_store.dart';
 import 'package:hupo_app/services/timeline_store.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -175,16 +173,6 @@ void main() {
       expect(pre.getKeys().where((k) => k.startsWith(TimelineStore.keyPrefix)).length, 1);
     });
 
-    test('★ 过程档位**不清**（它是设备级偏好，不是账号数据）', () async {
-      final levels = ProcessLevelStore();
-      await levels.write(ProcessLevel.reasoning);
-      final c = ChatController(
-        api: fakeApi(), tokens: TokenStore(), local: _store(), drafts: _drafts(), levels: levels,
-      );
-      await c.start(token: tokenForSub('u1'), openStream: false);
-      await c.logout();
-      expect(await levels.read(), ProcessLevel.reasoning, reason: '档位不该被退出登录清掉');
-    });
   });
 }
 

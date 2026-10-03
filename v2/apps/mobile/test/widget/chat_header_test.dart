@@ -15,7 +15,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hupo_app/models/export_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
@@ -62,23 +61,26 @@ void main() {
     );
   });
 
-  testWidgets('会话头那几样还在：名字 · 导出 · 过程 ·（右栏那颗）', (tester) async {
+  testWidgets('🔴 会话头现在只剩两样：名字 ＋ 右侧那颗「收起聊天」', (tester) async {
     await _pump(tester);
     final header = find.byType(ChatFloater);
     expect(
       find.descendant(of: header, matching: find.text(appName)),
       findsOneWidget,
-      reason: '会话头那两个字被碰掉了',
+      reason: '会话头上那个名字被碰掉了',
     );
     expect(
-      find.descendant(of: header, matching: find.text(exportTooltip)),
+      find.descendant(of: header, matching: find.text(chatCollapse)),
       findsOneWidget,
-      reason: '「导出」被碰掉了',
+      reason: '★ 右侧那颗「收起聊天」不在（收起就没有看得见的出口了）',
     );
-    expect(
-      find.descendant(of: header, matching: find.text(levelActionWords)),
-      findsOneWidget,
-      reason: '「过程」被碰掉了',
-    );
+    // 🔴 **负向对照**：主人 2026-10-03 说不要的那三样**一个字都不许回来**。
+    for (final w in const ['回收站', '导出', '过程']) {
+      expect(
+        find.descendant(of: header, matching: find.text(w)),
+        findsNothing,
+        reason: '★「$w」又回来了 —— 主人 2026-10-03 说这三样不要了',
+      );
+    }
   });
 }

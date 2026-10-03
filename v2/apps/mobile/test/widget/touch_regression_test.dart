@@ -34,7 +34,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:hupo_app/models/dsh_design.dart';
-import 'package:hupo_app/models/export_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
@@ -241,56 +240,11 @@ void main() {
     expect(find.byType(BubbleSelectBar), findsOneWidget, reason: '★【多选】没进多选态');
   });
 
-  // ── ③ 🔴 手机宽度：横滚条不许被一个"什么都不画"的 Spacer 吃掉一半 ──
-
-  testWidgets('🔴 手机宽 390：横滚条至少得装得下**一整颗**动作（Spacer 吃掉一半 = 红）', (tester) async {
-    const size = Size(390, 844);
-    final r = _controller();
-    _feed(r.c, 6);
-    tester.view.physicalSize = size;
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await _pump(tester, r.c);
-    await _expand(tester);
-    await _drainFrames(tester);
-
-    final strip = tester.getRect(find.byKey(chatActionsStripKey));
-    expect(strip.width, greaterThan(0), reason: '★ 动作条没量到');
-    // 🔴 「过程」是这一串里**最后一个**（`reverse: true` ⇒ 它一定贴着视口右缘）。
-    //    读数（390 宽）：有那个 `Spacer` ⇒ 条 35.4 宽，「过程」被切掉半个；
-    //    拿掉它 ⇒ 条 53 宽，「过程」整颗在里面。
-    final last = tester.getRect(find.text(levelActionWords));
-    expect(
-      last.left >= strip.left - 0.5 && last.right <= strip.right + 0.5,
-      isTrue,
-      reason: '★ 横滚条（$strip）连最后那一颗「$levelActionWords」（$last）都装不下 —— '
-          '屏幕上就是"那一排按钮点不开"',
-    );
-  });
-
-  testWidgets('对照组：宽屏 800 ⇒ 那一串动作**一颗都不缺**、全在视口里、点得动', (tester) async {
-    final r = _controller();
-    _feed(r.c, 6);
-    await _pump(tester, r.c); // 默认 800×600
-    await _expand(tester);
-    await _drainFrames(tester);
-    final strip = tester.getRect(find.byKey(chatActionsStripKey));
-    for (final w in const [trashTooltip, exportTooltip, levelActionWords]) {
-      final rect = tester.getRect(find.text(w));
-      expect(
-        rect.left >= strip.left - 0.5 && rect.right <= strip.right + 0.5,
-        isTrue,
-        reason: '★ 宽屏下「$w」（$rect）居然不在横滚条（$strip）里',
-      );
-      // ⚠️ `warnIfMissed`：点得到才算数（落在视口外会报出来）
-      await tester.tap(find.text(w), warnIfMissed: true);
-      await tester.pumpAndSettle();
-      // 前两条各进一屏（回收站 / 导出）⇒ 退回来继续下一颗；
-      // 最后一条（过程）弹的是那层面板，留着不收（用例到此为止）。
-      if (w != levelActionWords) {
-        await tester.pageBack();
-        await tester.pumpAndSettle();
-      }
-    }
-  });
+  // ── ③ 手机宽度那一排动作 ──────────────────────────────
+  //
+  // 🔴 **2026-10-03：这一组整条换掉了。** 原来钉的是"横滚条至少装得下一整颗动作"
+  //    （`chatActionsStripKey`）—— 而主人当天说**回收站 / 导出 / 过程三样都不要了**，
+  //    右侧只剩**一颗带字的「收起聊天」** ⇒ 横滚条本身不存在了。
+  //    新的钉子（"那一行只剩两样"＋"那颗的字与命中区"）在
+  //    `test/widget/chat_header_test.dart` 与 `floater_actions_test.dart` 里。
 }

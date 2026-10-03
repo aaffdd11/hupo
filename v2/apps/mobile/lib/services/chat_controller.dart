@@ -11,7 +11,6 @@ import 'package:flutter/foundation.dart';
 
 import '../models/conn_state.dart';
 import '../models/chat_queue.dart';
-import '../models/export.dart';
 import '../models/hearing_session.dart';
 import '../models/job_ask.dart';
 import '../models/job_words.dart';
@@ -22,14 +21,12 @@ import '../models/plan.dart';
 import '../models/process_levels.dart';
 import '../models/timeline.dart';
 import '../models/trash.dart';
-import '../models/trash_words.dart';
 import 'api.dart';
 import 'compose_store.dart';
 import 'draft_store.dart';
 import 'hearing.dart' as hearing_service;
 import 'speech.dart' as speech_service;
 import 'speech_store.dart';
-import 'process_level_store.dart';
 import 'stream.dart';
 import 'stream_uri.dart';
 import '../models/scope.dart';
@@ -61,7 +58,6 @@ class ChatController extends ChangeNotifier {
     TimelineStore? local,
     DraftStore? drafts,
     ComposeStore? compose,
-    ProcessLevelStore? levels,
     SpeechStore? speech,
     this.onUnauthorized,
     /// **念出来**那两个动作（可注入 —— 判据要能验"该念的时候调了没有"）。
@@ -85,7 +81,6 @@ class ChatController extends ChangeNotifier {
        local = local ?? TimelineStore(),
        drafts = drafts ?? DraftStore(),
        compose = compose ?? ComposeStore(),
-       levels = levels ?? ProcessLevelStore(),
        speech = speech ?? SpeechStore(),
        _newStream = newStream,
        _speak = speak ?? speech_service.speakAloud,
@@ -207,9 +202,6 @@ class ChatController extends ChangeNotifier {
 
   /// 现在存着的那份打字草稿（`null` = 没有）。界面拿它画"上面那条草稿"。
   String? composeDraft;
-
-  /// 过程两档存在哪（契约 `docs/dev/122` §三）。**按设备存、按账号不存**。
-  final ProcessLevelStore levels;
 
   /// "自动念"那个开关住哪（设备级偏好，见 `speech_store.dart`）。
   final SpeechStore speech;
@@ -645,9 +637,11 @@ class ChatController extends ChangeNotifier {
     await tokens.write(token);
     _needsSetup = false;
     _lastError = null;
-    // ★ 过程档位是**本机偏好**，跟"先画本机一屏"一起读出来——
-    //   它决定那一屏上推理原文要不要画（`doing` 档不画）。
-    _level = await levels.read();
+    // 🔴 2026-10-03：**档位选择那一件砍了**（主人：*"回收站，导出，过程，我们也不需要。"*）
+    //    ⇒ 档位**钉在默认那一个**（`doing`：「在做什么」）。
+    //    ⚠️ 协议**一个字没动**：`level` 照旧按连接级那一格发（老设备盘上存过的
+    //       `reasoning` **不再读** —— 读了就成了"卡在那一档、又没法切回来"的陷阱）。
+    _level = defaultProcessLevel;
     await _restoreLocal();
     notifyListeners();
     // ★ 本机那一屏已经画出来了，这才轮到网络。
@@ -662,20 +656,6 @@ class ChatController extends ChangeNotifier {
   ///    中间那段事实由服务端的补发兜住（协议 R5）。
   ///
   /// ⚠️ 存盘**先做**：就算马上要重连、就算这一次重连失败，
-  ///    下次开机也得是用户刚选的那一档。
-  Future<void> setLevel(ProcessLevel level) async {
-    if (level == _level) return;
-    _level = level;
-    await levels.write(level);
-    notifyListeners();
-    if (_stream == null) return;
-    // ⚠️ `dispose` 不是 `close`：换档会反复走这条路，旧的流连它那两个
-    //    `StreamController` 一起收掉，别留着一堆没人引用的监听。
-    final old = _stream;
-    _stream = null;
-    await old?.dispose();
-    _ensureStream();
-  }
 
   /// **换房间**（契约 `83-APP-WORKSPACE.md` §五·甲：跟着图标走；
   /// C 期按 `84-DISPATCHER-FOCUS.md` §三·3 **收回了"按房间重连"**）。
@@ -1354,58 +1334,6 @@ class ChatController extends ChangeNotifier {
   /// 界面上那两个"知道了"按的就是这个。
   void dismissNotice() => _dismissNotice();
 
-  /// 撤销这条路要交给服务端的东西（**按不动就 `null`**）。
-  ///
-  /// ⚠️ 两个入口、**同一份判断**：
-  ///    · `from == null` ⇒ 浮窗里那个（读浮窗手上那一条）；
-  ///    · 给了 `from` ⇒ **时间线里**那一条。
-  ///
-  /// ⚠️ 为什么时间线那个**不能**读浮窗手上那一条（这一条踩过一次，别改回去）：
-  ///    浮窗**会自己消失**（约束 2），而"撤销窗口不能随浮窗一起消失"
-  ///    正是约束 3 的全部意思。读浮窗 = 浮窗一走，时间线那个按钮就成了
-  ///    一个按了不会有结果的按钮 —— 那是屏幕上说假话（N10）。
-  ///
-  /// ⚠️ `action` 今天只有一条（`trash/restore`，契约 §五）：
-  ///    认不出来的 action 一律**不给入口**。
-  /// ⚠️ 它**不新造接口**：复用的是回收站那条 `trashRestore`（`restoreTurn`）。
-  ///    通知的撤销与回收站里那个"恢复"是同一件事。
-  List<String>? undoNoticeIds({TimelineNotice? from}) {
-    final u = from?.undo ?? _notice?.undo;
-    if (u == null || !u.usable) return null;
-    if (u.action != NoticeUndoAction.trashRestore) return null;
-    return u.messageIds;
-  }
-
-  /// 按撤销：**和回收站里那个"恢复"是同一条路**。
-  ///
-  /// [from] 同 [undoNoticeIds]：不传 = 浮窗那个；传了 = 时间线那一条。
-  ///
-  /// ⚠️ 成没成都如实说（N11）：失败时把浮窗撤掉、把那一句写上顶部状态条，
-  ///    而且把结果**交回调用方**（按下它的那一层才说得出话）。
-  ///    ——"以为拿回来了其实没有"和"以为没拿回来其实拿回来了"都不许出现
-  ///    （契约 §四 🔴 与回收站那一批同一条纪律）。
-  ///
-  /// ⚠️ **两处走的是同一个方法**（约束 3 说的"同一件事"就是这个意思）：
-  ///    差别只有"这份 undo 是从哪儿读的"。浮窗撤掉只是顺手——
-  ///    时间线那一条**不撤**（它就是给"你不在"留的）。
-  ///
-  /// 返回值：`null` = 这一条没有按得动的撤销（**什么都没做**）。
-  Future<TrashAnswer<bool>?> undoNotice({TimelineNotice? from}) async {
-    final ids = undoNoticeIds(from: from);
-    if (ids == null) return null;
-    _notice = null;
-    _noticeTimer?.cancel();
-    _noticeTimer = null;
-    final r = await restoreTurn(ids);
-    if (r is! TrashOk<bool>) {
-      _lastError = r is TrashUnauthorized
-          ? trashUnauthorizedLine
-          : trashRestoreFailedLine;
-      notifyListeners();
-    }
-    return r;
-  }
-
   /// 存缓存：**按"句子的边界"写，不按钟写**。
   ///
   /// * 结构性事件（一轮开始 / 收口 / 用户那句 / 分节标记）⇒ **立刻写**：
@@ -1615,50 +1543,6 @@ class ChatController extends ChangeNotifier {
     final r = await api.trashRemove(messageIds: messageIds, token: t);
     if (r is TrashOk<bool>) await _forgetTurn(messageIds);
     return r;
-  }
-
-  /// 回收站里现在有什么。
-  Future<TrashAnswer<List<TrashEntry>>> loadTrash() async {
-    final t = _token;
-    if (t == null) return const TrashUnauthorized<List<TrashEntry>>();
-    return api.trashList(token: t);
-  }
-
-  /// 从回收站拿回来。
-  ///
-  /// ⚠️ 服务端会落一条 `turn/restored`（契约 §8.3），但那一帧要是没到
-  ///    （断线 / 补发窗口已经过去），屏幕上就少了一条**其实已经拿回来**的话
-  ///    ——那也是一种说假话 ⇒ 就地取消隐藏（幂等，事件到了再做一遍没差别）。
-  Future<TrashAnswer<bool>> restoreTurn(List<String> messageIds) async {
-    final t = _token;
-    if (t == null) return const TrashUnauthorized<bool>();
-    final r = await api.trashRestore(messageIds: messageIds, token: t);
-    if (r is TrashOk<bool>) {
-      timeline.showMessages(messageIds);
-      notifyListeners();
-    }
-    return r;
-  }
-
-  /// 彻底删掉（拿不回来）。成功后**从内存里丢掉**（契约 §8.3）。
-  Future<TrashAnswer<bool>> purgeTurn(List<String> messageIds) async {
-    final t = _token;
-    if (t == null) return const TrashUnauthorized<bool>();
-    final r = await api.trashPurge(messageIds: messageIds, token: t);
-    if (r is TrashOk<bool>) await _forgetTurn(messageIds, purge: true);
-    return r;
-  }
-
-  /// **导出**：拿那一段能粘走的文字（契约 `docs/dev/30-EXPORT.md`）。
-  ///
-  /// ⚠️ **不在这一侧拼**：那段文字由服务端渲染（§六）——
-  ///    只有它知道回收站里删过谁（§三：那些不算进来，但条数要报）。
-  ///    客户端拿到成品，只负责显示与复制。
-  /// ⚠️ 没有令牌 ⇒ 直接 [TrashUnauthorized]（**不是**"网不好"）。
-  Future<TrashAnswer<ExportDoc>> loadExport() async {
-    final t = _token;
-    if (t == null) return const TrashUnauthorized<ExportDoc>();
-    return api.exportText(token: t);
   }
 
   /// 就地收拾"这一轮已经不在了"：藏起来（或丢掉）+ **清本机那两份**。

@@ -25,7 +25,6 @@ class TrashPlanSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final purge = purgeAtLine(plan.purgeAt);
     return SafeArea(
       // 列表能滚 ⇒ 字号最大那一档也不会溢出（D3.5 那道硬闸）。
       child: ListView(
@@ -37,13 +36,8 @@ class TrashPlanSheet extends StatelessWidget {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
-            child: Text(planTtlLine(plan.ttlDays), style: theme.textTheme.bodyMedium),
+            child: Text(planGoneLine, style: theme.textTheme.bodyMedium),
           ),
-          if (purge.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-              child: Text(purge, style: theme.textTheme.bodySmall),
-            ),
           // ⚠️ §五 那一条：**删不掉的那一项必须被看见**。
           if (plan.hasCannot)
             Padding(

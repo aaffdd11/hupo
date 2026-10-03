@@ -42,7 +42,6 @@ const _diskFullText = '盘满了，这条我没能记下来';
 const _ids = ['u_x', 'm_y'];
 const _undo = {'label': '拿回来', 'action': 'trash/restore', 'messageIds': _ids};
 const _undoLabel = '拿回来';
-const _minTouch = 44.0;
 
 http.Response _json(String body, [int status = 200]) => http.Response(
       body,
@@ -102,10 +101,6 @@ Future<void> _pump(WidgetTester tester, ChatController c, {bool caughtUp = true}
   await tester.pump();
   if (caughtUp) c.ingest({'type': '__caught_up__'});
 }
-
-/// 时间线里那个撤销按钮上的字。
-Finder _lineUndo() =>
-    find.descendant(of: find.byType(NoticeLine), matching: find.text(_undoLabel));
 
 /// 灌一条通知进去（**从真入口**：控制器收服务端事件那条路）。
 Future<void> _arrive(WidgetTester tester, ChatController c, Map<String, dynamic> e) async {
@@ -199,20 +194,18 @@ void main() {
 
   // ── 三、撤销：**只剩时间线那一处**，而且仍是同一条路 ────────────────
 
-  testWidgets('🔴 时间线里那个"撤销"走回收站那条路（`trash/restore` ＋ 服务端给的 id）', (tester) async {
+  testWidgets('🔴 通知上**不再有**「撤销」（那条路 2026-10-03 砍了）', (tester) async {
+    // 🔴 主人 2026-10-03：*「回收站，导出，过程，我们也不需要。」*（甲：功能一起删掉）
+    //    ⇒ 通知照旧上屏（那是服务端的事实），但**一个按钮都不挂**。
+    //    ⚠️ 负向对照就在这条里：先证明那句话**真画出来了**，再证明按钮不在 ——
+    //      不然"没扫到"可能是因为整条通知都没进树。
     final server = _Server();
     final c = _controller(server: server);
     await _pump(tester, c);
     await _arrive(tester, c, _notice());
-
-    expect(_lineUndo(), findsOneWidget);
-    await tester.tap(_lineUndo());
-    await tester.pumpAndSettle();
-
-    expect(server.calls.length, 1, reason: '★ 撤销没发出去');
-    // ⚠️ 请求体里只有 `messageIds`：`action`（`trash/restore`）是**客户端选哪条路**用的，
-    //    不上行 —— 路已经由**打到哪个端点**证明了（这个假服务端只认那个端点）。
-    expect(server.calls.single['messageIds'], _ids, reason: '★ 用的必须是服务端给的那份 id');
+    expect(find.byType(NoticeLine), findsOneWidget, reason: '★ 那条通知该在屏幕上');
+    expect(find.text(_undoLabel), findsNothing, reason: '★ 撤销那条路砍了，不该再画它');
+    expect(server.calls, isEmpty, reason: '★ 什么都没按 ⇒ 一个请求都不该发');
   });
 
   testWidgets('没有 undo 的通知（续做那条）⇒ **不画**撤销按钮', (tester) async {
@@ -240,13 +233,4 @@ void main() {
     expect(find.text(_undoLabel), findsNothing, reason: '★ 认不出的动作不许画成按得动的按钮');
   });
 
-  testWidgets('🔴 时间线里那个撤销：命中区 ≥44', (tester) async {
-    final c = _controller();
-    await _pump(tester, c);
-    await _arrive(tester, c, _notice());
-    // ⚠️ 量**按钮**（`TextButton`），不是里面的字：字比命中区小。
-    final r = tester.getRect(find.ancestor(of: _lineUndo(), matching: find.byType(TextButton)));
-    expect(r.width, greaterThanOrEqualTo(_minTouch));
-    expect(r.height, greaterThanOrEqualTo(_minTouch));
-  });
 }

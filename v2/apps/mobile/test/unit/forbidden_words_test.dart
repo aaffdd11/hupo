@@ -26,7 +26,6 @@ import 'package:hupo_app/models/source_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/speak_words.dart';
 import 'package:hupo_app/models/tool_row_words.dart';
-import 'package:hupo_app/models/trash.dart';
 import 'package:hupo_app/models/trash_words.dart';
 
 void main() {
@@ -135,10 +134,10 @@ void main() {
       // ⚠️ **关于页那几句也在这儿**（直接引数据源，不手抄 —— 手抄会漂）
       ...aboutFacts.expand((f) => [f.title, ...f.lines]),
       ...aboutFactsFor(canHear: true).expand((f) => [f.title, ...f.lines]),
-      // ⚠️ 批 3「删掉 / 回收站」那一批（`28-DELETE.md`）：顶栏入口、气泡长按菜单、
-      //    删前那份清单、回收站页的按钮与几句回话 —— **直接引数据源**。
-      trashTitle,
-      trashTooltip,
+      // ⚠️ 批 3「删掉」那一批（`28-DELETE.md`）：气泡长按菜单、删前那份清单、
+      //    几句回话 —— **直接引数据源**。
+      //    🔴 2026-10-03：回收站那一页（顶栏入口 / 放回来 / 彻底删掉）**砍了**
+      //      ⇒ 它那几句字跟着走了（`docs/dev/172-HEADER-TRIM.md`）。
       bubbleMenuTitle,
       bubbleMenuDelete,
       bubbleMenuDeleteHint,
@@ -161,16 +160,8 @@ void main() {
       planConfirm,
       planCannotLine,
       planEmptyLine,
-      trashEmptyLine,
-      trashNoPreviewLine,
-      trashLoadFailedLine,
+      planGoneLine,
       trashRetry,
-      trashRestore,
-      trashPurge,
-      trashPurgeConfirmTitle,
-      trashPurgeConfirmBody,
-      trashPurgeConfirmYes,
-      trashPurgeConfirmNo,
       // ★ 2026-09-25（契约 `docs/dev/108-JOB-ASK-FLOW.md`）：派活那一层确认上的字
       //    —— **直接引数据源**（手抄会漂）。⚠️ 那句问话本身**不在**这一份里：
       //    它是**服务端给的**（客户端照抄），这边一个字的模板都不许有。
@@ -182,17 +173,11 @@ void main() {
       jobAskFailedLine,
       jobAskWhyLine('帮我做一个练算数的小程序'),
       trashDeletedLine,
-      trashRestoredLine,
-      trashPurgedLine,
       trashDeleteFailedLine,
-      trashRestoreFailedLine,
-      trashPurgeFailedLine,
       trashPlanFailedLine,
       trashUnauthorizedLine,
       // 拼出来的那几句也要扫（模板里可能有内部词）
-      planTtlLine(30),
-      planTtlLine(null),
-      purgeAtLine(1758400000000),
+      planGoneLine,
       verdictLabel('delete'),
       verdictLabel('cannot'),
       planItemTitle('可见的那几句', '这台设备'),
@@ -204,16 +189,6 @@ void main() {
       noticeUndoLabel,
       noticeDismissLabel,
       noticeNotKeptLine,
-      // ★ 2026-10-02（`154` §2.3）：回收站那一页新写的每一句（一条一张卡上那三行）
-      trashHeadLine(3),
-      trashHeadHint,
-      trashAtLine(1758400000000),
-      trashAtLine(null),
-      trashCanRestoreUntilLine(1758400000000),
-      trashCanRestoreUntilLine(null),
-      trashLineOf(TrashEntry(messageIds: const ['u_1'], say: '他说的一句话')),
-      trashEmptyLine,
-      trashEmptyHint,
       // ★ 2026-10-02（`154` §2.1）：连着同样几句合成一行时末尾那个次数
       noticeRepeatSuffix(4),
       // ★ 2026-10-02：时间那一行那两个字

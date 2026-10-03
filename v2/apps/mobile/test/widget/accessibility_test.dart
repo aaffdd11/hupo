@@ -23,7 +23,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:hupo_app/models/export_words.dart';
 import 'package:hupo_app/models/dev_harness.dart';
 import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/desktop_words.dart';
@@ -31,7 +30,6 @@ import 'package:hupo_app/models/dsh_design.dart';
 import 'package:hupo_app/models/harness.dart';
 import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/models/message_state.dart';
-import 'package:hupo_app/models/process_levels.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/source_words.dart';
 import 'package:hupo_app/models/speak_words.dart';
@@ -649,43 +647,6 @@ Future<void> _pumpVoiceTab(WidgetTester tester, double scale) async {
 }
 
 
-/// 顶栏那三个入口现在**带字**（2026-09-23 整理 UI：手机上没法 hover，光图标没人敢点）
-/// ⇒ 从"用户看得见的那两个字"进去；窄屏 + 大字号下它们在**横滚条**里，先滚过去。
-Future<void> _tapHeaderAction(WidgetTester tester, String label) async {
-  final f = find.text(label);
-  await tester.ensureVisible(f.first);
-  await tester.pumpAndSettle();
-  await tester.tap(f.first);
-  await tester.pumpAndSettle();
-}
-
-/// **像用户那样**打开过程两档的切换面板（批 3 加、2026-09-26 收成两档）。
-///
-/// ⚠️ 和关于页同一条理由：新加的界面**必须也过五档不溢出那道硬闸**，
-///    不然"五档不溢出"会随时间失效。
-Future<void> _openProcessMenu(WidgetTester tester, double scale) async {
-  await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _controller(), onLoggedOut: () {}), scale);
-  await _tapHeaderAction(tester, levelActionWords);
-}
-
-/// 一份"过程那一块拉满"的控制器：**推理原文**（那是今天唯一的"过程行"）。
-///
-/// ⚠️ 用留下的那一档 `reasoning`：服务端也仍然会发 `step/*`（累加的梯子），
-///    所以这里**照样灌步骤** —— 顺带证明"收了也不画"（契约 `docs/dev/122` §三）。
-/// ⚠️ 推理原文**挂在气泡上** ⇒ 得先有 `message/start`，否则它只是"待挂"、
-///    一个像素都不画（那道闸就白量了）。
-Future<ChatController> _processController() async {
-  final c = _controller();
-  await c.setLevel(ProcessLevel.reasoning);
-  c.ingest({'type': 'message/status', 'turn': 1, 'state': 'started'});
-  c.ingest({'type': 'step/start', 'turn': 1, 'step': 1, 'state': 'searching'});
-  c.ingest({'type': 'step/start', 'turn': 1, 'step': 2, 'state': 'writing'});
-  c.ingest({'type': 'message/start', 'messageId': 'm1', 'seq': 1});
-  c.ingest({'type': 'message/text', 'messageId': 'm1', 'block': 'quick', 'text': '这周 7 小时。', 'seq': 2});
-  c.ingest({'type': 'reasoning/delta', 'turn': 1, 'text': '他问的是这周，我先把账翻出来对一下。'});
-  return c;
-}
-
 // ── ★ `116`：工具行 / 系统提示词行 / 每轮用量 / 过程折叠（主人 2026-09-26）────
 //
 // ⚠️ 和关于页 / 过程两档同一条理由：**新加的界面必须也过这两道硬闸**
@@ -959,38 +920,6 @@ ChatController _sourceController() {
   return c;
 }
 
-/// **像用户那样**打开回收站页：从主界面点顶栏那个入口。
-Future<void> _openTrash(WidgetTester tester, double scale) async {
-  await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _trashController(), onLoggedOut: () {}), scale);
-  await _tapHeaderAction(tester, trashTooltip);
-}
-
-/// 一份"导出页拿得到东西"的假服务端（批 3 欠的最后一件）。
-ChatController _exportController() {
-  final api = Api(
-    client: MockClient((r) async {
-      if (r.url.path == '/api/export') {
-        return _json(jsonEncode({
-          'text': '—— 9月21日 ——\n\n我：帮我把这周工时记一下\n\n它：这周 7 小时。\n\n'
-              '（这儿只是这条对话里你我互相说过的话。它自己记在记忆里的那一层不在里面。）',
-          'hiddenCount': 2,
-        }));
-      }
-      return _json('{}');
-    }),
-  );
-  return ChatController(api: api, tokens: TokenStore(), token: 'tok');
-}
-
-/// **像用户那样**打开导出页：从主界面点顶栏那个入口。
-///
-/// ⚠️ 契约 §五⑥ 点名要**从真入口进** —— 直接把 `ExportScreen` 当 `home` 泵出来，
-///    它没有返回键，命中区扫描会"一个能点的都没扫到"，量的也不是用户真看到的那棵树。
-Future<void> _openExport(WidgetTester tester, double scale) async {
-  await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _exportController(), onLoggedOut: () {}), scale);
-  await _tapHeaderAction(tester, exportTooltip);
-}
-
 /// **像用户那样**长按一条回答，弹出删除菜单。
 Future<void> _openBubbleMenu(WidgetTester tester, double scale) async {
   await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _turnController(), onLoggedOut: () {}), scale);
@@ -1052,7 +981,7 @@ Future<void> _openNoticeIn(WidgetTester tester, ChatController c, double scale) 
   //    从前这道闸量的是"**浮窗里那个撤销**"—— 而带号的通知**不再弹**了，
   //    于是"窗口里那条"今天只剩**瞬态那条**（盘满），它**没有 undo**（服务端不给）。
   //    ⇒ 改量它**真有的那颗按钮**：「知道了」（`noticeDismissLabel`）。
-  //    ⚠️ 撤销那颗按钮**照样在硬闸里** —— 走 `_openNoticeLine`（时间线里那一条）。
+  //    ⚠️ 时间线里那一条**照样在硬闸里** —— 走 `_openNoticeLine`。
   expect(
     find.descendant(of: find.byType(NoticeStrip), matching: find.text(noticeDismissLabel)),
     findsOneWidget,
@@ -1067,7 +996,10 @@ Future<void> _closeNotice(WidgetTester tester, ChatController c) async {
 }
 
 /// 🔴 2026-09-30：带号的通知**本来就不弹**（直接进时间线）—— 这一条量的是
-/// **时间线里那一条**（撤销要在）。
+/// **时间线里那一条**。
+///
+/// ⚠️ **2026-10-03 改**：那颗「撤销」（拿回来）**砍了**（主人："回收站…我们也不需要"）
+///    ⇒ 这里不再要求它在那儿；这一条照旧量"那条通知真的进了树、而且不溢出"。
 Future<void> _openNoticeLine(WidgetTester tester, double scale) async {
   final c = _controller();
   await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), scale);
@@ -1076,11 +1008,8 @@ Future<void> _openNoticeLine(WidgetTester tester, double scale) async {
   await tester.pump();
   expect(find.byType(NoticeLine), findsOneWidget, reason: '★ 带号的通知必须进时间线（约束 2 没动）');
   expect(find.byType(NoticeStrip), findsNothing, reason: '★ 它不许再浮一次');
-  expect(
-    find.descendant(of: find.byType(NoticeLine), matching: find.text(noticeUndoLabel2)),
-    findsOneWidget,
-    reason: '★ 时间线里那个撤销也得在（"你不在"之后还能按）',
-  );
+  // 负向对照：**通知自己真的画出来了**才算数（不然这一组量的是空屏）
+  expect(find.byType(NoticeLine), findsOneWidget);
 }
 
 /// 一条**有撤销**的系统通知（服务端给的形状，`29-NOTICE.md` §五）。
@@ -1287,12 +1216,6 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '主界面在 ${s}x 溢出了');
       });
 
-      testWidgets('主界面 @ ${s}x（推理原文拉满 —— 批 3 新加、仍发来的 step/* 不画）', (tester) async {
-        final c = await _processController();
-        await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
-        expect(_drain(tester), isEmpty, reason: '过程那一块在 ${s}x 溢出了');
-      });
-
       testWidgets('主界面 @ ${s}x（工具行 —— 116 新加的·展开着）', (tester) async {
         final c = _toolRowOnly();
         await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}), s);
@@ -1494,29 +1417,6 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '关于页在 ${s}x 溢出了');
       });
 
-      testWidgets('过程两档的切换面板（从真入口进）@ ${s}x', (tester) async {
-        await _openProcessMenu(tester, s);
-        expect(_drain(tester), isEmpty, reason: '切换面板在 ${s}x 溢出了');
-        // ★ 负向对照：菜单里**真的只有那两行**（砍掉的一个都不许混进来）
-        expect(find.byType(ListTile), findsNWidgets(ProcessLevel.values.length));
-        // 命中区：面板里每一行都得 ≥44（它们是 `ListTile`，
-        // 不在下面那份按钮扫描的种类里，所以在这儿单独量）。
-        for (final t in find.byType(ListTile).evaluate()) {
-          final size = tester.getSize(find.byWidget(t.widget));
-          expect(size.height >= minTouch, isTrue,
-              reason: '切换面板 @${s}x：一行的命中区只有 ${size.height}');
-        }
-      });
-
-      testWidgets('回收站页（从真入口进）@ ${s}x', (tester) async {
-        // ⚠️ 批 3 新加的页面 ⇒ 必须也过这道闸（同关于页那条的理由）。
-        await _openTrash(tester, s);
-        expect(_drain(tester), isEmpty, reason: '回收站页在 ${s}x 溢出了');
-        // 负向对照：**真的画出了条目**才算数（只画出"读不到"那一句的话，
-        // 这道闸量的是一个空页）。
-        expect(find.text(trashRestore), findsWidgets, reason: '★ 回收站页没画出条目 ⇒ 这条闸漏了它');
-      });
-
       testWidgets('气泡长按菜单（从真入口进）@ ${s}x', (tester) async {
         await _openBubbleMenu(tester, s);
         // ★ 2026-09-25（`106-CHAT-SELECT.md`）：**新加的那两项**也必须在这一屏上
@@ -1539,15 +1439,6 @@ void main() {
         expect(_drain(tester), isEmpty, reason: '多选工具条在 ${s}x 溢出了');
       });
 
-      testWidgets('导出页（从真入口进）@ ${s}x', (tester) async {
-        // ⚠️ 批 3 欠的最后一件（`30-EXPORT.md`）：新加的页面**必须也过这道闸**。
-        await _openExport(tester, s);
-        expect(_drain(tester), isEmpty, reason: '导出页在 ${s}x 溢出了');
-        // 负向对照：**那段字真的画出来了**才算数
-        //（只画出"没拿到"那一句的话，这道闸量的是一个空页）。
-        expect(find.byType(SelectableText), findsOneWidget,
-            reason: '★ 导出页没画出那一段字 ⇒ 这条闸漏了它');
-      });
 
       testWidgets('删前那份清单（从真入口进，含"删不掉"那一条）@ ${s}x', (tester) async {
         await _openPlan(tester, s);
@@ -1823,12 +1714,6 @@ void main() {
         await sweep(tester, '填钥匙那屏 @${s}x');
       });
 
-      testWidgets('回收站页（从真入口进）@ ${s}x', (tester) async {
-        // ⚠️ 新加的页面必须也进这份扫描 —— 不然它的按钮（恢复 / 彻底删掉）
-        //    就没有任何东西守着"命中区 ≥44"。
-        await _openTrash(tester, s);
-        await sweep(tester, '回收站页 @${s}x');
-      });
 
       testWidgets('删前那份清单（从真入口进）@ ${s}x', (tester) async {
         await _openPlan(tester, s);
@@ -1848,11 +1733,6 @@ void main() {
         await sweep(tester, '多选工具条 @${s}x');
       });
 
-      testWidgets('导出页（从真入口进）@ ${s}x', (tester) async {
-        // ⚠️ 那个"复制"按钮必须进这份扫描 —— 不然它的命中区没有任何东西守着（D3.6）。
-        await _openExport(tester, s);
-        await sweep(tester, '导出页 @${s}x');
-      });
 
       testWidgets('浮窗（从真入口进）@ ${s}x', (tester) async {
         // ⚠️ 浮窗里的"撤销 / 知道了"两个按钮必须也进这份扫描 ——

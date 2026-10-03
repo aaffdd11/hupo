@@ -32,7 +32,6 @@ import '../models/design.dart' as d;
 import '../models/desktop_words.dart';
 import '../models/landing_words.dart';
 import '../models/dsh_design.dart';
-import '../models/export_words.dart';
 import '../models/scroll_follow.dart';
 import '../models/space.dart';
 import '../models/app_spec.dart';
@@ -75,16 +74,13 @@ import '../widgets/mini_app_host.dart';
 import '../widgets/mini_app_frame.dart';
 import '../widgets/composer.dart';
 import '../widgets/notice.dart';
-import '../widgets/process_level_menu.dart';
 import '../widgets/queue_strip.dart';
 import '../widgets/process_view.dart';
 import '../widgets/time_mark.dart';
 import '../widgets/tool_row_view.dart';
 import '../widgets/trash_plan_sheet.dart';
 import 'discover_screen.dart';
-import 'export_screen.dart';
 import 'settings_screen.dart';
-import 'trash_screen.dart';
 
 /// "下面那一整块"的名字（状态条 + 内容 + 输入框）。
 ///
@@ -881,7 +877,6 @@ class _ChatScreenState extends State<ChatScreen> {
               maxHeight: maxH,
               title: appName,
               initialTier: widget.initialTier,
-              trailing: _actions(c),
               composer: _composer(c),
               // 上层拿这两个数去算"小程序被盖住没有 / 内容要内缩多少"（§6.4 规则 1/2/3）
               onTier: (t) {
@@ -1838,62 +1833,6 @@ class _ChatScreenState extends State<ChatScreen> {
     widget.onLoggedOut();
   };
 
-  /// 抓手行右边那一串动作（原来挂在 `AppBar.actions` 上）。
-  ///
-  /// ⚠️ **位置变了，理由要记住**：桌面出来之后顶栏那一条没有地方站了 ——
-  ///    它会把"浮着"这件事拆掉（页面顶上一条实心栏 = 不是一个浮窗）。
-  ///    ⇒ 搬进抓手行；宽度不够时靠**横滚**（`ChatFloater` 那边），**不靠藏**。
-  List<Widget> _actions(ChatController c) => <Widget>[
-    // ⚠️ **回收站**（契约 §二 第 2 条：放顶栏）。删掉的东西先进这儿，
-    //    30 天内能拿回来 —— 顶栏这一处就是"我删的东西去哪了"的答案。
-    //
-    // ★ 2026-09-23（主人：*"先整理整个UI"*）：这三个原来**只有图标 + tooltip**，
-    //   而手机上没有 hover ⇒ 用户只能瞎点（那排图标在展开态最显眼）。
-    //   ⇒ 改成**图标 + 中文短标签**（D3.8 的同一条道理：不许只有无字图形）。
-    //   ⚠️ 它们在浮窗里是**横向可滚**的（见 `chat_floater.dart`）⇒ 加字也不会把这一行撑高。
-    TextButton.icon(
-      style: _actionStyle,
-      onPressed: () => Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) =>
-              TrashScreen(controller: c, onLoggedOut: widget.onLoggedOut),
-        ),
-      ),
-      icon: const Icon(Icons.delete_outline),
-      label: const Text(trashTooltip),
-    ),
-    // ⚠️ **导出**（契约 `30-EXPORT.md` §四：和删除入口**对称** ——
-    //    能删掉，就能拿走）。位置**等主人看过再定，不属于契约**，
-    //    所以这一批只保证"有一个能进去的入口"。
-    TextButton.icon(
-      style: _actionStyle,
-      onPressed: () => Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) =>
-              ExportScreen(controller: c, onLoggedOut: widget.onLoggedOut),
-        ),
-      ),
-      icon: const Icon(Icons.copy_all_outlined),
-      label: const Text(exportTooltip),
-    ),
-    // ⚠️ **过程两档的入口**（契约 `docs/dev/122`：重做之后只剩两档，
-    //    位置等主人看过再定，所以这一批只做"能切"）。换档要重连（`level` 是连接级的）。
-    TextButton.icon(
-      style: _actionStyle,
-      onPressed: () => _pickLevel(c),
-      icon: const Icon(Icons.tune),
-      label: const Text(levelActionWords),
-    ),
-  ];
-
-  /// 顶栏那一排动作的样子（一处定、三个都照它）。
-  ///
-  /// ⚠️ **命中区 ≥44**（D3.6）+ 文字用主题里那一档（**不写死字号**）。
-  static final ButtonStyle _actionStyle = TextButton.styleFrom(
-    minimumSize: const Size(0, 44),
-    padding: const EdgeInsets.symmetric(horizontal: 10),
-  );
-
   /// **聊天区**（状态条 + 时间线）。⚠️ **不含输入条** —— 输入条由 `_composer` 单独给，
   /// 因为**收起态也要有它**（主人 2026-09-22：*"助手那个聊天窗口，收缩的时候也有一个输入框。"*）。
   /// ⇒ 而且必须是**同一个实例**：两个地方各建一个 Composer 的话，
@@ -2006,11 +1945,8 @@ class _ChatScreenState extends State<ChatScreen> {
             // ★ **窗口里面那一条**（2026-09-30）：原来它是顶部那个浮窗。
             //   今天只剩**瞬态那一种**（写盘失败）—— 带号的通知只进时间线。
             if (c.notice != null)
-              NoticeStrip(
-                notice: c.notice!,
-                onUndo: () => _undoNotice(),
-                onDismiss: c.dismissNotice,
-              ),
+              // 🔴 2026-10-03：「拿回来」那条路砍了 ⇒ 这一条不再挂撤销按钮。
+              NoticeStrip(notice: c.notice!, onDismiss: c.dismissNotice),
             QueueStrip(queue: c.queue, onCancel: c.unsay),
             Composer(
           // ★ **那条浮窗**（主人 2026-09-27）：挂在**这一行**上（锚点 = 那颗 home 的上面），
@@ -2219,11 +2155,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _TimeMarkSlot(:final at) => TimeMarkLine(
       label: timeMarkLabel(at, now: DateTime.now().millisecondsSinceEpoch),
     ),
-    _NoticeRunSlot(:final notice, :final count) => NoticeLine(
-      notice: notice.notice,
-      count: count,
-      onUndo: notice.undo == null ? null : () => _undoNotice(notice),
-    ),
+    _NoticeRunSlot(:final notice, :final count) =>
+      NoticeLine(notice: notice.notice, count: count),
     _FoldSlot(:final turn) => TurnProcessControl(
       counts: c.processOfTurn(turn),
       expanded: !_processFolded(turn, c.closedThrough),
@@ -2286,20 +2219,6 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() {});
   }
 
-  /// 打开两档的切换面板。**选中即生效**（换档会重连，见 `setLevel`）。
-  Future<void> _pickLevel(ChatController c) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      builder: (sheet) => ProcessLevelMenu(
-        current: c.level,
-        onPick: (level) {
-          Navigator.of(sheet).pop();
-          c.setLevel(level);
-        },
-      ),
-    );
-  }
-
   Widget _render(TimelineItem item, ChatController c) => switch (item) {
     UserUtterance() => UserBubble(
       utterance: item,
@@ -2314,11 +2233,10 @@ class _ChatScreenState extends State<ChatScreen> {
     TimelineMarker() => MarkerLine(marker: item),
     // ★ **系统通知那一条**（契约 `29-NOTICE.md` 约束 2）：进列表、跟着滚、
     //   占一个位置。有 `undo` 时在这儿也渲染撤销（约束 3）——
-    //   ⚠️ 按下去走的是**同一条路**（`_undoNotice` → `c.undoNotice()`）。
-    TimelineNotice() => NoticeLine(
-      notice: item.notice,
-      onUndo: item.undo == null ? null : () => _undoNotice(item),
-    ),
+    //   ⚠️ 2026-10-03：「拿回来」（撤销）**砍了** —— 通知照旧上屏，不挂按钮。
+    // 🔴 2026-10-03：**「拿回来」那条路砍了**（主人：*"回收站…我们也不需要"*）
+    //    ⇒ 通知照旧上屏（它是服务端的事实），但**不再挂那个撤销按钮**。
+    TimelineNotice() => NoticeLine(notice: item.notice),
     // ── ★ `116` 那三样（主人 2026-09-26：*"首先全部开放"*）──────────
     //
     // ⚠️ 折叠**不在这里做**：折起来的那几行由 `_planSlots` 换成那个控件、
@@ -2331,26 +2249,6 @@ class _ChatScreenState extends State<ChatScreen> {
     // ⚠️ 用量那一行**由控制器折过**才画（`turnUsage`：任何一次没报准 ⇒ null ⇒ 一个像素不占）。
     TimelineTurnUsage() => TurnUsageRowView(usage: c.turnUsage(item.turn)),
   };
-
-  /// 按"撤销"（**浮窗里那个与时间线里那个共用这一条**，约束 3）。
-  ///
-  /// [from] 不传 = 浮窗里那个；传了 = 时间线里那一条
-  /// （⚠️ 两者的 undo **各读各的**：浮窗会自己消失，时间线那一条不会）。
-  ///
-  /// ⚠️ 成没成都如实说（N11）——用词与回收站那一页**同一句**
-  ///    （同一件事同一句话，别再新造一个说法）。
-  Future<void> _undoNotice([TimelineNotice? from]) async {
-    final r = await widget.controller.undoNotice(from: from);
-    if (!mounted || r == null) return;
-    switch (r) {
-      case TrashOk():
-        _say(trashRestoredLine);
-      case TrashUnauthorized():
-        _unauthorized();
-      case TrashFailed():
-        _say(trashRestoreFailedLine);
-    }
-  }
 
   /// 401：**说一句 + 回登录页**（欠账 **#25**）。
   ///

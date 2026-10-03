@@ -32,22 +32,15 @@ import 'dsh_look.dart';
 /// ⚠️ [count] > 1 = 这是**连着同样几句合成的一行**（契约 `154` §2.1）：
 ///    那句话**逐字是服务端给的**，只在末尾多一个次数。
 class NoticeLine extends StatelessWidget {
-  const NoticeLine({super.key, required this.notice, this.onUndo, this.count = 1});
+  const NoticeLine({super.key, required this.notice, this.count = 1});
 
   final Notice notice;
-
-  /// 按撤销。`null` = 这一条没有撤销（或那条路今天走不通）⇒ 不画按钮。
-  final VoidCallback? onUndo;
 
   /// 连着几句合成一行的次数（`1` = 就是一条）。
   final int count;
 
   @override
-  Widget build(BuildContext context) => NoticeCard(
-        notice: notice,
-        onUndo: onUndo,
-        count: count,
-      );
+  Widget build(BuildContext context) => NoticeCard(notice: notice, count: count);
 }
 
 /// **窗口里面那一条**（2026-09-30 起：**不再是浮窗**）。
@@ -64,15 +57,9 @@ class NoticeLine extends StatelessWidget {
 /// ⚠️ **瞬态那条也要说清它不在记录里**（`29-NOTICE.md` §三①）：写盘失败时
 ///    时间线物理上写不进那一条 ⇒ 屏幕上**必须自己说清**（[noticeNotKeptLine]）。
 class NoticeStrip extends StatelessWidget {
-  const NoticeStrip({
-    super.key,
-    required this.notice,
-    this.onUndo,
-    this.onDismiss,
-  });
+  const NoticeStrip({super.key, required this.notice, this.onDismiss});
 
   final Notice notice;
-  final VoidCallback? onUndo;
   final VoidCallback? onDismiss;
 
   @override
@@ -82,7 +69,6 @@ class NoticeStrip extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
       child: NoticeCard(
         notice: notice,
-        onUndo: onUndo,
         onDismiss: onDismiss,
         // ★ 瞬态那条：把"它不在记录里"说出来
         footnote: notice.urgent ? noticeNotKeptLine : null,
@@ -91,8 +77,11 @@ class NoticeStrip extends StatelessWidget {
   }
 }
 
-/// 一条通知长什么样。**两处共用**——于是"浮窗里那个撤销"和"时间线里那个撤销"
-/// 不可能长得不一样、更不可能变成两套动作。
+/// 一条通知长什么样。**两处共用**（时间线里那一条 / 输入条上面那条瞬态）。
+///
+/// 🔴 **2026-10-03：那个「撤销」（拿回来）整条砍了**（主人：*"回收站…我们也不需要"*）
+///    ⇒ 通知上**不再有任何按钮**（只有那条事实本身）；`notice.undo` 照旧解析
+///    （协议冻结），只是**不画**。
 ///
 /// 🔴 ★ **2026-10-02 改过形状**（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.1）：
 ///    主人让我重做聊天窗口，我登录拍到的屏幕上是**连着九张一模一样的粉色卡**
@@ -104,14 +93,12 @@ class NoticeCard extends StatelessWidget {
   const NoticeCard({
     super.key,
     required this.notice,
-    this.onUndo,
     this.onDismiss,
     this.footnote,
     this.count = 1,
   });
 
   final Notice notice;
-  final VoidCallback? onUndo;
   final VoidCallback? onDismiss;
 
   /// 底下补的一句话（今天只有瞬态那条用：[noticeNotKeptLine]）。
@@ -135,7 +122,6 @@ class NoticeCard extends StatelessWidget {
     // 图标跟着字算（**不写死尺寸**，D3）
     // ★ 2026-10-01：通知是"非主要"⇒ 走非主要那一档（`look.quiet` = 11/14）
     final iconSize = look.quiet.size + 4;
-    final undo = notice.undo;
     final note = footnote;
 
     final row = Row(
@@ -198,7 +184,6 @@ class NoticeCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 2, left: DshSpace.s4),
                 child: Text(note, style: dshTextStyle(look.quiet, p.labelTertiary)),
               ),
-            if (undo != null && undo.usable) _undoRow(undo.label),
           ],
         ),
       );
@@ -225,22 +210,9 @@ class NoticeCard extends StatelessWidget {
               padding: const EdgeInsets.only(top: 2, left: 4),
               child: Text(note, style: dshTextStyle(look.quiet, look.palette.labelTertiary)),
             ),
-          if (undo != null && undo.usable) _undoRow(undo.label),
         ],
       ),
     );
   }
 
-  /// 撤销那一下（两档共用；⚠️ `Wrap` 不是 `Row`：字放到最大时按钮要能折行 —— D3.5）。
-  Widget _undoRow(String label) => Wrap(
-        children: [
-          TextButton(
-            onPressed: onUndo,
-            style: TextButton.styleFrom(minimumSize: const Size(44, 44)),
-            // ⚠️ 按钮上的字**用服务端给的那份**（`undo.label`）：
-            //    客户端不另编一个说法，否则两边会漂。
-            child: Text(label),
-          ),
-        ],
-      );
 }

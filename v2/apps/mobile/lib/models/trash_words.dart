@@ -1,4 +1,4 @@
-// 「删掉 / 回收站」这一路**用户会看到的字**（契约 `28-DELETE.md`）。
+// 「删掉」这一路**用户会看到的字**（契约 `28-DELETE.md`）。
 //
 // ⚠️ 为什么文案单放一个 models 文件、不写在界面里：
 //    摆在 `screens/` / `widgets/` 里的字符串，**禁用词硬闸够不着**
@@ -9,15 +9,15 @@
 //    工具 / 搜索"那些内部词（那是缺陷，不是文风问题）。
 //
 // ⚠️ 纯逻辑，**不许 import flutter/material**。
-
-// ⚠️ 只为了 `trashMomentWords`（毫秒 → `10月1日 21:33`，纯函数，住 `trash.dart`）。
-//    那一份在 `models/trash.dart`（同层，import 方向合法）——**日期格式化只有那一处**，
-//    这里只负责把它拼成给人读的整句。
-import 'trash.dart';
-
-/// 顶栏那个入口，以及那一页的标题。
-const trashTitle = '回收站';
-const trashTooltip = '回收站';
+//
+// ── 🔴 2026-10-03：**回收站那一整条砍了**（主人原话：
+//    *「回收站，导出，过程，我们也不需要。」* · 甲：功能一起删掉）──
+//    ⇒ 这一份里"那一页 / 放回来 / 彻底删掉 / 还能放到什么时候"那些字**全删了**
+//      （见 `docs/dev/172-HEADER-TRIM.md`）。
+//    ⚠️ **删掉本身一个字没动**：长按菜单 → 删前那份清单 → 删掉，照旧。
+//    ⚠️ 连"先放进回收站、过一阵子才真的删"这种话也不许再说 ——
+//      今天**没有任何入口能把它列出来、也没有拿回来的地方**（B29 早就这么定了，
+//      `desktop_words.dart` 从那以后就没承诺过），说了就是屏幕上说假话。
 
 // ── 气泡长按菜单（契约 §二 第 2 条：入口先做**最小**那一个）──────────
 
@@ -33,10 +33,9 @@ const trashTooltip = '回收站';
 /// ⚠️ **2026-09-25 改**（契约 `docs/dev/106-CHAT-SELECT.md` §一）：菜单里多了
 ///    【复制】【多选】两件**与删掉无关**的事 ⇒ 原来那句"要删掉这一处吗"只说删掉，
 ///    **就是屏幕上说假话**。⇒ 换成对三件事都成立的一句。
-///    ⚠️ **删掉那一项本身一个字没动**（`bubbleMenuDelete` / `bubbleMenuDeleteHint`）。
 const bubbleMenuTitle = '要拿这一条怎么办';
 const bubbleMenuDelete = '删掉';
-const bubbleMenuDeleteHint = '先放进回收站，过一阵子才真的删';
+const bubbleMenuDeleteHint = '删掉之后就从对话里没有了';
 const bubbleMenuCancel = '算了';
 
 // ── 长按菜单新加的两项：复制 / 多选（契约 `docs/dev/106-CHAT-SELECT.md`）──
@@ -74,16 +73,10 @@ const planCannotLine = '有一条删不掉，下面写清了为什么';
 /// 清单为空时（理论上有，但别让屏幕上出现一个空白框）。
 const planEmptyLine = '没有列出要删的东西';
 
-/// 在回收站里留多久 / 什么时候彻底删掉。
+/// 删掉之后会怎样 —— **今天只有一句实话可说**（回收站那条路砍了）。
 ///
-/// ⚠️ `ttlDays` / `purgeAt` **都从服务端来**，客户端不复制那两个数
-///    （阈值只住在服务端与手册里）；读不出来就**只说"过一阵子"**。
-String planTtlLine(int? ttlDays) => ttlDays == null || ttlDays <= 0
-    ? '先放进回收站，过一阵子会彻底删掉。'
-    : '先放进回收站，$ttlDays 天之后彻底删掉。';
-
-String purgeAtLine(int? purgeAt) =>
-    purgeAt == null ? '' : '彻底删掉的时间：${dateOf(purgeAt)}';
+/// ⚠️ **不许写天数、不许写"还能拿回来"**：没有任何入口能把它列出来或放回来。
+const planGoneLine = '删掉之后就从对话里没有了。';
 
 /// 一条清单项的归属（"哪一样（在哪儿）"）。读不出 `where` 就只说 `what`。
 String planItemTitle(String what, String where) {
@@ -98,80 +91,14 @@ String planItemTitle(String what, String where) {
 ///    —— 与 `TrashPlanItem.cannot` 的 fail-closed 同一条规矩。
 String verdictLabel(String verdict) => verdict == 'delete' ? '会删掉' : '删不掉';
 
-// ── 回收站那一页 ────────────────────────────────────────────
-
-/// 空的时候那两句：一句实话 ＋ 一句"删掉的话会先来这儿"（§2.3）。
-const trashEmptyLine = '这儿是空的';
-const trashEmptyHint = '删掉的东西会先来这儿，过一阵子才真的没了。';
-
-const trashNoPreviewLine = '（这一条没有能看的字）';
-const trashLoadFailedLine = '没读到回收站，过一会儿再试';
+/// 删失败时要能重试（那一页今天只有"再试一次"这一条出口）。
 const trashRetry = '再试一次';
 
-// ── ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.3）：一条一张卡上的三行 ──
-
-/// 抬头下面那句：**这 N 次删掉的还能放回来**。
-///
-/// 🔴 **这里一个天数都不许有**：留多久由服务端算（`ttlDays` / 每条的 `purgeAt`），
-///    客户端自己写一个数就是编（手册第一条纪律：阈值只住服务端与手册）。
-///    ⇒ 具体到哪一天，由每张卡上的 [trashCanRestoreUntilLine] 说。
-String trashHeadLine(int n) => '这 $n 次删掉的还能放回来';
-
-/// 紧跟着抬头的下半句：**过了那个时间就真的没了**。
-const trashHeadHint = '过了每一条写的时间，就真的没了。';
-
-/// 什么时候删的（`at`，本机时区）。
-///
-/// ⚠️ 服务端没给这个数 ⇒ **如实说没记下来**，不许拿"现在"顶上（那就是编）。
-String trashAtLine(int? at) =>
-    at == null ? '什么时候删的没记下来' : '${trashMomentWords(at)} 删的';
-
-/// 还能放到什么时候（`purgeAt`，本机时区）。
-///
-/// 🔴 服务端没给 ⇒ 只说"过一阵子"，**不许编一个日期**（判据在 `trash_test.dart`）。
-String trashCanRestoreUntilLine(int? purgeAt) =>
-    purgeAt == null ? '过一阵子就没了' : '还能放到 ${trashMomentWords(purgeAt)}';
-
-/// 一张卡上那一行字：**他自己那句话**（新键 `say`）⇒ 老盒子没有就退回
-/// 已上线的 `preview` ⇒ 两样都没有才说"没有能看的字"。
-///
-/// 🔴 **照实显示**：服务端给什么就是什么，这里一个字都不截、不改写
-///    （契约 §2.3：客户端不许自己截取/改写）。
-/// ⚠️ 退回那一条是**负向对照**要钉的：新客户端 + 老盒子（不给 `say`）也不许空白。
-String trashLineOf(TrashEntry e) {
-  if (e.say.isNotEmpty) return e.say;
-  if (e.preview.isNotEmpty) return e.preview;
-  return trashNoPreviewLine;
-}
-
-const trashRestore = '放回来';
-const trashPurge = '彻底删掉';
-
-/// 彻底删要**二次确认**（契约 §8.2：破坏性动作不许手滑就触发）。
-const trashPurgeConfirmTitle = '彻底删掉？';
-const trashPurgeConfirmBody = '删掉之后就拿不回来了。';
-const trashPurgeConfirmYes = '彻底删掉';
-const trashPurgeConfirmNo = '算了';
-
 // 做完之后如实说一句（**成没成都说**）。
-const trashDeletedLine = '已经放进回收站了';
-const trashRestoredLine = '已经拿回来了';
-const trashPurgedLine = '已经彻底删掉了';
+const trashDeletedLine = '已经删掉了';
 const trashDeleteFailedLine = '没删成，过一会儿再试';
-const trashRestoreFailedLine = '没拿回来，过一会儿再试';
-const trashPurgeFailedLine = '没删成，过一会儿再试';
 const trashPlanFailedLine = '没拿到要删的清单，过一会儿再试';
 
 /// 这一轮"删前清单"没拿到 / 删不掉，要是**登录过期**就得说那一句
 /// （和 `chat_controller` 里同一句话：同一件事同一句，别再新造一个说法）。
 const trashUnauthorizedLine = '登录过期了，重新登录一下';
-
-/// 毫秒 → `YYYY-MM-DD`（本机时区）。
-///
-/// ⚠️ 手写而不是引 `intl`：这一条只要"哪一天"，
-///    而多一个依赖就多一份要跟着升的东西。纯函数 ⇒ 进 `test/unit`。
-String dateOf(int ms) {
-  final d = DateTime.fromMillisecondsSinceEpoch(ms).toLocal();
-  String two(int v) => v < 10 ? '0$v' : '$v';
-  return '${d.year}-${two(d.month)}-${two(d.day)}';
-}

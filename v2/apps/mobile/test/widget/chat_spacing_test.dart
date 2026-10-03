@@ -7,7 +7,7 @@
 //   ② 🔴 **工具行那一行的高度**：原来行里那颗展开按钮是**默认 48** 的 `IconButton`
 //      ⇒ 11 号字那一行被撑到 56+；现在图形 18、**可点区域仍 ≥44**（D3.6 不许放宽）
 //      ⇒ 行高 ≤ 50 且 ≥ 44；
-//   ③ 🔴 **标题行右边那颗「收起」**：图形收到 18（原来 24），可点区域仍 ≥44。
+//   ③ 🔴 **标题行右边那颗「收起聊天」**：带字的按钮（2026-10-03 起），命中区仍 ≥44。
 //
 // ⚠️ 提示档（`AGENTS.md` §5.1：`test/widget` 只有可访问性那一份是硬闸），
 //    但它是"这一刀到底有没有画到屏幕上"的唯一自动化证据；
@@ -18,7 +18,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hupo_app/models/dsh_design.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
@@ -136,19 +135,19 @@ void main() {
         reason: '★ 点行左边也该展开（整行可点）');
   });
 
-  testWidgets('🔴 标题行右边那颗「收起」：图形 18，可点区域仍 ≥44', (tester) async {
+  testWidgets('🔴 标题行右边那颗**带字**的「收起聊天」：字在、命中区 ≥44', (tester) async {
+    // 🔴 2026-10-03：主人把它从"一颗只有图形的箭头"改成**带字的按钮**
+    //    （原话：*"让收起聊天变成右侧的一个按钮，就叫收起聊天。"*）
+    //    ⇒ 这一条跟着改口径：量"字在不在"＋"命中区够不够"，
+    //      不再量 `IconButton.iconSize`（那颗图标没有了）。
     await _feedTwo(tester);
     await tester.pumpAndSettle();
-    final btn = find.byWidgetPredicate(
-      (w) => w is IconButton && w.tooltip == chatCollapse,
-    );
-    expect(btn, findsOneWidget, reason: '前提：那颗「收起」该在树上');
+    final btn = find.byKey(chatCollapseKey);
+    expect(btn, findsOneWidget, reason: '前提：那颗「收起聊天」该在树上');
+    expect(find.descendant(of: btn, matching: find.text(chatCollapse)), findsOneWidget,
+        reason: '★ 按钮上必须有字（手机上没法 hover）');
     final r = tester.getRect(btn);
     expect(r.height, greaterThanOrEqualTo(44), reason: '★ 命中区被收小了 —— D3.6 不许');
     expect(r.width, greaterThanOrEqualTo(44), reason: '★ 同上');
-    // ⚠️ 同上：`Icon.size` 是 null（走 IconTheme）⇒ 量那颗按钮声明的大小
-    expect(tester.widget<IconButton>(btn).iconSize, DshChatSpace.headerIconSize,
-        reason: '★ 图形该是收小的那个（18）');
-    expect(DshChatSpace.headerIconSize < 24, true, reason: '★ 比默认 24 小才是"不占地方"');
   });
 }

@@ -1,4 +1,4 @@
-// 「删掉 / 回收站」那一路的**数据形状**与**回执解析**（契约 `28-DELETE.md` §八·8.2）。
+// 「删掉」那一路的**数据形状**与**回执解析**（契约 `28-DELETE.md` §八·8.2）。
 //
 // ⚠️ 键是 `messageIds`，**不是轮号**（契约 **§三·补**）：
 //    落盘的事件里没有轮号（`message/status` / `step/*` 上的 `turn` 是瞬态），
@@ -75,45 +75,6 @@ class TrashPlan {
   bool get hasCannot => items.any((i) => i.cannot);
 }
 
-/// 回收站里的一条（`GET /api/trash`）。
-class TrashEntry {
-  const TrashEntry({
-    required this.messageIds,
-    this.at,
-    this.purgeAt,
-    this.preview = '',
-    this.say = '',
-  });
-
-  final List<String> messageIds;
-
-  /// 什么时候删掉的。
-  final int? at;
-
-  /// 什么时候彻底删掉。
-  final int? purgeAt;
-
-  /// 服务端给的**一句话摘要**（已上线那个键 `preview`）。
-  ///
-  /// 🔴 **它不是"用户自己的话"**：服务端给的是「N 条」那种摘要
-  ///    （`services/core/src/trash.js` 的 `list()`）。这条注释原来写成
-  ///    "用户自己的话"——**2026-10-02 改正**，免得下一个人照着它去改
-  ///    `preview` 的语义（已上线的字段冻结，改含义是违约）。
-  final String preview;
-
-  /// ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.3 的**新增键**）：
-  /// **他自己说的那句话**（服务端从盘上读出来的）。
-  ///
-  /// 🔴 为什么单开一个键、不去改 [preview]：`preview` 已经上线（老客户端拿它
-  ///    当摘要画），改它的含义就是改**已上线字段的语义**。`say` 是**新增**键，
-  ///    按老规矩"看不见就当没有"：老盒子不给它 ⇒ 空串 ⇒ 界面退回 [preview]。
-  /// ⚠️ **照实显示**：界面不截取、不改写（要短是服务端的事）。
-  final String say;
-
-  /// 这一条能不能操作（一个 id 都没有 ⇒ 什么都不做，别发一个空请求）。
-  bool get usable => messageIds.isNotEmpty;
-}
-
 /// `POST /api/trash/plan` 的回执 → [TrashPlan]。
 ///
 /// ⚠️ 缺字段一律给"读不出来的那个最保守的值"，不抛：
@@ -134,22 +95,6 @@ TrashPlan trashPlanFrom(Map<String, dynamic> j) => TrashPlan(
       ttlDays: _int(j['ttlDays']),
     );
 
-/// `GET /api/trash` 的回执 → 条目清单。
-List<TrashEntry> trashEntriesFrom(Map<String, dynamic> j) => [
-      for (final e in _listOf(j['items']))
-        if (e is Map)
-          TrashEntry(
-            messageIds: messageIdsFrom(e['messageIds']),
-            at: _int(e['at']),
-            purgeAt: _int(e['purgeAt']),
-            preview: _str(e['preview']),
-            // ★ 新增键：**只认字符串**（老回执没有它 / 类型不对 ⇒ 空串，**不抛**；
-            //    界面那一行退回 `preview`）。⚠️ 这里不用 `_str`：那个会把数字
-            //    拼成字（对已上线的 `preview` 是既成行为，对新键不适用）。
-            say: e['say'] is String ? e['say'] as String : '',
-          ),
-    ];
-
 /// 从"服务端事实"里去掉属于这几个 id 的那些（**删除时要清掉的就是它们**）。
 ///
 /// ⚠️ 纯函数：本机缓存那一屏"清完之后长什么样"在这儿定，
@@ -169,19 +114,3 @@ int? _int(Object? raw) => raw is num ? raw.toInt() : null;
 
 String _str(Object? raw) => raw is String ? raw : (raw == null ? '' : '$raw');
 
-/// 毫秒 → 人话时刻：`10月1日 21:33`（本机时区）。
-///
-/// ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.3）：回收站那一页要
-///   说清"**什么时候删的**"与"**还能放到什么时候**"——`2026-10-01 21:33` 那种
-///   写法是给机器看的，`10月1日 21:33` 才是给人读的。
-///
-/// ⚠️ 与 `trash_words.dart` 的 `dateOf`（`YYYY-MM-DD`）**不是同一个东西**：
-///    那一个是"哪一天"（删前清单那份清单用），这一条是"哪一刻"，两个都留着。
-/// ⚠️ 手写而不是引 `intl`：同 `dateOf` 那条理由——多一个依赖就多一份要跟着升的东西。
-/// ⚠️ **纯函数**（只碰 `dart:core`，不 import flutter / http）⇒ 进 `test/unit`，
-///    由 `trash_test.dart` 逐条钉着（含"服务端没给数时客户端不许编一个日期"）。
-String trashMomentWords(int ms) {
-  final d = DateTime.fromMillisecondsSinceEpoch(ms).toLocal();
-  String two(int v) => v < 10 ? '0$v' : '$v';
-  return '${d.month}月${d.day}日 ${two(d.hour)}:${two(d.minute)}';
-}

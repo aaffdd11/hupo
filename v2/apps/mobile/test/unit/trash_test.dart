@@ -431,28 +431,11 @@ void main() {
       expect((await c.local.load()).where((e) => e['messageId'] == 'm1'), isEmpty);
     });
 
-    test('恢复：服务端那一帧没到也立刻回来（幂等）', () async {
-      final c = _controller(
-        client: MockClient((r) async => r.url.path == '/api/trash/restore'
-            ? http.Response('{"ok":true}', 200)
-            : http.Response('{}', 200)),
-      );
-      await c.start(token: 'tok', openStream: false);
-      for (final e in _turnFacts(userId: 'u1', answerId: 'm1')) {
-        c.ingest(e);
-      }
-      c.ingest({'type': 'turn/deleted', 'seq': 90, 'messageIds': ['u1', 'm1']});
-      expect(c.items, isEmpty);
-
-      final r = await c.restoreTurn(['u1', 'm1']);
-      expect(r, isA<TrashOk<bool>>());
-      expect(c.items.length, 2, reason: '拿回来要立刻');
-    });
   });
 
   // ── 接口那一层（§8.2）──────────────────────────────────────
 
-  group('五个入口：路径 / 令牌头 / confirm', () {
+  group('删掉那条路：路径 / 令牌头 / confirm', () {
     Future<List<http.Request>> calls(
       Future<void> Function(Api api) run, {
       String body = '{"ok":true,"messageIds":["u1","m1"],"items":[],"purgeAt":1,"ttlDays":30}',
@@ -468,31 +451,25 @@ void main() {
       return seen;
     }
 
-    test('🔴 五个方法**都带令牌头**，而且令牌不进 URL', () async {
+    test('🔴 删掉那条路那两个方法**都带令牌头**，而且令牌不进 URL', () async {
+      // 🔴 2026-10-03：回收站**那一屏砍了** ⇒ 只剩"删前清单 ＋ 删掉"这两个
+      //    （`trashList` / `trashRestore` / `trashPurge` 连它们的方法一起删了）。
       final seen = await calls((api) async {
         await api.trashPlan(messageIds: ['u1', 'm1'], token: 'tok');
         await api.trashRemove(messageIds: ['u1', 'm1'], token: 'tok');
-        await api.trashList(token: 'tok');
-        await api.trashRestore(messageIds: ['u1', 'm1'], token: 'tok');
-        await api.trashPurge(messageIds: ['u1', 'm1'], token: 'tok');
       });
       expect(seen.map((r) => r.url.path), [
         '/api/trash/plan',
         '/api/trash/remove',
-        '/api/trash',
-        '/api/trash/restore',
-        '/api/trash/purge',
       ]);
       for (final r in seen) {
         final auth = r.headers['authorization'] ?? r.headers['Authorization'];
         expect(auth, 'Bearer tok', reason: '${r.url.path} 没带令牌头');
         expect(r.url.toString().contains('tok'), false, reason: '令牌不许进 URL');
       }
-      // `plan` 只读 ⇒ 不许带 confirm；`remove` / `purge` 必须带（少它就是 400）
+      // `plan` 只读 ⇒ 不许带 confirm；`remove` 必须带（少它就是 400）
       expect(jsonDecode(seen[0].body), {'messageIds': ['u1', 'm1']});
       expect(jsonDecode(seen[1].body), {'messageIds': ['u1', 'm1'], 'confirm': true});
-      expect(jsonDecode(seen[3].body), {'messageIds': ['u1', 'm1']});
-      expect(jsonDecode(seen[4].body), {'messageIds': ['u1', 'm1'], 'confirm': true});
     });
 
     test('plan 的回执 → 清单（逐条都在，含"删不掉"那条）', () async {
@@ -569,44 +546,6 @@ void main() {
       expect(const TrashPlanItem(what: '', where: '', verdict: 'delete', note: '').cannot, false);
     });
 
-    test('回收站条目：读得出来，坏行跳过', () {
-      final list = trashEntriesFrom(const {
-        'items': [
-          {'messageIds': ['u1', 'm1'], 'at': 1, 'purgeAt': 2, 'preview': '帮我把这周工时记一下'},
-          'x',
-          {'preview': '没有 id 的'},
-        ],
-      });
-      expect(list.length, 2);
-      expect(list[0].preview, '帮我把这周工时记一下');
-      expect(list[0].usable, true);
-      expect(list[1].usable, false, reason: '一个 id 都没有 ⇒ 不给那两个按钮，也不发空请求');
-    });
-
-    test('★ 新增键 `say`（他自己那句话）：认得出；老回执不给它 ⇒ 空串（不抛）', () {
-      final list = trashEntriesFrom(const {
-        'items': [
-          {'messageIds': ['u1'], 'preview': '2 条', 'say': '帮我把这周工时记一下'},
-          {'messageIds': ['u2'], 'preview': '2 条'},
-          {'messageIds': ['u3'], 'preview': '2 条', 'say': 42},
-        ],
-      });
-      expect(list[0].say, '帮我把这周工时记一下');
-      expect(list[0].preview, '2 条', reason: '已上线的 `preview` 照旧留着（一个字节没动）');
-      expect(list[1].say, '', reason: '老盒子不给这个键 ⇒ 空串，不抛');
-      expect(list[2].say, '', reason: '类型不对 ⇒ 当没有（宽容解析），不抛');
-    });
-
-    test('🔴 卡上那一行：`say` 优先 ⇒ 退回 `preview` ⇒ 都没有才说"没有能看的字"', () {
-      const withSay = TrashEntry(messageIds: ['u1'], preview: '2 条', say: '帮我把这周工时记一下');
-      expect(trashLineOf(withSay), '帮我把这周工时记一下');
-      // ★ 负向对照：新客户端 + 老盒子（不给 `say`）那条路**没断**
-      const old = TrashEntry(messageIds: ['u1'], preview: '2 条');
-      expect(trashLineOf(old), '2 条', reason: '退回 preview 那一条不许断');
-      const neither = TrashEntry(messageIds: ['u1']);
-      expect(trashLineOf(neither), trashNoPreviewLine);
-    });
-
     test('🔴 清缓存用的那个纯函数：只去掉这几个 id', () {
       final facts = [
         {'type': 'user/echo', 'seq': 1, 'messageId': 'u1'},
@@ -620,80 +559,11 @@ void main() {
     });
   });
 
-  // ── ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.3）：回收站页重做 ──
-  //
-  // 这一组钉的是**那一页上算出来的每一句**：时刻怎么读、截止时间怎么读、
-  // 服务端没给数时**不许编**（这是这一页唯一的诚实判据）。
-
-  group('回收站页：时刻 / 截止时间那些人话（§2.3）', () {
-    test('毫秒 → 中文人话时刻（月日 ＋ 时刻，本地时区）', () {
-      // ⚠️ 用"本地时间构造出来的那一刻"反推，避免测试里写死一个时区
-      expect(
-        trashMomentWords(DateTime(2026, 10, 1, 21, 33).millisecondsSinceEpoch),
-        '10月1日 21:33',
-      );
-      expect(
-        trashMomentWords(DateTime(2026, 1, 2, 3, 4).millisecondsSinceEpoch),
-        '1月2日 03:04',
-      );
-      // ⚠️ 与 `dateOf`（`YYYY-MM-DD`，删前清单那份用）**不是同一个东西**：两个都在。
-      expect(dateOf(DateTime(2026, 10, 1, 21, 33).millisecondsSinceEpoch), '2026-10-01');
-    });
-
-    test('什么时候删的 / 还能放到什么时候（有数就说数）', () {
-      final t = DateTime(2026, 10, 22, 9, 5).millisecondsSinceEpoch;
-      expect(trashAtLine(t), '10月22日 09:05 删的');
-      expect(trashCanRestoreUntilLine(t), '还能放到 10月22日 09:05');
-    });
-
-    test('🔴 服务端没给 `purgeAt` ⇒ 只说"过一阵子"，**不许编一个日期**', () {
-      final line = trashCanRestoreUntilLine(null);
-      expect(line, contains('过一阵子'));
-      expect(RegExp(r'\d').hasMatch(line), false, reason: '没有那个数就一个数字都不许出现');
-    });
-
-    test('服务端没给 `at` ⇒ 如实说没记下来（也不许编）', () {
-      final line = trashAtLine(null);
-      expect(line, contains('没记下来'));
-      expect(RegExp(r'\d').hasMatch(line), false);
-    });
-
-    test('🔴 抬头那句：只有"删了几次"这个数，**一个天数都不许出现**', () {
-      expect(trashHeadLine(3), contains('3'));
-      expect(trashHeadLine(3), contains('还能放回来'));
-      expect(RegExp(r'天').hasMatch(trashHeadLine(3)), false,
-          reason: '留多久由服务端算 —— 客户端自己写天数就是编');
-      expect(trashHeadHint.contains('没了'), true);
-    });
-
-    test('空的那两句：一句实话 ＋ 一句"删掉的话会先来这儿"', () {
-      expect(trashEmptyLine, '这儿是空的');
-      expect(trashEmptyHint.contains('先来这儿'), true);
-    });
-  });
-
-  // ── 屏幕上那些字 ───────────────────────────────────────────
-
   group('这一批新加的人话', () {
     test('verdict 翻成人话（认不出来 ⇒ 删不掉）', () {
       expect(verdictLabel('delete'), '会删掉');
       expect(verdictLabel('cannot'), '删不掉');
       expect(verdictLabel('wat'), '删不掉');
-    });
-
-    test('留多久 / 什么时候彻底删掉（数从服务端来，读不出就只说"过一阵子"）', () {
-      expect(planTtlLine(30), contains('30 天'));
-      expect(planTtlLine(null), contains('过一阵子'));
-      expect(planTtlLine(0), contains('过一阵子'));
-      expect(purgeAtLine(1758400000000), startsWith('彻底删掉的时间：'));
-      expect(purgeAtLine(null), isEmpty);
-    });
-
-    test('日期是本地那一天（不引依赖）', () {
-      // 用"本地时间构造出来的那一刻"反推，避免测试里写死一个时区
-      final d = DateTime(2026, 9, 21, 12);
-      expect(dateOf(d.millisecondsSinceEpoch), '2026-09-21');
-      expect(dateOf(DateTime(2026, 1, 2, 3).millisecondsSinceEpoch), '2026-01-02');
     });
 
     test('清单一项的标题：没有"在哪儿"就只说"哪一样"', () {
@@ -704,8 +574,6 @@ void main() {
 
     test('🔴 新加的这些文案一条都不许带内部词', () {
       final copies = [
-        trashTitle,
-        trashTooltip,
         bubbleMenuTitle,
         bubbleMenuDelete,
         bubbleMenuDeleteHint,
@@ -724,39 +592,12 @@ void main() {
         planConfirm,
         planCannotLine,
         planEmptyLine,
-        trashEmptyLine,
-        trashNoPreviewLine,
-        trashLoadFailedLine,
+        planGoneLine,
         trashRetry,
-        trashRestore,
-        trashPurge,
-        trashPurgeConfirmTitle,
-        trashPurgeConfirmBody,
-        trashPurgeConfirmYes,
-        trashPurgeConfirmNo,
         trashDeletedLine,
-        trashRestoredLine,
-        trashPurgedLine,
         trashDeleteFailedLine,
-        trashRestoreFailedLine,
-        trashPurgeFailedLine,
         trashPlanFailedLine,
         trashUnauthorizedLine,
-        // ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.3）：回收站页重做
-        //    新写的每一句 —— **直接引数据源**（手抄会漂）。
-        //    ⚠️ 这里**故意没有天数**：留多久由服务端算，客户端一个数都不许写。
-        trashHeadLine(0),
-        trashHeadLine(3),
-        trashHeadHint,
-        trashAtLine(1758400000000),
-        trashAtLine(null),
-        trashCanRestoreUntilLine(1758400000000),
-        trashCanRestoreUntilLine(null),
-        trashEmptyHint,
-        trashMomentWords(1758400000000),
-        planTtlLine(30),
-        planTtlLine(null),
-        purgeAtLine(1758400000000),
         verdictLabel('delete'),
         verdictLabel('cannot'),
       ];
@@ -788,44 +629,15 @@ void main() {
         planConfirm,
         planCannotLine,
         planEmptyLine,
-        planTtlLine(30),
-        planTtlLine(null),
-        purgeAtLine(1758400000000),
+        planGoneLine,
         verdictLabel('delete'),
         verdictLabel('cannot'),
         planItemTitle('可见的那几句', '这台设备'),
-        trashTitle,
-        trashTooltip,
-        trashEmptyLine,
-        trashNoPreviewLine,
-        trashLoadFailedLine,
         trashRetry,
-        trashRestore,
-        trashPurge,
-        trashPurgeConfirmTitle,
-        trashPurgeConfirmBody,
-        trashPurgeConfirmYes,
-        trashPurgeConfirmNo,
         trashDeletedLine,
-        trashRestoredLine,
-        trashPurgedLine,
         trashDeleteFailedLine,
-        trashRestoreFailedLine,
-        trashPurgeFailedLine,
         trashPlanFailedLine,
         trashUnauthorizedLine,
-        // ★ 2026-10-02（契约 `docs/dev/154-CHAT-RECORD-LOOK.md` §2.3）：回收站页重做
-        //    新写的每一句 —— **直接引数据源**（手抄会漂）。
-        //    ⚠️ 这里**故意没有天数**：留多久由服务端算，客户端一个数都不许写。
-        trashHeadLine(0),
-        trashHeadLine(3),
-        trashHeadHint,
-        trashAtLine(1758400000000),
-        trashAtLine(null),
-        trashCanRestoreUntilLine(1758400000000),
-        trashCanRestoreUntilLine(null),
-        trashEmptyHint,
-        trashMomentWords(1758400000000),
       ];
       for (final c in copies) {
         expect(c.contains('轮'), false, reason: '「$c」里有内部概念"轮"：说人话');

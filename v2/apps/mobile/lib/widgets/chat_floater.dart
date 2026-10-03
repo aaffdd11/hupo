@@ -62,8 +62,8 @@ enum FloaterTier {
 /// **抓手那颗按钮的 key**（判据用它量命中区、也用它点/拖 —— 图形上没有字可找）。
 const Key chatHandleKey = Key('chat-handle');
 
-/// **标题行右边那一串动作那条横滚条**的 key（判据用它量"看得见几个"）。
-const Key chatActionsStripKey = Key('chat-actions-strip');
+/// **右侧那颗「收起聊天」按钮**的 key（判据用它点它 —— 字与 tooltip 都可能有别的同名）。
+const Key chatCollapseKey = Key('chat-collapse');
 
 /// 浮窗自己的几条常量（**不散在代码里**）。
 class FloaterMetrics {
@@ -108,7 +108,6 @@ class ChatFloater extends StatefulWidget {
     required this.title,
     required this.child,
     required this.composer,
-    this.trailing = const <Widget>[],
     this.initialTier = FloaterTier.collapsed,
     this.onTier,
     this.onHeight,
@@ -128,10 +127,6 @@ class ChatFloater extends StatefulWidget {
   /// 收缩的时候也有一个输入框。"*）⇒ 而且上下两态用的是**同一个实例**，
   /// 不然"打了一半再展开"会换一个 `State`、**框里的字就丢了**。
   final Widget composer;
-
-  /// 抓手行右边的动作（回收站/导出/过程/配置/退出那套）。
-  /// ⚠️ **收起态不画它们** —— 收起条只留"带字的展开入口"（D3.8）。
-  final List<Widget> trailing;
 
   // ⚠️ 2026-09-24：原来这里有一个 `leading`（标题前面那个"在哪儿说话"的图标）。
   //    聊天窗口收成**一行**之后，它搬到了输入条那一行的最前面
@@ -460,84 +455,42 @@ class ChatFloaterState extends State<ChatFloater> {
                           child: Row(
                             children: [
                               const SizedBox(width: d.gapS),
-                              // ★ `118` 起标题**可以让位**（窄屏 + 大字号下右边还要摆
-                              //    那一串动作）：原来的 Text 是不弹性的 ⇒
-                              //    这一行会横向溢出。`Flexible` + 省略号把它变成
-                              //    "地方不够就截字"，**位置与大小在地方够时一字不变**
-                              //    （`notice_overlay_test` 量的就是那个矩形）。
-                              Flexible(
+                              // 标题：**这一行里唯一会伸缩的那一格**（地方不够就截字）。
+                              Expanded(
                                 child: Text(
                                   widget.title,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  // ★ 2026-09-23：`titleSmall`(≈14) → `titleMedium`(≈16)
-                                  //   —— 它是这一屏的名字，原来和旁边那排图标一样大。
                                   // ★ 批次 4：字色跟色板走（暗色下 `d.ink` 是黑字）。
                                   // ★ 2026-10-02（契约 `154` §2.1）：改用 `DshTypes.title`
-                                  //   （20 / **600** / 28）—— 与导出页、回收站那两处抬头
-                                  //   **同一个 token**（"同一份数字不许两处"）。原来那个
-                                  //   `titleMedium` ＋ 就地 `copyWith(fontWeight: 600)`
-                                  //   正是那条纪律不许的形状。
+                                  //   （20 / **600** / 28）—— 一处 token，不就地 copyWith。
                                   style: dshTextStyle(DshTypes.title, p.labelPrimary),
                                 ),
                               ),
-                                                            // 🔴 **这里原来有一个 `Spacer()`** —— 2026-09-26 拿掉。
-                              //    它和右边那一条**都是 flex 1** ⇒ 把剩余宽对半分，
-                              //    而它自己一个像素都不画。390 宽的手机上量到：
-                              //      有它：横滚条 **35.4** 宽（连「过程」都被切掉半个）
-                              //      没它：横滚条 **53** 宽（「过程」整颗在里面）
-                              //    ⇒ 纯粹是浪费。读数在 `docs/dev/124-TOUCH-REGRESSION.md` §三。
-                              //    ⚠️ 那一条**仍然贴右**：`Flexible` 里的横滚条是**贪婪**的，
-                              //      会把分到的宽全占满（`收起` 照旧钉在最右）。
-                              // ⚠️ 那一串动作要能**横向滚**：窄屏 + 大字号下它**一定**放不下；
-                              //    折行会让这一行变高 ⇒ 把时间线挤没。一行 + 横滚：高度不变。
-                              // 🔴 **"一个都不藏"是假话**（2026-09-26 如实改口径）：
-                              //    窄屏下这一串**仍然**放不下 ⇒ 靠前那几颗在视口外，
-                              //    只有横滑够得着。
-                              //    ⚠️ 2026-09-26（`#173` 砍掉那两个 tab 之后）真量过：
-                              //      390 宽下这一格只剩【这一窗动过哪些文件】那一颗
-                              //      ⇒ 横滚条 **53 → 101** 像素（读数见 `docs/dev/00-PROGRESS.md` §〇 `#173`）；
-                              //      「过程」整颗在里面、「导出」露一半、「回收站」还在视口外。
-                              //      原来那条"视口外那几颗的 a11y 矩形挂在【聊天/轨迹】坐标上"
-                              //      的实例，随着 tab 一起没了。
-                              //    ⇒ 这条账**没结**：真修法要么加一颗「更多」的出口、
-                              //      要么把它们搬出这一行 —— 那是产品决定，
-                              //      记在 `docs/dev/124-TOUCH-REGRESSION.md` §三·五。
-                              Flexible(
-                                child: SingleChildScrollView(
-                                  key: chatActionsStripKey,
-                                  scrollDirection: Axis.horizontal,
-                                  reverse: true,
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: widget.trailing,
+                              const SizedBox(width: d.gapS),
+                              // 🔴 **右侧那一颗就是出口**（主人 2026-10-03：
+                              //    *"让收起聊天变成右侧的一个按钮，就叫收起聊天。"*）
+                              //    —— **带字的按钮**，不再是那颗只有图形的箭头。
+                              // ⚠️ 同一天更早一句（*"回收站，导出，过程，我们也不需要。"*）：
+                              //    这一行右边原来还有一串动作 ＋ 一条**横滚**
+                              //    （`chatActionsStripKey`）⇒ **整条删了**。
+                              //    读数与"那条账怎么结的"见 `docs/dev/172-HEADER-TRIM.md`。
+                              Tooltip(
+                                message: chatCollapse,
+                                child: TextButton(
+                                  key: chatCollapseKey,
+                                  onPressed: () => _setTier(
+                                    FloaterTier.collapsed,
+                                    auto: false,
                                   ),
+                                  // ⚠️ 命中区 ≥44（D3.6）；字用主题里那一档（**不写死字号**）。
+                                  style: TextButton.styleFrom(
+                                    minimumSize: const Size(44, 44),
+                                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                                    foregroundColor: p.labelTertiary,
+                                  ),
+                                  child: const Text(chatCollapse),
                                 ),
-                              ),
-                              // 🔴 **「收起」钉在横滚之外**（主人 2026-09-22：*"展开后要有收回的按钮"*）：
-                              //    它原来在那条**横向滚动**里 ⇒ 窄屏 + 大字号下会被滚出视野，
-                              //    而"想收起来"的时候找不到按钮 = 一个点不到的出口。
-                              //    ⚠️ **只在展开态画它**（收起态本来就已经收起来了）。
-                              //    ⚠️ 2026-09-24 起**抓手自己也收得起来**，这个按钮留着是"看得见的出口"。
-                              IconButton(
-                                tooltip: chatCollapse,
-                                onPressed: () => _setTier(
-                                  FloaterTier.collapsed,
-                                  auto: false,
-                                ),
-                                // ★ 2026-10-01（主人："右侧那颗「收起」太大/占地方"）：
-                                //   图形 24 → 18、外框收到 44 —— **可点区域仍 ≥44**（D3.6）。
-                                iconSize: DshChatSpace.headerIconSize,
-                                padding: EdgeInsets.zero,
-                                // ⚠️ 同上：把触控框从 48 收到 44（正好 ≥ D3.6 那条线）
-                                style: IconButton.styleFrom(
-                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                  minimumSize: const Size(44, 44),
-                                  maximumSize: const Size(44, 44),
-                                  padding: EdgeInsets.zero,
-                                ),
-                                icon: const Icon(Icons.keyboard_arrow_down),
-                                color: p.labelTertiary,
                               ),
                             ],
                           ),

@@ -435,8 +435,11 @@ void main() {
 
     // 省下来的空间**要能量得出来**：标题行上沿离浮窗上沿只有那一点点内边距
     final floater = _floaterRect(tester);
-    final title = tester.getRect(find.byKey(chatActionsStripKey));
-    expect(title.top - floater.top, lessThan(12),
+    final title = tester.getRect(find.text(appName));
+    // ⚠️ 2026-10-03：这一条原来卡 `< 12`，而右侧那颗改成**带字的按钮**之后
+    //    标题行高了约 2px（读数正好 12.0）⇒ 口径改成"**没有多出一整行**"：
+    //    真有那一行抓手的话，差值是 40 上下（那一行 44 高）。
+    expect(title.top - floater.top, lessThan(30),
         reason: '★ 标题行上面还压着一块（差 ${title.top - floater.top}）—— 那一行没真的省掉');
 
     // 收起态：抓手在，而且**里面没有那根 44×4 的杠**（它的子树里一个方块都没有）
@@ -461,7 +464,7 @@ void main() {
     //    改绑到标题行上（§6.3 原文就是"抓手 / 标题行"）。
     await _pump(tester, tier: FloaterTier.half);
     final before = _floaterRect(tester).height;
-    await tester.drag(find.byKey(chatActionsStripKey), const Offset(0, -200));
+    await tester.drag(find.text(appName), const Offset(0, -200));
     await tester.pumpAndSettle();
     expect(_floaterRect(tester).height > before, true,
         reason: '★ 展开态拖标题行改不了高度了（$before → ${_floaterRect(tester).height}）');
