@@ -37,6 +37,8 @@ function startAppOrigin(apps) {
     resolveApps: () => apps,
     key: KEY,
     frameAncestors: 'https://w.example',
+    // ★ **`A3`：URL 上不带人 ⇒ 这个测试世界里"可能的人"只有 u1**
+    subsOf: () => ['u1'],
     now: () => NOW,
   });
   return new Promise((resolve) => {

@@ -138,6 +138,8 @@ async function boot() {
     frameAncestors: main,
     agentAsk: (o) => agentAsk(o),
     agentPoll: (o) => agentPoll(o),
+    // ★ **`A3`：URL 上不带人 ⇒ 这个测试世界里"可能的人"只有 u1**
+    subsOf: () => ['u1'],
     now: () => clock,
   });
   const appPort = await new Promise((r) => appsOrigin.listen(0, '127.0.0.1', () => r(appsOrigin.address().port)));
@@ -216,12 +218,12 @@ function post(port, path, body) {
   });
 }
 
-/** 签一条入口 URL 的那三样（app 原点只认它 / 票）。 */
+/** 签一条入口 URL 的那两样（app 原点只认它 / 票）。★ `A3`：URL 上没有人，只有 `e`/`s`。 */
 async function sigOf(h, id) {
   const { entryUrl } = await import('../src/app-serve.js');
   const url = entryUrl({ base: `http://127.0.0.1:${h.appPort}`, key: APP_SIGN_KEY, sub: 'u1', id, version: 1, entry: 'index.html', now: 1_800_000_000_000 });
   const q = new URLSearchParams(url.split('?')[1]);
-  return { u: q.get('u'), e: q.get('e'), s: q.get('s') };
+  return { e: q.get('e'), s: q.get('s') };
 }
 
 // ════════════════════════════════════════════════════════════

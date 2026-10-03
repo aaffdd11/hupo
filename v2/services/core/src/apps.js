@@ -30,6 +30,8 @@ import {
 } from './app-db.js';
 // ★ **小程序定时任务**（`148` §四）：清单形状与"该不该跑"只在那一份里判（`checkTaskList`）
 import { checkTaskList, nextTaskState } from './app-tasks.js';
+// ★ **`A3·补`（D4.24 · 2026-10-03）：审计里的身份换凭据哈希**（推不回明文，见那个文件卷首）。
+import { credHashOf } from './cred-hash.js';
 import { reclaimScope } from './reclaim.js';
 import nodeCrypto from 'node:crypto';
 import nodeFs from 'node:fs';
@@ -441,6 +443,9 @@ export class Apps {
    *        ★ **`114`：活的那一份复制时要读/写工作区**（内容在工作区里，不在这儿）。
    *        形状 `{ workspaces }`（`AppWorkspaces`）；`null`（缺省）⇒ 只有"包"那一套复制。
    *        ⚠️ 与 `reclaim` 同一条理由传**函数/惰性**：`workspaces` 在 `new Apps()` 之后才建。
+   * @param {Buffer|string|null} [o.credKey]
+   *        ★ **`A3·补`：审计账里那把凭据哈希的键**（`serve.js` 给的是制品签名键）。
+   *        不给 ⇒ `cred-hash.js` 的退化键。**审计里不再写明文 `sub`。**
    */
   constructor({
     dir,
@@ -451,10 +456,12 @@ export class Apps {
     onVersion = () => {},
     reclaim = null,
     live = null,
+    credKey = null,
   }) {
     if (!dir) throw new AppsError('dir 必填');
     this.dir = dir;
     this.sub = sub;
+    this.credKey = credKey;
     this.fs = fs;
     this.now = now;
     this.onAudit = onAudit;
@@ -504,7 +511,14 @@ export class Apps {
 
   /** 只追加的审计（**它坏了不许挡住主流程**）。 */
   #audit(entry) {
-    const line = JSON.stringify({ at: this.now(), sub: this.sub, ...entry });
+    /**
+     * 🔴 **`A3·补`（D4.24 · 2026-10-03）：这一行写的是凭据哈希，不是明文身份。**
+     *    原来第一格是 `sub: this.sub`（`"sub":"u1"` 直接落盘）。
+     *    ⇒ 换成 `credHashOf`：同一个部署里同一个人的行仍然对得上（稳定假名），
+     *      但推不回明文（键在签名键里，只服务端有）。
+     *    ⚠️ **老行一个字都不改**（只对新写入的这一行生效）。
+     */
+    const line = JSON.stringify({ at: this.now(), sub: credHashOf(this.sub, this.credKey), ...entry });
     try {
       this.#ensureRoot();
       this.fs.appendFileSync(nodePath.join(this.root, 'audit.jsonl'), `${line}\n`, { mode: 0o644 });

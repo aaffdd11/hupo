@@ -23,6 +23,7 @@ import {
 import {
   SIGNED_TTL_MS, appsBaseOf, createAppServer, entryUrl, parseArtifactPath, signEntry, verifyEntry,
 } from '../src/app-serve.js';
+import { credHashOf } from '../src/cred-hash.js';
 import { fontMirrorRel } from '../src/server.js';
 
 const tmpDirs = [];
@@ -172,7 +173,9 @@ test('审计：create 与 rollback 各留一行，而且**只追加**', () => {
   assert.equal(lines[0].by, 'agent');
   assert.equal(lines[0].turn, 7, '★ 可倒查：哪一轮造的');
   assert.equal(lines.at(-1).what, 'rollback');
-  assert.equal(lines.at(-1).sub, 'u1');
+  // ★ **`A3·补`（D4.24）：这一格是凭据哈希，不是明文 `u1`**（同一个人的行仍然对得上）。
+  assert.equal(lines.at(-1).sub, credHashOf('u1'), '稳定的假名 ⇒ 同一个人的行归得到一起');
+  assert.notEqual(lines.at(-1).sub, 'u1', '🔴 审计里不许再写明文身份');
 });
 
 function n3(n1) { return n1 + 2; }
@@ -236,6 +239,8 @@ async function startServe({ dir, key = KEY, frameAncestors = 'http://127.0.0.1:8
     resolveApps: (sub) => (sub === 'u1' ? apps : null),
     key,
     frameAncestors,
+    // ★ **`A3`：URL 上不带人 ⇒ 这台测试制品口"可能的人"只有 u1**
+    subsOf: () => ['u1'],
     now,
   });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
@@ -275,17 +280,20 @@ test('制品口：好消息 200 + 内容对 + 带 CSP + **没有 X-Frame-Options
   await close();
 });
 
-test('🔴 制品口：伪造 / 过期 / 换人 一律 403（而且连目录都不看）', async () => {
+test('🔴 制品口：伪造 / 过期 / 拿别人的签名 一律 403（而且连目录都不看）', async () => {
   const dir = tmp();
   const { apps, base, close } = await startServe({ dir });
   apps.create({ ...OK });
   const good = entryUrl({ base, key: KEY, sub: 'u1', id: 'dice', version: 1, entry: 'index.html' });
   const exp = Date.now() + SIGNED_TTL_MS;
   const cases = [
-    `${base}/a/dice/1/index.html?u=u1&e=${exp}&s=${'0'.repeat(64)}`,          // 假签名
-    `${base}/a/dice/1/index.html?u=u2&e=${exp}&s=${signEntry({ key: KEY, sub: 'u1', id: 'dice', version: 1, exp })}`, // 换人
-    `${base}/a/dice/1/index.html?u=u1&e=${exp}&s=${signEntry({ key: KEY, sub: 'u1', id: 'dice', version: 2, exp })}`, // 换版本
-    `${base}/a/dice/1/index.html?u=u1&e=${Date.now() - 1000}&s=${signEntry({ key: KEY, sub: 'u1', id: 'dice', version: 1, exp: Date.now() - 1000 })}`, // 过期
+    `${base}/a/dice/1/index.html?e=${exp}&s=${'0'.repeat(64)}`,                       // 假签名
+    // ★ `A3`：URL 上没有人 ⇒ "换人"不再是"改一个 u"，而是"拿一个**别人**的有效签名"。
+    //    u9 **不在这台登记过的人里**（`subsOf` 只有 u1）⇒ 认不出人 ⇒ 拒（fail-closed）。
+    `${base}/a/dice/1/index.html?e=${exp}&s=${signEntry({ key: KEY, sub: 'u9', id: 'dice', version: 1, exp })}`, // 别人的签名
+    `${base}/a/dice/1/index.html?e=${exp}&s=${signEntry({ key: KEY, sub: 'u1', id: 'dice', version: 2, exp })}`, // 换版本（域分离）
+    `${base}/a/dice/1/index.html?e=${exp}&s=${signEntry({ key: KEY, sub: 'u1', id: 'other', version: 1, exp })}`, // 换 app（域分离）
+    `${base}/a/dice/1/index.html?e=${Date.now() - 1000}&s=${signEntry({ key: KEY, sub: 'u1', id: 'dice', version: 1, exp: Date.now() - 1000 })}`, // 过期
     `${base}/a/dice/1/index.html`,                                            // 没签名
   ];
   for (const u of cases) {
@@ -293,6 +301,10 @@ test('🔴 制品口：伪造 / 过期 / 换人 一律 403（而且连目录都�
     assert.equal(r.status, 403, `这条该被拒：${u}`);
   }
   assert.equal((await get(good)).status, 200, '对照：真签名必须过');
+  // ★ **负向对照的第二半（旧攻击面已经不存在）**：往真 URL 上挂一个"别人的身份"也不管用 ——
+  //   认人只看签名，`u` 那一格今天被忽略 ⇒ 还是以 u1 的身份打开（拿不到别人的东西）。
+  const r2 = await get(`${good}&u=u2`);
+  assert.equal(r2.status, 200, '挂了 u=u2 也改不了"这是谁"（认人只看签名）');
   await close();
 });
 

@@ -89,6 +89,8 @@ async function bootOrigin(t, { worlds, spy = null }) {
     },
     key: KEY,
     frameAncestors: "'self'",
+    // ★ **`A3`：URL 上不带人 ⇒ 这个测试世界里"可能的人"就是 u1/u2**
+    subsOf: () => ['u1', 'u2'],
     now: () => NOW,
     log: () => {},
   });
@@ -602,6 +604,8 @@ test('活地址·盒子不通 ⇒ 503（**绝不**拿宿主那份旧的顶上）
     }),
     key: KEY,
     frameAncestors: "'self'",
+    // ★ **`A3`：URL 上不带人 ⇒ 这个测试世界里"可能的人"就是 u1/u2**
+    subsOf: () => ['u1', 'u2'],
     now: () => NOW,
     log: () => {},
   });
@@ -629,6 +633,8 @@ test('🔴 制品口·盒子不通 ⇒ 503（与 `/api/apps` 那个预闸**一�
     },
     key: KEY,
     frameAncestors: "'self'",
+    // ★ **`A3`：URL 上不带人 ⇒ 这个测试世界里"可能的人"就是 u1/u2**
+    subsOf: () => ['u1', 'u2'],
     now: () => NOW,
     log: () => {},
   });
@@ -653,6 +659,8 @@ test('🔴 制品口·**读**的时候盒子不通 ⇒ 也是 503（不是"没�
     }),
     key: KEY,
     frameAncestors: "'self'",
+    // ★ **`A3`：URL 上不带人 ⇒ 这个测试世界里"可能的人"就是 u1/u2**
+    subsOf: () => ['u1', 'u2'],
     now: () => NOW,
     log: () => {},
   });
@@ -675,6 +683,8 @@ test('🔴 反向对照：**不是**盒子不通的抛错，口径一个字都�
     },
     key: KEY,
     frameAncestors: "'self'",
+    // ★ **`A3`：URL 上不带人 ⇒ 这个测试世界里"可能的人"就是 u1/u2**
+    subsOf: () => ['u1', 'u2'],
     now: () => NOW,
     log: () => {},
   });
@@ -696,6 +706,8 @@ test('🔴 反向对照：**不是**盒子不通的抛错，口径一个字都�
     }),
     key: KEY,
     frameAncestors: "'self'",
+    // ★ **`A3`：URL 上不带人 ⇒ 这个测试世界里"可能的人"就是 u1/u2**
+    subsOf: () => ['u1', 'u2'],
     now: () => NOW,
     log: () => {},
   });

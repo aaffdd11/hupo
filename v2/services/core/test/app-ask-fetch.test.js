@@ -64,6 +64,8 @@ function startAppOrigin({ apps, askApp }) {
     key: KEY,
     frameAncestors: 'https://w.example',
     askApp,
+    // ★ **`A3`：URL 上不带人 ⇒ 这个测试世界里"可能的人"只有 u1**
+    subsOf: () => ['u1'],
     now: () => NOW,
   });
   return new Promise((resolve) => {
@@ -130,7 +132,8 @@ function post(port, path, body, headers = {}) {
 function signUrl(port, { id = 'wenda', version = 1, sub = 'u1' } = {}) {
   const url = entryUrl({ base: `http://127.0.0.1:${port}`, key: KEY, sub, id, version, entry: 'index.html', now: NOW });
   const q = new URLSearchParams(url.split('?')[1]);
-  return { u: q.get('u'), e: q.get('e'), s: q.get('s') };
+  // ★ `A3`：入口 URL 上没有人（只有 `e`/`s`）。
+  return { e: q.get('e'), s: q.get('s') };
 }
 
 test('K1/K2 真 app 原点：入口签名 ⇒ 200 ＋ 回答；那张票能接着用', async (t) => {

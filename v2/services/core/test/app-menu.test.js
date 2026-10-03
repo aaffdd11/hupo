@@ -23,6 +23,7 @@ import { AgentRuntime } from '../src/agent-runtime.js';
 import { MAX_COPY_TRIES, MAX_TITLE_CHARS } from '../src/apps.js';
 import { createBoxApps } from '../src/apps-box.js';
 import { Auth } from '../src/auth.js';
+import { credHashOf } from '../src/cred-hash.js';
 import { createServer } from '../src/server.js';
 import { USAGE_KINDS } from '../src/usage.js';
 import { Worlds } from '../src/worlds.js';
@@ -293,7 +294,9 @@ test('S10 改名 ⇒ **盒里那一版 manifest 的 title 真变了**（`list()`
   assert.ok(line, '🔴 改名要留审计一行');
   assert.equal(line.id, id);
   assert.equal(line.title, '奥数练一练（改）');
-  assert.equal(line.sub, 'owner');
+  // ★ **`A3·补`（D4.24）：审计里的身份是凭据哈希，不是明文 `owner`**。
+  assert.equal(line.sub, credHashOf('owner'), '留痕里要能认出"同一个人"（稳定假名）');
+  assert.notEqual(line.sub, 'owner', '🔴 审计里不许再写明文身份');
   assert.equal(typeof line.at, 'number', '审计那一行要有时间');
 
   // 宿主那份：**一个字节都不许动**

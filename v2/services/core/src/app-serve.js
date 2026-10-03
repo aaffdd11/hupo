@@ -184,29 +184,72 @@ export const ASK_PATH = '/ask';
 export const AGENT_PATH = '/agent';
 
 /**
+ * ★ **`A3`（D4.24 · 2026-10-03 定）：入口 URL 里不带人 ⇒ "这是谁"只能从签名里认。**
+ *
+ * ── 形状（这一处**两条路、两张口共用**）────────────────────
+ *   · URL / 正文里**没有**任何身份字段（只有签名 `s` 与到期 `e`）；
+ *   · 拿**已知的人**逐个试那条签名（`sub` 本来就是签名 payload 的一格）——
+ *     试中的那个就是"谁"，试不中就一个都不算（fail-closed）。
+ *
+ * 🔴 **为什么不是"URL 带一个不透明 handle"**：口径是"**URL 只带签名 + 到期**"
+ *    （`90` §10.1·⑤）。带 handle 等于把身份换个写法带出去 —— 那还是"URL 上有一个
+ *    可关联到人的指针"（第三方制品读一下 `location.search` 就能跨页 join）。
+ *    ⇒ 只有当"人"**一个字都不在 URL 上**时，那条判据才是结构性的。
+ *
+ * ⚠️ **代价（记在明处）**：一次请求最多算 `subs` 条数的 HMAC。今天这台部署的人很少；
+ *    真到很大那一天，这里要换成"按签名查表"—— 但**判定仍然只在这一处**，不许分叉。
+ *
+ * @param {object} o
+ * @param {Buffer|string} o.key   签名键
+ * @param {string} o.sig          签名（URL 上那一格）
+ * @param {string} o.id           app id（签名绑了它）
+ * @param {string|number} o.version 版本（或活地址哨兵 `live`）
+ * @param {string} o.exp          到期
+ * @param {string[]} o.subs       **已知的人**（`serve.js` 给的是"这台部署登记过的人"）
+ * @param {number} [o.now]
+ * @returns {string|null} 签名属于谁；认不出 ⇒ `null`
+ */
+export function resolveEntrySub({ key, sig, id, version, exp, subs, now = Date.now() }) {
+  for (const sub of Array.isArray(subs) ? subs : []) {
+    if (typeof sub !== 'string' || sub === '') continue;
+    if (verifyEntry({ key, sig, sub, id, version, exp, now })) return sub;
+  }
+  return null;
+}
+
+/**
  * ★ **app 原点上那几条口（`/db` 与 `/ask`）共用的凭据判定**（别的都不认）：
- *   · 第一次：页面把它自己那条入口 URL 里的三样（`u`/`e`/`s`）＋ 它自己是谁（`id`/`v`）报上来
+ *   · 第一次：页面把它自己那条入口 URL 里的两样（`e`/`s`）＋ 它自己是谁（`id`/`v`）报上来
  *     ⇒ **照入口签名那四道验一遍**（绑人 ＋ 绑 app ＋ 绑版本 ＋ 没过期）；
+ *     ⚠️ **`A3` 之后 URL 上没有 `u` 了** ⇒ 人由 `subsOf` 逐个试签名认出来
+ *     （老页面照旧把 `u` 一起报上来 —— **那一格今天被忽略**，认人只看签名）。
  *   · 之后：上一次换来的**会话票**（`ticket`）。
  *
  * 🔴 **为什么要有票**：入口 URL 只有十分钟（`SIGNED_TTL_MS`）—— 而一个页面可能开着几小时。
  *    票一次签发、绑同一个人同一个 app，**权限每次都重查**（撤销立刻生效）。
  * ⚠️ **票只在内存里算**（HMAC，不落盘、不上账）⇒ 重启就让所有票失效（可接受，页面刷新即可）。
  */
-export function appTicketOf({ key, body, id, version, now = Date.now() }) {
+export function appTicketOf({ key, body, id, version, now = Date.now(), subsOf = null }) {
   const ticket = typeof body?.ticket === 'string' ? body.ticket : '';
   if (ticket !== '') return verifyTicket({ key, ticket, id, now });
-  return verifyEntry({
+  let subs = [];
+  try {
+    subs = typeof subsOf === 'function' ? subsOf() : [];
+  } catch {
+    subs = [];
+  }
+  const sub = resolveEntrySub({
     key,
     sig: typeof body?.s === 'string' ? body.s : '',
-    sub: typeof body?.u === 'string' ? body.u : '',
     id,
     version,
     exp: typeof body?.e === 'string' ? body.e : '',
+    subs,
     now,
-  })
-    ? { sub: body.u, id, version, exp: Number(body.e) }
-    : null;
+  });
+  if (sub === null) return null;
+  // ⚠️ `exp` 照老形状回（有些调用方读它）—— 数值化失败回 `NaN`，跟老代码一个字不差。
+  return { sub, id, version, exp: Number(body.e) };
 }
 
 /** 签名要覆盖的那串东西：**绑人 + 绑版本 + 绑到期**。 */
@@ -253,11 +296,19 @@ export function appsBaseOf(cfg = {}) {
   return `http://${cfg.appsHost ?? '127.0.0.1'}:${cfg.appsPort ?? 8021}`;
 }
 
-/** 拼一条入口 URL。`base` 形如 `http://127.0.0.1:8021`（**不带尾斜杠**）。 */
+/**
+ * 拼一条入口 URL。`base` 形如 `http://127.0.0.1:8021`（**不带尾斜杠**）。
+ *
+ * 🔴 **`A3`（D4.24 · 2026-10-03 定）：URL 上只带"签名 + 到期"，不带人。**
+ *    绑人照旧在签名里（`signEntry` 的 payload 第一格就是 `sub`）——
+ *    但那个值**一个字都不出现在 URL 上** ⇒ 第三方制品读 `location.search`
+ *    也拿不到访客是谁（`90` §9.2·1／§10.1·⑤ 要的就是这一条）。
+ *    ⚠️ 验的一方怎么知道是谁：**拿已知的人逐个试签名**（`resolveEntrySub`）。
+ */
 export function entryUrl({ base, key, sub, id, version, entry, now = Date.now(), ttlMs = SIGNED_TTL_MS }) {
   const exp = now + ttlMs;
   const sig = signEntry({ key, sub, id, version, exp });
-  const q = new URLSearchParams({ u: sub, e: String(exp), s: sig });
+  const q = new URLSearchParams({ e: String(exp), s: sig });
   return `${base}${ARTIFACT_PREFIX}${id}/${version}/${entry}?${q}`;
 }
 
@@ -277,7 +328,8 @@ export function entryUrl({ base, key, sub, id, version, entry, now = Date.now(),
 export function liveEntryUrl({ base, key, sub, id, entry, now = Date.now(), ttlMs = SIGNED_TTL_MS }) {
   const exp = now + ttlMs;
   const sig = signEntry({ key, sub, id, version: LIVE_VERSION, exp });
-  const q = new URLSearchParams({ u: sub, e: String(exp), s: sig });
+  // 🔴 `A3`：和 `entryUrl()` 一样 —— **URL 上没有人**（只有 `e` 与 `s`）。
+  const q = new URLSearchParams({ e: String(exp), s: sig });
   return `${base}${LIVE_PREFIX}${id}/${entry}?${q}`;
 }
 
@@ -357,6 +409,10 @@ function denyBox(res) {
  *        （fail-closed：宁可他点开说取不到，也不许把"某一版快照"顶上活地址）。
  * @param {Buffer|string} o.key      签名密钥（**不进日志**）
  * @param {string} o.frameAncestors  壳的 origin（CSP `frame-ancestors`）
+ * @param {()=>string[]} [o.subsOf]
+ *        ★ **`A3`：这台部署"登记过的人"**（URL 上没有人 ⇒ 拿他们逐个试签名，见 `resolveEntrySub`）。
+ *        `serve.js` 给的是 `[OWNER_ID, ...users.ids()]`。**不给 ⇒ 一律拒**（fail-closed：
+ *        宁可他点开说取不到，也不许"猜一个人"出来）。
  * @param {(m:string)=>void} [o.log]
  * @param {()=>number} [o.now]
  */
@@ -365,6 +421,8 @@ export function createAppServer({
   resolveLive = null,
   key,
   frameAncestors,
+  // ★ **`A3`（D4.24）：URL 上不带人 ⇒ 验签那一侧得知道"可能是谁"**。
+  subsOf = null,
   // ★ **`148`：替小程序问一句**（"app 对它自己那个源发一次请求"那条路）。
   //   `null` ⇒ 这条口不接（如实 503），**绝不假装它答上来了**。
   askApp = null,
@@ -384,6 +442,18 @@ export function createAppServer({
   async function cspForApp(apps, id) {
     const hosts = await netHostsFor(apps, id);
     return hosts.length === 0 ? csp : cspFor(frameAncestors, hosts);
+  }
+
+  /**
+   * ★ **`A3`：这一台部署登记过的人**（认人用 —— URL 上没有身份字段）。
+   * 取不出来一律当"没有人"（fail-closed）：宁可他点开说取不到，也不许猜一个出来。
+   */
+  function subsNow() {
+    try {
+      return typeof subsOf === 'function' ? subsOf() : [];
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -443,7 +513,7 @@ export function createAppServer({
       send(403, { ok: false, error: 'bad-target', text: '这一条不认。' });
       return { ok: false, done: true };
     }
-    const who = appTicketOf({ key, body, id, version: v, now: now() });
+    const who = appTicketOf({ key, body, id, version: v, now: now(), subsOf: subsNow });
     if (!who) {
       log(`app 原点：凭据不过（${id}）`);
       send(403, { ok: false, error: 'bad-ticket', text: '这一条不认。' });
@@ -767,13 +837,16 @@ export function createAppServer({
     }
     const id = live ? live.id : hit.id;
     const q = new URLSearchParams(parsed.query ?? '');
-    const sub = q.get('u') ?? '';
     const exp = q.get('e') ?? '';
     const sig = q.get('s') ?? '';
     // 🔴 **先验签，再碰盘**（顺序刻意：没签名的请求连目录都不看）
     //    · 活地址那一格签的是哨兵 `live`（域分离：制品签名拿到这儿过不了）
     const version = live ? LIVE_VERSION : hit.version;
-    if (!sub || !verifyEntry({ key, sig, sub, id, version, exp, now: now() })) {
+    // ★ **`A3`：URL 上没有人**（原来那一格"从查询串里读身份"的代码已经删掉了）——
+    //   "这是谁"只能拿登记过的人逐个试签名认出来（`resolveEntrySub`）。
+    //   ⚠️ 老 URL 上那个 `u`（明文身份）今天**被忽略**：认人只看签名。
+    const sub = resolveEntrySub({ key, sig, id, version, exp, subs: subsNow(), now: now() });
+    if (sub === null) {
       log(`${live ? '活地址' : '制品口'}：签名不过（${id}）`);
       deny(res, 403);
       return;

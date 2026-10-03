@@ -372,6 +372,8 @@ function startAppOrigin(apps) {
     resolveApps: () => apps,
     key: KEY,
     frameAncestors: 'https://w.example',
+    // ★ **`A3`：URL 上不带人 ⇒ 这个测试世界里"可能的人"只有 u1**
+    subsOf: () => ['u1'],
     now: () => NOW,
   });
   return new Promise((resolve) => {
@@ -424,11 +426,10 @@ test('D7 那条口：入口签名换票 ⇒ 用票继续 ⇒ 没凭据 403（回
     const bad = await post(port, '/db', { id: 'coin', v: '1', op: 'run', sql: 'CREATE TABLE t(a)' });
     assert.equal(bad.status, 403);
     assert.equal(bad.headers['access-control-allow-origin'], '*', '不透明源那一侧要它');
-    // ② 拿入口签名换票
+    // ② 拿入口签名换票（★ `A3`：正文里**没有**身份那一格了，认人只看签名）
     const first = await post(port, '/db', {
       id: 'coin',
       v: '1',
-      u: q.get('u'),
       e: q.get('e'),
       s: q.get('s'),
       op: 'run',

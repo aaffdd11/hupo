@@ -20,6 +20,9 @@ import nodePath from 'node:path';
 
 import { AppsError } from './apps.js';
 import { assertDeclarationAllowed } from './app-outbound.js';
+// ★ **`A3·补`（D4.24 · 2026-10-03）：共享库审计里的 `by:<sub>` 换成凭据哈希**
+//   （这是"越界风险 ＋ 同装共现那条决定的前提"要修的那一处，见 `90` §9.2·1）。
+import { credHashOf } from './cred-hash.js';
 import { assertOutboundAllowed, assertOutboundBytes } from './outbound.js';
 
 /** 共享库放在数据目录下的哪个子目录。 */
@@ -47,13 +50,17 @@ export class Published {
    * @param {object} [o.fs]
    * @param {()=>number} [o.now]
    * @param {(e:object)=>void} [o.onAudit]
+   * @param {Buffer|string|null} [o.credKey]
+   *        ★ **`A3·补`：审计账里那把凭据哈希的键**（`serve.js` 给的是制品签名键）。
+   *        不给 ⇒ `cred-hash.js` 的退化键。**审计里不再写明文 `sub`。**
    */
-  constructor({ dir, fs = nodeFs, now = Date.now, onAudit = () => {} }) {
+  constructor({ dir, fs = nodeFs, now = Date.now, onAudit = () => {}, credKey = null }) {
     if (!dir) throw new PublishedError('dir 必填');
     this.dir = dir;
     this.fs = fs;
     this.now = now;
     this.onAudit = onAudit;
+    this.credKey = credKey;
   }
 
   get root() {
@@ -299,7 +306,8 @@ export class Published {
       //    ⚠️ 保留 id 那条判据的报错顺序**不变**：它在 `apps.create` 里排在更前面。
       expectRootHash: index.rootHash,
     });
-    this.#audit({ what: 'install', id, version: m.version, by: apps.sub ?? null });
+    // ★ **`A3·补`：装的人也不写明文** —— 原来这里是 `by: apps.sub ?? null`。
+    this.#audit({ what: 'install', id, version: m.version, by: credHashOf(apps.sub, this.credKey) });
     return { id: m.id, version: m.version, title: m.title };
   }
 }

@@ -166,9 +166,18 @@ const runtime = new AgentRuntime({
  */
 const badKeys = new Set();
 
+// ★ **制品的签名键**（`data/apps-signing.key`，0600、跨重启稳定）。
+//   ⚠️ **它原来是在建 `apps` 那个口之前才读的**（2026-10-03 · `A3` 之前）——
+//      现在提前到这儿，因为**审计里的凭据哈希也要用它**（`cred-hash.js`：
+//      同一把键、两种用途，域分隔在消息前缀里）。读法一个字没改。
+const appsSignKey = loadSignKey(cfg.appsSignKeyPath);
+
 worlds = new Worlds({
   cfg,
   runtime,
+  // ★ **`A3·补`（D4.24）：审计账里的身份换成凭据哈希** —— 键就是上面那把签名键
+  //   （同一个部署稳定、跨重启不变 ⇒ 同一个人的行仍然对得上；没有键 ⇒ 推不回明文）。
+  credKey: appsSignKey,
   log: (m) => console.log(m),
   warn: (m) => console.warn(m),
   /**
@@ -872,7 +881,8 @@ const liveForSub = makeLiveForSub({
 //      （这台机器上已经有"服务不在 systemd 下"那笔账）⇒ 这一批先做成**同进程第二个口**：
 //      对浏览器来说它就是**另一个原点**（同源看的是 scheme+host+port），
 //      而它自己的路由面小到看得完（三条：验签 / 读 / 带 CSP 回）。
-const appsSignKey = loadSignKey(cfg.appsSignKeyPath);
+// ★ **制品的签名键**：提到上面去了（`worlds` 建的时候就要给审计那把键）——
+//   这一行原来在这儿读它，2026-10-03（`A3`）挪到 `new Worlds(...)` 之前。
 // ⚠️ **对外那个地址优先**（生产上制品口是另一个域名）；没配才退回本机那个。
 //    🔴 这条一定要能配，否则"上线"就得改代码 —— 而"改代码才上线"正是要避免的形状。
 //    （规则本身在 `appsBaseOf()` 里，有判据钉着。）
@@ -889,6 +899,11 @@ const appsOrigin = createAppServer({
   resolveApps: (sub) => appsForSub(sub),
   // ★ **`112`：`/w/` 那条活地址的取值来源**（契约 112）。形状同 `resolveApps`。
   resolveLive: (sub) => liveForSub(sub),
+  // ★ **`A3`（D4.24）：URL 上不带人 ⇒ 验签这一侧要"可能是谁"的名单**。
+  //   给的是**这台部署登记过的人**（与开机 `warmUp` 那份逐字同源）——
+  //   签名 payload 里那一格就是 `sub`，试中谁就是谁。
+  //   ⚠️ **现取**（`users.ids()` 是内存里那份）：新登记的人当场就能开自己的小程序。
+  subsOf: () => [OWNER_ID, ...users.ids()],
   key: appsSignKey,
   frameAncestors: cfg.appsFrameAncestors,
   log: (m) => console.warn(`  ⚠️ ${m}`),

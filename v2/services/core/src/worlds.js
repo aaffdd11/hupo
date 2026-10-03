@@ -281,6 +281,14 @@ export class Worlds {
   /** 共享的小程序库（乙-3）。**一个部署一份**（不是按人一份）。 */
   #published;
   /**
+   * ★ **`A3·补`（D4.24 · 2026-10-03）：审计账里那把"凭据哈希"的键**。
+   *
+   * 审计里不许再写明文身份（`by:<sub>` / `"sub":"u1"`）⇒ 换成一个稳定假名；
+   * 键由 `serve.js` 用**制品签名键**接上（同一个部署稳定、跨重启不变）。
+   * `null`（单测 / 没接线的调用方）⇒ `cred-hash.js` 的退化键（**判据会钉接线**）。
+   */
+  #credKey;
+  /**
    * ★ **预审规则**（96 第 3b 条）：产品层那份（只读挂载＋指纹），
    * **一个部署一份**。`undefined` = 还没读过；`null` = 读过但读不到（fail-closed）。
    */
@@ -318,6 +326,9 @@ export class Worlds {
    *        ⚠️ **宿主上它不存在**（`serve.js` 只在容器那一支建）⇒ `null` ⇒ 一次都不问。
    *        ⚠️ 给**取值函数**也行：建 `worlds` 时那台中继还没建出来（顺序上有个环，
    *           同 `cfgFor`），到用的时候才读。
+   * @param {Buffer|string|null} [o.credKey]
+   *        ★ **`A3·补`：审计账里那把凭据哈希的键**（`serve.js` 给的是制品签名键）。
+   *        不给 ⇒ `cred-hash.js` 的退化键。
    */
   constructor({
     cfg,
@@ -331,6 +342,8 @@ export class Worlds {
     onAuthFailure = null,
     /** 🔴 见上面那段：开发者入口那台中继（宿主上 `null`）。 */
     devContainer = null,
+    /** ★ **`A3·补`：审计里凭据哈希的键**（不给 ⇒ 退化键，见 `cred-hash.js`）。 */
+    credKey = null,
   }) {
     if (!cfg) throw new Error('Worlds 需要 cfg');
     if (!runtime) throw new Error('Worlds 需要 runtime（agent 那个进程池）');
@@ -340,8 +353,9 @@ export class Worlds {
     this.#log = log;
     this.#warn = warn;
     this.#wantTrash = trash;
+    this.#credKey = credKey;
     // ★ 共享的小程序库（乙-3）：**一个部署一份**（所有人共享那一个目录）
-    this.#published = new Published({ dir: this.#cfg.dataDir });
+    this.#published = new Published({ dir: this.#cfg.dataDir, credKey: this.#credKey });
     this.#now = now;
     // ⚠️ **这一行原来漏了**（2026-09-21）：参数加了、往下传的那一行也加了，
     //    就是**没存下来** ⇒ `#onAuthFailure` 永远是 `null` ⇒ 整条链子静默断掉。
@@ -609,6 +623,8 @@ export class Worlds {
     const apps = new Apps({
       dir: t.dir,
       sub: t.userId,
+      // ★ **`A3·补`：这个人那一份审计里的身份也换凭据哈希**（键与共享库那把同一把）。
+      credKey: this.#credKey,
       reclaim: reclaimCtx,
       // ★ **`114`：活的那一份复制时要读/写工作区**（内容在工作区里，不在制品库里）。
       //   ⚠️ 与 `reclaim` 同一条理由传**函数**（惰性取）：`workspaces` 在下面才建，

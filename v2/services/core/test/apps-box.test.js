@@ -194,6 +194,8 @@ async function bootHost(t, { hostDirs, boxUds, tenants = { u1: 'hupo-a', u2: 'hu
       resolveLive: liveOfFor({ worlds, tenantOf, dialFor }),
       key: KEY,
       frameAncestors: "'self'",
+      // ★ **`A3`：URL 上不带人 ⇒ 这台测试部署"可能的人"就是这几个**
+      subsOf: () => ['owner', 'u1', 'u2'],
       now: () => NOW,
       log: () => {},
     });
@@ -304,11 +306,13 @@ test('🔴 B15-2 反例：没签名 / 签名是别人的 ⇒ 403，而且盒子*
   // ① 一个签名都不带
   const r1 = await fetch(`${host.artifactOrigin}${good.pathname}`);
   assert.equal(r1.status, 403);
-  // ② 签名是**别人**的（同一串字节换个 u）
+  // ② ★ **`A3`：改一个字 ⇒ 拒**（原来这一条是"换个 `u`"—— URL 上那个身份字段今天没了，
+  //    所以"别人"的攻击面换成"篡改签名"；域分离那两条在 `apps.test.js` 上钉着）。
   const q = new URLSearchParams(good.search);
-  q.set('u', 'u1');
+  const sig0 = q.get('s') ?? '';
+  q.set('s', `${sig0.slice(0, -1)}${sig0.endsWith('0') ? '1' : '0'}`);
   const r2 = await fetch(`${host.artifactOrigin}${good.pathname}?${q}`);
-  assert.equal(r2.status, 403, '签名绑人 —— 换成别人必须过不了');
+  assert.equal(r2.status, 403, '签名改一个字必须过不了');
   // ③ 过期
   const q2 = new URLSearchParams(good.search);
   q2.set('e', String(NOW - 1));
@@ -320,6 +324,13 @@ test('🔴 B15-2 反例：没签名 / 签名是别人的 ⇒ 403，而且盒子*
     before,
     '★ **先验签、再碰盒子**：这三条没签名的请求一次都不许去碰盒子',
   );
+
+  // ④ ★ **`A3` 的负向对照（旧攻击面已经不存在）**：往**真**URL 上挂一个"别人的身份"
+  //    （`u=u1`）也不管用 —— 认人只看签名 ⇒ 它还是 u2 的那一条，**取不到 u1 的东西**。
+  const q3 = new URLSearchParams(good.search);
+  q3.set('u', 'u1');
+  const r4 = await fetch(`${host.artifactOrigin}${good.pathname}?${q3}`);
+  assert.equal(r4.status, 200, '挂了 u=u1 也改不了"这是谁"（认人只看签名）');
 });
 
 // ════════════════════════════════════════════════════════════
@@ -547,10 +558,12 @@ test('B15-2/B15-5 制品字节也不会串：甲拿到的签名换到乙的盒�
   const r = await fetch(`${host.artifactOrigin}${u.pathname}${u.search}`);
   assert.equal(await r.text(), '<p>甲的内容</p>', '★ 甲只取得到甲盒子里那份');
 
-  // 反例：同一串签名换个 u ⇒ 过不了（绑人）
+  // ★ **`A3` 的负向对照**：旧攻击面是"同一串签名换个 `u`"——今天 URL 上**没有**身份字段了，
+  //   挂一个 `u=u2` 也改不了"这是谁"：它还是甲的那一条，**取不到乙盒子里那份**。
   const q = new URLSearchParams(u.search);
   q.set('u', 'u2');
-  assert.equal((await fetch(`${host.artifactOrigin}${u.pathname}?${q}`)).status, 403);
+  const swapped = await fetch(`${host.artifactOrigin}${u.pathname}?${q}`);
+  assert.equal(await swapped.text(), '<p>甲的内容</p>', '🔴 挂 u=u2 也拿不到乙的东西（认人只看签名）');
 });
 
 // ════════════════════════════════════════════════════════════
