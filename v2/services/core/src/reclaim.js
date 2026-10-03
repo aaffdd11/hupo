@@ -37,6 +37,11 @@ import nodePath from 'node:path';
 //    与本模块没有环；抄一份到这里就会漂（`serve.js` 清会话那一处用的是同一个）。
 import { groupSlugFor } from './prune.js';
 
+// ⚠️ **只借这一个纯函数**（带键 HMAC · `hupo-cred-v1`）。它与审计账 /
+//    共享库作者假名（`published.js` 的 `authorHashOf`）**同一个口径、同一把函数**：
+//    生产那把键 = 制品签名键。抄一份到这里就会漂 —— 判据会钉"同一个函数"。
+import { credHashOf } from './cred-hash.js';
+
 /**
  * ★ **"按房间回收"那条路上的错**（B28：一间**没有制品**的工作区怎么拿走）。
  *
@@ -56,6 +61,65 @@ export class RoomReclaimError extends Error {
  * 留痕那个文件名（**只有这一处**：写它的、扫它的、判据读的都是这一个常量）。
  */
 export const RECLAIMED_FILE = 'reclaimed.json';
+
+// ── "谁删的"那一格的口径（`D4.24 · B1`／`A3·补` 同族 · 账本 `#74`）──────
+// 🔴 原来这一格写的是**明文身份**（`by: "<sub>"`）。`sub` 是**稳定用户 id**
+//    （`owner`／`u1`／`u2`…，`users.js` 发的），可枚举；这一份又落在**用户自己那一格**里
+//    ⇒ 谁拿到它就拿到一个身份把手（`90` §5.3 点过的那一类）。
+//    ⇒ 换成 `cred-hash.js` 那套**带键 HMAC**（域 `hupo-cred-v1`，键 = 制品签名键）：
+//      同一个部署里同一个人的行仍然对得上（**稳定、能对账**），**推不回明文**。
+//      判据：换一把键 ⇒ 同一个人的值就变（带键的证明）。
+// ⚠️ **存量一个字节不改**（老记录里仍是明文）⇒ 读法是 **"读得出老值、只写新值"**：
+//    读走 `readReclaimBy`（新旧都认，**认不出一律 fail-closed**），写永远走 `reclaimByOf`。
+//     这与 `163-INDEX-AUTHOR-HASH.md` 那套**逐字同形**（`readAuthorHash` 的
+//     `'cred' | 'legacy' | null`）。
+// ⚠️ 这一格**今天没有生产读取方**：`readReclaimedSeqs` 只读 `takenSeqs`；
+//    `/api/room-remove` 把整条 record 原样回给它自己那一侧（客户端不解释 `by`）。
+//    `readReclaimBy` 是给"将来真读它的人"留下的**唯一读法**（形状照
+//    `published.js` 的 `readAuthorHash`），**不是**为了今天某个调用方。
+
+/**
+ * **旧口径（只读）**：那一格原来写的就是 `sub` 的**明文**。
+ * 🔴 **只许用来读**：写永远走 `reclaimByOf`（新口径）。
+ *
+ * @param {string|null|undefined} sub
+ * @returns {string|null} `sub` 为空 ⇒ `null`（不编一个出来）
+ */
+export function legacyReclaimBy(sub) {
+  if (sub === null || sub === undefined || sub === '') return null;
+  return String(sub);
+}
+
+/**
+ * **当前口径**：`credHashOf(sub, key)`（带键 HMAC，域 `hupo-cred-v1`）。
+ *
+ * @param {string|null|undefined} sub
+ * @param {Buffer|string|null} [key] 凭据键（生产 = 制品签名键；不给 ⇒ 退化键）
+ * @returns {string|null} 稳定假名；`sub` 为空 ⇒ `null`
+ */
+export function reclaimByOf(sub, key = null) {
+  return credHashOf(sub, key);
+}
+
+/**
+ * 读那一格：`'cred'`（当前口径）／`'legacy'`（旧口径明文）／**`null`（读不出来）**。
+ *
+ * 🔴 `null` 一律 **fail-closed**：既不是新口径写的、也不是旧口径写的 ⇒ 当
+ *    "**认不出是谁**"，**绝不许**落到"那就是某个人"。换一把键时同一个人的**新值**
+ *    也读不出来 —— 那正是"换键就换值"。
+ *
+ * @param {unknown} stored 盘上那一格（`record.by`）
+ * @param {string|null|undefined} sub 这是谁（候选）
+ * @param {Buffer|string|null} [key]
+ * @returns {'cred'|'legacy'|null}
+ */
+export function readReclaimBy(stored, sub, key = null) {
+  const s = typeof stored === 'string' ? stored : '';
+  if (s === '') return null;
+  if (s === reclaimByOf(sub, key)) return 'cred';
+  if (s === legacyReclaimBy(sub)) return 'legacy';
+  return null;
+}
 
 /**
  * 那个 scope 名字能不能当目录名。
@@ -131,6 +195,9 @@ function relocate(from, to, fs) {
  *    **不动制品库**，只搬工作区 / 那一间的对话 / 助手那边的原件 —— 留痕里
  *    `items.app` 如实写 `false`（不许把它记成"有个制品被拿走了"）。
  * @param {string} [o.sub]              谁（写进留痕的"谁删的"）
+ * @param {Buffer|string|null} [o.credKey]
+ *        写"谁删的"那把**凭据键**（`cred-hash.js`；生产 = 制品签名键）。
+ *        ⚠️ 不给 ⇒ 退化键（值仍稳定、也不是明文，但常量谁都能知道）⇒ 生产必须接真键。
  * @param {number} [o.at]               什么时候
  * @param {object} [o.fs]               注入文件系统（测试用）
  * @param {(m:string)=>void} [o.log]
@@ -146,6 +213,7 @@ export function reclaimScope({
   unread = null,
   work = null,
   sub = null,
+  credKey = null,
   hasApp = true,
   at = Date.now(),
   fs = nodeFs,
@@ -256,11 +324,12 @@ export function reclaimScope({
     }
 
     // **留痕**（N22 的唯一例外）：哪一间、被拿走的号、什么时候、谁删的
+    // ⚠️ `by` 写的是**带键 HMAC**（`reclaimByOf`），不是明文身份 —— 见本模块顶上那段。
     const record = {
       v: 1,
       scopeId: scope,
       at,
-      by: sub ?? null,
+      by: reclaimByOf(sub, credKey),
       takenSeqs: [...takenSeqs].sort((a, b) => a - b),
       items,
       unreadWas: unreadWas ?? null,

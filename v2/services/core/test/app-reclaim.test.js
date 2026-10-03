@@ -26,7 +26,7 @@ import { Apps } from '../src/apps.js';
 import { createBoxApps } from '../src/apps-box.js';
 import { Auth } from '../src/auth.js';
 import { groupSlugFor } from '../src/prune.js';
-import { RECLAIMED_FILE, readReclaimedSeqs } from '../src/reclaim.js';
+import { RECLAIMED_FILE, readReclaimBy, readReclaimedSeqs } from '../src/reclaim.js';
 import { createServer } from '../src/server.js';
 import { Store } from '../src/store.js';
 import { USAGE_KINDS } from '../src/usage.js';
@@ -321,7 +321,11 @@ test('S8 号洞**有留痕**：`reclaimed.json` 记着被拿走的号；删掉�
   assert.equal(rec.scopeId, id, '留痕要说清是哪一间');
   assert.deepEqual(rec.takenSeqs, [2, 3], '🔴 留痕要记着**被拿走的号**');
   assert.equal(typeof rec.at, 'number', '留痕要有时间');
-  assert.equal(rec.by, 'owner', '留痕要有"谁删的"');
+  // 🔴 `A3·补` 同族（账本 `#74`）：留痕里"谁删的"是**带键 HMAC**，**不是**明文身份。
+  //    ⚠️ 这一份 `Worlds` 没接键（退化键）⇒ 拿 `key=null` 读得回来是 `'cred'`。
+  assert.equal(readReclaimBy(rec.by, 'owner'), 'cred', '留痕的"谁删的"要是带键口径');
+  assert.equal(readReclaimBy(rec.by, 'u2'), null, '不许把这一条误判成别人');
+  assert.equal(String(rec.by).includes('owner'), false, '这一格不许留明文身份');
 
   const removedRoot = nodePath.join(appsRoot(h.dataDir), '.removed');
   // 正：洞在留痕里 ⇒ **过**（这是 N22 的唯一例外）

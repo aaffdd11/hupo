@@ -1656,6 +1656,9 @@ export class Apps {
           id,
           into: to,
           sub: this.sub,
+          // ★ 留痕里"谁删的"那把**凭据键**（账本 `#74`）：以 `Apps` 自己那份为准 ——
+          //   同 `sub` 那条理由（上下文里那份也许来自没接键的调用方）。
+          credKey: this.credKey,
           at,
           fs: this.fs,
           log: (m) => ctx.log?.(m),

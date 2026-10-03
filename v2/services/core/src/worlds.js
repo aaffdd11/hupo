@@ -621,6 +621,9 @@ export class Worlds {
       unread,
       work,
       sub: t.userId,
+      // ★ **`A3·补` 同族（账本 `#74`）**：留痕里"谁删的"那一格也换成**带键 HMAC**
+      //   （`reclaimByOf`；键与审计账 / 共享库那把**同一把**）—— 不是明文身份。
+      credKey: this.#credKey,
       log: (m) => this.#warn(m),
     });
     const apps = new Apps({
