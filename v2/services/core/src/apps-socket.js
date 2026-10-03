@@ -25,6 +25,7 @@ import { INSIDE_APP_NO_CREATE, NEEDS_ASK, asksToMakeApp } from './apps-consent.j
 import { NEEDS_ASK_IMAGE, asksToDrawImage } from './image.js';
 import { NEEDS_ASK_VIDEO, asksToMakeVideo } from './video.js';
 import { OutboundError, assertOutboundAllowed } from './outbound.js';
+import { EntryRunError } from './app-run.js';
 import { PublishedError, authorHashOf } from './published.js';
 import { reviewForPublish } from './review.js';
 import { handSocketToAgent } from './socket-owner.mjs';
@@ -370,12 +371,22 @@ async function runAppsOp(apps, req, ctx = {}) {
         //    而它第一件事就是过 `outbound.assertOutboundAllowed`。这里把**这一间房**递过去
         //    （申报住 `<scope>/.exp/` 与 `<scope>/.data/`）—— 少了它，出界检查就只能按默认布局找了。
         //    ⚠️ `published.publish` 里还有**外联申报（A16）**那道闸（读不到 ⇒ 拒）。
-        const r = ctx.published.publish(apps, {
-          id: req.id,
-          authorSub: ctx.sub,
-          authorName: ctx.authorName,
-          workspaces: ctx.workspace ?? null,
-        });
+        // ★ **A2 · 真跑一次（分级）拒的时候要看得见**（`D4.24`）：拒绝码与"包太大／形状没声明"
+        //    分开 —— 它说的是"**这一版真跑了一次，入口起不来**"，理由里点名哪个文件哪一行。
+        let r;
+        try {
+          r = ctx.published.publish(apps, {
+            id: req.id,
+            authorSub: ctx.sub,
+            authorName: ctx.authorName,
+            workspaces: ctx.workspace ?? null,
+          });
+        } catch (err) {
+          if (err instanceof EntryRunError) {
+            return { ok: false, refused: 'entry-would-crash', run: err.detail ?? null, error: err.message };
+          }
+          throw err;
+        }
         return { ok: true, id: r.id, version: r.version, title: r.title, verdict: rev.verdict };
       }
       case 'unpublish': {
@@ -431,6 +442,7 @@ async function runAppsOp(apps, req, ctx = {}) {
             };
           }
         }
+        const beforeInstall = apps.current(req.id);
         const r = ctx.published.installInto(apps, req.id);
         const upstreamHash = apps.manifest(req.id, r.version)?.rootHash ?? null;
         const forked = changed && mode === 'fork';
@@ -479,6 +491,23 @@ async function runAppsOp(apps, req, ctx = {}) {
         } catch {
           /* 同上：记账失败不影响制品 */
         }
+        // ★ **`D4.24` · C1／C3：这一次到底是"换字节"还是"请 AI 重写"、跟不跟** ——
+        //   判定只有一处（`app-upgrade.decideUpgrade`），这里只**记录那次决定**。
+        //   🔴 **契约版未变 ⇒ 重写计数不会涨**（判据 C1-⑤ 反着验）。
+        //   ⚠️ 没接那本账（`ctx.upgrade` 不给）⇒ 什么都不做（既有调用方一个字都不变）；
+        //      没有升级需求（新装 / 就是这一版）⇒ **一个字都不写**（不过度）。
+        let upgrade = null;
+        if (ctx.upgrade) {
+          try {
+            upgrade = ctx.upgrade.plan({
+              apps, id: r.id, fromVersion: beforeInstall, toVersion: r.version,
+            });
+          } catch (err) {
+            // ⚠️ 算不出"要不要请 AI"**不许**把这次装上弄没 —— 如实回一个 `uncomputable`，
+            //    让上层看得见（`90` §④：算不出的如实标，不许安静地绿）。
+            upgrade = { id: r.id, kind: 'uncomputable', rewrite: false, error: err?.message ?? String(err) };
+          }
+        }
         return {
           ok: true,
           id: r.id,
@@ -487,6 +516,7 @@ async function runAppsOp(apps, req, ctx = {}) {
           forked,
           current: apps.current(r.id),
           snapshot: snapshot ? { version: snapshot.version, rootHash: snapshot.rootHash } : null,
+          ...(upgrade ? { upgrade } : {}),
         };
       }
       case 'discover': {

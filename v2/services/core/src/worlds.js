@@ -44,6 +44,9 @@ import {
   leakNoticeText,
 } from './main-leak.js';
 import { Published, authorHashOf } from './published.js';
+// ★ **`D4.24` · C1／C3：升级那本账**（分级判定 ＋ 粒度默认"按用户整体跟"）。
+//   装／升级时记录那一次决定 ⇒ "契约版未变 ⇒ 重写计数 = 0" 在**真路**上也能读出来。
+import { UpgradeBook } from './app-upgrade.js';
 import { Dispatcher } from './dispatcher.js';
 import { loadReviewPolicy } from './review.js';
 import { createDshReviewAgent } from './review-agent.js';
@@ -718,6 +721,9 @@ export class Worlds {
         // ★ **`A3·补·二`**：共享库那条 `discover` 要凭据键才判得出"哪条是我发的"
         //   （存量旧口径的值也认；不给 ⇒ 退化键）。
         credKey: this.#credKey,
+        // ★ **`D4.24` · C1／C3：升级那本账**（住他那一格）—— 装／升级时记下那一次决定：
+        //   契约版变了才请 AI 重写；粒度默认**按用户整体跟**，某一个可以显式留旧版。
+        upgrade: new UpgradeBook({ dir: t.dir }),
         // ★ **服务端那一刀住在这里**（契约 §三·4）：`app_create` 由**服务端**
         //   建工作区、把产物落进去、再从工作区拷一份进制品库。
         //   模型只要把内容交给工具，**一个字都不用记得**。

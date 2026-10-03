@@ -31,6 +31,10 @@ import nodePath from 'node:path';
 
 import { AppsError } from './apps.js';
 import { assertDeclarationAllowed } from './app-outbound.js';
+// ★ **发布必须真跑过（分级）**（`D4.24` · **A2** · 2026-10-03 主人定）：
+//   只验"**能跑起来的最小判据**"（入口必崩 ⇒ 拒），**不做全量回归**。
+//   🔴 判定本体只在 `app-run.js` 一处 —— 这里只调它，把"跑过"的凭据留在登记里。
+import { EntryRunError, describeRunFailure, runEntryOnce } from './app-run.js';
 // ★ **形状声明（`D4.24` · A1 · 2026-10-03）**：那份随 fork 走、值永不随的固定名文件。
 //   🔴 **判据本体只在 `data-shape.js` 一处** —— 这里只调它，把指纹留在审计里。
 import { DATA_SHAPE_FILENAME, dataShapeDigest, packsOf, parseDataShape } from './data-shape.js';
@@ -237,6 +241,15 @@ export class Published {
       shapeAudit = { declared: true, digest: dataShapeDigest(decl), packs: packsOf(decl) };
     }
 
+    // ★ **A2 · 真跑一次（分级）**（`D4.24` · 2026-10-03 主人定）：只验"**能跑起来的最小判据**"
+    //    —— 入口那一份的脚本在最小壳里**真编译、真执行**；**入口必崩 ⇒ 拒**。
+    //    ⚠️ 顺序刻意：它在**任何一次写盘之前** —— 拒的时候共享库一个字节都不动；
+    //       而且它是**最小**判据（不跑回归、不联网、不起子进程、带硬超时），
+    //       逐条见 `app-run.js` 文件头。
+    //    ⚠️ 驳回**说清为什么**（N11）：点名哪个文件、哪一行、什么错。
+    const run = runEntryOnce({ files, entry: manifest.entry ?? mine.entry ?? 'index.html' });
+    if (!run.ok) throw new EntryRunError(describeRunFailure(run), run);
+
     const vdir = nodePath.join(this.appDir(id), 'versions', String(mine.version));
     this.fs.mkdirSync(vdir, { recursive: true, mode: 0o755 });
     for (const [rel, buf] of Object.entries(files)) {
@@ -266,6 +279,17 @@ export class Published {
       authorName: name,
       publishedAt: this.now(),
       published: true,
+      // ★ **"跑过"的凭据**（`D4.24` · A2）：登记在册、可复核 —— 这一版上架时
+      //   入口真跑过一次（跑了几段、跳过了几段、花了多久）。⚠️ 它是**如实**的读数，
+      //   不是"我们记得跑过"。判定本体仍只有一处（`app-run.runEntryOnce`）。
+      ran: {
+        ok: true,
+        entry: run.entry,
+        scripts: run.scripts,
+        executed: run.executed,
+        skipped: run.skipped,
+        ms: run.ms,
+      },
     };
     const idx = nodePath.join(this.appDir(id), 'index.json');
     const tmp = `${idx}.tmp-${process.pid}-${this.now()}`;
@@ -292,6 +316,8 @@ export class Published {
       // ★ **形状声明那一笔**（`D4.24` · A1）：这一版带没带形状、带的是哪一包、指纹是什么。
       //    ⚠️ 它是**如实的"没有"**（`declared:false`），不是"忘了写"。
       shape: shapeAudit,
+      // ★ **"真跑一次"那一笔**（`D4.24` · A2）：最小判据的读数（不是全量回归）。
+      run: { ok: run.ok, entry: run.entry, scripts: run.scripts, executed: run.executed, ms: run.ms },
     });
     return index;
   }
