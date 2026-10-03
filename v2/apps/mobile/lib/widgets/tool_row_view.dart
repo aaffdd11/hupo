@@ -30,6 +30,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/dsh_design.dart';
+import 'row_entry.dart';
 import '../models/tool_row.dart';
 import '../models/tool_row_words.dart';
 import 'dsh_look.dart';
@@ -78,14 +79,18 @@ class _ToolRowViewState extends State<ToolRowView> {
     final title = row.title;
     // ★ 2026-10-02：认得出就翻人话，认不出留空（见 `toolHumanName` 那段）。
     final humanName = toolHumanName(row.name);
-    return Padding(
-      // ★ 2026-10-01（主人："间距有问题"）：这一行是**非主要**，字缩到 11 之后
-      //   它原来那圈空当（`s4` ＋ 一个 48 高的按钮）就显得很空 ⇒ 一起收。
-      padding: const EdgeInsets.symmetric(vertical: DshChatSpace.rowPadV),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 🔴 2026-10-03（主人：*"那个右边点一下展开的箭头，行高明显占用太大了……
+        //    这个箭头要重新设计"*）：**整行可点**（`DshRowEntry`），
+        //    右边那颗箭头只当**指示**（18 的图形）—— 它不再撑 44 的行高，
+        //    行高跟着这一行文字（11 号 / 行高 14）走。
+        //    ⚠️ 命中区改按**行级**算（整行宽 × 行高 ≥ 44×44 的面积）：见 `row_entry.dart` 顶上。
+        DshRowEntry(
+          onTap: () => setState(() => _open = !_open),
+          tooltip: _open ? toolRowCollapseLabel : toolRowExpandLabel,
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
@@ -119,31 +124,17 @@ class _ToolRowViewState extends State<ToolRowView> {
                   ],
                 ),
               ),
-              // 展开入口：**真按钮**（命中区由 Material 撑着 ≥44，D3.6）。
-              IconButton(
-                onPressed: () => setState(() => _open = !_open),
-                tooltip: _open ? toolRowCollapseLabel : toolRowExpandLabel,
-                // ★ 2026-10-01：图形收小、**可点区域仍是 44**（D3.6 那条硬闸没放宽）——
-                //   原来它是一个默认 48 的按钮，把 11 号字那一行撑得很空。
-                iconSize: DshChatSpace.rowIconSize,
-                padding: EdgeInsets.zero,
-                // ⚠️ 光给 `constraints` 不够：M3 的 `IconButton` 默认还要
-                //    `MaterialTapTargetSize.padded`（48 的触控框）⇒ 那一行仍是 54。
-                //    这里显式收成"就 44"（正好卡在 D3.6 那条线上）。
-                style: IconButton.styleFrom(
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  minimumSize: const Size(44, 44),
-                  maximumSize: const Size(44, 44),
-                  padding: EdgeInsets.zero,
-                ),
-                icon: Icon(_open ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right),
+              // 展开**指示**（不再是按钮：整行才是入口 —— 见上面 `DshRowEntry`）
+              Icon(
+                _open ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+                size: DshChatSpace.rowIconSize,
                 color: p.labelTertiary,
               ),
             ],
           ),
-          if (_open) _body(look),
-        ],
-      ),
+        ),
+        if (_open) _body(look),
+      ],
     );
   }
 
@@ -227,12 +218,15 @@ class _SystemPromptViewState extends State<SystemPromptView> {
     final look = DshLook.of(context);
     final p = look.palette;
     final row = widget.row;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: DshSpace.s4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 🔴 2026-10-03：同"工具行"——整行可点、箭头只当指示（它原来是默认 48 的按钮，
+        //    把这一行撑得更高）。
+        DshRowEntry(
+          onTap: () => setState(() => _open = !_open),
+          tooltip: _open ? systemPromptCollapseLabel : systemPromptExpandLabel,
+          child: Row(
             children: [
               Icon(Icons.article_outlined, size: look.quiet.size, color: p.labelTertiary),
               const SizedBox(width: DshSpace.s8),
@@ -244,17 +238,18 @@ class _SystemPromptViewState extends State<SystemPromptView> {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              IconButton(
-                onPressed: () => setState(() => _open = !_open),
-                tooltip: _open ? systemPromptCollapseLabel : systemPromptExpandLabel,
-                icon: Icon(_open ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right),
+              // 展开**指示**（整行才是入口）
+              Icon(
+                _open ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
+                size: DshChatSpace.rowIconSize,
                 color: p.labelTertiary,
               ),
             ],
           ),
-          if (_open)
-            Padding(
-              padding: const EdgeInsets.only(top: DshSpace.s4, left: DshSpace.s4),
+        ),
+        if (_open)
+          Padding(
+            padding: const EdgeInsets.only(top: DshSpace.s4, left: DshSpace.s4),
               child: Container(
                 decoration: BoxDecoration(
                   color: p.markdownCodeBlock,
@@ -284,10 +279,9 @@ class _SystemPromptViewState extends State<SystemPromptView> {
                     ),
                   ),
                 ),
-              ),
             ),
-        ],
-      ),
+          ),
+      ],
     );
   }
 }
@@ -346,20 +340,12 @@ class TurnProcessControl extends StatelessWidget {
     final look = DshLook.of(context);
     final p = look.palette;
     final label = dshTurnProcessLabel(counts, turnProcessChatWords);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: DshChatSpace.rowPadV),
-      child: SizedBox(
-        width: double.infinity,
-        child: TextButton(
-          onPressed: onToggle,
-          style: TextButton.styleFrom(
-            // D3.6：命中区下限 44（视觉可以小，命中区不许小）
-            minimumSize: const Size(44, 44),
-            alignment: Alignment.centerLeft,
-            foregroundColor: p.labelSecondary,
-            padding: const EdgeInsets.symmetric(horizontal: DshSpace.s8),
-          ),
-          child: Row(
+    // 🔴 2026-10-03：`TextButton` → **行级入口**（整行可点、不再凑 44 行高）。
+    return SizedBox(
+      width: double.infinity,
+      child: DshRowEntry(
+        onTap: onToggle,
+        child: Row(
             children: [
               Icon(
                 expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_right,
@@ -376,7 +362,6 @@ class TurnProcessControl extends StatelessWidget {
             ],
           ),
         ),
-      ),
     );
   }
 }

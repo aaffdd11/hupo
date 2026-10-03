@@ -71,6 +71,7 @@ import 'package:hupo_app/widgets/notice.dart';
 import 'package:hupo_app/widgets/tool_row_view.dart';
 import 'package:hupo_app/widgets/wallpaper_picker.dart';
 import 'package:hupo_app/widgets/queue_strip.dart';
+import 'package:hupo_app/widgets/row_entry.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// D3.5 点名的五档。
@@ -1253,6 +1254,29 @@ Future<void> sweep(WidgetTester tester, String where) async {
   //    手柄在 Overlay 里，`EditableText` **不是它的祖先**。
   //    ⇒ 改成两条：这里只扫我们自己的按钮；再用一条源码级断言
   //      **禁止 lib 里出现裸 GestureDetector**（真加了，就必须把它加进这份扫描）。
+  // ── 行级入口（D3.6 的"行级那一档"，2026-10-03 加）──────────────────
+  // 整行可点的那种行（`DshRowEntry`）**不给 44 高** —— 那会把 11 号字那一行撑到 50
+  // （主人 2026-10-03：*"那个右边点一下展开的箭头，行高明显占用太大了"*）。
+  // 改成按**面积**算：整行宽 × 行高 ≥ 44×44（1936），而且宽度 ≥44。
+  // ⚠️ 这**不是放宽**：原来那颗 44×44 的箭头是 1936 px²，而一行通常 300×20 = 6000
+  //    —— 手指要够的地方从"一颗小图标"变成**整行**（理由写在 `row_entry.dart` 顶上）。
+  // ⚠️ 这一条**扫到 0 行不算红**（这一屏可能本来就没有这种行）；
+  //    "一行都扫不到 ⇒ 空转"由 D3.6 那一组的专用用例盯着（它用**有工具行的**夹具）。
+  for (final e in [for (final e in find.byType(DshRowEntry).evaluate()) e.widget]) {
+    final w = find.byWidget(e);
+    if (w.evaluate().isEmpty) {
+      recycled += 1;
+      continue;
+    }
+    final r = tester.getSize(w);
+    checked += 1;
+    expect(
+      r.width >= minTouch && r.width * r.height >= minTouch * minTouch,
+      isTrue,
+      reason: '$where：行级入口是 ${r.width}×${r.height} —— 要"宽 ≥$minTouch 且面积 ≥ ${minTouch * minTouch}"',
+    );
+  }
+
   // 负向对照：一个都没扫到 ⇒ 这条闸是空转的
   expect(checked, greaterThan(0), reason: '$where：一个能点的都没扫到');
   // ⚠️ 被回收的格子数如实报出来（0 = 整屏都量到了）。见 `recycled` 那段说明。
@@ -1598,6 +1622,46 @@ void main() {
       testWidgets('空屏 @ ${s}x', (tester) async {
         await _pump(tester, ChatScreen(initialTier: FloaterTier.full, controller: _controller(), onLoggedOut: () {}), s);
         expect(_drain(tester), isEmpty, reason: '空屏在 ${s}x 溢出了');
+      });
+
+      testWidgets('行级入口：整行可点 + 面积 ≥ 44×44（D3.6 行级那一档）@ ${s}x', (tester) async {
+        // 🔴 2026-10-03 新加的**那一档**：整行可点的那种行（工具行 / 系统提示词行 /
+        //    轮次过程 / 排队抬头）**不再凑 44 的行高**，改成"整行都是命中区"。
+        //    这条用例钉三件：① 真的扫到（不是空转）；② 面积够、宽够；
+        //    ③ **行高 < 44** —— 那正是这次重设计的目的，谁把它改回去就该红。
+        //    ⚠️ 夹具用 `_filePanelFeed()`：它里面有**三条工具调用**（每一行一个入口）。
+        final c = _filePanelFeed();
+        await _pump(
+          tester,
+          ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}),
+          s,
+        );
+        final entries = find.byType(DshRowEntry);
+        expect(entries, findsWidgets, reason: '★ 一行都没扫到 ⇒ 这条判据是空转的');
+        for (final e in [for (final e in entries.evaluate()) e.widget]) {
+          final r = tester.getSize(find.byWidget(e));
+          expect(r.width >= minTouch, isTrue, reason: '行级入口的宽只有 ${r.width}');
+          expect(
+            r.width * r.height >= minTouch * minTouch,
+            isTrue,
+            reason: '行级入口的面积只有 ${r.width}×${r.height}（要 ≥ ${minTouch * minTouch}）',
+          );
+        }
+        final row = tester.getRect(entries.first);
+        // ⚠️ 只在 1.0x 上钉这一条：3.1x 下**文字自己**的行高就超过 44 了，
+        //    那时候这一行本来就该高（容器跟字算，D3.5）—— 不是被按钮撑的。
+        if (s == 1.0) {
+          expect(row.height < minTouch, isTrue,
+              reason: '行级入口又被撑到 ${row.height} 高了（这次就是要它跟着文字走）');
+        }
+        // 点**行里最左边**那一段（不是右边那颗箭头）也要展开 —— 这就是"整行可点"。
+        await tester.tapAt(Offset(row.left + 4, row.center.dy));
+        await tester.pumpAndSettle();
+        expect(
+          find.byIcon(Icons.keyboard_arrow_down),
+          findsWidgets,
+          reason: '★ 点行的左边也该展开（整行才是入口）',
+        );
       });
 
       testWidgets('我的小程序·空房间（从真入口进）@ ${s}x', (tester) async {

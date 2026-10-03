@@ -36,6 +36,7 @@ import '../models/chat_queue.dart';
 import '../models/dsh_design.dart';
 import '../models/queue_words.dart';
 import 'dsh_look.dart';
+import 'row_entry.dart';
 
 /// 判据用的键：那条横条本体 / 两条以上时那个抬头。
 const Key queueStripKey = Key('queue-strip');
@@ -108,18 +109,15 @@ class _QueueStripState extends State<QueueStrip> {
   /// 两条以上时那个抬头（点它展开 / 收起）。
   Widget _header(DshLook look, int count) {
     final p = look.palette;
+    // 🔴 2026-10-03（主人：*"那个右边点一下展开的箭头，行高明显占用太大了……
+    //    这个箭头要重新设计"*）：`TextButton` → **行级入口**（整行可点）；
+    //    左右那两颗箭头只当**指示** ⇒ 行高跟着那一行字走，不再凑 44。
+    //    命中区按**行级**算（整行宽 × 行高 ≥ 44×44），见 `row_entry.dart` 顶上。
     return SizedBox(
       width: double.infinity,
-      child: TextButton(
+      child: DshRowEntry(
         key: queueHeaderKey,
-        onPressed: () => setState(() => _expanded = !_expanded),
-        // D3.6：命中区下限 44（视觉可以小，命中区不许小）
-        style: TextButton.styleFrom(
-          minimumSize: const Size(44, 44),
-          alignment: Alignment.centerLeft,
-          foregroundColor: p.labelSecondary,
-          padding: const EdgeInsets.symmetric(horizontal: DshSpace.s8),
-        ),
+        onTap: () => setState(() => _expanded = !_expanded),
         child: Row(
           children: [
             Icon(
@@ -137,10 +135,9 @@ class _QueueStripState extends State<QueueStrip> {
               ),
             ),
             // 抬头那一颗也带一句读屏/悬停的话（它是"点开会发生什么"）。
-            Tooltip(
-              message: _expanded ? queueCollapseLabel : queueExpandLabel,
-              child: Icon(Icons.expand_more, size: look.quiet.size, color: p.labelTertiary),
-            ),
+            // ⚠️ 它只是**指示**（整行才是入口）⇒ 不再单独挂 Tooltip（那会把这一格
+            //    变成一个"有名字的小方块"）；那句话挂在整行的 `DshRowEntry` 上。
+            Icon(Icons.expand_more, size: look.quiet.size, color: p.labelTertiary),
           ],
         ),
       ),

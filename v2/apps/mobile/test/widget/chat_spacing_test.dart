@@ -28,6 +28,7 @@ import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/bubbles.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/widgets/tool_row_view.dart';
+import 'package:hupo_app/widgets/row_entry.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 ChatController _controller() => ChatController(
@@ -112,22 +113,27 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // ★ 那一行的高度：原来行里那颗按钮是默认 48 ⇒ 56+；现在 ≤50
+    // 🔴 2026-10-03（主人：*"那个右边点一下展开的箭头，行高明显占用太大了……
+    //    这个箭头要重新设计"*）：这一行改成**整行可点**（`DshRowEntry`），
+    //    右边那颗箭头只当指示 ⇒ 行高**跟着文字走**（原来那颗 44×44 的按钮把它撑到 50）。
     final row = tester.getRect(find.byType(ToolRowView).first);
-    expect(row.height, lessThanOrEqualTo(50),
-        reason: '★ 工具行还是被那颗按钮撑着（实测 ${row.height}）');
-    // 而**可点区域**照旧 ≥44（D3.6；这一条在 a11y 硬闸里也有一份）
-    final btn = tester.getRect(
-      find.descendant(of: find.byType(ToolRowView).first, matching: find.byType(IconButton)).first,
+    expect(row.height, lessThanOrEqualTo(50), reason: '★ 工具行还是被撑高了（实测 ${row.height}）');
+    expect(row.height, lessThan(44), reason: '★ 这一版就是要它跟着文字走（实测 ${row.height}）');
+    // 而**命中区**照旧够：整行都是入口 ⇒ 按**面积**算（D3.6 行级那一档）
+    final entry = tester.getRect(
+      find.descendant(of: find.byType(ToolRowView).first, matching: find.byType(DshRowEntry)).first,
     );
-    expect(btn.height, greaterThanOrEqualTo(44), reason: '★ 命中区被收小了 —— D3.6 不许');
-    expect(btn.width, greaterThanOrEqualTo(44), reason: '★ 同上');
-    // 图形本身是收小的（18，不是默认 24）—— ⚠️ `Icon.size` 是 null（它走 IconTheme），
-    // 所以量的是**那颗按钮声明的大小**。
-    final expandBtn = tester.widget<IconButton>(
-      find.descendant(of: find.byType(ToolRowView).first, matching: find.byType(IconButton)).first,
+    expect(entry.width, greaterThanOrEqualTo(44), reason: '行级入口的宽只有 ${entry.width}');
+    expect(
+      entry.width * entry.height,
+      greaterThanOrEqualTo(44 * 44),
+      reason: '行级入口的面积只有 ${entry.width}×${entry.height}（要 ≥ 1936）',
     );
-    expect(expandBtn.iconSize, DshChatSpace.rowIconSize);
+    // 点**行的左边**（不是箭头那一格）也要能展开 —— 整行才是入口
+    await tester.tapAt(Offset(entry.left + 4, entry.center.dy));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.keyboard_arrow_down), findsWidgets,
+        reason: '★ 点行左边也该展开（整行可点）');
   });
 
   testWidgets('🔴 标题行右边那颗「收起」：图形 18，可点区域仍 ≥44', (tester) async {
