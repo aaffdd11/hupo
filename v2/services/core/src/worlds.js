@@ -715,6 +715,9 @@ export class Worlds {
       ctx: {
         published: this.#published,
         sub: t.userId,
+        // ★ **`A3·补·二`**：共享库那条 `discover` 要凭据键才判得出"哪条是我发的"
+        //   （存量旧口径的值也认；不给 ⇒ 退化键）。
+        credKey: this.#credKey,
         // ★ **服务端那一刀住在这里**（契约 §三·4）：`app_create` 由**服务端**
         //   建工作区、把产物落进去、再从工作区拷一份进制品库。
         //   模型只要把内容交给工具，**一个字都不用记得**。
@@ -729,8 +732,10 @@ export class Worlds {
             this.#warn(`  ⚠️ ${t.userId} 的"造了一个"没记上：${err?.message ?? err}`);
           }
         },
-        // ⚠️ 对外显示的名字**按哈希生成**：手机号那种东西**绝不进共享库**
-        authorName: `用户 ${authorHashOf(t.userId).slice(0, 4)}`,
+        // ⚠️ 对外显示的名字**按假名生成**：手机号那种东西**绝不进共享库**。
+        //   ★ `A3·补·二`：这一格以前拿的是**裸 sha256 前 4 位**（可枚举反推）⇒
+        //     现在与 `index.json` 的 `authorHash` **同一把键、同一个域**（`credHashOf`）。
+        authorName: `用户 ${authorHashOf(t.userId, this.#credKey).slice(0, 4)}`,
         // ★ **他明说才许写**（P1-22）：造东西那条闸要"当轮他自己说的那句话"。
         //   取的是**服务端记的**那一份（`dispatcher.turnInput`）；
         //   还没建好（`null`）⇒ 当作"没有明说"（那正是**开机那几秒**该有的保守行为）。

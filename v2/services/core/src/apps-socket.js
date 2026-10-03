@@ -57,6 +57,8 @@ const MAX_LINE_BYTES = 8 * 1024 * 1024;
  * @param {object} [ctx]  共享库与"这是谁"（发布/装上要它们）
  *   · `published`  共享库（`Published`）
  *   · `sub`        这是谁（**身份只从这里来**，绝不从请求里读）
+ *   · `credKey`    ★ 凭据键（`cred-hash.js`）：共享库那条 `discover` 判"哪条是我发的"
+ *     要它。不给 ⇒ 退化键（值仍稳定，但**存量旧口径的值也读得出** —— 见 `readAuthorHash`）。
  *   · `authorName` 他对外显示的名字（默认按哈希生成，**绝不显示手机号**）
  *   · `onInstalled(info)` 装上了 ⇒ 让他的桌面自己刷新（外面往流里推一条）
  *   · `turnInput()` **这一轮他自己说的那句话**（P1-22：造东西那条闸要看它）。
@@ -484,7 +486,13 @@ async function runAppsOp(apps, req, ctx = {}) {
       }
       case 'discover': {
         if (!ctx.published) return { ok: false, error: '这台部署还没开共享库' };
-        return { ok: true, apps: ctx.published.discover(), me: authorHashOf(ctx.sub ?? '') };
+        return {
+          ok: true,
+          // ★ `A3·补·二`：把"这是谁"交给共享库去判 `mine`（新旧口径都认）——
+          //   拿哈希直接比会在**存量旧值**上把他自己发的那条误判成"别人发的"。
+          apps: ctx.published.discover({ sub: ctx.sub ?? null, key: ctx.credKey ?? null }),
+          me: authorHashOf(ctx.sub ?? '', ctx.credKey ?? null),
+        };
       }
       case 'uninstall': {
         // ★ **卸载**（乙-4）：🔴 **真回收**（决策 D3.11，契约 `docs/dev/103-APP-DELETE.md` §七）——

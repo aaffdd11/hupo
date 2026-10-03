@@ -402,7 +402,11 @@ async function callTool(name, args) {
   if (name === 'app_discover') {
     const r = await ask({ op: 'discover' });
     if (!r.ok) return textResult(`这一侧没答上来：${r.error}`, true);
-    const fromOthers = (Array.isArray(r.apps) ? r.apps : []).filter((a) => a.authorHash !== r.me);
+    // ★ `A3·补·二`：服务端已按"这是谁"判好了 `mine`（**新旧口径都认** —— 存量旧值
+    //   也算"我的"）⇒ 优先用它；老服务端没给这一格时才退回拿哈希直接比。
+    const fromOthers = (Array.isArray(r.apps) ? r.apps : []).filter((a) => (
+      typeof a.mine === 'boolean' ? a.mine === false : a.authorHash !== r.me
+    ));
     if (fromOthers.length === 0) return textResult('现在还没有别人发出来的小程序。');
     const lines = fromOthers.map((a) => `· ${a.title}（${a.id}，第 ${a.version} 版，${a.author} 发的）`);
     return textResult(`别人发出来的有这些：\n${lines.join('\n')}`);

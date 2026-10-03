@@ -7,8 +7,19 @@
 //      ⇒ 制品口那条路**一行都不用改**（它只从"你自己那一格"里读），
 //        而且"别人下架"不会让装过的人忽然打不开。
 //
-// ⚠️ **共享库里不存作者的身份**，只存 `authorHash = sha256(sub)` 的前 12 位：
-//    下架时比对哈希就够，**原始身份不进这个所有人共享的目录**。
+// ⚠️ **共享库里不存作者的身份**，只存 `authorHash`：
+//    下架时比对这个假名就够，**原始身份不进这个所有人共享的目录**。
+//
+// 🔴 **`A3·补·二`（D4.24 · B1 · 2026-10-03）**：这一格原来是 **`sha256(sub)` 的前 12 位**
+//    —— 那是**裸 sha256 截断**，而 `sub` 是可枚举的（`u1`/`u2`…）⇒ **能穷举反推**
+//    ⇒ 与 B1「真身份不给」冲突（账本 `#73`）。现在换成 `cred-hash.js` 那套
+//    **带键 HMAC**（同一把键、同一个域 `hupo-cred-v1`）。
+//
+// 🔴 但这一格**承重**（`publish` 的重名判 · `unpublish` 的"这一条不是你发的" ·
+//    `discover` 的"哪条是我发的"），而**存量 `index.json`（真机上的
+//    `published-apps/coin`）写的是旧口径** ⇒ 改法必须是
+//    **"读得出老值、只写新值"**：读走 `readAuthorHash`（新旧都认，
+//    认不出一律 fail-closed），写永远走 `authorHashOf`（新口径）。
 //
 // ⚠️ **id 是全局唯一的**（谁先发布谁占住）：重名直接拒，并说清"这个名字被别人用了"。
 //    理由：客户端桌面上那个图标按 id 认人，两个不同的人各发一个 `dice`
@@ -38,9 +49,46 @@ export class PublishedError extends Error {
   }
 }
 
-/** 作者身份的哈希（只进共享库的那一半）。 */
-export function authorHashOf(sub) {
+/**
+ * 作者假名的**当前口径**：`cred-hash.js` 那把**带键 HMAC**（域 `hupo-cred-v1`）。
+ *
+ * 🔴 与审计账（`apps.js#audit` · `published.js#installInto`）**同一个函数同一把键** ——
+ *    "署名"与"审计里的身份"不许两处各推一个（两处一定会漂）。
+ *
+ * @param {string} sub 身份（`owner` / `u1` / …）
+ * @param {Buffer|string|null} [key] 凭据键（生产 = `appsSignKey`；不给 ⇒ 退化键，见 `cred-hash.js`）
+ */
+export function authorHashOf(sub, key = null) {
+  return credHashOf(sub, key);
+}
+
+/**
+ * ⚠️ **旧口径（只读）**：`sha256(sub)` 的前 12 位。
+ *
+ * 存量共享库里在架的那些 `index.json` 写的**就是它**（真机上的
+ * `published-apps/coin`：`4c1029697ee3` = `sha256("owner")[:12]`）——
+ * 不许把它当"不存在"。🔴 **只许用来读**：写永远走 `authorHashOf`（新口径）。
+ */
+export function legacyAuthorHashOf(sub) {
   return nodeCrypto.createHash('sha256').update(String(sub)).digest('hex').slice(0, 12);
+}
+
+/**
+ * **读**一个存量 `authorHash`（"读得出老值、只写新值"的唯一入口）。
+ *
+ * @param {unknown} stored `index.json` 里那一格
+ * @param {string} sub 这是谁
+ * @param {Buffer|string|null} [key] 凭据键
+ * @returns {'cred'|'legacy'|null} `null` ⇒ **读不出来**。调用方一律 **fail-closed**
+ *   （当成"不是他写的"），**绝不许**落到"那就是别人"；键不对时同一个人的新值
+ *   也读不出来 —— 那正是"换键就换值"。
+ */
+export function readAuthorHash(stored, sub, key = null) {
+  const s = typeof stored === 'string' ? stored : '';
+  if (s === '') return null;
+  if (s === authorHashOf(sub, key)) return 'cred';
+  if (s === legacyAuthorHashOf(sub)) return 'legacy';
+  return null;
 }
 
 export class Published {
@@ -129,9 +177,12 @@ export class Published {
     // 🔴 **出界的唯一裁决**（92 §③ 阶段 2）：无锚的 `share:true` ⇒ 拒。
     //    顺序刻意：它在**重名判、复制、写 index 之前** —— 拒的时候共享库一个字节都不动。
     const adj = assertOutboundAllowed({ route: 'publish', apps, workspaces, id, version: mine.version });
-    const authorHash = authorHashOf(authorSub);
+    const authorHash = authorHashOf(authorSub, this.credKey);
     const prev = this.index(id);
-    if (prev && prev.authorHash !== authorHash) {
+    // 🔴 **读得出老值**（`A3·补·二`）：存量那条 index.json 写的是旧口径
+    //    ⇒ 认得出的照旧"拦住别人、放行本人"；**认不出**（含键换过）⇒ 当"别人的"
+    //    （fail-closed：绝不把一个读不出来的值算成"那就是他"）。
+    if (prev && readAuthorHash(prev.authorHash, authorSub, this.credKey) === null) {
       throw new PublishedError('这个名字已经被别人用了，换一个短名再发');
     }
     const name = String(authorName ?? '').trim().slice(0, MAX_AUTHOR_CHARS) || '一位用户';
@@ -222,18 +273,32 @@ export class Published {
   unpublish(id, authorSub) {
     const prev = this.index(id);
     if (!prev) throw new PublishedError('这一条不在共享库里');
-    if (prev.authorHash !== authorHashOf(authorSub)) throw new PublishedError('这一条不是你发的');
+    // 🔴 **读得出老值**：存量那条写的是旧口径（裸 sha256 前 12 位）⇒ 本人照旧撤得下来。
+    //    读不出来 ⇒ fail-closed（"这一条不是你发的"），**不是**"那就是别人"。
+    if (readAuthorHash(prev.authorHash, authorSub, this.credKey) === null) {
+      throw new PublishedError('这一条不是你发的');
+    }
     const next = { ...prev, published: false, unpublishedAt: this.now() };
     const idx = nodePath.join(this.appDir(id), 'index.json');
     const tmp = `${idx}.tmp-${process.pid}-${this.now()}`;
     this.fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o644 });
     this.fs.renameSync(tmp, idx);
-    this.#audit({ what: 'unpublish', id, authorHash: authorHashOf(authorSub) });
+    this.#audit({ what: 'unpublish', id, authorHash: authorHashOf(authorSub, this.credKey) });
     return next;
   }
 
-  /** **发现**：所有人看得到的那一份清单（只列上架的）。坏索引跳过那一条。 */
-  discover() {
+  /**
+   * **发现**：所有人看得到的那一份清单（只列上架的）。坏索引跳过那一条。
+   *
+   * ★ **`A3·补·二`**：多收一个可选的"这是谁"（`sub` ＋ `key`）——
+   *   给了就**顺带判出 `mine`**（哪几条是他自己发的）。判据必须走
+   *   `readAuthorHash`（新旧口径都认）**而不是**拿两个哈希直接比：
+   *   存量那条写的是旧口径 ⇒ 直接比会把他自己发的那条**误判成"别人发的"**
+   *   （`mcp-apps-server.mjs` 的 `app_discover` 就是照 `mine` 分的）。
+   *
+   * @param {{sub?:string|null, key?:Buffer|string|null}} [o]
+   */
+  discover({ sub = null, key = null } = {}) {
     let ids = [];
     try {
       ids = this.fs.readdirSync(this.root, { withFileTypes: true })
@@ -242,21 +307,26 @@ export class Published {
     } catch {
       return [];
     }
+    const wantMine = sub !== null && sub !== undefined && sub !== '';
     const out = [];
     for (const id of ids.sort()) {
       const j = this.index(id);
       if (!j || j.published !== true) continue;
-      out.push({
+      const row = {
         id: j.id,
         title: j.title,
         icon: j.icon,
         version: j.version,
         author: j.authorName,
-        // ⚠️ 它是**哈希**（12 位），不是身份：只用来分辨"这条是不是我自己发的"
+        // ⚠️ 它是**假名**（新口径 = 带键 HMAC；存量可能是旧口径），不是身份：
+        //    只用来分辨"这条是不是我自己发的"
         authorHash: j.authorHash,
         permissions: [...(j.permissions ?? [])],
         publishedAt: j.publishedAt,
-      });
+      };
+      // 只有给了"这是谁"才多这一格（不给 ⇒ 形状与以前一字不差）
+      if (wantMine) row.mine = readAuthorHash(j.authorHash, sub, key) !== null;
+      out.push(row);
     }
     return out;
   }

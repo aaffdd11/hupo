@@ -81,8 +81,10 @@ const str = (v) => (typeof v === 'string' ? v.trim() : v === null || v === undef
  * **人格 key**：由"这是谁"推出来，**不是手机号**。
  *
  * 🔴 直接复用 `published.authorHashOf` —— 共享库的作者署名用的就是它
- *    （`worlds.js` 里 `用户 ${authorHashOf(userId).slice(0,4)}`）。
+ *    （`worlds.js` 里 `用户 ${authorHashOf(userId, 键).slice(0,4)}`）。
  *    自己再写一个哈希就是"同一个东西两处实现"，两边一定会漂。
+ * ⚠️ `A3·补·二` 之后这个函数**也**是带键 HMAC 口径（生产那把键在共享库/审计那两处接的；
+ *    这一处今天没人接线 ⇒ `cred-hash.js` 的退化键，值仍稳定）。
  */
 export function personaKeyOf(owner) {
   return authorHashOf(owner);
