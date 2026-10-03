@@ -324,6 +324,11 @@ async function runAppsOp(apps, req, ctx = {}) {
               });
             }
           } catch (err) {
+            // ★ **形状声明那道闸**（`D4.24` · A1）拒的时候要**看得见**：它说的不是"包太大"，
+            //   而是"这一格数据没有形状声明"—— 拒绝码分开，别让它混在"打不出来"里（N11）。
+            if (err?.name === 'DataShapeError') {
+              return { ok: false, refused: 'shape-not-declared', error: `这一版还发不了：${err.message}` };
+            }
             return {
               ok: false,
               refused: 'package-too-big',

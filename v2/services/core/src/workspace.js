@@ -26,6 +26,14 @@ import nodePath from 'node:path';
 
 import { checkLiveRel, liveRelOk } from './app-live.js';
 import {
+  DATA_SHAPE_FILENAME,
+  assertShapeDeclared,
+  dataNamespacesOnDisk,
+} from './data-shape.js';
+// ★ **形状声明（`D4.24` · A1）那道"打包侧"的闸**：数据那一格的**目录名只从 `outbound.js` 取**
+//   （那里是唯一写这个名字的地方 —— 这里不许再抄一遍）。
+import { DATA_DIRNAME } from './outbound.js';
+import {
   AppsError,
   MAX_ID_CHARS,
   MAX_VERSIONS,
@@ -612,6 +620,16 @@ export function snapshotWorkspace({
   if (!apps) throw new AppsError('apps 必填（快照要落进制品库）');
   if (!workspaces) throw new AppsError('workspaces 必填（快照从工作区读）');
   const ws = workspaces.read(id);
+  // 🔴 **形状声明那道最严的闸**（`D4.24` · A1 第 4 点 · 判据⑤）：
+  //    盘上那几格数据（`<scope>/.data/<pack>/`）**每一格都要在这一版里有形状声明**；
+  //    没有 ⇒ **拒**（人话 + 点名哪一格），**不是**安静地跳过那格字节。
+  //    ⚠️ 位置刻意：它在 `apps.create` **之前** ⇒ 拒的时候制品库里**一个版本目录都还没建**
+  //       （盘上零残留）；而"值永不随"是结构性的（`workspaces.read()` 本来就跳过 `.` 开头）。
+  //    ⚠️ 两格都不在盘上 ⇒ 不拦（他给自己做的 app 照旧打包得住）。
+  const shape = assertShapeDeclared({
+    packs: dataNamespacesOnDisk({ scopeDir: workspaces.dirFor(id), cell: DATA_DIRNAME }),
+    declarationBytes: ws.files[DATA_SHAPE_FILENAME] ?? null,
+  });
   const m = apps.create({
     id,
     title: title ?? ws.manifest?.title ?? id,
@@ -622,7 +640,7 @@ export function snapshotWorkspace({
     createdBy,
     createdTurn,
   });
-  return { manifest: m, workspace: ws.dir, files: Object.keys(ws.files).sort() };
+  return { manifest: m, workspace: ws.dir, files: Object.keys(ws.files).sort(), shape };
 }
 
 /**

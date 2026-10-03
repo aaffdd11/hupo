@@ -31,6 +31,9 @@ import nodePath from 'node:path';
 
 import { AppsError } from './apps.js';
 import { assertDeclarationAllowed } from './app-outbound.js';
+// ★ **形状声明（`D4.24` · A1 · 2026-10-03）**：那份随 fork 走、值永不随的固定名文件。
+//   🔴 **判据本体只在 `data-shape.js` 一处** —— 这里只调它，把指纹留在审计里。
+import { DATA_SHAPE_FILENAME, dataShapeDigest, packsOf, parseDataShape } from './data-shape.js';
 // ★ **`A3·补`（D4.24 · 2026-10-03）：共享库审计里的 `by:<sub>` 换成凭据哈希**
 //   （这是"越界风险 ＋ 同装共现那条决定的前提"要修的那一处，见 `90` §9.2·1）。
 import { credHashOf } from './cred-hash.js';
@@ -224,6 +227,16 @@ export class Published {
     //       在**任何一次写盘之前** —— 拒的时候共享库一个字节都不动。
     assertDeclarationAllowed({ files, version: mine.version });
 
+    // ★ **形状声明（`D4.24` · A1）**：它随 `rootHash` 冻结、随 fork 走 —— 上架这一刀
+    //    再核一遍（**同一个 `parseDataShape`，不是第二处规则**），并把它的指纹留在审计里。
+    //    ⚠️ 文件不在 ⇒ 如实记 `declared:false`（"这一版没有形状声明"），**不许编一个空形状**。
+    //    ⚠️ 文件在而认不出／想塞值 ⇒ **拒**（fail-closed，在写盘之前 —— 共享库一个字节都不动）。
+    let shapeAudit = { declared: false, digest: null, packs: [] };
+    if (Object.prototype.hasOwnProperty.call(files, DATA_SHAPE_FILENAME)) {
+      const decl = parseDataShape(files[DATA_SHAPE_FILENAME]);
+      shapeAudit = { declared: true, digest: dataShapeDigest(decl), packs: packsOf(decl) };
+    }
+
     const vdir = nodePath.join(this.appDir(id), 'versions', String(mine.version));
     this.fs.mkdirSync(vdir, { recursive: true, mode: 0o755 });
     for (const [rel, buf] of Object.entries(files)) {
@@ -276,6 +289,9 @@ export class Published {
         share: adj.share.length,
         digest: seal.digest,
       },
+      // ★ **形状声明那一笔**（`D4.24` · A1）：这一版带没带形状、带的是哪一包、指纹是什么。
+      //    ⚠️ 它是**如实的"没有"**（`declared:false`），不是"忘了写"。
+      shape: shapeAudit,
     });
     return index;
   }

@@ -32,6 +32,9 @@ import {
 import { checkTaskList, nextTaskState } from './app-tasks.js';
 // ★ **`A3·补`（D4.24 · 2026-10-03）：审计里的身份换凭据哈希**（推不回明文，见那个文件卷首）。
 import { credHashOf } from './cred-hash.js';
+// ★ **形状声明（`D4.24` · A1 · 2026-10-03）**：那份随 fork 走、值永不随的固定名文件。
+//   🔴 **规则本体只在 `data-shape.js` 一处**：这里只用它的两个名字（文件名 / 那道判据）。
+import { DATA_SHAPE_FILENAME, parseDataShape, readDataShape } from './data-shape.js';
 import { reclaimScope } from './reclaim.js';
 import nodeCrypto from 'node:crypto';
 import nodeFs from 'node:fs';
@@ -800,6 +803,25 @@ export class Apps {
   }
 
   /**
+   * ★ **这一版带的那份形状声明**（`D4.24` · A1 · 2026-10-03）。
+   *
+   * 它与上面 `shapeVersion()` **不是一回事**（91 §8.1「三个号互不代管」）：
+   *   · `shapeVersion()` = **能力体那一族的号**（`manifest.schema`）；
+   *   · 这一个 = **数据那一族的号**（`data-shape.json` 里每个包自己的内容地址）。
+   *
+   * 🔴 **读它 = 读制品里的字节**（`apps.read` 会逐字节核 `sha256`）⇒ 它**随版本冻结**：
+   *    改一个键名／类型／空值口径／去重键 ⇒ 那一包 `shapeVersion` 必变；
+   *    而"只改数据的值"动的是**另一格**（`.data/` 里的字节）⇒ 这份文件逐字不动。
+   * ⚠️ **读不到 ⇒ `{declared:false}`**（如实的"没有声明"）；**文件在而认不出 ⇒ 抛**（fail-closed）。
+   *
+   * @returns {{declared:boolean, decl:object|null, digest:string|null, version:number}}
+   */
+  dataShape(id, version = null) {
+    checkAppId(id);
+    return readDataShape({ apps: this, id, version });
+  }
+
+  /**
    * **我的清单**：每个 app 的那张脸（坏的就跳过那一个，不许整个清单炸）。
    *
    * ★ `114`：**活的那一份（只要有 `app.json`）也在里面** —— 他自己造的小程序
@@ -895,6 +917,12 @@ export class Apps {
       refuseHiddenRelPath(rel);
       const raw = files[rel];
       const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw), 'utf8');
+      // 🔴 **形状声明（`D4.24` A1）那道闸就在它的汇合点**（与 `refuseHiddenRelPath` 同一处位置）。
+      //    `data-shape.json` 是制品里那份**固定名文件**（随 `rootHash` 冻结、随 fork 走）——
+      //    它只许写形状、**值一个字节都不许进来**；认不出 ⇒ 拒。
+      //    ⚠️ 位置刻意：它跑在**动盘之前**（四条硬规矩②）⇒ 拒的时候**盘上零残留**；
+      //       规则本体只在 `data-shape.js` 一处，这里**只调它**（判据 S4b 的变异会核这一下真的承重）。
+      if (rel === DATA_SHAPE_FILENAME) parseDataShape(buf);
       if (buf.length === 0) throw new AppsError(`制品里有空文件：${rel}`);
       if (buf.length > MAX_FILE_BYTES) throw new AppsError(`单个文件太大：${rel}`);
       total += buf.length;
