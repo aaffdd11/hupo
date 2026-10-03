@@ -90,6 +90,32 @@ export class DataShapeError extends Error {
   }
 }
 
+/**
+ * **包名的形状**（`D4.24` · **D1** · 唯一出处）：`91` §3.3.5「包名走与 app id 同一条形状」。
+ *
+ * 🔴 为什么把它拎出来当函数：命名空间那道闸（`data-namespace.js`）要判"哪个包"，
+ *    而**包名的形状只许有一处** —— 它 `import` 这一个，**不许**另抄一个正则
+ *    （正则与上限就在上面那两个常量里，判据 S5 会扫源码核这一条）。
+ *
+ * ⚠️ 认不出 ⇒ **抛**（人话，N11），**不返回 null**：调用它的都是"要动手"的路，
+ *    猜一个名字出去比拒绝更坏。
+ *
+ * @param {unknown} raw
+ * @returns {string} 校验过的包名
+ */
+export function checkPackName(raw) {
+  const pack = typeof raw === 'string' ? raw.trim() : '';
+  if (pack === '') {
+    throw new DataShapeError('数据包没写名字（pack）—— 说不清是哪一格，不认');
+  }
+  if (pack.length > MAX_PACK_NAME_CHARS || !PACK_NAME_RE.test(pack)) {
+    throw new DataShapeError(
+      `包名不合形状（${String(raw).slice(0, 40)}）—— 只许小写字母、数字、短横`,
+    );
+  }
+  return pack;
+}
+
 function isPlainObject(v) {
   return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 }
