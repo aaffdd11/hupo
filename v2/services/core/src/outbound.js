@@ -23,6 +23,15 @@
 //      判据 S3-5（`test/outbound-defaults.test.js`）用源码扫描把这句话钉死：
 //      往那三个文件里塞一行读 `.exp/x/pack.json` ⇒ 当场红。
 //
+// ── 阶段 6 把"出界那一刻"变成**常驻断言**（92 §③ 阶段 6）──────
+// 阶段 1 那条真机闸（`scripts/check-scope-boundary.sh --live`）能绿，靠的是**机制**：
+// `.data/`／`.exp/` 的字节**根本不进** `manifest.files` ⇒ 上架那一刻**没有任何断言**在核。
+// 阶段 6 要的正是那一条：**准备出界的字节，必须与那一版清单逐条对得上** ——
+// 见下面的 `assertOutboundBytes()`，它是**发布路径自带**的（不是闸脚本里的技巧）。
+// 🔴 **它压的是"声明 ↔ 字节"，不是内容正则**：多了什么／少了什么／有没有 `.` 开头的段／
+//    字节与声明的 sha 是否一致 —— 一条内容黑名单（`sk-` 那种）既会误伤正经内容，
+//    又永远追不上"下一个没想到的形态"。**结构上对得上 ⇒ 那些字节出不去。**
+//
 // ── 这条独木桥架在哪 ──────────────────────────────────────
 // 往共享库／发现页出去，全仓**只有一个写入者**：`published.js` 的 `publish()`。
 // 它的第一件事（在**碰任何盘之前**）就是调这里的 `assertOutboundAllowed()`。
@@ -47,7 +56,13 @@
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
-import { MAX_VERSIONS } from './apps.js';
+import {
+  MAX_VERSIONS,
+  checkRelPath,
+  refuseHiddenRelPath,
+  rootHashOf,
+  sha256hex,
+} from './apps.js';
 
 /** 经验包那一格（`<scope>/.exp/<pack>/`）。**只有这一处**写这个名字。 */
 export const EXP_DIRNAME = '.exp';
@@ -317,4 +332,124 @@ export function assertOutboundAllowed({
   const bases = new Set(lineage.map((e) => e?.baseRootHash).filter((h) => isRootHash(h)));
   const resolves = (h) => own.has(h) || bases.has(h);
   return adjudicate({ route, id, rootHash: man.rootHash, packs, lineage, resolves });
+}
+
+/**
+ * 🔴 **出界那一刻的常驻断言**（92 §③ 阶段 6）：**准备出界的字节，必须与那一版清单逐条对得上**。
+ *
+ * ── 为什么是这个形状（**不是"扫字符串黑名单"**）──────────────
+ * 92 §② 的判层规则**不读内容**，只看**路径**与**声明**。所以"不该出界的字节一律拒"
+ * 这件事，**只有在"声明 ↔ 字节"这一层才判得准**：
+ *
+ *   · **多了什么**：`files` 里有一份**清单没申报**的 ⇒ 拒；
+ *   · **少了什么**：清单声明了、字节里没有 ⇒ 拒；
+ *   · **换过什么**：某一份的 `sha256` 与清单里那一条对不上 ⇒ 拒（清单说 A、字节是 B）；
+ *   · **有没有 `.` 开头的段**：路径**任一段**以 `.` 开头 ⇒ 拒（`.data/`／`.exp/`／任何散文件，
+ *     判的是**每一段**，与 `apps.refuseHiddenRelPath` **同一处规则**、不另抄一份）；
+ *   · **越界路径**：绝对路径 / `..` / 反斜杠 / 控制字符 ⇒ 拒（`apps.checkRelPath`，同一处规则）；
+ *   · **清单自己**：重复路径、空路径、`rootHash` 与清单算出来的对不上 ⇒ 拒（声明不可核）。
+ *
+ * 🔴 **为什么不扫内容**：一份 `sk-` 之类的字符串黑名单**既会误伤正经内容**（一个讲 API key
+ *    的教程页面就被它拦下），又**永远追不上**"下一个没想到的形态"。而上面这几条是
+ *    **结构**：对得上 ⇒ 那份字节**就是**那份清单声明的能力体，**没有**两格的字节在里面。
+ *    ⚠️ 所以 92 §④ 那条"全库搜哨兵"**不是**被这一条取代 —— 它是**抽样的事后核对**，
+ *    住 `scripts/check-scope-boundary.sh`；这里这一条是**发布自己带的**、每次上架都跑的。
+ *
+ * ── 它在哪跑 ────────────────────────────────────────────
+ * 唯一写入者 `published.publish()`，在**读字节之后、碰任何盘之前**。给 `files` 就核字节那一半；
+ * 不给（只给 `manifest`）就只核"声明"那一半（形状），返回同一份留痕。
+ * 🔴 **fail-closed**：读不出／对不上一律**拒**（不是"当没有"）。
+ *
+ * @param {object} o
+ * @param {string} [o.route]  哪条口（`publish` / `artifact` / `deliver`）—— 只进拒绝文案
+ * @param {string} [o.id]
+ * @param {object} o.manifest  这一版的清单（`apps.manifest()` 那一份）
+ * @param {Record<string, Buffer|string>|null} [o.files]  准备出界的字节（path → 内容）
+ * @returns {{route:string, id:string, version:number|null, rootHash:string|null,
+ *            files:Array<{path:string,sha256:string,bytes:number}>, count:number,
+ *            bytes:number, digest:string|null}}  **留痕用的那一份**（`digest` 就是登记的起点）
+ */
+export function assertOutboundBytes({ route = 'publish', id = '', manifest, files = null } = {}) {
+  const where = routeName(route);
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new OutboundError(`${where}的清单读不出来 —— 声明不可核，不出去`);
+  }
+  if (!Array.isArray(manifest.files)) {
+    throw new OutboundError(`${where}的清单里没有文件表（files）—— 声明不可核，不出去`);
+  }
+  const declared = manifest.files;
+
+  // ── ① 清单里**声明**的每一条路径（这一半不读字节）────────────────
+  const seen = new Set();
+  for (const rec of declared) {
+    const rel = typeof rec?.path === 'string' ? rec.path : '';
+    if (rel === '') {
+      throw new OutboundError(`${where}的清单里有一条路径是空的 —— 声明不可核，不出去`);
+    }
+    if (seen.has(rel)) {
+      throw new OutboundError(`${where}的清单里「${rel}」出现了不止一次 —— 声明不可核，不出去`);
+    }
+    seen.add(rel);
+    try {
+      // 🔴 两条规则**复用** `apps.js` 那一处（不另抄一份；不然迟早会漂）
+      checkRelPath(rel);
+      refuseHiddenRelPath(rel);
+    } catch (err) {
+      throw new OutboundError(
+        `${where}的清单里有一条不该出界的路径：「${rel}」—— ${err?.message ?? String(err)}`,
+      );
+    }
+  }
+
+  // ── ② 字节那一半（给了才判）────────────────────────────────
+  const sealed = [];
+  let bytes = 0;
+  if (files !== null && files !== undefined) {
+    if (typeof files !== 'object' || Array.isArray(files)) {
+      throw new OutboundError(`${where}的字节表读不出来 —— 声明不可核，不出去`);
+    }
+    // **多了什么**：没申报的一律不许出去
+    for (const rel of Object.keys(files)) {
+      if (!seen.has(rel)) {
+        throw new OutboundError(
+          `${where}要带出去的字节里有一份没有申报：「${rel}」—— 多出来的东西一份都不许出去`,
+        );
+      }
+    }
+    for (const rec of declared) {
+      const rel = rec.path;
+      if (!Object.prototype.hasOwnProperty.call(files, rel)) {
+        throw new OutboundError(
+          `${where}的清单声明了「${rel}」，字节里却没有它 —— 清单与实际对不上，不出去`,
+        );
+      }
+      const raw = files[rel];
+      const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw ?? ''), 'utf8');
+      const h = sha256hex(buf);
+      if (h !== rec.sha256) {
+        throw new OutboundError(
+          `${where}的字节与清单对不上（「${rel}」不是清单里那一条）—— 声明不可核，不出去`,
+        );
+      }
+      bytes += buf.length;
+      sealed.push({ path: rel, sha256: h, bytes: buf.length });
+    }
+    // **清单自己**：它算出来的起点必须与登记的那一条逐字一致
+    const want = rootHashOf(declared.map((r) => ({ path: r.path, sha256: r.sha256 })));
+    if (want !== manifest.rootHash) {
+      throw new OutboundError(`${where}的清单与它登记的可核起点对不上 —— 声明不可核，不出去`);
+    }
+  }
+
+  return {
+    route,
+    id,
+    version: Number.isInteger(manifest.version) ? manifest.version : null,
+    rootHash: typeof manifest.rootHash === 'string' ? manifest.rootHash : null,
+    files: sealed,
+    count: declared.length,
+    bytes,
+    // 🔴 留痕那一把：清单自己算出来的起点（正常就是登记的那个 `rootHash`）
+    digest: typeof manifest.rootHash === 'string' ? manifest.rootHash : null,
+  };
 }

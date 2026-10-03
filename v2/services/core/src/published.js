@@ -20,7 +20,7 @@ import nodePath from 'node:path';
 
 import { AppsError } from './apps.js';
 import { assertDeclarationAllowed } from './app-outbound.js';
-import { assertOutboundAllowed } from './outbound.js';
+import { assertOutboundAllowed, assertOutboundBytes } from './outbound.js';
 
 /** 共享库放在数据目录下的哪个子目录。 */
 export const PUBLISHED_DIR = 'published-apps';
@@ -121,7 +121,7 @@ export class Published {
     if (!mine) throw new PublishedError('你自己这儿还没有这个，先做出来再发');
     // 🔴 **出界的唯一裁决**（92 §③ 阶段 2）：无锚的 `share:true` ⇒ 拒。
     //    顺序刻意：它在**重名判、复制、写 index 之前** —— 拒的时候共享库一个字节都不动。
-    assertOutboundAllowed({ route: 'publish', apps, workspaces, id, version: mine.version });
+    const adj = assertOutboundAllowed({ route: 'publish', apps, workspaces, id, version: mine.version });
     const authorHash = authorHashOf(authorSub);
     const prev = this.index(id);
     if (prev && prev.authorHash !== authorHash) {
@@ -136,6 +136,13 @@ export class Published {
     for (const f of manifest.files ?? []) {
       files[f.path] = apps.read(id, mine.version, f.path).content;
     }
+
+    // 🔴 **92 §③ 阶段 6：出界那一刻的常驻断言** —— 这里是**发布路径自带**的那一条，
+    //    不再是闸脚本里的技巧：**准备出界的字节，必须与那一版清单逐条对得上**
+    //    （多了／少了／换过字节／一条 `.` 开头的段 ⇒ 拒）。它**压的是声明 ↔ 字节**，
+    //    不是内容正则（理由见 `outbound.js` 里那段）。
+    //    ⚠️ 顺序刻意：它在**任何一次写盘之前**；拒的时候共享库一个字节都不动。
+    const seal = assertOutboundBytes({ route: 'publish', id, manifest, files });
 
     // 🔴 **外联申报（A16）** —— 93 §2.4：**读不到申报 ⇒ 拒上架**（fail-closed，
     //    **不是**"当没有外联"）。申报是制品里的一个普通文件 ⇒ **随 `rootHash` 冻结**
@@ -179,7 +186,24 @@ export class Published {
     this.fs.writeFileSync(tmp, `${JSON.stringify(index, null, 2)}\n`, { mode: 0o644 });
     this.fs.renameSync(tmp, idx);
 
-    this.#audit({ what: 'publish', id, version: mine.version, authorHash, rootHash: mine.rootHash });
+    this.#audit({
+      what: 'publish',
+      id,
+      version: mine.version,
+      authorHash,
+      rootHash: mine.rootHash,
+      // 🔴 **常驻断言的留痕**（92 §③ 阶段 6）：这一版出去的时候，字节与清单**逐条核过**
+      //    —— `files` 是核过的条数、`bytes` 是字节数、`digest` 是登记的起点、
+      //    `share` 是带锚的可分享条目数（没有锚的在上一步就拒了）。
+      //    ⚠️ 它是**成功才写**的：拒的时候 `#audit` 一次都不调（共享库一个字节都不动）。
+      outbound: {
+        sealed: true,
+        files: seal.count,
+        bytes: seal.bytes,
+        share: adj.share.length,
+        digest: seal.digest,
+      },
+    });
     return index;
   }
 

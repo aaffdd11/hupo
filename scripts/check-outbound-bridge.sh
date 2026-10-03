@@ -15,12 +15,15 @@
 #   两列判据、两种风险（一个会动真盘、一个不会），混成一条脚本会让"该不该
 #   小心跑"这件事变模糊 ⇒ **新开一条**，并在这里写明为什么不扩。
 #
-# ── 判据 A–E（照 §③ 那一行 ＋ §④ 抄；每条都带**负向对照**）──────
+# ── 判据 A–F（照 §③ 那一行 ＋ §④ 抄；每条都带**负向对照**）──────
 #   A 🔴 `.exp/` 里一份**受版权记录** ＋ `share:true` ＋ **没有锚** ⇒ 上架**必须红**
 #   B ★  给它补上来源 `rootHash`（锚）⇒ **过**（正对照，证明闸不是空转）
 #   C 🔴 把锚**删掉** ⇒ **又拒**（不是"一次通过就永远通过"）
 #   D 🔴 **冒出第二个绕过这条检查的出口 ⇒ 红**（源码级扫描；既有测试 ＋ 新加强版）
 #   E ★  `share:false` ／ `outbound=one-to-one` ／ **未声明（默认最严）** ⇒ 逐条有据
+#   F 🔴 **92 §③ 阶段 6：出界那一刻的常驻断言**（发布路径**自带**）——
+#        夹带（清单里多一条 `.data/…`）⇒ 发布**必须红**；差分对照（同改法、路径不隐藏）⇒ 过；
+#        上架成功那条审计**带 seal**（digest == rootHash）；断言本体（多了／换了字节）⇒ 拒
 #
 # 🔴 纪律（92 §④ 末两条）：
 #   · 读不出 / 算不出 ⇒ 如实打印 **`不可算`** 并记**失败**，**绝不安静地绿**；
@@ -47,7 +50,7 @@ T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 
 # ══════════════════════════════════════════════════════════════════
-echo '── A–E：临时目录里真调 `published.publish`（**不碰线上、不碰真共享库**）'
+echo '── A–F：临时目录里真调 `published.publish`（**不碰线上、不碰真共享库**）'
 # ══════════════════════════════════════════════════════════════════
 
 cat > "$T/bridge-probe.mjs" <<'NODE'
@@ -64,10 +67,10 @@ const ok = (id, name, reading) => console.log(`OK  ${id} :: ${name} ;; ${reading
 const bad = (id, name, reading) => console.log(`BAD ${id} :: ${name} ;; ${reading}`);
 
 const mod = (rel) => import(pathToFileURL(nodePath.join(CORE, 'src', rel)).href);
-const { Apps } = await mod('apps.js');
+const { Apps, rootHashOf, sha256hex } = await mod('apps.js');
 const { AppWorkspaces } = await mod('workspace.js');
 const { Published } = await mod('published.js');
-const { OutboundError, assertOutboundAllowed } = await mod('outbound.js');
+const { OutboundError, assertOutboundAllowed, assertOutboundBytes } = await mod('outbound.js');
 
 const APP = { title: '新闻', icon: 'dice', entry: 'index.html' };
 // ★ A16：制品里必须有外联申报（读不到 ⇒ 上架拒）—— 这一组验的是**出界闸**，带上它。
@@ -244,6 +247,97 @@ try {
   bad('E3', '未声明 ⇒ 拒', `**不可算**（${e?.message ?? e}）`);
 }
 
+// ── F 🔴 **92 §③ 阶段 6：出界那一刻的常驻断言**（发布路径自带）───────
+//   F1 夹带（清单里多一条 `.data/…`，字节真在盘上、hash 也对）⇒ 发布必须红 ＋ 共享库零残留
+//   F2 差分对照：同样的改法、只把那条路径换成不隐藏的 ⇒ **过**（红的必须是隐藏路径）
+//   F3 留痕：上架成功那条审计**带 seal**（digest == rootHash）
+//   F4 断言本体（纯函数，喂假清单）：多了／换了字节 ⇒ 拒；干净样本 ⇒ 放行
+try {
+  /** 真盘上把那一版的清单改成"多一条"（⚠️ 版本里的文件是 0444 ⇒ 先 chmod 才写得动）。 */
+  const plantExtra = (w, id, rel, body) => {
+    const m = w.apps.manifest(id, 1);
+    const vdir = w.apps.versionDir(id, 1);
+    const buf = Buffer.isBuffer(body) ? body : Buffer.from(String(body), 'utf8');
+    const rec = { path: rel, sha256: sha256hex(buf), bytes: buf.length };
+    const files = [...m.files, rec];
+    const mfile = nodePath.join(vdir, 'manifest.json');
+    nodeFs.chmodSync(mfile, 0o644);
+    nodeFs.writeFileSync(mfile, `${JSON.stringify({ ...m, files, rootHash: rootHashOf(files) }, null, 2)}\n`);
+    nodeFs.mkdirSync(nodePath.dirname(nodePath.join(vdir, rel)), { recursive: true });
+    nodeFs.writeFileSync(nodePath.join(vdir, rel), buf);
+    return { ...m, files, rootHash: rootHashOf(files) };
+  };
+
+  // ── F1 🔴 夹带 ⇒ 发布红 ＋ 零残留 ─────────────────────────────
+  const wF1 = world('F1');
+  makeApp(wF1);
+  plantExtra(wF1, 'news', '.data/a.json', '{"sentinel":"PROBE-DATA-SENTINEL-do-not-ship"}');
+  const errF1 = caught(() => publish(wF1));
+  const residueF1 = nodeFs.existsSync(nodePath.join(wF1.dir, 'published-apps'));
+  if (errF1 instanceof OutboundError && !residueF1) {
+    ok('F1', '🔴 夹带（清单里多一条 `.data/a.json`）⇒ 发布**必须红**，共享库零残留',
+      `${errF1.name}：${errF1.message}`);
+  } else {
+    bad('F1', '夹带 ⇒ 发布必须红 ＋ 零残留',
+      `拒=${errF1 ? `${errF1.name}: ${errF1.message}` : '没拒（闸空转）'}；共享库有残留=${residueF1}`);
+  }
+
+  // ── F2 ★ 差分对照：同改法、路径不隐藏 ⇒ 过 ─────────────────────
+  const wF2 = world('F2');
+  makeApp(wF2);
+  const manF2 = plantExtra(wF2, 'news', 'assets/a.json', '{"ok":true}');
+  let idxF2 = null;
+  let errF2 = null;
+  try { idxF2 = publish(wF2); } catch (e) { errF2 = e; }
+  const copied = nodeFs.existsSync(nodePath.join(wF2.dir, 'published-apps', 'news', 'versions', '1', 'assets', 'a.json'));
+  if (idxF2 && copied) {
+    ok('F2', '★ 差分对照：同样的改法、路径换成不隐藏的 ⇒ **过**（红的不是"清单被动过"）',
+      `上架成功；versions/1/assets/a.json 真有一份（清单 ${manF2.files.length} 条）`);
+  } else {
+    bad('F2', '差分对照：不隐藏的那一条该过', `过=${Boolean(idxF2)}；真有那一份=${copied}；错=${errF2?.message ?? '—'}`);
+  }
+
+  // ── F3 ★ 留痕：审计账那一条带 seal ────────────────────────────
+  try {
+    const audit = nodePath.join(wF2.dir, 'published-apps', 'audit.jsonl');
+    const lines = nodeFs.readFileSync(audit, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const pub = lines.find((l) => l.what === 'publish');
+    if (pub?.outbound?.sealed === true && pub.outbound.digest === manF2.rootHash) {
+      ok('F3', '★ 留痕：上架成功那条审计**带 seal**（`sealed:true`，digest == 登记的起点）',
+        `files=${pub.outbound.files} · bytes=${pub.outbound.bytes} · share=${pub.outbound.share} · digest=${String(pub.outbound.digest).slice(0, 12)}…`);
+    } else {
+      bad('F3', '留痕：上架成功那条审计该带 seal', `读到：${JSON.stringify(pub?.outbound ?? null)}`);
+    }
+  } catch (e) {
+    bad('F3', '留痕：上架成功那条审计该带 seal', `**不可算**（${e?.message ?? e}）`);
+  }
+
+  // ── F4 🔴 断言本体（纯函数）：多了／换过 ⇒ 拒；干净 ⇒ 放行 ──────
+  const CLEAN = { 'index.html': '<p>x</p>' };
+  const cleanFiles = { 'index.html': Buffer.from(CLEAN['index.html'], 'utf8') };
+  const cleanMan = {
+    id: 'news', version: 1,
+    files: [{ path: 'index.html', sha256: sha256hex(cleanFiles['index.html']), bytes: cleanFiles['index.html'].length }],
+    rootHash: rootHashOf([{ path: 'index.html', sha256: sha256hex(cleanFiles['index.html']) }]),
+  };
+  const many = caught(() => assertOutboundBytes({
+    route: 'publish', manifest: cleanMan, files: { ...cleanFiles, 'sneak.txt': Buffer.from('夹带') },
+  }));
+  const swapped = caught(() => assertOutboundBytes({
+    route: 'publish', manifest: cleanMan, files: { 'index.html': Buffer.from('<p>换过了</p>') },
+  }));
+  const cleanOk = caught(() => assertOutboundBytes({ route: 'publish', manifest: cleanMan, files: cleanFiles })) === null;
+  if (many instanceof OutboundError && swapped instanceof OutboundError && cleanOk) {
+    ok('F4', '🔴 断言本体：字节里**多出来的**／**换过的** ⇒ 拒；干净样本 ⇒ 放行（不是"总是红"）',
+      `多了 ⇒ ${many.message.slice(0, 40)}…；换过 ⇒ ${swapped.message.slice(0, 40)}…`);
+  } else {
+    bad('F4', '断言本体：多了／换过 ⇒ 拒，干净 ⇒ 放行',
+      `多了拒=${many instanceof OutboundError}；换过拒=${swapped instanceof OutboundError}；干净过=${cleanOk}`);
+  }
+} catch (e) {
+  bad('F', '92 §③ 阶段 6 的常驻断言那几条', `**不可算**（探针自己炸了：${e?.message ?? e}）`);
+}
+
 process.exitCode = 0;
 NODE
 
@@ -256,8 +350,8 @@ pass=$((pass + np)); fail=$((fail + nf))
 if [ "$rc" != "0" ] && [ "$nf" = "0" ]; then
   bad "A–E 探针异常退出（rc=$rc）却没报哪一条 ⇒ 这些判据**不可算**"
 fi
-if [ "$nf" = "0" ] && [ "$np" -lt 6 ]; then
-  bad "A–E 应该出 6 条读数（A/B/C/E1/E2/E3），只读到 $np 条 ⇒ **不可算**"
+if [ "$nf" = "0" ] && [ "$np" -lt 10 ]; then
+  bad "A–F 应该出 10 条读数（A/B/C/E1/E2/E3/F1/F2/F3/F4），只读到 $np 条 ⇒ **不可算**"
 fi
 
 # ══════════════════════════════════════════════════════════════════
