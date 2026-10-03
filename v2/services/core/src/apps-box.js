@@ -30,7 +30,7 @@
 
 import nodeHttp from 'node:http';
 
-import { AppsError } from './apps.js';
+import { AppsError, HIDDEN_PATH_CODE } from './apps.js';
 
 /** 内部口的前缀。**不带 `/api/`**：它故意不在那套令牌语义里（见文件头）。 */
 export const INTERNAL_PREFIX = '/internal/';
@@ -39,6 +39,17 @@ export const INTERNAL_PREFIX = '/internal/';
 export const BOX_APPS_PATH = '/internal/apps';
 /** 取一个制品的字节。 */
 export const BOX_ARTIFACT_PATH = '/internal/artifact';
+/**
+ * ★ **读侧那道闸拒了这条路径 ⇒ 盒子内部口回这个状态**（`164` · 2026-10-03）。
+ *
+ * 🔴 为什么非要一个**专码**，不能落进 404：租户那一份的字节在**他盒子里**，
+ *    盒里 `Apps.read()` 现在也过那道闸 —— 若这里把"不许取"混成 404，
+ *    宿主就会回一个**假 404**（"这里没有这个文件"），把读侧的拒绝又变回"悄悄弄坏"。
+ * ⇒ 这一条口如实回 403 ＋ 正文里的理由，宿主那侧（下面 `read()`）认这个码，
+ *    重新抛一个 `code='hidden-path'` 的 `AppsError` ⇒ 制品口回那条**看得见的 403**。
+ * ⚠️ 数是**两侧共用的一处**（盒子那侧 `server.js` import 它），不许两边各写一个。
+ */
+export const BOX_PATH_REFUSED_STATUS = 403;
 /**
  * ★ **`112`：取那一间工作区里一个"活文件"的字节**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）。
  *
@@ -333,6 +344,13 @@ export function createBoxApps({ sub = 'owner', dial, log = () => {} } = {}) {
       const q = new URLSearchParams({ id: String(id), version: String(version), rel: String(rel) });
       const r = await requestOverSocket(dialOnce(dial), { path: `${BOX_ARTIFACT_PATH}?${q}` });
       if (r.status === 404) throw new AppsError('制品里没有这个文件');
+      // ★ **读侧那道闸拒了**（`164`）：把盒子那边**同一个理由**原样带回宿主 ⇒
+      //   制品口回那条看得见的 403。**不许**把它降级成"没有这个文件"。
+      if (r.status === BOX_PATH_REFUSED_STATUS) {
+        const j = parseJson(r.body);
+        const text = typeof j?.text === 'string' && j.text !== '' ? j.text : '这一条路径按规矩不许从制品口取';
+        throw new AppsError(text, null, HIDDEN_PATH_CODE);
+      }
       if (r.status !== 200) {
         log(`盒子取字节不过（${id}）：HTTP ${r.status}`);
         throw new BoxError(`盒子那边取不到这个文件（HTTP ${r.status}）`, 'bad-status');

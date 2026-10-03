@@ -75,10 +75,12 @@ import {
   parseArtifactQuery,
   parseInternalPath,
   parseLiveQuery,
+  // ★ **`164`：读侧那道闸拒了 ⇒ 盒子这条口回专码**（宿主据此回"看得见的 403"，不是假 404）
+  BOX_PATH_REFUSED_STATUS,
 } from './apps-box.js';
 // ⚠️ 只用它的**错误类型**（内部写入那条路要把"校验不过"如实回给宿主，而不是 500）
 //    与那个总量上限（内部口的身体上限由它推出来，**不另写一个数**）。
-import { AppsError, MAX_DESC_CHARS, MAX_TITLE_CHARS, MAX_TOTAL_BYTES, PERMISSIONS, isAnAppRoom, newAppId } from './apps.js';
+import { AppsError, MAX_DESC_CHARS, MAX_TITLE_CHARS, MAX_TOTAL_BYTES, PERMISSIONS, isAnAppRoom, isHiddenPathRefusal, newAppId } from './apps.js';
 // ★ **"活的工作区"那一刀**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）：
 //   `/internal/workspace-live`（盒里那条口）读的就是它 —— **以盒子为准**。
 import { readLiveApp } from './workspace.js';
@@ -3156,6 +3158,15 @@ const TENANT_ROUTES = [
       } catch (err) {
         // ⚠️ 签名这一层在宿主已经过了 ⇒ 这儿读不出来就是**真没有**（404）
         log(`[internal] 取字节读不出来（${q.id}）：${err?.message ?? err}`);
+        // ★ **读侧那道闸拒了 ⇒ 如实回专码 ＋ 理由**（`164`）：混成 404 就是把
+        //   "按规矩不许取"说成"没有这个文件" —— 宿主那侧再回假 404，读侧又变回"悄悄弄坏"。
+        if (isHiddenPathRefusal(err)) {
+          return sendJson(res, BOX_PATH_REFUSED_STATUS, {
+            error: 'refused-path',
+            code: 'hidden-path',
+            text: err.message,
+          });
+        }
         return sendJson(res, 404, { error: 'not-found' });
       }
       const buf = Buffer.from(got.content ?? '');

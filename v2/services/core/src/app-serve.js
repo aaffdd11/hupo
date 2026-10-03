@@ -22,7 +22,7 @@ import nodePath from 'node:path';
 import nodeUrl from 'node:url';
 
 import { LIVE_PREFIX, LIVE_VERSION, checkLiveRel, parseLivePath } from './app-live.js';
-import { AppsError } from './apps.js';
+import { AppsError, isHiddenPathRefusal } from './apps.js';
 // ★ **小程序自己那一格存储**（主人 2026-09-30 拍板 · 契约 `147-APP-SQLITE.md`）：
 //   这一份只做"验凭据 → 交给**那个人那个 app** 的库去跑 → 把结论带回去"，
 //   **自己不碰 SQLite、也不认路径**（执行在 `app-db.js`，路径在 `apps.js`）。
@@ -396,6 +396,38 @@ function denyBox(res) {
     'x-content-type-options': 'nosniff',
   });
   res.end('这个现在打不开，等会儿再试试。\n');
+}
+
+/**
+ * ★ **读侧那道闸拒了 ⇒ 回一条看得见的理由**（`D4.24` · 2026-10-03 主人点头「加」；
+ *    契约 `docs/dev/164-READ-SIDE-HIDDEN-GATE.md`）。
+ *
+ * 🔴 **为什么不能再用 `deny(res, 404)`**：404 说的是"这里没有这个文件" ——
+ *    而这一档里文件**在**、也**在制品里**，只是**按规矩不许从制品口取**。
+ *    拿 404 顶它，就是"悄悄地弄坏"（`dev/158` §五·1 明写不接受的那一种）。
+ *
+ * 🔴 **为什么这不是"泄漏细节"**：`rel` 本来就在请求的 URL 上；`why` 是
+ *    `apps.js` 那条规则的原文（**同一处规则，不另抄一份**）；文案里没有人、没有盒子名、
+ *    没有 HTTP 码以外的东西。它要回答的正是那三句：**谁拒的 · 拒的是什么 · 该怎么办**。
+ *
+ * ⚠️ 状态码用 403（"我懂你的请求，但我不给"），并带 `x-hupo-refusal: hidden-path`
+ *    那个头 —— 机器（闸脚本 / 排障）据此与"签名不过"那一档分开。
+ */
+function denyRefusedPath(res, { id, rel, why }) {
+  const body =
+    '这个文件被拦下了。\n'
+    + '谁拦的：琥珀的制品口\n'
+    + `拦的是什么：${id} 里的「${rel}」\n`
+    + `为什么：${why}\n`
+    + '这不是「没有这个文件」，也不是签名不对 —— 是这一条路径按规矩不许从制品口取。\n'
+    + '怎么办：把它从制品里去掉（数据放它自己那一格存储，别放进制品），重新发一版。\n';
+  res.writeHead(403, {
+    'content-type': 'text/plain; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'x-hupo-refusal': 'hidden-path',
+  });
+  res.end(body);
 }
 
 /**
@@ -893,6 +925,11 @@ export function createAppServer({
       pending = live ? apps.readLive(live.id, live.rel) : apps.read(hit.id, hit.version, hit.rel);
     } catch (e) {
       log(`${live ? '活地址' : '制品口'}：读不出来（${id}）${e instanceof AppsError ? e.message : '未知错'}`);
+      // ★ **读侧那道闸拒了 ⇒ 看得见的 403**（`164`）：理由说全，**不许**落进下面那个假 404。
+      if (isHiddenPathRefusal(e)) {
+        denyRefusedPath(res, { id, rel: live ? live.rel : hit.rel, why: e.message });
+        return;
+      }
       // ★ **盒子不通 ⇒ 503**（`B27`：这一条**两条路都适用** —— 在制品那条路上，
       //   以前落到 404 = 页面在说假话（"这里没有这个文件"，而他明明有，只是那台没应）；
       //   而 `/api/apps` 那个预闸对同一个病说的是 503 ⇒ 三处要一个口径，见上面那段）。
@@ -959,7 +996,9 @@ export function createAppServer({
       (e) => {
         log(`${live ? '活地址' : '制品口'}：读不出来（${id}）${e instanceof AppsError ? e.message : (e?.message ?? '未知错')}`);
         if (!res.headersSent) {
-          if (live && e instanceof BoxError) denyBox(res);
+          // ★ 读侧那道闸拒了（租户那一份可能是异步/过隧道取回来的）⇒ 同样看得见的 403。
+          if (isHiddenPathRefusal(e)) denyRefusedPath(res, { id, rel: live ? live.rel : hit.rel, why: e.message });
+          else if (live && e instanceof BoxError) denyBox(res);
           else deny(res, 404);
         } else {
           res.destroy();

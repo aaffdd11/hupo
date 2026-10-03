@@ -190,6 +190,21 @@ export class Published {
     // 把那一版的每个文件读出来（`read` 会**逐字节核对 hash** ⇒ 复制的是真东西）
     const manifest = apps.manifest(id, mine.version);
     if (!manifest) throw new PublishedError('那一版的清单坏了，发不了');
+    /**
+     * 🔴 **声明那一半先在读字节之前跑一遍**（`164` · 2026-10-03）。
+     *
+     * ── 为什么非要有这一下 ────────────────────────────────────
+     * 读侧那条路（`apps.read`）**今天也有同一道闸**了（`D4.24`：主人点头「加」）——
+     * 而它是这一条出界断言**读字节时必经的路**。⇒ 一份声明了 `.data/…` 的清单
+     * 会**在读第一个字节时**就被读侧拒掉，出界这条断言就再也不是"发布路径自带的
+     * 第一现场"了（`check-outbound-bridge.sh` 判据 F1 钉的就是**这一条**）。
+     * ⇒ 把**声明 ↔ 声明**那一半提到读字节之前：同一个 `assertOutboundBytes`
+     *   （**不是第二处规则**），下面那次带字节的再核一遍"声明 ↔ 字节"。
+     *
+     * ⚠️ 位置刻意：它在 `assertOutboundAllowed`（两格申报那条闸）**之后** ——
+     *    无锚的 `share:true` 仍然第一个拒（既有报错顺序与话一个字不变）。
+     */
+    assertOutboundBytes({ route: 'publish', id, manifest });
     const files = {};
     for (const f of manifest.files ?? []) {
       files[f.path] = apps.read(id, mine.version, f.path).content;

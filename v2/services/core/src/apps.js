@@ -241,13 +241,30 @@ const CONTENT_TYPES = Object.freeze({
  *    给了就是**这一条路该回的那个码** —— `104` 的两条口要分清
  *    "名字不合法（400）" / "试不出来（409）" / "不在他这儿（404）"。
  *    形状照 `src/say.js` 的 `SayError(message, status)`（那里也是 400 起）。
+ * ⚠️ `code`（可选）是给**读侧那道闸**分岔用的（`HIDDEN_PATH_CODE`）：老调用方只看
+ *    `message` 与 `status`，多一个标记**一个字都不影响**；新调用方（制品口 / 盒子那条口）
+ *    据此把"这条路径按规矩不许取"与"真没有这个文件"分开回 —— 不再一律 404。
  */
 export class AppsError extends Error {
-  constructor(message, status = null) {
+  constructor(message, status = null, code = null) {
     super(message);
     this.name = 'AppsError';
     this.status = status;
+    this.code = code;
   }
+}
+
+/**
+ * 🔴 **读侧那道闸拒的时候带的标记**（`D4.24` · 2026-10-03 主人点头「加」）。
+ *
+ * **只有这一处**：`refuseHiddenRelPath()` 抛它，制品口 / 盒子内部口 / 盒代理都 `import` 它
+ * （`isHiddenPathRefusal()` 判），**不许在别处再写一遍这个字符串**。
+ */
+export const HIDDEN_PATH_CODE = 'hidden-path';
+
+/** 这个错是不是"读侧那道闸拒了这条路径"（**判据只有这一处**）。 */
+export function isHiddenPathRefusal(err) {
+  return err instanceof AppsError && err.code === HIDDEN_PATH_CODE;
 }
 
 /** `/^[a-z0-9][a-z0-9-]{0,31}$/` —— 小写字母数字与短横，首字符不能是短横。 */
@@ -349,7 +366,8 @@ export function refuseHiddenRelPath(rel) {
   const where = seg === '.data' || seg === '.exp'
     ? '（这类是你的数据或经验，不进制品、也不跟着装走）'
     : '（`.` 开头的名字不进制品）';
-  throw new AppsError(`制品里不许有以 "." 开头的文件${where}：${rel}`);
+  // 🔴 `HIDDEN_PATH_CODE`：读侧那几处（制品口 / 盒子内部口）据此把"不许取"与"没有"分开回。
+  throw new AppsError(`制品里不许有以 "." 开头的文件${where}：${rel}`, null, HIDDEN_PATH_CODE);
 }
 
 /**
@@ -958,6 +976,21 @@ export class Apps {
   /**
    * **读一个文件**：先验这一版的 hash（规矩③），再验路径（规矩④）。
    *
+   * 🔴 **读侧的同一道闸**（`D4.24` · 2026-10-03 主人点头「加」；落地见
+   *    `docs/dev/164-READ-SIDE-HIDDEN-GATE.md`，来由是 `dev/158` §五·1 那一笔）：
+   *    写侧 `create()` 里那道 `refuseHiddenRelPath` 在这里**再跑一遍** ——
+   *    **规则一个字都不另抄**，就是同一个函数。
+   *
+   *    老租户的包里可能有**写侧那道闸之前**写进去的隐藏路径（`.data/…`／`.exp/…`）。
+   *    本闸让那些包**从今天起读不出来** —— 这个代价主人 2026-10-03 点头接受了；
+   *    但**"弄坏"必须是"看得见的拒绝"**：拒的时候带 `code = 'hidden-path'`，
+   *    制品口据此回一条**能查的明确理由**（不是白屏、不是假 404），
+   *    并在这里留一条审计（`<world>/hupo/apps/audit.jsonl`）。
+   *
+   * 🔴 **顺序刻意**：先认这一版在不在（"没有这一版"是真话），再判路径 ——
+   *    所以对**真的存在**的那一版，隐藏路径**一律拒**（不管清单里有没有声明它）。
+   *    它跑在**读第一个字节之前**。
+   *
    * @returns {{ content: Buffer, contentType: string }}
    */
   read(id, version, rel) {
@@ -965,6 +998,17 @@ export class Apps {
     checkRelPath(rel);
     const m = this.manifest(id, version);
     if (!m) throw new AppsError('这一版不在（或者它的清单坏了）');
+    try {
+      // 🔴 与写侧 `create()` 同一个函数（**同一条规则只住一处**）
+      refuseHiddenRelPath(rel);
+    } catch (err) {
+      // 拒得**看得见**：留一条审计（谁的世界 · 哪个 app · 哪条路径）。
+      if (isHiddenPathRefusal(err)) {
+        const n = Number.parseInt(version, 10);
+        this.#audit({ what: 'hidden-path-refused', id, version: Number.isInteger(n) ? n : null, path: rel });
+      }
+      throw err;
+    }
     const rec = (m.files ?? []).find((f) => f.path === rel);
     if (!rec) throw new AppsError('制品里没有这个文件');
     let buf;
