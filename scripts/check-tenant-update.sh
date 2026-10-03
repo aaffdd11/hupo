@@ -163,7 +163,7 @@ portable_part() {
         --tmpfs /run/hupo:rw,nosuid,nodev,mode=0700 \
         --security-opt=no-new-privileges --cap-drop=ALL \
         --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
-        --pids-limit=512 --memory=768m --memory-swap=768m "$IMG" >/dev/null 2>&1 || true
+        --pids-limit=512 --memory=1536m --memory-swap=1536m "$IMG" >/dev/null 2>&1 || true
       GOT=""
       for _ in $(seq 1 30); do
         GOT="$(curl -s "http://127.0.0.1:$PORT/api/version" 2>/dev/null \
@@ -340,6 +340,18 @@ portable_part() {
     ok "三处的能力清单逐字一致（$CAPS）"
   else
     bad "🔴 只有 $n_caps/3 处写着那一串 —— 漏掉的那一处会让容器起不来"
+  fi
+  # ⚠️ **2026-09-29 加**：能力清单有闸，**内存/进程上限原来没有** —— 同一个值写在 7 处，
+  #    改一处不改另一处 = "那一台跑在另一个上限上"，而两边都不报错。⇒ 同款逐字一致。
+  RES='--pids-limit=512 --memory=1536m --memory-swap=1536m'
+  n_res=0
+  for f in scripts/build-tenant-image.sh scripts/build-tenant-code.sh scripts/create-tenant-pool.sh; do
+    grep -qF -- "$RES" "$ROOT/$f" && n_res=$((n_res + 1))
+  done
+  if [ "$n_res" = "3" ]; then
+    ok "三处的内存/进程上限逐字一致（$RES）"
+  else
+    bad "🔴 只有 $n_res/3 处写着那一串 —— 漏掉的那一处会让那台跑在另一个上限上"
   fi
   # 负向对照：少一条就必须被抓住
   if grep -qF -- "${CAPS% --cap-add=FOWNER}" <(printf '%s\n' "${CAPS% --cap-add=FOWNER}"); then

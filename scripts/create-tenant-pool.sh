@@ -111,7 +111,14 @@ UNIT
         #    要它们也带上，得等下一次自然重开（`--replace` 会重建）。
         #    ⚠️ 这里原来只有 `--pids-limit` 与 `--memory`：内存那条挡住了，
         #    CPU 那条没有 ⇒ 一个租户里跑飞的 agent 能把整机（32 线程）吃满。
-        printf '  --pids-limit=512 --memory=768m --memory-swap=768m --cpus=4 \\\n'
+        # ⚠️ **2026-09-29 主人拍板：内存 768m → 1536m**。依据是真机读数：B 盒 `memory.peak`
+        #    737 MiB / 768 MiB（**96%**，只剩 30 MB），A 盒才 49 MiB —— 768 是真的紧。
+        #    模板 `max_tenants=8` ⇒ 满编也只占 12 GiB（本机 62.8 GiB / 可用 48 GiB）。
+        #    `--memory-swap` **跟着同值** ⇒ swap 仍然禁用（cgroup `memory.swap.max=0`），
+        #    不是「多给了一份 swap」。
+        #    ⚠️ 同 `--cpus=4` 那句：**只对以后新建/重开的容器生效** —— 跑着的那两台
+        #    要重开一次才带上（`sudo bash scripts/create-tenant-pool.sh --yes`）。
+        printf '  --pids-limit=512 --memory=1536m --memory-swap=1536m --cpus=4 \\\n'
         printf '  --env HUPO_CHANNEL=/run/hupo-host/channel.sock \\\n'
         printf '  --env HUPO_CHANNEL_WAIT_MS=60000 \\\n'
         printf '  %s\n' "$IMG"

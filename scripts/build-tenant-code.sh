@@ -331,7 +331,7 @@ if [ "$MODE" = "verify" ]; then
     --security-opt=no-new-privileges \
     --cap-drop=ALL \
     --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
-    --pids-limit=512 --memory=768m --memory-swap=768m \
+    --pids-limit=512 --memory=1536m --memory-swap=1536m \
     --env HUPO_CODE_DIR=/app/code \
     "$IMG" >/dev/null || { bad "容器起不来"; rm -rf "$DATA"; exit 3; }
 

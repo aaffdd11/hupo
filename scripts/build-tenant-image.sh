@@ -408,7 +408,7 @@ out="$("$PODMAN" run --rm \
     --security-opt=no-new-privileges \
     --cap-drop=ALL \
     --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
-    --pids-limit=512 --memory=768m --memory-swap=768m \
+    --pids-limit=512 --memory=1536m --memory-swap=1536m \
     "$IMG" 2>&1)"
 rc=$?
 echo "  退出码 $rc（**不为 0 才对**）· 数据 $DATA · 口 127.0.0.1:$PORT"
@@ -435,7 +435,7 @@ else
       --security-opt=no-new-privileges \
       --cap-drop=ALL \
       --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
-      --pids-limit=512 --memory=768m --memory-swap=768m \
+      --pids-limit=512 --memory=1536m --memory-swap=1536m \
       "$IMG" 2>&1 | tail -1)"
   for _ in $(seq 1 20); do
     code2="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT2/api/version" 2>/dev/null || true)"

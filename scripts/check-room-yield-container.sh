@@ -7,7 +7,7 @@
 #     那一轮**失败**，原话就是主人遇到的那条 `already owned by an active write handle`。
 #
 # ── 它做的是什么 ────────────────────────────────────────────
-#   起一台**一次性容器**（同镜像、同 cap（**没有 CAP_KILL**）、`--memory=768m`），
+#   起一台**一次性容器**（同镜像、同 cap（**没有 CAP_KILL**）、`--memory=1536m`），
 #   在盒里：① 用**真** `dsh --profile sdk` 造出这一间的会话；
 #   ② 用**真**中继起一台**真** `dsh web` 把那间开着；
 #   ③ 让那台 web **真的写开**这条会话（＝浏览器真的在看它；
@@ -357,7 +357,7 @@ echo "  （不发布、不重启、不碰任何租户的盒子）"
   --env B46_EXPECT="$EXPECT" \
   --security-opt=no-new-privileges \
   --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
-  --pids-limit=512 --memory=768m --memory-swap=768m --cpus=4 \
+  --pids-limit=512 --memory=1536m --memory-swap=1536m --cpus=4 \
   "$IMG" /bin/node /harness/run.mjs
 RC=$?
 echo "▶ 容器退出码：$RC"

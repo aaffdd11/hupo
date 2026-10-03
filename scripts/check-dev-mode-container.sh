@@ -2,7 +2,7 @@
 # 开发者入口"换房间"那条路的**真机验收**（B43 第二版 · 契约 `docs/dev/110-ONE-SESSION-PER-ROOM.md` §八·补3）。
 #
 # ── 它做的是什么 ────────────────────────────────────────────
-#   起一台**一次性容器**（同镜像、同 `--cap-drop=ALL` 那五条、`--memory=768m`、
+#   起一台**一次性容器**（同镜像、同 `--cap-drop=ALL` 那五条、`--memory=1536m`、
 #   `--pids-limit=512`），挂一份**产品层**，在盒里**真起 `dsh web`**、**真换房间**，
 #   读**这个容器自己的** `/proc` 与 cgroup（`oom_kill` / `memory.max` / `--profile web` 的 cwd）。
 #   ⇒ 真内核、真 cgroup、真 dsh、真换手 —— 但 **不碰任何租户的盒子、不发布、不重启任何东西**。
@@ -50,7 +50,7 @@ cat > "$HARNESS" <<'HARNESS_EOF'
 //
 // ⚠️ 这不是夹具：跑在 `localhost/hupo-tenant:local` 的**真容器**里，参数照
 //    `create-tenant-pool.sh` 抄（`--cap-drop=ALL` 只加回五条 ⇒ **没有 CAP_KILL**、
-//    `--memory=768m`、`--pids-limit=512`），dsh 是镜像里那支真的，uid 换手也是真的。
+//    `--memory=1536m`、`--pids-limit=512`），dsh 是镜像里那支真的，uid 换手也是真的。
 //
 // 用法（容器里）：node /harness/run.mjs "main,aoshu-bank,main,aoshu-bank"
 import nodeFs from 'node:fs';
@@ -283,7 +283,7 @@ echo "  （不发布、不重启、不碰任何租户的盒子）"
   --env HUPO_CODE_DIR=/app/code \
   --security-opt=no-new-privileges \
   --cap-drop=ALL --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
-  --pids-limit=512 --memory=768m --memory-swap=768m --cpus=4 \
+  --pids-limit=512 --memory=1536m --memory-swap=1536m --cpus=4 \
   "$IMG" /bin/node /harness/run.mjs "$SEQ"
 RC=$?
 echo "▶ 容器退出码：$RC"

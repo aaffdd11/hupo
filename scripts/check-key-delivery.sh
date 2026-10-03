@@ -78,7 +78,7 @@ portable_part() {
     --tmpfs /run/hupo:rw,nosuid,nodev,mode=0700 \
     --security-opt=no-new-privileges --cap-drop=ALL \
     --cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=SETUID --cap-add=SETGID --cap-add=FOWNER \
-    --pids-limit=512 --memory=768m --memory-swap=768m \
+    --pids-limit=512 --memory=1536m --memory-swap=1536m \
     --env HUPO_CODE_DIR=/app/code "$IMG" >/dev/null 2>&1 || { bad "容器起不来"; return; }
   for _ in $(seq 1 30); do
     [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/version" 2>/dev/null || true)" = "200" ] && break
