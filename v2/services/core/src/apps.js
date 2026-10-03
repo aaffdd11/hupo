@@ -742,6 +742,32 @@ export class Apps {
   }
 
   /**
+   * **这一版"形状"的号**（92 §③ 阶段 5 的第三个号；91 §8.1「三个号互不代管」）。
+   *
+   * ── 它读哪儿、为什么是那儿 ────────────────────────────────
+   *   形状**不是**经验的号，**也不是**能力体内容的号 —— 它是**制品声明的那套形状契约**
+   *   （`manifest.schema`，`apps.SCHEMA` 那一族）：入口形态 / 目录形态 / 清单字段形态。
+   *   ⇒ 它住在**清单里**（那正是"形状住制品内固定名文件"这条决定在能力体这一侧的落点：
+   *     制品里那个固定名文件就是 `manifest.json`，它已经是清单本身）。
+   *   🔴 **所以只改 `.exp/` ⇒ 它不变** —— 这是 92 §③ 阶段 5 第一条判据，且是**结构性的**：
+   *     `.exp/` 的字节根本不进 `manifest.json`，也不参与 `rootHash`。
+   *
+   * ⚠️ **读不到 ⇒ `null`**（不猜一个号出来）：这一版不在 / 清单坏了 ⇒ 说"没有"。
+   * ⚠️ 它**不替代** `rootHash`：`rootHash` 管"内容是不是这一份"，它管"形状是哪一族"。
+   *
+   * @returns {number|null} 形状的号（清单里的 `schema`），读不出 ⇒ `null`
+   */
+  shapeVersion(id, version = null) {
+    checkAppId(id);
+    const v = version === null || version === undefined ? this.current(id) : Number.parseInt(version, 10);
+    if (!Number.isInteger(v) || v < 1) return null;
+    const m = this.manifest(id, v);
+    if (!m) return null;
+    const s = Number.parseInt(m.schema, 10);
+    return Number.isInteger(s) && s >= 1 ? s : null;
+  }
+
+  /**
    * **我的清单**：每个 app 的那张脸（坏的就跳过那一个，不许整个清单炸）。
    *
    * ★ `114`：**活的那一份（只要有 `app.json`）也在里面** —— 他自己造的小程序
@@ -1584,10 +1610,35 @@ export class Apps {
    * 边的形状照契约：`(base rootHash, 我的那一版)`；**只记能力体**，不碰数据／经验。
    *
    * ⚠️ 它**不承重**：删掉它，app 照样能装能跑（可检查性归 0 ⇒ 90 Q4.8）。
+   *
+   * ── ★ 92 §③ 阶段 5：这里是**能力体版本边**（三条登记边里的第一条）──────
+   * 🔴 **它是"只增"的那一条**：`lineage.json` 只有追加，**没有任何一条删边的路**
+   *    （这个类里没有 `removeLineage`／`unlink lineate.json`；本函数也只 `push`）。
+   * 🔴 **来源只许是 `baseRootHash`（64 位十六进制）**：正式记录走
+   *    [`capabilityEdgeOf`]（`src/method-edge.js`）——它当场核"那个起点在我们这儿立得住"。
+   * 🔴 **经验／数据的"来源"不许塞进这条边**（92 §③ 阶段 5 第二条判据）：
+   *    那两样各有自己的边与自己的登记处（经验 → `methodEdge*`；数据 → `delivery/*`）。
+   *    塞进来 ⇒ **当场拒**（见下面的白名单）。理由：血缘是**能力体**那一族的关系，
+   *    混进别人的来源之后，"这个 app 是从哪一版长出来的"这件事就说不清了。
+   *
+   * @param {object} entry 白名单：`kind` · `baseRootHash` · `baseVersion` · `myVersion`
+   *   （`at` 由这里填）。**别的键一律拒** —— 那是别的边的东西。
    */
   noteLineage(id, entry = {}) {
     checkAppId(id);
     if (!this.has(id)) throw new AppsError('这个小程序不在你这儿');
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new AppsError('血缘边要是一条记录');
+    }
+    // 🔴 **只收能力体版本边自己的字段**（92 §③ 阶段 5）—— 多一个都不收。
+    const LIN_KEYS = ['kind', 'baseRootHash', 'baseVersion', 'myVersion'];
+    const foreign = Object.keys(entry).filter((k) => k !== 'at' && !LIN_KEYS.includes(k));
+    if (foreign.length > 0) {
+      throw new AppsError(
+        `血缘边只记能力体那一族（根 hash 与版本），收不了这些：${foreign.join('、')}`
+        + ' —— 经验／数据的来源住它们自己那条登记边（不在 app 血缘里）',
+      );
+    }
     const all = this.lineage(id);
     const rec = { at: this.now(), ...entry };
     all.push(rec);

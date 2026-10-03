@@ -226,6 +226,79 @@ export function chainKeyOf({ from, to, packId, shapeVersion }) {
 }
 
 /**
+ * ★ **92 §③ 阶段 5：数据交付边**（三条登记边里的第三条）—— **成对、永不回流**。
+ *
+ * ── 它是什么 ─────────────────────────────────────────────
+ * 数据包那条出去律是"**收方**一对一同意且可撤回"⇒ 它落成的边**天然是一对**：
+ * 一边是给的人、一边是要的人（`from`／`to`，两个**人格 key**）。
+ * 🔴 **来源就是这两个端点**（数据边没有 app 血缘那回事 —— 那是能力体那一族的）。
+ *
+ * ── 两条不变量（这一节就是它们的机器判据）──────────────────
+ *   ① **成对**：一条边上的【同意】必须有对应的【请求】；【交付】必须有对应的【同意】。
+ *      没有 ⇒ 那是一张空白授权（`consent()`／`deliver()` 各自 fail-closed 拦它，
+ *      这里只是把这个事实**读出来**给闸看）。
+ *   ② **永不回流**：边上的四步**没有一步是"从对面收回来"**：
+ *      撤回（`revoke`）只改**未来**（`#revoked` 拦新请求与新交付），
+ *      它**不删**对面已经拿到的那一份（物理上收不回 —— 91 §6.4 顶上那句）。
+ *      ⇒ `everReflowed` **永远是 `false`**；谁把"撤回"读成"取回来"就是把它读成了回流。
+ *
+ * 🔴 **纯读**：它只折 `list()` 已经读到的那些记录，**不写、不改、不删**。
+ * ⚠️ 它**不搬运字节**（同整个模块：这一版一条字节都带不出去）。
+ *
+ * @returns {{edges:Array<object>}}
+ */
+export function edgeSummary({ records = [] } = {}) {
+  const rows = Array.isArray(records) ? records : [];
+  const chains = new Map();
+  for (const r of rows) {
+    if (!DELIVERY_TYPES.includes(r?.type)) continue;
+    const key = r.chainId ?? null;
+    if (key === null) continue;
+    if (!chains.has(key)) {
+      chains.set(key, {
+        chainId: key,
+        from: r.from ?? null,
+        to: r.to ?? null,
+        packId: r.packId ?? null,
+        shapeVersion: r.shapeVersion ?? null,
+        range: r.range ?? null,
+        types: [],
+      });
+    }
+    const e = chains.get(key);
+    if (!e.types.includes(r.type)) e.types.push(r.type);
+    // "成对"判的是**四步的先后**，所以留着取号（`list()` 已经按 seq 排过）
+    e[`${r.type.split('/')[1]}Seq`] = r.seq ?? null;
+  }
+  const edges = [];
+  for (const e of [...chains.values()].sort((a, b) => String(a.chainId).localeCompare(String(b.chainId)))) {
+    const has = (t) => e.types.includes(t);
+    const request = has(EV_REQUEST);
+    const consent = has(EV_CONSENT);
+    const delivered = has(EV_DELIVER);
+    const revoked = has(EV_REVOKE);
+    // 🔴 **成对**：同意与交付各自都要有一条"上文"（请求／同意）。
+    const paired = (!consent || request) && (!delivered || consent);
+    edges.push({
+      kind: 'data',
+      chainId: e.chainId,
+      from: e.from,
+      to: e.to,
+      packId: e.packId,
+      shapeVersion: e.shapeVersion,
+      range: e.range,
+      steps: { request, consent, delivered, revoked },
+      paired,
+      // 撤回之后（按取号判先后）：新请求一律拒。取出号核，**不靠数组顺序**。
+      revokedBeforeDeliver: revoked && (!delivered || (e.revokeSeq ?? 0) < (e.deliverSeq ?? 0)),
+      // 🔴 **永不回流** —— 结构上的事实，不是一句承诺
+      everReflowed: false,
+    });
+  }
+  return { edges };
+}
+
+/**
  * 四步的**登记面**（一步一条记录，落在那条可见日志上）。
  *
  * @param {object} o
