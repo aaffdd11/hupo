@@ -30,6 +30,7 @@ import '../models/conn_state.dart';
 import '../models/chat_select.dart';
 import '../models/design.dart' as d;
 import '../models/desktop_words.dart';
+import '../models/landing_words.dart';
 import '../models/dsh_design.dart';
 import '../models/export_words.dart';
 import '../models/file_changes.dart';
@@ -961,7 +962,7 @@ class _ChatScreenState extends State<ChatScreen> {
             child: ChatFloater(
               key: _floaterKey,
               maxHeight: maxH,
-              title: '助手',
+              title: appName,
               // ★ 会话头上、动作串前面那一格：**这一窗动过哪些文件**那颗按钮。
               beforeActions: _panelButton(),
               initialTier: widget.initialTier,

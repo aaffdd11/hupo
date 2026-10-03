@@ -1,5 +1,26 @@
 # 手册变更记录
 
+> ## v2.37 · **产品名 = 「琥珀聊天」**（2026-10-03 · `D1.5` · 主人：*「我们叫琥珀聊天。」*）
+>
+> **问题**：产品名在四处**各写各的**，而且**已经不一致** —— 浏览器标签页、"添加到主屏幕"
+> 的图标名、聊天窗口抬头都是「**助手**」，而登录页/首页那一格早就换成了「**琥珀**」
+> （2026-09-22「统一页面风格」那次，登录页改成跟首页共用一个标志 `BrandMark` ＋ `landingBrand`）。
+> ⇒ 手册 `01-PROJECT.md` §6.1 那张登录页定稿图与 `05-DECISIONS.md` 的 `D2` 定稿文案
+> **还写着「助手」** —— 它们描述的是**已经不存在的那一屏**。
+>
+> **定案**：产品名 = 「**琥珀聊天**」，**浏览器标签页** · **主屏幕图标名** · **聊天窗口抬头**
+> 三处逐字用它；**品牌名「琥珀」仍是登录页 / 首页那一格**（两个词不是一个词，别互相顶替）。
+>
+> **落点**：`v2/apps/mobile/lib/models/landing_words.dart` 新增 `appName`（**一处出处**）·
+> `lib/main.dart`（`MaterialApp.title`）· `lib/screens/chat_screen.dart`（浮窗抬头）·
+> `web/index.html`（`<title>` ＋ `apple-mobile-web-app-title`）· `web/manifest.json`（`name` / `short_name`）。
+> ⚠️ 静态壳那两份 import 不了 Dart ⇒ 判据 `test/unit/web_shell_test.dart` **拿 `appName` 逐字钉住**。
+>
+> **判据**：`bash scripts/check-client.sh` 全过（analyze ＋ `test/unit` ＋ `test/widget` ＋
+> 可访问性硬闸 5 档字号）· `flutter build web --release` 出来的产物已上线
+> （入口指纹见 `data/deploy-stamp.json`）· 线上页面**真的**是「琥珀聊天」（取 `index.html` 与
+> `manifest.json` 看、浏览器那条路通）。落地 [`dev/170`](../dev/170-PRODUCT-NAME.md)。
+
 > ## v2.36 · **"包的身份从哪来"定了：页面自带身份（甲）**（2026-10-03 · 主人一个字「甲」）
 >
 > **背景**：`D1`（数据契约 ＋ 命名空间隔离，`v2.31` 前后）把判定建好了，但**没有一条产品调用方** ——

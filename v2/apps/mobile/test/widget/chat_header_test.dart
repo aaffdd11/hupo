@@ -16,6 +16,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/export_words.dart';
+import 'package:hupo_app/models/landing_words.dart';
 import 'package:hupo_app/models/file_panel_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
@@ -63,11 +64,11 @@ void main() {
     );
   });
 
-  testWidgets('会话头那几样还在：助手 · 导出 · 过程 ·（右栏那颗）', (tester) async {
+  testWidgets('会话头那几样还在：名字 · 导出 · 过程 ·（右栏那颗）', (tester) async {
     await _pump(tester);
     final header = find.byType(ChatFloater);
     expect(
-      find.descendant(of: header, matching: find.text('助手')),
+      find.descendant(of: header, matching: find.text(appName)),
       findsOneWidget,
       reason: '会话头那两个字被碰掉了',
     );

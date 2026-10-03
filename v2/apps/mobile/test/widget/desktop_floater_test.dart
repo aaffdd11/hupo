@@ -14,6 +14,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/dsh_design.dart';
+import 'package:hupo_app/models/landing_words.dart';
 import 'package:hupo_app/models/design.dart' as d;
 import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/models/space_words.dart';
@@ -312,7 +313,7 @@ void main() {
     //    ⚠️ 2026-09-24 改：原来是点"最上面 12px"，而现在那一块**就是抓手**
     //      （主人要它在上边框正中央）⇒ 再点那儿等于点抓手，判据会红得毫无意义。
     //      改成点标题那几个字（那儿没有按钮，也在浮窗内部）。
-    await tester.tap(find.text('助手'));
+    await tester.tap(find.text(appName));
     await tester.pumpAndSettle();
     expect(_floaterRect(tester).height, before, reason: '点浮窗内部不该动它（更不该漏到桌面）');
     expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '还是展开着');

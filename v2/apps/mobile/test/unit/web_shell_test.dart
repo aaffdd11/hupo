@@ -10,6 +10,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hupo_app/models/landing_words.dart';
 
 void main() {
   group('Web 外壳', () {
@@ -22,11 +23,23 @@ void main() {
       }
     });
 
-    test('名字就是那个给用户看的词（「助手」）', () {
-      expect(File('web/index.html').readAsStringSync().contains('<title>助手</title>'), true);
+    test('🔴 名字就是那个给用户看的词（`appName`）—— 静态壳与 Dart **逐字钉在同一个常量上**', () {
+      // ⚠️ 为什么这么写：`web/` 那两份是**脚手架的字符串**，import 不了 Dart ⇒
+      //    靠这一条把它们钉回 `appName`（一处出处；不然改了一处、另一处悄悄旧着）。
+      final html = File('web/index.html').readAsStringSync();
+      expect(
+        html.contains('<title>$appName</title>'),
+        true,
+        reason: '★ 浏览器标签页的标题对不上 `appName`（应当是「$appName」）',
+      );
+      expect(
+        html.contains('content="$appName"'),
+        true,
+        reason: '★「添加到主屏幕」之后那个名字（apple-mobile-web-app-title）对不上 `appName`',
+      );
       final m = jsonDecode(File('web/manifest.json').readAsStringSync()) as Map;
-      expect(m['name'], '助手');
-      expect(m['short_name'], '助手');
+      expect(m['name'], appName);
+      expect(m['short_name'], appName);
     });
 
     test('🔴 网页上**关掉浏览器自己的右键菜单**（不关的话，右键删除点不到）', () {

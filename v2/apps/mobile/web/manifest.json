@@ -1,6 +1,6 @@
 {
-    "name": "助手",
-    "short_name": "助手",
+    "name": "琥珀聊天",
+    "short_name": "琥珀聊天",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

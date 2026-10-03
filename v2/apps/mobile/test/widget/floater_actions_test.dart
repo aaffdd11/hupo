@@ -8,6 +8,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/space_words.dart';
+import 'package:hupo_app/models/landing_words.dart';
 import 'package:hupo_app/models/export_words.dart';
 import 'package:hupo_app/models/speak_words.dart';
 import 'package:hupo_app/models/timeline.dart';
@@ -49,7 +50,7 @@ void main() {
 
   testWidgets('★ 标题比原来大：>= 16（它是这一屏的名字）', (tester) async {
     await _pump(tester);
-    final title = tester.widget<Text>(find.text('助手'));
+    final title = tester.widget<Text>(find.text(appName));
     expect(
       title.style?.fontSize,
       greaterThanOrEqualTo(16),

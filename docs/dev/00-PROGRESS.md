@@ -32,6 +32,7 @@
 
 | # | 一句话 | 状态 | 全文 |
 |---|---|---|---|
+| **266** | 🔴 **产品名 = 「琥珀聊天」**（主人 2026-10-03 原话：*「聊天那个，叫助手。页面在浏览器也成了助手。我们叫琥珀聊天。」*；口径写进手册 `05-DECISIONS.md` **`D1.5`**，升 **v2.37**）。原来那四个字在**五处**各写各的、而且**本来就不一致**：`MaterialApp.title` ／ 浮窗抬头 ／ `web/index.html` 的 `<title>` ＋ `apple-mobile-web-app-title` ／ `web/manifest.json` 的 `name`／`short_name` 都是「助手」，而**登录页/首页那一格早就是「琥珀」**（2026-09-22 统一页面风格那次改的）⇒ 手册 `01-PROJECT.md` §6.1 的登录页定稿图与 `D2` 的文案**记的是已经不存在的那一屏**，一并更正 | ✅ **已上线** | `docs/dev/170-PRODUCT-NAME.md`（新） · 改：`lib/models/landing_words.dart`（新 `appName`，**一处出处**）· `lib/main.dart` · `lib/screens/chat_screen.dart` · `web/index.html` · `web/manifest.json` · 手册 `01-PROJECT.md`／`05-DECISIONS.md`／`CHANGELOG.md`（**v2.37**）· 判据改：`test/unit/web_shell_test.dart`（**拿 `appName` 逐字钉住**静态壳那两份）／`test/widget/{chat_header,floater_actions,desktop_floater}_test.dart` | **品牌名「琥珀」不动**（登录页/首页那一格）、**APK 桌面名不动**（`android:label`）、**句子里出现的"助手"不动**（那是句子不是名字）。**一处出处** = `appName`；静态壳 import 不了 Dart ⇒ 靠判据钉回来。读数：`bash scripts/check-client.sh` **✅ 硬闸全过**（analyze ＋ `test/unit` ＋ `test/widget` 全量 ＋ 可访问性 5 档）· 网页 `deploy-web-v2.sh` 上线（入口指纹 **`7d238394c0ca`**、部署后浏览器自检过）· **线上取回来真的是它**（`<title>琥珀聊天</title>` · `apple-mobile-web-app-title=琥珀聊天` · `manifest.name=琥珀聊天`）· 浏览器那条路通（1 条 WS、202 帧、令牌续期）。⚠️ **如实说**：展开档的抬头**没有用人眼确认过** —— 探针驱动不了画布（合成指针进不去 `flt-glass-pane`），语义树只在收起档稳定；证据是 widget 判据 ＋ 收起档截图（`170` §五）。**服务端一个字没动** · 手册动了 ⇒ **父 agent 重建开机清单**（已重建，见 §九） |
 | **265** | ★ **`A3·补` 同族落地：回收留痕 `reclaimed.json` 的"谁删的"换成带键 HMAC**（还的是账本 `#74`；口径是拍过板的：`05-DECISIONS.md` D4.24／主人 2026-10-03「可以的」）。那一格原来是 **`by: <sub>` 的明文**（`owner`／`u1`／`u2`…，可枚举；落点在**用户自己那一格**）⇒ 现在写 = `credHashOf(sub, appsSignKey)`（**同一把键、同一个域** `hupo-cred-v1`，与审计账／共享库作者假名**同一个函数**）。改法是**"读得出老值、只写新值"**（**不做存量迁移**）：新增 `legacyReclaimBy` ＋ `reclaimByOf` ＋ `readReclaimBy`（`'cred'｜'legacy'｜**`null`（fail-closed）**，形状照 `published.js` 的 `readAuthorHash`），写永远走新口径；键经 `worlds.js` 的 `reclaimCtx()`／`apps.js` 的 `remove()` 一路传进 `reclaimScope()` | ✅ 已推送（`docs/dev/169`）（`npm test` **1505/0**（改前 **1501**；本批 **+4**）· 新闸 `check-reclaim-by-hash.sh` **4/0**（① 新留痕搜不到身份明文／手机号明文＋负向对照 ② 稳定／两人不撞／换键就换值＋**生产接线** ③ **真机那一份老留痕**（`app-0yegxgx1`，`by=owner`·`takenSeqs=[130…135]`）逐字节拷进来，走今天的读路照样解释得了号洞、本人认得出／别人认不出、读不出的如实 `null` ④ 真机 `.removed/` **111 条目**逐文件 sha256 一致＝零残留；**三刀变异**各自当场红）· 四条老闸**未改**照旧 `check-index-author-hash.sh` **4/0**／`check-app-entry-identity.sh` **9/0**／`check-docs.mjs` 绿 **186 份**）| `docs/dev/169-RECLAIM-BY-HASH.md`（新） · 改（**小改**）`src/{reclaim,worlds,apps}.js` · 新 `test/reclaim-by-hash.test.js`（4 条 R1–R4）＋ `test/app-reclaim.test.js` S8 断言改口径 · 新 `scripts/check-reclaim-by-hash.sh`（4 条带负向对照 ＋ 变异）。⚠️ **如实说**：这条账原来记作"明文手机号"，盘上实测写的是 **`users.js` 发的稳定 id**（不是手机号；手机号只住 `data/users.json` 0600）⇒ 按实际泄漏的东西（可枚举 id）修，判据的搜索器**照样**把手机号形状当泄漏（合成号只进负向对照，真手机号一个都没进仓库）· 这一格**今天没有生产读取方**（`readReclaimBy` 是给将来留的唯一读法）· ✅ **手册没动**（`02-ARCHITECTURE` 只说"谁删的"、没写口径；`08-SPEC` 那条回执本来就只列三项 ⇒ 没有一句变假）⇒ **不需要重建开机清单** · ✅ **已上线**（父 agent 收尾：本机服务重启、对外 **200**；产品层 **`4b4e6433540a → 8c2e0f63592c`**（`gitRev = 3f0ad71`，`--verify` 起得来的那一份），2026-10-03 **16:43 UTC** 记的账。⚠️ **这一次同时把 `#257`…`#264` 一起带上线** —— 它们尾巴上写的「没部署」已过期，**线上是什么以本格为准**） |
 | **264** | 🔴 **`D4.24` · A2／C1／C3 落地：发布真跑一次（分级）＋ 升级分级派 ＋ 升级粒度**（口径是拍过板的：`05-DECISIONS.md` D4.24／签字页 `161` A2·C1·C3／`85` §四·2·§五／`90` §7.1 Q7.3·§7.2·§10.1②④／`92` §②）。**A2**：新增 `src/app-run.js`（**唯一判定**）—— 入口那一份的脚本在最小壳里**真编译、真执行**（真 JS 引擎 ＋ **硬时间预算**），**入口必崩 ⇒ 拒**（语法错／顶层抛／超时／本地脚本缺失，理由点名哪个文件哪一行），**不做全量回归**（不碰子进程／网络／npm；死循环 251ms 被截）；`published.publish()` 在**写盘之前**调它 ⇒ 拒时共享库**零字节**，成了则 `index.json` ＋ 审计里留**"跑过"的凭据**；`apps-socket` 分开的拒绝码 `entry-would-crash`。**C1**：`src/app-upgrade.js` 的 `decideUpgrade()` = **唯一那处比较**（契约版逐字未变 ⇒ `byte-swap` 不请 AI；变了 ⇒ `ai-rewrite`；读不出 ⇒ 抛 `不可算`）＋ `UpgradeBook.rewriteCount()`。**C3**：`UpgradePolicy` **默认 `mode='user'`（按用户整体跟）**，`pin(id,version)` 显式留旧版（`state()` 看得见 `follows`／`pinnedVersion`）；装／升级真路（`worlds` 的 `ctx.upgrade` → `apps-socket` install）记下那一次决定 | ✅ 已推送（`docs/dev/168`）（`npm test` **1501/0**（改前 **1488**；本批 **+13**）· 新闸 `check-publish-run-upgrade.sh` **11/0**（P1–P8 全带负向对照 ＋ **变异**：把 guard 改成"一律请 AI" ⇒ 未变也重写 ⇒ 红）· 真数据目录 **152 文件逐文件 sha256 复原** · 九条老闸**一个字节没动**照旧 13/0／9/0／17/0／8/0／8/0／9/0／4/0／10/0／6/0 · `check-docs.mjs` 绿 185 份） | `docs/dev/168-PUBLISH-RUN-UPGRADE.md`（新） · 新 `src/app-run.js` ／ `src/app-upgrade.js` · 改（**小改**）`src/{published,apps-socket,worlds}.js` · 新 `test/app-run.test.js`（7）＋ `test/app-upgrade.test.js`（6） · 新 `scripts/check-publish-run-upgrade.sh`。⚠️ **"请 AI 重写"的执行器今天不存在** ⇒ 计数读的是"**决定**计数"（`168` §五·1，F3 的另一半没落）；最小真跑**替不了真浏览器**（§五·2）。✅ **手册没动**（D4.24 已记口径）⇒ **不需要重建开机清单**（`00-PROGRESS.md` 不在 strict 清单里）· ✅ **已上线**（随 `#265` 那次收尾一起 —— 本行写下时确实没部署；线上从那次起带上了它，读数见 `#265`） |
 | **263** | 📋 **"包的身份从哪来"拍板：甲（页面自带身份）**（主人 2026-10-03 一个字「甲」）| ✅ **已写进决定**（`D4.26`，v2.36）| 手册 `05-DECISIONS.md` ＋ `CHANGELOG.md` | **甲**：平台把"你是哪个 app 的哪个包"**注入**给页面（窄口，只能读写自己那一格）；**不许从 URL/查询串拿包名**。**为什么**：D1 的判定没有产品调用方（`#75`）＋ 主人已下"有存储就做"（`D4.25`）⇒ 必须有一条受管的落点。⚠️ 落地（注入窄口接 D1）**排在 A2/C1/C3 之后** |
@@ -349,16 +350,24 @@
 > | **现在攒着什么、还没重建** | **就在这一节下面**（写「无」就是没有） |
 > | 每次重建的留痕（改哪 / 改什么 / 为什么 / 时间 / 动了哪几个文件） | [`PROGRESS-HISTORY.md` §九](PROGRESS-HISTORY.md#s9) |
 
-**现在攒着的：有 2 笔 ——**
-**① 2026-10-03 `#253`（92 §③ 阶段 6）改了 `docs/handbook/**`**（`02-ARCHITECTURE.md` 加 **N31** · `08-SPEC.md` 加 **§14.7** · `CHANGELOG.md` 升 **v2.30**）。
-**② 2026-10-03 `#255`（92 §③ 阶段 5）又改了 `docs/handbook/**`**（`02-ARCHITECTURE.md` 加 **N32** · `08-SPEC.md` 加 **§14.8** · `05-DECISIONS.md` O 组加 **D4.22** · `CHANGELOG.md` 升 **v2.31**）。
-⇒ **这两笔一起请父 agent 重建开机清单**（`docs/handbook/**` 是 `strict`；命令照 `verify-integrity.mjs` 打出来的那一条，里面是绝对路径）。
-⚠️ 本批**没有自己重建**（`#255` 的硬约束：不许自己重建开机清单）；`node scripts/verify-integrity.mjs` 现在如实报
-**4 处会拒绝启动**（就是上面那四份手册）＋ **2 处只报**（`src/apps.js`／`src/delivery.js`）＋ **2 条漏进清单**
-（新文件 `src/method-edge.js`／`scripts/check-edge-kinds.sh`）—— 那是**预期的**，等重建。
+**现在攒着的：无 —— 2026-10-03 已重建过一次（见下）。**
+
+⚠️ 这一格原来记着"有 2 笔"（`#253`／`#255` 改的 `docs/handbook/**`），
+**那两笔后来已经随 `#263`（`D4.26` 拍板）那一次重建带上了**（`git log` 里 `25bad38` 那句
+"重建清单"就是它）—— 只是这一格当时没跟着改。2026-10-03 我核过：
+`node scripts/verify-integrity.mjs` 报 **0 处会拒绝启动**。
+
+**这一次重建（2026-10-03 16:55 UTC，我跑的）**：改的是 `docs/handbook/**` 三份
+（`01-PROJECT.md` §6.1 登录页定稿图第一行 `助手` → `琥珀` · `05-DECISIONS.md` 新增 `D1.5`
+＋ `D2` 定稿文案那一格同改 · `CHANGELOG.md` 升 **v2.37**），**为什么**：主人 2026-10-03 定了
+产品名「琥珀聊天」，而那两处写的是**已经不存在的那一屏**。顺手把 `#264`／`#265` 那两个
+`src/` 文件（`app-run.js`／`app-upgrade.js`／`check-publish-run-upgrade.sh`／`check-reclaim-by-hash.sh`
+等"漏进清单"的）一起收进基线。⇒ 重建后 `verify-integrity.mjs` **✅ 对上了**
+（`/etc/hupo/integrity.json`，`root:root 0444`）· 明细见 [`PROGRESS-HISTORY.md` §九](PROGRESS-HISTORY.md#s9)。
 
 | 最近三次重建 | 一句话 | 全文 |
 |---|---|---|
+| `九·补56` · 2026-10-03 | `D1.5` 产品名「琥珀聊天」（＋ §6.1 登录页定稿图与 `D2` 文案那两处 `助手` 更正） | [→](PROGRESS-HISTORY.md#b56) |
 | `九·补55` · 2026-10-01 | 手册 §2.1：`/api/creds` 字段名更正 ＋ `/api/space` 的 `voiceReady` | [→](PROGRESS-HISTORY.md#b55) |
 | `九·补54` · 2026-10-01 | `D3.9·补`：图片与视频**同一把钥匙**（只填一栏两样都能用） | [→](PROGRESS-HISTORY.md#b54) |
 | `九·补53` · 2026-10-01 | 语音**完全切成豆包**（腾讯那半条腿挪进备份） | [→](PROGRESS-HISTORY.md#b53) |

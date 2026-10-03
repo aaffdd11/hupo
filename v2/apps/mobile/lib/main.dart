@@ -19,6 +19,7 @@ import 'screens/chat_screen.dart';
 import 'screens/app_theme.dart';
 import 'services/api.dart';
 import 'models/image_outcome.dart';
+import 'models/landing_words.dart';
 import 'models/space.dart';
 import 'screens/model_key_screen.dart';
 import 'screens/not_logged_in.dart';
@@ -237,7 +238,7 @@ class _HupoAppState extends State<HupoApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '助手',
+      title: appName,
       debugShowCheckedModeBanner: false,
       // ★ **全站一套外观**（契约 `docs/dev/49-STYLE.md`）：数值只有 `models/design.dart`
       //   一处出处，这里只是把它拼成 `ThemeData`。改那六个颜色/三档圆角，
