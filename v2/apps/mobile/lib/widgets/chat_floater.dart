@@ -108,7 +108,6 @@ class ChatFloater extends StatefulWidget {
     required this.title,
     required this.child,
     required this.composer,
-    this.beforeActions,
     this.trailing = const <Widget>[],
     this.initialTier = FloaterTier.collapsed,
     this.onTier,
@@ -133,14 +132,6 @@ class ChatFloater extends StatefulWidget {
   /// 抓手行右边的动作（回收站/导出/过程/配置/退出那套）。
   /// ⚠️ **收起态不画它们** —— 收起条只留"带字的展开入口"（D3.8）。
   final List<Widget> trailing;
-
-  /// **标题行上、动作那条横滚串前面那一格**。
-  ///
-  /// 今天放的是【这一窗动过哪些文件】那颗按钮（`FilePanelButton`）。
-  /// `null` = 那一格什么都不画（老调用方 / 单看这一块的测试照旧）。
-  /// ⚠️ **收起态不画它**（收起条只有一行：抓手 ＋ 输入框）。
-  /// ⚠️ 它是**不弹性的**：挤的时候让标题去截字，这一格永远整颗看得见。
-  final Widget? beforeActions;
 
   // ⚠️ 2026-09-24：原来这里有一个 `leading`（标题前面那个"在哪儿说话"的图标）。
   //    聊天窗口收成**一行**之后，它搬到了输入条那一行的最前面
@@ -490,14 +481,6 @@ class ChatFloaterState extends State<ChatFloater> {
                                   style: dshTextStyle(DshTypes.title, p.labelPrimary),
                                 ),
                               ),
-                              // ★ 会话头上、动作那条横滚串**前面**那一格
-                              //    （今天放的是【这一窗动过哪些文件】那颗按钮）。
-                              //    ⚠️ 它是**不弹性**的：挤的时候让标题去截字，
-                              //       这一格永远整颗看得见。
-                              if (widget.beforeActions != null) ...[
-                                const SizedBox(width: d.gapS),
-                                widget.beforeActions!,
-                              ],
                                                             // 🔴 **这里原来有一个 `Spacer()`** —— 2026-09-26 拿掉。
                               //    它和右边那一条**都是 flex 1** ⇒ 把剩余宽对半分，
                               //    而它自己一个像素都不画。390 宽的手机上量到：

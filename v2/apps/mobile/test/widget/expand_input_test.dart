@@ -46,7 +46,7 @@
 //    早就有判据，而这两条都**不在纯逻辑里** —— 一条在"谁算用户自己动的"，
 //    一条在"布局把键盘算了几遍"。
 // ⚠️ **发送那一条（`展开后发送`）在修之前就是绿的**：我把主人点名的四种状态
-//    （右栏关/开 · 有折叠控件 · 有工具行 · 亮/暗 ＋ 非默认字号）全过了一遍，
+//    （常态 · 有折叠控件 · 有工具行 · 亮/暗 ＋ 非默认字号）全过了一遍，
 //    真浏览器里也用真事件（假 harness）验过 —— **没有复现出"发不出去"**。
 //    它是**回归网**（防以后谁把这条链子碰断），不是"修好了"的证据；如实记在
 //    `docs/dev/121-EXPAND-INPUT-FIX.md` §五。
@@ -62,7 +62,6 @@ import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
-import 'package:hupo_app/widgets/file_panel.dart';
 import 'package:hupo_app/widgets/tool_row_view.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hupo_app/widgets/composer.dart';
@@ -218,7 +217,7 @@ void main() {
   // ⚠️ 下面这一组在**修之前就是绿的**（我没能复现"发不出去"，见文件头）。
   //    留着它是回归网：主人点名的四种状态各一条，谁碰断了当场红。
 
-  for (final state in const ['右栏关', '右栏开', '有折叠控件', '有工具行']) {
+  for (final state in const ['常档', '有折叠控件', '有工具行']) {
     testWidgets('展开后发送 · $state ⇒ 恰好交给服务端一句', (tester) async {
       final r = _controller();
       _feed(r.c, 6, tools: state == '有工具行' || state == '有折叠控件');
@@ -235,12 +234,6 @@ void main() {
       if (state == '有工具行') {
         expect(find.byType(ToolRowView), findsWidgets, reason: '★ 没有工具行 ⇒ 这条没量到那个状态');
       }
-      if (state == '右栏开') {
-        await tester.tap(find.byKey(filePanelButtonKey));
-        await tester.pumpAndSettle();
-        expect(find.byKey(filePanelCloseKey), findsWidgets, reason: '★ 右栏没开 ⇒ 这条没量到那个状态');
-      }
-
       await tester.enterText(find.byType(TextField), '在吗');
       await tester.pump();
       expect(_sendReady(tester), isTrue, reason: '★ 有字了发送钮还是灰的');
@@ -470,49 +463,4 @@ void main() {
     );
   });
 
-  // ── ④ 手机上开右栏：不许把聊天挤成 30 像素 ─────────────────────
-
-  testWidgets('🔴 手机宽度 + 右栏开 ⇒ 聊天还剩得下一块能用的宽度（溢出 = 红）', (tester) async {
-    const size = Size(390, 844);
-    final r = _controller();
-    _feed(r.c, 6, tools: true);
-    tester.view.physicalSize = size;
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await _pump(tester, r.c);
-    await _expand(tester);
-    await tester.tap(find.byKey(filePanelButtonKey));
-    await tester.pumpAndSettle();
-    expect(find.byKey(filePanelCloseKey), findsWidgets, reason: '★ 右栏没开 ⇒ 这条没量到那个状态');
-
-    // 负向对照：气泡那一行真的画着（不然"没溢出"是因为什么都没有）
-    expect(find.text('第 6 句'), findsWidgets, reason: '★ 屏幕上没有气泡 ⇒ 这条量的是空的');
-
-    expect(
-      tester.takeException(),
-      isNull,
-      reason: '★ 右栏一开就横向溢出（手机上聊天被挤到几十像素）',
-    );
-    final chatWidth = tester.getRect(find.byType(ListView).first).width;
-    // ⚠️ 用 `dshRightPanelNarrowWidth`（"一根柱子能用得起来的最小宽度"）：
-    //    修完之后 `dshRightPanelChatMinWidth` 就是它那一个数（同源、不各写一份）。
-    expect(
-      chatWidth,
-      greaterThanOrEqualTo(dshRightPanelNarrowWidth),
-      reason: '★ 聊天那一块被挤得比"能用"的最小宽度还窄',
-    );
-  });
-
-  testWidgets('对照组：够宽时**还是"挤"**（聊天真的变窄，栏在右边 —— 这条一直是对的）', (tester) async {
-    final r = _controller();
-    _feed(r.c, 6, tools: true);
-    await _pump(tester, r.c);
-    await _expand(tester);
-    final wide = tester.getRect(find.byType(ListView).first).width;
-    await tester.tap(find.byKey(filePanelButtonKey));
-    await tester.pumpAndSettle();
-    final narrow = tester.getRect(find.byType(ListView).first).width;
-    expect(narrow, lessThan(wide - 100), reason: '★ 够宽时本该是"挤"（与 DSH 三轨同形）');
-    expect(narrow, greaterThanOrEqualTo(dshRightPanelNarrowWidth), reason: '★ 挤完还得能用');
-  });
 }

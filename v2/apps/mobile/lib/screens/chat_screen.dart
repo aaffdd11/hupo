@@ -33,7 +33,6 @@ import '../models/desktop_words.dart';
 import '../models/landing_words.dart';
 import '../models/dsh_design.dart';
 import '../models/export_words.dart';
-import '../models/file_changes.dart';
 import '../models/scroll_follow.dart';
 import '../models/space.dart';
 import '../models/app_spec.dart';
@@ -72,7 +71,6 @@ import '../widgets/bubble_select_bar.dart';
 import '../widgets/bubble_menu.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/chat_floater.dart';
-import '../widgets/file_panel.dart';
 import '../widgets/mini_app_host.dart';
 import '../widgets/mini_app_frame.dart';
 import '../widgets/composer.dart';
@@ -347,87 +345,6 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 这一轮的过程行**现在折起来了吗**（收口 + 用户没展开过）。
   bool _processFolded(int turn, int closedThrough) =>
       turn <= closedThrough && !_unfoldedTurns.contains(turn);
-
-  // ── ★ 批 5：右栏（DSH 的右侧栏；契约 `docs/dev/120-FILE-PANEL.md`）──────
-  //
-  // 🔴 它是**浮窗里面**一块**滑进来的盖板**（不是新的一屏、也不把聊天挤窄）：
-  //    聊天那一块留在树里、宽度一个像素都不变 ⇒ 关掉的时候
-  //    `ScrollPosition` 原封不动（"关掉不许丢位置"那条靠的就是这个）。
-  // ⚠️ 会话头上那颗展开按钮**开着的时候不画**（出口改成栏里那颗「收起这一栏」
-  //    ——DSH 同一条）。
-
-  /// 右边那一栏现在开着没有。
-  bool _panelOpen = false;
-
-  /// **算过的文件改动**（按"工具行那批引用"缓存）。
-  ///
-  /// ⚠️ 为什么要这一小层：这一屏几乎每帧都在重建（流、滚动、动画），而
-  ///    `FileChanges.of` 要把**每一行**的入参 JSON 解一遍 —— 每帧算一次
-  ///    在长会话里是白烧。⚠️ 用 `identical` 比引用（`ChatController.items` 每次都新建
-  ///    一个 List ⇒ 内容没变也会"变"）—— 见 `_fileChangesOn` 顶上那段。
-  FileChanges? _fileCache;
-  List<TimelineItem>? _fileCacheOn;
-
-  /// 打开右边那一栏。
-  void _openPanel() {
-    if (_panelOpen) return;
-    setState(() => _panelOpen = true);
-  }
-
-  /// 收起右边那一栏（**聊天那一屏一个像素都不动**）。
-  void _closePanel() {
-    if (!_panelOpen) return;
-    setState(() => _panelOpen = false);
-  }
-
-  /// 那一刻的 `items` 清单是不是**同一批对象**（见 [_fileCache] 那段）。
-  bool _fileChangesOn(List<TimelineItem> items) {
-    final cached = _fileCacheOn;
-    if (cached == null || cached.length != items.length) return false;
-    for (var i = 0; i < items.length; i += 1) {
-      if (!identical(cached[i], items[i])) return false;
-    }
-    return true;
-  }
-
-  /// **这一窗动过哪些文件**（`models/file_changes.dart` 抽出来的那份）。
-  FileChanges _fileChanges(ChatController c) {
-    final items = c.items;
-    if (_fileCache == null || !_fileChangesOn(items)) {
-      _fileCache = FileChanges.of([
-        for (final it in items)
-          if (it is TimelineToolCall) it.row,
-      ]);
-      _fileCacheOn = items;
-    }
-    return _fileCache!;
-  }
-
-  /// 会话头上、动作那条横滚串**前面**那一格：**这一窗动过哪些文件**那颗按钮。
-  ///
-  /// ⚠️ 面板开着的时候它**不画**（出口是栏里那一颗「收起这一栏」—— DSH 同一条）。
-  Widget? _panelButton() =>
-      _panelOpen ? null : FilePanelButton(onPressed: _openPanel);
-
-  /// **这一栏是"挤着聊天"还是"盖在聊天上面"**（标题行与视图那一块**问的是同一个判断**）。
-  ///
-  /// 🔴 为什么要分两种：这一栏开在**浮窗里面**，而那些动作按钮（收起来 / 回收站 /
-  ///    导出 / 过程 / 配置 / 退出）住在**同一根标题行**上。地方不够的时候，
-  ///    "挤"会把标题行挤成负宽 —— 那个 `IconButton` 的语义矩形量出来是
-  ///    **负的**（真栽过：`Size(-281, 48)`，命中区那道硬闸当场红）。
-  /// ⇒ 够宽就**挤**（聊天还看得见一条边，与 DSH 的三轨同一个形状）；
-  ///    不够宽就**盖满**（派活单点名的那一档：窄屏下按不动 = 点了没反应，比盖住更坏）。
-  ///
-  /// 🔴 **2026-09-26 补上第三个条件**（真机缺陷）："这一栏放得下"**不等于**
-  ///    "聊天还剩得下" —— 手机那一档（浮窗里约 330）算出来的栏宽正好 300 ⇒
-  ///    聊天只剩 30 像素，气泡那一行 `RenderFlex overflowed by 41 pixels`。
-  ///    ⇒ 只有 **两根柱子各自都有一块能用的宽度**（[dshRightPanelLeavesRoomForChat]）
-  ///      才走 `Row`；否则走"盖"（聊天一个像素都不动、栏照旧滑进来）。
-  bool _panelDocked(double available) =>
-      _panelOpen &&
-      dshRightPanelFits(available) &&
-      dshRightPanelLeavesRoomForChat(available) &&
-      dshRightPanelWidth(available) < available;
 
   // ── ★ 批次 4：聊天窗口的外观与字号（契约 `docs/dev/119`）────────────
   //
@@ -963,8 +880,6 @@ class _ChatScreenState extends State<ChatScreen> {
               key: _floaterKey,
               maxHeight: maxH,
               title: appName,
-              // ★ 会话头上、动作串前面那一格：**这一窗动过哪些文件**那颗按钮。
-              beforeActions: _panelButton(),
               initialTier: widget.initialTier,
               trailing: _actions(c),
               composer: _composer(c),
@@ -1989,48 +1904,14 @@ class _ChatScreenState extends State<ChatScreen> {
       key: chatBodyKey,
       children: [
         _StatusStrip(state: c.conn, error: c.lastError),
-        // ★ 批 5：右栏那一栏（契约 `docs/dev/120-FILE-PANEL.md`）。
-        //
-        // 🔴 两条路，按**这块地方够不够宽**选（见 [_panelDocked]）：
-        //   · **够宽 ⇒ 挤**（`Row`：聊天那一块真的变窄，还看得见一条边 ——
-        //     与 DSH 的三轨同一个形状）；
-        //   · **不够宽 ⇒ 盖满**（`Stack`：聊天那一块**一个像素都不动**，
-        //     栏从右缘滑进来盖在上面）。
-        // ⚠️ **两条路底下聊天那一棵子树都是同一个 `_chatPane(c)`**（同一个
-        //    `State`、同一个 `ScrollPosition`）⇒ 开关这一栏**不会丢滚动位置**。
-        Expanded(
-          child: LayoutBuilder(
-            builder: (context, cons) {
-              final docked = _panelDocked(cons.maxWidth);
-              final panel = FilePanel(
-                key: filePanelKey,
-                open: _panelOpen,
-                width: dshRightPanelWidth(cons.maxWidth),
-                changes: _fileChanges(c),
-                onClose: _closePanel,
-              );
-              if (!docked) {
-                return Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    _chatPane(c),
-                    // ⚠️ `Align` 而不是 `Positioned.fill`：后者的孩子会被拉满
-                    //    整块地方，这一栏就"盖满"了（窄屏那一档才是盖满）。
-                    Align(alignment: Alignment.centerRight, child: panel),
-                  ],
-                );
-              }
-              return Row(
-                children: [
-                  Expanded(child: _chatPane(c)),
-                  // ⚠️ `FilePanel` 自己不设宽（宽度由上层那个 `dshRightPanelWidth`
-                  //    算好传下去）⇒ 这里只给它一个 `SizedBox` 的位子。
-                  SizedBox(width: dshRightPanelWidth(cons.maxWidth), child: panel),
-                ],
-              );
-            },
-          ),
-        ),
+        // 🔴 **2026-10-03 砍掉**：这一格原来摆的是**右栏**（"这一窗动过哪些文件"，
+        //    契约 `docs/dev/120-FILE-PANEL.md`）。主人的原话：
+        //    *「聊天窗口有个展开，这一轮动过哪些地方，这个我们可以关掉，不需要这个功能。」*
+        //    ⇒ 整条（那一栏 ＋ 会话头上那颗展开按钮 ＋ 它的几何 token）**删掉了**，
+        //      不是"藏起来"（手册 §六 纪律 6：要么做，要么明说砍了）。
+        //    ⚠️ 顺手的好处：标题行**少了一格**（约 52px）⇒ 那一排动作的可视宽度变宽
+        //      （读数见 `docs/dev/171-PANEL-CUT.md`）。
+        Expanded(child: _chatPane(c)),
         // ★ **长按气泡之后那一条**（契约 `28-DELETE.md` §二 / `106-CHAT-SELECT.md`）。
         //   🔴 它**摆在这儿**（输入条上面、时间线的兄弟）而不是弹一层：
         //      弹一层会带 barrier ⇒ 弹着的时候**整个窗口都点不动、也发不出去**

@@ -17,14 +17,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/export_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
-import 'package:hupo_app/models/file_panel_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
-import 'package:hupo_app/widgets/file_panel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 ChatController _controller() => ChatController(
@@ -82,22 +80,5 @@ void main() {
       findsOneWidget,
       reason: '「过程」被碰掉了',
     );
-    expect(
-      find.descendant(of: header, matching: find.byKey(filePanelButtonKey)),
-      findsOneWidget,
-      reason: '★ 右栏那颗按钮被跟轨迹一起砍了 —— 它是**另一件事**，不许动',
-    );
-  });
-
-  testWidgets('右栏那颗照样开 / 关（砍轨迹不许把它碰坏）', (tester) async {
-    await _pump(tester);
-    await tester.tap(find.byKey(filePanelButtonKey));
-    await tester.pumpAndSettle();
-    expect(find.text(filePanelTitle), findsOneWidget, reason: '★ 点开没进去');
-    // 开着的时候会话头上那颗**收起来**（出口是栏里那颗）
-    expect(find.byKey(filePanelButtonKey), findsNothing);
-    await tester.tap(find.byKey(filePanelCloseKey));
-    await tester.pumpAndSettle();
-    expect(find.byKey(filePanelButtonKey), findsOneWidget, reason: '关掉之后那颗该回来');
   });
 }
