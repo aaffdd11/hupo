@@ -80,7 +80,12 @@ class _VoiceBarState extends State<VoiceBar> {
         final said = f.said.trim();
         return (text: said.isEmpty ? hearDrillThinkingLead : said, loud: true);
       case DrillPhase.asking:
-        return (text: f.question.isEmpty ? hearDrillAskingLead : f.question, loud: true);
+        // ⚠️ 问句后面**带上"怎么答"**：只摆一个问句，他就不知道下一步干什么
+        //   （主人 2026-10-04：*"出现了一个问句，然后就没有然后"*）。
+        return (
+          text: (f.question.isEmpty ? hearDrillAskingLead : f.question) + hearDrillAnswerHint,
+          loud: true,
+        );
       case DrillPhase.failed:
         return (text: f.note.isEmpty ? hearDrillFailedLead : f.note, loud: true);
       case DrillPhase.ready:

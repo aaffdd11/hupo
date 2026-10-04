@@ -1339,7 +1339,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   String _voiceLine(ChatController c) {
     final f = c.voiceFlow;
     if (f.phase == DrillPhase.asking) {
-      return f.question.isEmpty ? hearDrillAskingLead : f.question;
+      return (f.question.isEmpty ? hearDrillAskingLead : f.question) + hearDrillAnswerHint;
     }
     final said = f.said.trim();
     if (said.isNotEmpty) return said;

@@ -66,3 +66,7 @@ const String hearDrillTalkLabel = '说一句';
 
 /// 那颗圆圈的读屏名（正在录时）。
 const String hearDrillStopLabel = '说完了';
+
+/// ★ 它在问的时候，圆圈旁边那半句"怎么答"（2026-10-04 主人报"只出来了问句，就没有然后"）：
+/// 他得知道**按一下那颗圆圈、答一句就行**。
+const String hearDrillAnswerHint = '（按一下圆圈，答一句就行）';
