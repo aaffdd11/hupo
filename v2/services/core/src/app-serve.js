@@ -836,27 +836,6 @@ export function createAppServer({
         });
         return;
       }
-      // ★ **丙（`184`）：壳那一页**（小程序那一屏的浮层由它画 —— 一份实现，网页与手机同一套）。
-      //   🔴 它**不拿钥匙**：里面嵌的是**已经签好名的活地址**（`?u=`），而且那条地址
-      //      在壳里还要再被认一遍（只认 `/w/`|`/a/` 且带 `s=`）。判据 S1–S3。
-      const shellKind = shellKindOf(parsed.pathname ?? '');
-      if (shellKind) {
-        const body = shellKind === 'html' ? shellHtml() : shellKind === 'css' ? shellCss() : shellJs();
-        const type = shellKind === 'html'
-          ? 'text/html; charset=utf-8'
-          : shellKind === 'css'
-            ? 'text/css; charset=utf-8'
-            : 'application/javascript; charset=utf-8';
-        res.writeHead(200, {
-          'content-type': type,
-          'content-security-policy': SHELL_CSP,
-          // ⚠️ 壳**不许**被缓存住（它跟着产品层一起变；缓存住会让旧壳一直跑）
-          'cache-control': 'no-store',
-          'x-content-type-options': 'nosniff',
-        });
-        res.end(body);
-        return;
-      }
       if ((parsed.pathname ?? '') === DB_PATH) {
         handleDb(req, res).catch((e) => {
           log(`存储口：这一条没答上来（${e?.message ?? e}）`);
@@ -883,6 +862,27 @@ export function createAppServer({
      *   · `/w/<id>/<rel>`           —— 那一间工作区里**现在那一份**（他自己那一份）。
      * 🔴 验签、CSP、响应头、"先验签再碰盘"的顺序，两条**逐字相同**。
      */
+      // ★ **丙（`184`）：壳那一页**（小程序那一屏的浮层由它画 —— 一份实现，网页与手机同一套）。
+      //   🔴 它**不拿钥匙**：里面嵌的是**已经签好名的活地址**（`?u=`），而且那条地址
+      //      在壳里还要再被认一遍（只认 `/w/`|`/a/` 且带 `s=`）。判据 S1–S3。
+      const shellKind = shellKindOf(parsed.pathname ?? '');
+      if (shellKind) {
+        const body = shellKind === 'html' ? shellHtml() : shellKind === 'css' ? shellCss() : shellJs();
+        const type = shellKind === 'html'
+          ? 'text/html; charset=utf-8'
+          : shellKind === 'css'
+            ? 'text/css; charset=utf-8'
+            : 'application/javascript; charset=utf-8';
+        res.writeHead(200, {
+          'content-type': type,
+          'content-security-policy': SHELL_CSP,
+          // ⚠️ 壳**不许**被缓存住（它跟着产品层一起变；缓存住会让旧壳一直跑）
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
+        });
+        res.end(body);
+        return;
+      }
     const live = parseLivePath(parsed.pathname ?? '');
     const hit = live ? null : parseArtifactPath(parsed.pathname ?? '');
     if (!live && !hit) {
