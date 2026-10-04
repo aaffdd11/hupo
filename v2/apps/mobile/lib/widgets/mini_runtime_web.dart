@@ -315,7 +315,8 @@ Widget buildMiniAppView({
 ///
 /// ⚠️ **一行回退**：改成 `false` ⇒ 回到"在壳外面再画一遍"那一版（那套代码还在，只是不建）。
 /// ⚠️ 壳只在**网页**上有（手机上那支还是老路）⇒ 关掉它网页也照样能跑。
-const bool _useShell = true;
+const bool _useShell = false; // 🔴 2026-10-05：壳那一版**先关掉**（主人报 apps 那个源"拒绝了请求"、
+//   内容空着）—— 一行回到**能跑的那一版**（Flutter 那一页直接嵌小程序 ＋ 我们自己那层浮层）。
 
 /// 活地址 → **壳那一条**：`/one/shell?u=<路径?查询>`（与活地址**同一个原点**）。
 String _shellUrlFor(String entryUrl) {
