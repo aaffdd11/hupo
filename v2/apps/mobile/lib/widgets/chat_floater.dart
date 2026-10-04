@@ -343,9 +343,15 @@ class ChatFloaterState extends State<ChatFloater> {
           height: h,
           child: DecoratedBox(
             // 阴影照手册 §10.1 阈值总表：外 blur 32 · α.45 · offset(0,-6)
+            // ★ **2026-10-04 主人：*"语音按钮下面的平台不需要了……不需要底下那个框了。"***
+            //   ⇒ **收起档不再画那个框**（阴影 / 圆角 / 磨砂 / 蒙版全撤），底下只剩那颗圆圈浮在桌面上；
+            //   ⚠️ **展开档一个字不动**（它是聊天记录那个窗口，白底不透明那一条照旧）。
+            //   ⚠️ widget 的**形状**仍然一样（`DecoratedBox` / `ClipRRect` / `BackdropFilter`
+            //      / `Container` 都在，只是收起档给"什么都没画"的值）——
+            //      这样两档来回切不会重建子树（这是当年"字不丢"那条判据的由来）。
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(d.radiusCard),
-              boxShadow: [
+              borderRadius: BorderRadius.circular(collapsed ? 0 : d.radiusCard),
+              boxShadow: collapsed ? const <BoxShadow>[] : [
                 BoxShadow(
                   // ★ 2026-09-29 主人：*"……我想用白色透明，不用黑色透明。"*
                   //   ⇒ 影的颜色从"墨色 α.45 的黑"换成**白**（`floaterShadowColor`）。
@@ -370,8 +376,8 @@ class ChatFloaterState extends State<ChatFloater> {
               //    ⚠️ 展开档为什么本来就不该糊：那一档里面是时间线，糊它既没用（白底）又白算。
               child: BackdropFilter(
                 filter: ImageFilter.blur(
-                  sigmaX: collapsed ? d.barBlurSigma : 0,
-                  sigmaY: collapsed ? d.barBlurSigma : 0,
+                  sigmaX: 0,
+                  sigmaY: 0,
                 ),
                 child: _barSurface(collapsed, p),
               ),
@@ -401,7 +407,7 @@ class ChatFloaterState extends State<ChatFloater> {
                   //   🔴 **展开档必须维持不透明**：那一档里面是时间线，
                   //     底透了就变成"字压在壁纸上"，读不了（这一条不许顺手改）。
                   color: collapsed
-                      ? p.bgLayer1.withValues(alpha: d.barVeilAlpha)
+                      ? const Color(0x00000000)
                       : p.bgLayer1,
                   child: Column(
                     mainAxisSize: collapsed ? MainAxisSize.min : MainAxisSize.max,
