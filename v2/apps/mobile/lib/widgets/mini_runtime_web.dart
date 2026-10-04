@@ -17,6 +17,7 @@ import 'dart:ui_web' as ui_web;
 import 'package:flutter/widgets.dart';
 
 import '../models/mini_frame.dart';
+import '../models/space_words.dart';
 
 /// 已经挂上监听的那些 iframe（按 viewId 记）—— **换掉那一帧时要退订**。
 ///
@@ -113,6 +114,7 @@ Widget buildMiniAppView({
   required String entryUrl,
   required String title,
   Future<String> Function(String prompt)? onAsk,
+  void Function()? onExit,
 }) {
   // 🔴 **viewId 的算法只有一处**（`models/mini_frame.dart`）——
   //    `MiniAppFrame` 记账用的是同一个函数。
@@ -132,6 +134,43 @@ Widget buildMiniAppView({
       f.style.width = '100%';
       f.style.height = '100%';
       f.style.background = 'transparent';
+      // 🔴 **小程序那一屏是真的 DOM 元素、压在 Flutter 画布上面**
+      //    （`docs/dev/183` §一那段注释）：Flutter 画的按钮**盖不住它、也收不到点击**
+      //    ⇒ 2026-10-04 主人报的"退出按钮有时候没用、小程序里没用"就是这一条。
+      //    ⇒ 这一个"退出"必须**也用 DOM 画**，而且 z-index 比 iframe 高（就是微信那个样子：
+      //      半透明的圆圈浮在页面右上角）。Flutter 那一颗留给**内置那几屏**
+      //      （它们不是平台视图，Flutter 自己就收得到点击）。
+      _exits[viewId] = onExit;
+      final wrap = html.DivElement()
+        ..style.position = 'relative'
+        ..style.width = '100%'
+        ..style.height = '100%';
+      final exitBtn = html.ButtonElement()
+        ..className = 'hupo-mini-exit'
+        ..text = '✕'
+        ..title = miniAppExitLabel
+        ..setAttribute('aria-label', miniAppExitLabel);
+      // ⚠️ 样式**内联**写（不由外面那张表管）：它在 iframe 上面，不跟着 Flutter 的主题走
+      exitBtn.style
+        ..position = 'absolute'
+        ..top = '10px'
+        ..right = '10px'
+        ..zIndex = '2147483647'
+        ..width = '36px'
+        ..height = '36px'
+        ..padding = '0'
+        ..border = 'none'
+        ..borderRadius = '50%'
+        ..background = 'rgba(0,0,0,.38)'
+        ..color = '#fff'
+        ..fontSize = '17px'
+        ..lineHeight = '36px'
+        ..cursor = 'pointer';
+      exitBtn.onClick.listen((_) {
+        final fn = _exits[viewId];
+        if (fn != null) fn();
+      });
+      wrap.children.addAll(<html.Element>[f, exitBtn]);
       // ⚠️ 新建的这一帧也要立刻跟上当前那一档（展开着的时候它一建出来就该是 `none`）
       _frames[viewId] = f;
       // ⚠️ 槽可能**刚**建出来 ⇒ 建完这一帧再统一设一次（同一个函数，一处口径）
@@ -177,11 +216,17 @@ Widget buildMiniAppView({
           f.contentWindow?.postMessage({'kind': 'hupo-ready'}, '*');
         });
       }
-      return f;
+      return wrap;
     });
   }
   return HtmlElementView(viewType: viewId);
 }
+
+/// 每一帧那颗"退出"要调的回调（`viewId → 回调`）。
+///
+/// ⚠️ 它住在**这一层**（DOM 那一侧）：圆圈是 DOM 画的，点击也在 DOM 上发生
+///    （见上面那段注释 —— 平台视图压着画布，Flutter 那一条收不到）。
+final Map<String, void Function()?> _exits = <String, void Function()?>{};
 
 /// **这一帧换掉了 / 关掉了 ⇒ 收干净**（由 `MiniAppFrame` 在换帧与 `dispose` 时叫）。
 ///
@@ -192,5 +237,6 @@ Widget buildMiniAppView({
 void releaseMiniAppView(String viewId) {
   final sub = _subs.remove(viewId);
   if (sub != null) sub.cancel();
+  _exits.remove(viewId);
   _frames.remove(viewId);
 }

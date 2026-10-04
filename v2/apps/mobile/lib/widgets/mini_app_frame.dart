@@ -28,6 +28,7 @@ class MiniAppFrame extends StatefulWidget {
     required this.entryUrl,
     required this.title,
     this.onAsk,
+    this.onExit,
   });
 
   /// 服务端**现签**的入口 URL（绑人 + 绑版本 + 短时效）。
@@ -38,6 +39,10 @@ class MiniAppFrame extends StatefulWidget {
 
   /// 那条唯一的回话通道（乙-4b）。
   final Future<String> Function(String prompt)? onAsk;
+
+  /// ★ **那颗「退出」**（`D3.15`）：Web 那一侧它由**DOM** 画在页面右上角
+  /// （平台视图压着画布 ⇒ Flutter 那颗收不到点击，见 `mini_runtime_web.dart`）。
+  final void Function()? onExit;
 
   /// 这一帧的 `viewId`（换版本 ⇒ 换它）。
   String get viewId => miniViewIdOf(entryUrl);
@@ -81,6 +86,7 @@ class _MiniAppFrameState extends State<MiniAppFrame> {
 
   @override
   Widget build(BuildContext context) => buildMiniAppView(
+    onExit: widget.onExit,
     entryUrl: widget.entryUrl,
     title: widget.title,
     onAsk: widget.onAsk,

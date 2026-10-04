@@ -27,6 +27,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import '../models/space_words.dart';
 import 'mini_runtime.dart';
 import 'motion.dart';
 import '../models/design.dart' show miniAppSurfaceAt;
@@ -357,31 +358,39 @@ class _MiniAppHostState extends State<MiniAppHost>
                       minimum: const EdgeInsets.all(d.gapM),
                       child: Align(
                         alignment: Alignment.topRight,
-                        child: Material(
-                        color: d.card,
-                        borderRadius: BorderRadius.circular(d.radiusChip),
-                        child: InkWell(
-                          key: miniAppExitKey,
-                          borderRadius: BorderRadius.circular(d.radiusChip),
-                          onTap: widget.onExit,
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(minHeight: d.barButtonBox),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: d.gapM),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.close_rounded, size: 20),
-                                  const SizedBox(width: d.gapXs),
-                                  Text(miniAppExitLabel),
-                                ],
+                        // ★ **一颗圆圈**（2026-10-04 主人：*"我想用一个圆圈，跟微信小程序那样的圆圈。"*）
+                        //   · 看得见那一圈 36（微信那个样子），**可点的是 48**（D3.6：视觉可以小、命中不许小）
+                        //   · "退出"那个词挂在 `Semantics`／`Tooltip` 上（读屏与悬停都听得到）
+                        child: Semantics(
+                          button: true,
+                          label: miniAppExitLabel,
+                          child: Tooltip(
+                            message: miniAppExitLabel,
+                            child: SizedBox(
+                              key: miniAppExitKey,
+                              width: d.barButtonBox,
+                              height: d.barButtonBox,
+                              child: InkWell(
+                                customBorder: const CircleBorder(),
+                                onTap: widget.onExit,
+                                child: Center(
+                                  child: Container(
+                                    width: 36,
+                                    height: 36,
+                                    decoration: BoxDecoration(
+                                      color: d.ink.withValues(alpha: 0.38),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(Icons.close_rounded,
+                                        size: 20, color: Colors.white),
+                                  ),
+                                ),
                               ),
                             ),
                           ),
                         ),
                       ),
                       ),
-                    ),
                   ),
               ],
             )),
@@ -404,5 +413,3 @@ class _MiniAppHostState extends State<MiniAppHost>
 /// 右上角那颗「退出」（判据要按它 —— `D3.15`）。
 const Key miniAppExitKey = ValueKey<String>('mini-app-exit');
 
-/// 那颗按钮上的字（**不许叫"返回 / 关闭"**：一件事只有一个说法）。
-const String miniAppExitLabel = '退出';

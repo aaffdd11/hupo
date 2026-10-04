@@ -21,6 +21,9 @@ Widget buildMiniAppView({
   required String entryUrl,
   required String title,
   Future<String> Function(String prompt)? onAsk,
+  // ★ `D3.15`：那颗「退出」在 Web 那一侧由 DOM 画（这里收下、不用它）——
+  //   入参两边必须一样，不然条件导入会编不过。
+  void Function()? onExit,
 }) {
   final native = nativeMiniAppView;
   if (native != null) {

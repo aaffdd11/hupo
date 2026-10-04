@@ -14,6 +14,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/space.dart';
+import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
@@ -64,7 +65,9 @@ void main() {
     await _openSettings(tester);
     final f = find.byKey(miniAppExitKey);
     expect(f, findsOneWidget, reason: '★ 每一屏右上角都要有它（`D3.15`）');
-    expect(find.text(miniAppExitLabel), findsWidgets, reason: '★ 带字（不是光一个叉）');
+    // ★ 2026-10-04 主人要的是**一个圆圈**（微信那个样子）⇒ 看得见的是图形，
+    //   "退出"这个词挂在 `Semantics`／`Tooltip` 上（读屏与悬停都听得到）。
+    expect(find.byTooltip(miniAppExitLabel), findsOneWidget, reason: '★ 那颗圆圈要说得出"退出"');
     final size = tester.getSize(f);
     expect(size.height, greaterThanOrEqualTo(44), reason: '★ 命中区 ≥44（D3.6）');
     expect(size.width, greaterThanOrEqualTo(44));

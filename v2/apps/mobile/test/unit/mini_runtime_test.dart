@@ -190,4 +190,21 @@ void main() {
     expect(line.contains('_barH'), true, reason: '★ 用的是**收起档那个稳定值**（只往下记）');
   });
 
+
+// ★ 2026-10-04（主人报的"退出按钮有时候没用、小程序里没用"）：
+//   真小程序那一屏是**真的 DOM 元素、压在 Flutter 画布上面** ⇒ Flutter 画的那颗
+//   **收不到点击**（内置那几屏不是平台视图，所以"有时候"好使）。
+//   ⇒ 那一颗必须**也用 DOM 画在 iframe 上面**（`mini_runtime_web.dart`）。
+//   ⚠️ 这里只钉**接线在不在**（DOM 的事在 VM 上跑不起来）——
+//      真机那一下要靠人在浏览器里点。
+test('🔴 Web 那一颗「退出」是**画在 iframe 上面**的（DOM ＋ z-index），不是 Flutter 画的', () {
+  final src = File('lib/widgets/mini_runtime_web.dart').readAsStringSync();
+  expect(src.contains('_exits[viewId] = onExit'), isTrue,
+      reason: '★ 那一帧的回调要存下来（DOM 按钮点击时才找得到）');
+  expect(src.contains('exitBtn.onClick.listen'), isTrue, reason: '★ 点击必须落在 DOM 那一侧');
+  expect(src.contains('zIndex'), isTrue, reason: '★ 必须压在 iframe 上面（不然点不到）');
+  expect(src.contains('miniAppExitLabel'), isTrue, reason: '★ 那个词只有一处出处（models）');
+  expect(src.contains('wrap.children.addAll'), isTrue,
+      reason: '★ iframe 与那颗圆圈要在**同一个容器**里（不然定位对不上）');
+});
 }

@@ -665,3 +665,8 @@ const String imageLoadingWords = '图正在过来…';
 const String imageGoneWords = '这张图取不回来了（那个地址是临时的，多半过期了）。';
 /// 图是临时地址那件事（与配置页那句同一个意思）。
 const String imageTempWords = '图是那边临时给的，想要就存下来。';
+
+/// ★ **每个 app 右上角那颗「退出」**（`D3.15`）—— 字只许有这一处：
+/// Flutter 那一颗（内置那几屏）与 Web 那一个 DOM 圆圈（真小程序）都用它。
+/// ⚠️ **不许叫"返回 / 关闭"**：一件事只有一个说法。
+const String miniAppExitLabel = '退出';

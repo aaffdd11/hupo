@@ -1069,6 +1069,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         //   版本换了 ⇒ 服务端现签一条新的 ⇒ 这里换一帧 ⇒ Web 那一侧换 iframe。
         //   旧那一帧的收尾（退订 + 销号）在 `MiniAppFrame` 里（判据 U5）。
         view: MiniAppFrame(
+          onExit: () => _backToDesktop(c),
           // 🔴 **2026-10-01 更正**：这条 URL 原来还带 `pt`/`pb`（让**页面自己**留出
           //   状态栏与聊天条那两条边距，为的是"页面铺满整屏还能不被压住"）。
           //   可**只要平台视图铺满，聊天浮窗就被它盖住** —— 见上面 `bottomInset` 那一段。
