@@ -199,9 +199,13 @@ Widget buildMiniAppView({
         ..style.lineHeight = '1.3'
         ..style.whiteSpace = 'pre-wrap'
         ..style.pointerEvents = 'none';
+      // 🔴 **2026-10-05 主人：*"为什么小程序的语音按钮，跟桌面的是不一样的？"***
+      //   ⇒ 桌面那颗是 Flutter 画的（`voice_bar.dart` 的 `_circle`：64 的白圆 ＋ 话筒图形，
+      //     在录时换成琥珀底 ＋ 方块）；这一颗是 DOM 画的，之前用了 🎤 emoji、56 大小 ——
+      //     两颗**看着就是两个东西**。⇒ 现在**照桌面那颗的样子画**（同一组颜色值，
+      //     取自 `models/design.dart`；图标用内联 SVG 画话筒，不用 emoji）。
       final micBtn = html.ButtonElement()
         ..className = 'hupo-mini-mic'
-        ..text = '🎤'
         ..title = miniMicTalkLabel
         ..setAttribute('aria-label', miniMicTalkLabel);
       micBtn.style
@@ -209,17 +213,19 @@ Widget buildMiniAppView({
         ..bottom = '16px'
         ..right = '16px'
         ..zIndex = '2147483647'
-        ..width = '56px'
-        ..height = '56px'
+        ..width = '64px'
+        ..height = '64px'
         ..padding = '0'
-        ..border = 'none'
+        ..display = 'flex'
+        ..alignItems = 'center'
+        ..justifyContent = 'center'
+        ..border = '1px solid #E8E0D4'
         ..borderRadius = '50%'
-        ..background = '#FFFFFF'
-        ..color = '#2b2b2b'
-        ..fontSize = '24px'
-        ..lineHeight = '56px'
+        ..background = '#FFFDF9'
+        ..color = '#2B2320'
         ..cursor = 'pointer'
-        ..boxShadow = '0 2px 8px rgba(0,0,0,.18)';
+        ..boxShadow = '0 2px 10px rgba(0,0,0,.16)';
+      micBtn.innerHtml = _micSvg('#2B2320');
       micBtn.onClick.listen((_) {
         final fn = _mics[viewId];
         if (fn != null) fn();
@@ -302,11 +308,24 @@ void setMiniAppMic(String viewId, void Function()? onMic) => _mics[viewId] = onM
 void updateMiniAppMic(String viewId, {required bool listening, required String label}) {
   final b = _micBtns[viewId];
   if (b == null) return;
-  b.text = listening ? '■' : '🎤';
+  // 与 Flutter 那颗**同一套**（`voice_bar.dart` 的 `_circle`）：在录 ⇒ `accent`（#C8452F）＋ 白方块；
+  // 没在录 ⇒ 白底（`card`）＋ 墨色话筒（`ink`）。
   b.title = label;
   b.setAttribute('aria-label', label);
-  b.style.background = listening ? '#E8B84B' : '#FFFFFF';
+  b.style.background = listening ? '#C8452F' : '#FFFDF9';
+  b.style.border = listening ? 'none' : '1px solid #E8E0D4';
+  b.innerHtml = listening
+      ? '<span style="display:block;width:16px;height:16px;border-radius:3px;background:#FFFDF9"></span>'
+      : _micSvg('#2B2320');
 }
+
+/// **话筒图形**（内联 SVG —— 不用 emoji：emoji 在不同机器上长得都不一样）。
+/// ⚠️ 它照着 Flutter 那颗用的 `Icons.mic_none` 画（同一形状、同一粗细）。
+String _micSvg(String color) => '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" '
+    'stroke="$color" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+    '<rect x="9" y="3" width="6" height="11" rx="3"/>'
+    '<path d="M5 11a7 7 0 0 0 14 0"/>'
+    '<path d="M12 18v3"/></svg>';
 
 /// **我说的话**那一行（圆圈左边）—— 空的就把那一行藏起来（**不许留一句空白**）。
 void updateMiniAppWords(String viewId, String text) {
