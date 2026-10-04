@@ -427,10 +427,44 @@ async function main() {
     await navigate();
     console.log('  令牌：没给（--no-token）⇒ 看的是**未登录**那一屏；那条流**不验**。');
   } else {
+  /**
+   * ★ **额外"这台设备已经设过"的本地偏好**（2026-10-04 加的 · 只为**拍图**）：
+   *   `HUPO_SEED_JSON='{"hupo_wallpaper":"wp-07"}'`
+   *
+   * 🔴 **为什么要有它**：壁纸 / 亮暗 / 字号这些偏好是**按设备存**的
+   *    （`docs/dev/131`：`SharedPreferences`，key `hupo_wallpaper`）——
+   *    而这个探针每趟开的是**一个全新的浏览器配置**，当然没有它们。
+   *    ⇒ 主人 2026-10-04 看截图时问的那件事（"这个用户设了壁纸，图上怎么没有"）
+   *      就是这么来的：**不是壁纸丢了，是这台新设备没有那条偏好**。
+   *    要拍一张"他那台设备"的样子，就得**先把它设上**。
+   * ⚠️ **只影响这一趟拍图**：键照 `shared_preferences` 的规矩加前缀、值照它的规矩
+   *    **JSON 编码**（字符串 ⇒ 带引号）——与上面令牌那一段同一条纪律（少一层编码就白跑）。
+   * ⚠️ 给了坏 JSON ⇒ 当没给（不许因为一个拍图开关把整条检查弄挂）。
+   * ⚠️ **它不改任何判据**：那条流通不通、页面开不开，一个字都没动。
+   */
+  const extraSrc = (() => {
+    try {
+      const j = JSON.parse(nodeProcess.env.HUPO_SEED_JSON ?? '{}');
+      if (!j || typeof j !== 'object') return '';
+      const out = [];
+      for (const [k, v] of Object.entries(j)) {
+        const enc = JSON.stringify(v); // 这就是 shared_preferences_web 的 json.encode
+        out.push(`localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(enc)});`);
+        out.push(`localStorage.setItem(${JSON.stringify(`flutter.${k}`)}, ${JSON.stringify(enc)});`);
+      }
+      if (out.length > 0) {
+        console.log(`  预置本地偏好：${Object.keys(j).join(' / ')}（**只为拍图**：这些是按设备存的偏好）`);
+      }
+      return out.join('');
+    } catch {
+      return '';
+    }
+  })();
   await send('Page.addScriptToEvaluateOnNewDocument', {
     source:
       `try { if (location.origin === ${JSON.stringify(origin)}) {` +
       KEYS.map((k) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(encoded)});`).join('') +
+      extraSrc +
       `} } catch (e) {}`,
   });
   await navigate();
