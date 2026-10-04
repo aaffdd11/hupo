@@ -80,6 +80,7 @@ import '../widgets/time_mark.dart';
 import '../widgets/tool_row_view.dart';
 import '../widgets/trash_plan_sheet.dart';
 import 'discover_screen.dart';
+import 'hear_drill_screen.dart';
 import 'settings_screen.dart';
 
 /// "下面那一整块"的名字（状态条 + 内容 + 输入框）。
@@ -1106,6 +1107,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           // ★ 2026-09-30：**注册制那张卡**（契约 `docs/dev/147-APP-SQLITE.md`）。
           //   清单就是这一屏手上那份 `/api/apps`（桌面那一墙也是它）；
           //   "答应它 / 现在不给"那一下由这一屏去说（见 `_grantMyApp`）。
+          // ★ 2026-10-04（V2.0 第一件）：设置里那一场"说一句试试"（演练，不会发出去）
+          hearDrillPage: () => HearDrillScreen(controller: c),
           apps: _myApps,
           onGrant: _grantMyApp,
           // ★ 2026-10-01：**清空它存下来的东西**（`POST /api/app-db-clear`）——

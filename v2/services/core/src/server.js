@@ -47,6 +47,8 @@ import { ADMIT_RATIO, readAdmission } from './admission.js';
 import { CATCHUP_RENDER, markCatchUp, planBackfill, planResume } from './resume.js';
 import { buildExport } from './export.js';
 import { MAX_ANSWER_CHARS, askViaLocalProxy } from './app-ask.js';
+// ★ **V2.0 第一件：「听懂那一层」**（主人 2026-10-04）：读一遍、问一句、**没有手**
+import { hearText } from './hear.js';
 // ★ `148` §四：定时任务那一句的标记（"他能一眼看出这不是他自己说的"）
 import { TASK_MARK } from './app-tasks.js';
 // ★ **`148` §3.5：限定档**（替小程序跑的那一轮**不许有手**）—— 默认就是它，`cfg` 里可注入假的
@@ -397,6 +399,14 @@ export function createServer({
    *    拿旧的顶替正是"页面在说假话"（B15 要修的那件事）。
    */
   appsOf = null,
+  /**
+   * ★ **V2.0 第一件：「听懂那一层」问模型的那条路**（主人 2026-10-04）。
+   *
+   * 形状与 `app-ask` 那条**逐字同一条**：`{prompt, model}` ⇒ `{ok, text, usage}`。
+   * ⚠️ **不给就退回 `askViaLocalProxy`**（生产上就是它 —— 盒内那个小代理握着钥匙）；
+   *    判据注一个假的进来，就能在**没有钥匙**的情况下把整条链验完。
+   */
+  hearAsk = null,
   /**
    * **字体镜像的磁盘缓存目录**（`/fonts/…` 那条口；`null` = 不落盘，每次去取）。
    * ⚠️ 它**必须显式传进来**：`createServer` 这一层**没有 `cfg`**
@@ -961,6 +971,45 @@ export function createServer({
           text: r.text,
           left: left === null ? null : left - 1,
           max: MAX_ANSWER_CHARS,
+        });
+      }
+
+      // ── ★ **V2.0 第一件：「听懂那一层」**（主人 2026-10-04）─────────────────
+      //
+      // 🔴 **它没有手**：这一条口**只回话** —— 不落盘、不发消息、不动任何东西
+      //    （判据 H6 钉的就是这个：调一次之后时间线一条不多）。
+      //    ⇒ 所以它**不需要**像 `/api/app-ask` 那样先过一道闸：闯进来最多换一段文字回去。
+      //
+      // ⚠️ **钥匙不出这一层**：真调用走盒内那个小代理（`hearAsk` ⇒ `askViaLocalProxy`），
+      //    与 `app-ask` 同一条路、同一把钥匙、同一个"不吃思考"的模型。
+      // ⚠️ **租户那一侧在盒子里算**：它在 `TENANT_ROUTES` 里（宿主原样转进去）——
+      //    因为"拿着钥匙的那台"是盒子。
+      // ⚠️ **上了线也不许改形状**：四个字段（`heard`/`ask`/`fact`/`scene`）是客户端在读的。
+      if (path === '/api/hear' && req.method === 'POST') {
+        let body;
+        try {
+          body = await readJson(req, 16 * 1024);
+        } catch {
+          return sendJson(res, 400, { error: 'bad-json', text: '这一条看不懂。' });
+        }
+        const text = typeof body?.text === 'string' ? body.text : '';
+        const history = Array.isArray(body?.history) ? body.history : [];
+        // ⚠️ 身体的那几道闸在 `hear.js` 里（**一处出处**），这里不另抄一遍
+        const askFn =
+          typeof hearAsk === 'function'
+            ? (o) => hearAsk(o)
+            : (o) => askViaLocalProxy({ prompt: o.prompt, model: o.model });
+        const r = await hearText({ text, history, ask: askFn });
+        if (!r.ok) {
+          // ⚠️ **我们这边没接上 / 太长** ⇒ 400／502 分开说（别把"没配钥匙"说成"没听懂"）
+          const mine = r.error === '没有听到话' || r.error === '这一句太长了';
+          return sendJson(res, mine ? 400 : 502, { error: mine ? 'bad-text' : 'hear-failed', text: r.error });
+        }
+        return sendJson(res, 200, {
+          heard: r.heard,
+          ask: r.ask,
+          fact: r.fact,
+          scene: r.scene,
         });
       }
 
@@ -1740,6 +1789,8 @@ const BACKFILL_MAX = 200;
 const TENANT_ROUTES = [
   '/api/say', '/api/health', '/api/export', '/api/trash', '/api/app-ask', '/api/timeline',
   '/api/unread', '/api/unread/read',
+  // ★ **V2.0 第一件**：听懂那一层也**在盒子里**算（拿钥匙的那台是盒子）
+  '/api/hear',
 ];
 
   /**

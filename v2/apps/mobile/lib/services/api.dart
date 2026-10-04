@@ -522,6 +522,29 @@ class Api {
     }
   }
 
+  /// **听懂那一层**（V2.0 第一件）：把这一句交给它读一遍。
+  ///
+  /// ⚠️ 它**只回话**（服务端那条口没有手）—— 发不发、发什么，仍然由界面这一侧决定。
+  /// ⚠️ `history` ＝ 前面几轮"我问…他答…"（最多两轮，服务端还会再截一次）。
+  Future<HearOutcome> hear(
+    String token,
+    String text, {
+    List<Map<String, String>> history = const <Map<String, String>>[],
+  }) async {
+    try {
+      final r = await _c
+          .post(
+            _u('/api/hear'),
+            headers: {'authorization': 'Bearer $token', ..._json},
+            body: jsonEncode({'text': text, if (history.isNotEmpty) 'history': history}),
+          )
+          .timeout(const Duration(seconds: 30));
+      return hearOutcomeOf(r.statusCode, r.body);
+    } catch (_) {
+      return const HearOutcome(error: '这条现在还接不上，等下再试');
+    }
+  }
+
   /// **「发现」清单**（乙-3）：大家发出来的小程序。**只读**。
   /// ⚠️ 问不到就是空清单（不抛）—— 那一屏会如实说"现在还没有"。
   /// **往前取一页**（批 C：老消息往上翻着加载 · `docs/dev/64-CHAT-REDESIGN.md` §三）。
@@ -1223,4 +1246,50 @@ class AskOutcome {
   final String? text;
   final String? error;
   bool get ok => text != null;
+}
+
+/// **听懂那一层**回来的四样（V2.0 第一件 · 契约 `docs/dev/182`）。
+///
+/// ⚠️ 它就是服务端那条口回的形状：`heard`（理顺版原话）· `ask`（要问的一句，没有 = `null`）·
+///    `scene`（像是要干什么：`chat` / `do` / `make-app`）。`fact` **不上界面**
+///    （那是给我们看的"它在不确定什么"）。
+class HearOutcome {
+  const HearOutcome({this.heard, this.ask, this.scene = 'chat', this.error});
+
+  final String? heard;
+  final String? ask;
+  final String scene;
+  final String? error;
+
+  bool get ok => heard != null && heard!.isNotEmpty;
+}
+
+/// `/api/hear` 的回执 → 结果（**纯函数**：不起网络、不碰界面、不看钟）。
+///
+/// 🔴 认不出 / 空 ⇒ `ok = false` + 一句人话（**绝不**猜一个"听到的" ——
+///    猜错的那一份会被当成他的话写进屏幕，还会走到"发出去"那一步）。
+HearOutcome hearOutcomeOf(int status, String body) {
+  Map<String, dynamic>? j;
+  try {
+    final raw = jsonDecode(body);
+    if (raw is Map<String, dynamic>) j = raw;
+  } catch (_) {
+    j = null;
+  }
+  if (status == 401 || status == 403) return const HearOutcome(error: '登录过期了，重新登录一下');
+  if (status == 200 && j != null) {
+    final heard = j['heard'];
+    if (heard is String && heard.trim().isNotEmpty) {
+      final ask = j['ask'];
+      final scene = j['scene'];
+      return HearOutcome(
+        heard: heard.trim(),
+        ask: ask is String && ask.trim().isNotEmpty ? ask.trim() : null,
+        scene: scene is String && scene.isNotEmpty ? scene : 'chat',
+      );
+    }
+    return const HearOutcome(error: '这句我没听清，你再说一遍');
+  }
+  final text = j != null && j['text'] is String ? j['text'] as String : '';
+  return HearOutcome(error: text.isNotEmpty ? text : '这条现在还接不上，等下再试');
 }
