@@ -50,6 +50,7 @@ class MiniAppHost extends StatefulWidget {
     this.icon,
     this.onSettled,
     this.onExit,
+    this.exitDrawnElsewhere = false,
   });
 
   /// 现在有 app 开着吗。
@@ -78,6 +79,17 @@ class MiniAppHost extends StatefulWidget {
   /// ⇒ 出口从**底下那条最前面那颗 home** 搬到了**每一屏的右上角**。
   /// ⚠️ `null` ⇒ 不画（收回动画里那几帧、以及测试搭的壳）。
   final VoidCallback? onExit;
+
+  /// ★ **那一颗「退出」由别处画**（2026-10-04 主人报"出现了两个 ✕"）。
+  ///
+  /// 🔴 为什么会有两颗：真小程序那一屏在网页上是**真的 DOM 元素**（iframe）——
+  ///    它盖着 Flutter 画布，所以 Flutter 画的那颗点不到 ⇒ 网页那一侧**另画了一颗 DOM 的**
+  ///    （`mini_runtime_web.dart`）。可那一层 DOM **并没有盖满**那颗圆圈所在的那一角
+  ///    ⇒ 两颗**同时看得见**。⇒ **同一时刻只许有一颗**：
+  ///    · 真小程序 ＋ 网页 ⇒ `true`（Flutter 这一颗不画，DOM 那颗接手）；
+  ///    · 内置那几屏（不是平台视图）⇒ `false`（Flutter 画，DOM 那颗不存在）；
+  ///    · 手机上（WebView，没有 DOM 那一颗）⇒ 照旧 `false`（Flutter 画）。
+  final bool exitDrawnElsewhere;
 
   /// ★ **2026-10-01（主人报的"没铺满、底色不同"）：这一屏的页面要铺满整屏**。
   ///
@@ -343,7 +355,7 @@ class _MiniAppHostState extends State<MiniAppHost>
                       ),
                     ),
                   ),
-                if (widget.onExit != null && !covered && widget.open)
+                if (widget.onExit != null && !covered && widget.open && !widget.exitDrawnElsewhere)
                   // ⚠️ **这一层 `OverflowBox` 与下面内容那一层同一个理由**：
                   //    收起/展开那几帧里这一格只剩十几像素宽，直接摆上去这一行会
                   //    **横向溢出**（`RenderFlex overflowed`）—— 判据 E1 当场抓到过。

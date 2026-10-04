@@ -17,6 +17,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/scheduler.dart' show SchedulerBinding;
@@ -915,6 +916,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               //   主人：*「所有的app，右上角都有一个退出按钮。所以我不再需要home按钮」*
               //   ⇒ 入口在 `MiniAppHost` 里，动作还是这一处（回桌面）。
               onExit: () => _backToDesktop(c),
+              // ★ **同一时刻只许有一颗 ✕**（2026-10-04 主人报"出现了两个 ✕"）：
+              //   真小程序在网页上是**真的 DOM 元素** ⇒ 那颗由**页面那一层**画
+              //   （`mini_runtime_web.dart`，不然点不到）；内置那几屏由 Flutter 画。
+              exitDrawnElsewhere:
+                  kIsWeb && _openApp != null && _openApp!.startsWith(_minePrefix),
               onSettled: () {
                 if (mounted) setState(() => _appSettled = true);
               },

@@ -95,6 +95,32 @@ void main() {
     expect(c.scope, 'main', reason: '★ 退回桌面 = 回到主线那条对话');
   });
 
+  testWidgets('E5 🔴 平台视图那一屏 ⇒ Flutter 这颗**不画**（同一时刻只许有一颗 ✕）', (tester) async {
+    // 直接泵那一层：`exitDrawnElsewhere: true` 就是"真小程序 ＋ 网页"那一档
+    //（网页那一侧另画了一颗 DOM 的，见 `mini_runtime_web.dart`）
+    Widget host(bool elsewhere) => MaterialApp(
+          home: Scaffold(
+            body: MiniAppHost(
+              open: true,
+              title: '真的那个小程序',
+              covered: false,
+              onCoveredTap: () {},
+              bottomInset: 0,
+              onExit: () {},
+              exitDrawnElsewhere: elsewhere,
+              child: const SizedBox.expand(),
+            ),
+          ),
+        );
+    await tester.pumpWidget(host(false));
+    await tester.pump();
+    expect(find.byKey(miniAppExitKey), findsOneWidget, reason: '前提：内置那几屏由 Flutter 画');
+    await tester.pumpWidget(host(true));
+    await tester.pump();
+    expect(find.byKey(miniAppExitKey), findsNothing,
+        reason: '★★ 真小程序那一屏：Flutter 这颗不许再画（不然屏幕上两个 ✕）');
+  });
+
   testWidgets('E4 被聊天盖住时 ⇒ 那颗退出不画（点不到的东西不许摆）', (tester) async {
     Widget host(bool covered) => MaterialApp(
           home: Scaffold(
