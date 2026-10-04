@@ -69,6 +69,9 @@ class _VoiceBarState extends State<VoiceBar> {
 
   bool get _listening => widget.flow.hearing.listening;
 
+  /// **打字那条退路**要不要摊开（默认不摊 —— 空白时屏幕上一个字都不许有）。
+  bool _typing = false;
+
   /// 圆圈左边那句话（**一句**：现在该让他看见什么）。
   ({String text, bool loud}) get _line {
     final f = widget.flow;
@@ -98,8 +101,13 @@ class _VoiceBarState extends State<VoiceBar> {
   Widget build(BuildContext context) {
     final t = Theme.of(context);
     final line = _line;
-    // 打字那条退路：**开不了麦**、或者**刚刚因为麦没开成而失败**时给出来。
-    final typed = !widget.canHear || widget.flow.phase == DrillPhase.failed;
+    // ★ **2026-10-04 主人**：*"如果是空的，小 bubble 自己就消失了。"*
+    //   ⇒ 什么都没有的时候**一个像素都不画**（不摆提示、不摆空框）：
+    //     · 有字 ⇒ 一颗**从右边长出来**的气泡（下面 `_bubble`）；
+    //     · 空 ⇒ 只剩那颗圆圈；
+    //     · 开不了麦 ⇒ 圆圈那个位置换成一颗「打字」，**按一下才摊开那一格**
+    //       （不按就什么都不摆 —— 这就是他看见"空对话上挂着一句开不了麦"的那一处）。
+    final typed = _typing || (!widget.canHear && widget.flow.phase != DrillPhase.idle);
     return Padding(
       padding: const EdgeInsets.fromLTRB(d.gapM, d.gapS, d.gapM, d.gapS),
       child: Stack(
@@ -113,19 +121,18 @@ class _VoiceBarState extends State<VoiceBar> {
               Expanded(
                 child: typed
                     ? _typedField(t)
-                    : Text(
-                        line.text,
-                        // ⚠️ **最多两行**：字大了、句子长了都不许把这一格撑破（D4.8 那一族）
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: t.textTheme.bodyLarge?.copyWith(
-                          color: line.loud ? d.ink : d.muted,
-                        ),
+                    : Align(
+                        alignment: Alignment.centerRight,
+                        // 空 ⇒ **什么都不画**（气泡自己消失）
+                        child: line.text.trim().isEmpty ? const SizedBox.shrink() : _bubble(t, line),
                       ),
               ),
               const SizedBox(width: d.gapS),
               // ── 那个圆圈（右下角）──
-              if (widget.canHear) _circle(t),
+              if (widget.canHear)
+                _circle(t)
+              else if (!_typing)
+                _typeChip(t),
             ],
           ),
           if (widget.hintAbove != null)
@@ -159,7 +166,35 @@ class _VoiceBarState extends State<VoiceBar> {
         ),
       );
 
-  /// 打字那条退路（**开不了麦**时才有）。
+  /// **他说的话那一颗气泡**：从右边长出来，长满一行就换行（主人 2026-10-04）。
+  ///
+  /// ⚠️ 宽度是**跟着字长**的（`Flexible` ＋ 右对齐），最多占那一行的 76%；
+  ///    超过就换行（`maxLines: 4` 兜底，真长到 4 行也该发出去了）。
+  Widget _bubble(ThemeData t, ({String text, bool loud}) line) => Container(
+        constraints: const BoxConstraints(maxWidth: 420),
+        padding: const EdgeInsets.symmetric(horizontal: d.gapM, vertical: d.gapS),
+        decoration: BoxDecoration(
+          color: d.card,
+          borderRadius: BorderRadius.circular(d.radiusField),
+          border: Border.all(color: d.line),
+        ),
+        child: Text(
+          line.text,
+          textAlign: TextAlign.right,
+          maxLines: 4,
+          overflow: TextOverflow.ellipsis,
+          style: t.textTheme.bodyLarge?.copyWith(color: line.loud ? d.ink : d.muted),
+        ),
+      );
+
+  /// **开不了麦**时，圆圈那个位置那颗「打字」（按一下才摊开输入格）。
+  Widget _typeChip(ThemeData t) => TextButton(
+        key: voiceBarTypeChipKey,
+        onPressed: () => setState(() => _typing = true),
+        child: const Text('打字'),
+      );
+
+  /// 打字那条退路（**按了那颗「打字」**才有）。
   Widget _typedField(ThemeData t) => Row(
         children: [
           Expanded(
@@ -192,3 +227,6 @@ const Key voiceBarCircleKey = ValueKey<String>('voice-bar-circle');
 /// 打字那条退路（开不了麦时才画）。
 const Key voiceBarTypeKey = ValueKey<String>('voice-bar-type');
 const Key voiceBarTypedSendKey = ValueKey<String>('voice-bar-typed-send');
+
+/// 开不了麦时那颗「打字」（按一下才摊开输入格）。
+const Key voiceBarTypeChipKey = ValueKey<String>('voice-bar-type-chip');

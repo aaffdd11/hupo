@@ -138,7 +138,8 @@ void main() {
 
     expect(s.asked.length, 1, reason: '★ 它问了一句');
     expect(s.said, isEmpty, reason: '★★ 问了就不许发');
-    expect(find.text('你说的那个东西是指什么？'), findsWidgets, reason: '★ 那一句写在屏幕上');
+    // ⚠️ 现在是**气泡里那一句**（后面还带着"（按一下圆圈，答一句就行）"）
+    expect(find.textContaining('你说的那个东西是指什么？'), findsWidgets, reason: '★ 那一句写在屏幕上');
     expect(find.byTooltip(chatCollapse), findsNothing, reason: '★ 没发出去 ⇒ 窗口不许自己打开');
   });
 }
