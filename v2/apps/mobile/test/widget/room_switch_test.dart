@@ -19,6 +19,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:hupo_app/widgets/mini_app_host.dart';
 import 'package:hupo_app/models/app_spec.dart';
 import 'package:hupo_app/models/app_words.dart';
 import 'package:hupo_app/models/scope.dart';
@@ -140,7 +141,7 @@ void main() {
     await tester.tap(find.byTooltip(chatCollapse));
     await tester.pumpAndSettle();
     expect(find.byType(DiscoverScreen), findsNothing, reason: '（负向对照：这一屏不是发现那一屏）');
-    await tester.tap(find.byKey(chatHomeButtonKey));
+    await tester.tap(find.byKey(miniAppExitKey));
     await tester.pumpAndSettle();
     expect(c.scope, mainScope, reason: '★ 关掉它 ⇒ 回到桌面那一间');
 
@@ -176,7 +177,7 @@ void main() {
     // 而"看得出来现在在哪儿"照旧（容器顶上那行字说得出这一间是谁）
     expect(find.byTooltip(chatScopeInApp(discoverTitle)), findsOneWidget);
     // 退回桌面 ⇒ 回主线那一间（房间是"现在开着哪个图标"的影子）
-    await tester.tap(find.byKey(chatHomeButtonKey));
+    await tester.tap(find.byKey(miniAppExitKey));
     await tester.pumpAndSettle();
     expect(c.scope, mainScope);
   });

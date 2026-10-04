@@ -91,7 +91,6 @@ import 'settings_screen.dart';
 const Key chatBodyKey = Key('chat-body');
 
 /// **聊天条最前面那颗 home**（主人 2026-09-27：*"点击 home 就是回到桌面"*）。
-const Key chatHomeButtonKey = Key('chat-home');
 
 /// 进小程序之后那条浮窗（同一天：*"点击 home 那个 icon 上面会有一个浮窗"*）。
 const Key chatHomeHintKey = Key('chat-home-hint');
@@ -912,8 +911,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               title: _appView(c)?.title ?? _lastAppTitle,
               // ★ 2026-09-24 主人定案：前半程要看到"**图标自己在长大**"
               icon: _appIconFor(),
-              // ⚠️ 2026-09-27 起**容器里没有任何按钮**了（顶栏撤掉）⇒ 不再传 `onClose`：
-              //    "关掉这一屏"只有一条路 —— 聊天条最前面那颗 home（`_backToDesktop`）。
+              // ★ **2026-10-04（`D3.15`）：出口在这一屏的右上角。**
+              //   主人：*「所有的app，右上角都有一个退出按钮。所以我不再需要home按钮」*
+              //   ⇒ 入口在 `MiniAppHost` 里，动作还是这一处（回桌面）。
+              onExit: () => _backToDesktop(c),
               onSettled: () {
                 if (mounted) setState(() => _appSettled = true);
               },
@@ -1156,6 +1157,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           // ★ 2026-09-30：**注册制那张卡**（契约 `docs/dev/147-APP-SQLITE.md`）。
           //   清单就是这一屏手上那份 `/api/apps`（桌面那一墙也是它）；
           //   "答应它 / 现在不给"那一下由这一屏去说（见 `_grantMyApp`）。
+          // ★ 2026-10-04：**「读出来」那个开关搬到语音那一屏**（原来住在被换掉的
+          //   聊天底下那一行里 —— 那颗喇叭）—— 同一档能力，新家。
+          autoSpeak: c.autoSpeak,
+          onToggleAutoSpeak: (on) => c.setAutoSpeak(on),
           // ★ 2026-10-04（V2.0 第一件）：设置里那一场"说一句试试"（演练，不会发出去）
           hearDrillPage: () => HearDrillScreen(controller: c),
           apps: _myApps,
@@ -1206,38 +1211,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   ///
   /// ⚠️ **它只是指示、不是按钮**：点了什么都不做 —— 主人要的是"看得出来现在在哪儿"。
   ///    真让它可点就等于多一个出口，那要另配一条行为与 ≥44 的命中区（D3.6），不在这一刀里。
-  IconData _scopeIcon(ChatController c) {
-    final s = c.scope;
-    if (s == mainScope) return Icons.home_outlined;
-    for (final a in _myApps) {
-      if (a.id == s) return miniAppIconFor(a.icon);
-    }
-    if (s == builtInSettingsId ||
-        s == builtInDiscoverId ||
-        s == builtInHarnessId) {
-      return _builtInIcon(s);
-    }
-    // ⚠️ 认不出那一间 ⇒ 给一个"在说话"的图标：**不许**画成"设置"，
-    //    更不许画成主线的家（那两样都是在说假话）。
-    return Icons.forum_outlined;
-  }
-
   /// 那条说明（长按 / 读屏听到"这句话是在哪儿说的"）。
   ///
   /// ★ 同 [_scopeIcon]：**按"现在在哪一间"算**（B35）。
-  String _scopeWords(ChatController c) {
-    final s = c.scope;
-    if (s == mainScope) return chatScopeDesktop;
-    for (final a in _myApps) {
-      if (a.id == s) return chatScopeInApp(a.title);
-    }
-    if (s == builtInSettingsId) return chatScopeInApp(configTitle);
-    if (s == builtInDiscoverId) return chatScopeInApp(discoverTitle);
-    if (s == builtInHarnessId) return chatScopeInApp(harnessAppLabel);
-    // 名字查不到（刚派出去那一间 —— 名字在他盒子里 · B20）⇒ 不撒谎的模糊话
-    return chatScopeElsewhere;
-  }
-
   /// **那颗 home 按钮**（原来它只是一个"在哪儿说话"的指示：只指示、不响应点击）。
   ///
   /// 🔴 主人 2026-09-27 定的三件（同一句话里）：
@@ -1249,47 +1225,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// ⚠️ **图形规则一个字没改**（主人 2026-09-23 定的）：桌面上是**家**，
   ///    进了某个小程序就是**它自己的图标**（`_scopeIcon`，与桌面上那一个是同一个来源）。
   ///    他这次说的是**那颗按钮**（位置/作用），不是"把图形换成房子"。
-  Widget _homeButton(ChatController c) {
-    // ★ 2026-09-29 主人：*"上面的左侧是home按钮……这些按钮就不是透明的了。"*
-    //   ⇒ 底下那条 bar 现在是**半透明**的，而这一颗**不跟着透**：
-    //     一层实底（`bgLayer2`）＋ 圆形裁剪 ⇒ 它看起来是"贴在玻璃上的一枚圆片"。
-    //   ⚠️ 命中区仍是 `homeButtonHit`（≥44，D3.6）：**底是可见的那一圈，
-    //     可点区还是外面那个方框**（图形 22 摆在正中，四周留白照旧算命中区）。
-    final look = DshLook.of(context);
-    return Tooltip(
-      message: _scopeWords(c),
-      child: InkWell(
-        key: chatHomeButtonKey,
-        onTap: () => _backToDesktop(c),
-        customBorder: const CircleBorder(),
-        child: SizedBox(
-          // ⚠️ 可点区**不许小于那一框**（`barButtonBox` 52）—— 原来这里写死 `homeButtonHit`
-          //    （44）⇒ 里面那个 52 的方块被**挤成 44**（"做大一些"当场没做成）。
-          //    取两者的大者：既满足 D3.6（≥44），又放得下那一框。
-          width: math.max(homeButtonHit, d.barButtonBox),
-          height: math.max(homeButtonHit, d.barButtonBox),
-          child: Center(
-            // ★ 2026-09-29 主人：*"左边home按钮变成正方形圆角框……整体高度提高一些，
-            //   也就是home按钮，录音按钮都要做大一些。"*
-            //   ⇒ 圆片 → **正方形圆角框**（`barButtonBox` 见方 / `barButtonRadius` 圆角），
-            //     与录音那颗**同一套尺寸**（两颗长得一样大，只是图形不同）。
-            child: Material(
-              color: look.palette.bgLayer2,
-              borderRadius: BorderRadius.circular(d.barButtonRadius),
-              child: SizedBox(
-                width: d.barButtonBox,
-                height: d.barButtonBox,
-                child: Center(
-                  child: Icon(_scopeIcon(c), size: homeButtonIcon, color: d.ink),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   /// **点那颗 home**（主人 2026-09-27：*"点击 home 就是回到桌面"*）。
   ///
   /// 两件一起做，缺一件都"回不到桌面"：
@@ -2043,9 +1978,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               speakable: canSpeak,
               onMic: () => unawaited(c.toggleVoiceCompose()),
               onTyped: (text) => unawaited(c.answerVoiceCompose(text)),
-              // ⚠️ 出口**暂时**还挂在这一行最前面（那颗 home）—— 它搬到每个 app 右上角之前，
-              //    少了它就"进去出不来"（`D3.15` 还没做，见 `183`）。
-              leading: _homeButton(c),
               hintAbove: _homeHint ? _homeHintBubble(look) : null,
             ),
           ],

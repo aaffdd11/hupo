@@ -10,6 +10,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:hupo_app/widgets/mini_app_host.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/app_words.dart';
 import 'package:hupo_app/models/space_words.dart';
@@ -81,7 +82,7 @@ void main() {
     expect(inApp, onDesktop.icon, reason: '★ 聊天条前面那个图标必须与桌面上那个是同一个小程序的图标');
 
     // 退出小程序 ⇒ 回到"在桌面上"（按最前面那颗 home）
-    await tester.tap(find.byKey(chatHomeButtonKey));
+    await tester.tap(find.byKey(miniAppExitKey));
     await tester.pumpAndSettle();
     expect(
       _badgeIcon(tester, chatScopeDesktop),

@@ -26,7 +26,9 @@ import '../models/dsh_design.dart';
 import '../models/hear_words.dart';
 import '../models/image_outcome.dart';
 import '../models/space.dart';
+import '../models/speak_words.dart';
 import '../models/space_words.dart';
+import '../services/speech.dart' as speech;
 import '../models/voice_record.dart';
 import '../models/voice_try.dart';
 import '../models/wallpaper.dart' show wallpaperLabel;
@@ -81,6 +83,8 @@ class SettingsScreen extends StatelessWidget {
     this.onGrant,
     this.onClear,
     this.hearDrillPage,
+    this.autoSpeak = false,
+    this.onToggleAutoSpeak,
   });
 
   /// ★ **V2.0 第一件：设置里那一场"说一句试试"**（主人 2026-10-04）。
@@ -88,6 +92,13 @@ class SettingsScreen extends StatelessWidget {
   /// ⚠️ `null` ⇒ **不画那一行**（这条路没接上时不许摆一个按不动的东西）。
   /// ⚠️ 它是**演练**：整条链子走一遍，**一句都不会发出去**。
   final Widget Function()? hearDrillPage;
+
+  /// ★ **「读出来」那个开关**（`D5.16`／`docs/dev/68`）。
+  ///
+  /// ⚠️ 2026-10-04：它原来住在聊天底下那一行里（那颗喇叭）—— 那一行换成
+  /// "一个圆圈"之后**界面上就没有它了** ⇒ 搬进**语音那一屏**（同一条能力，新家）。
+  final bool autoSpeak;
+  final ValueChanged<bool>? onToggleAutoSpeak;
 
   /// 现在有没有一串能用的钥匙（服务端说的）。
   final bool hasKey;
@@ -665,6 +676,17 @@ class SettingsScreen extends StatelessWidget {
       // ★ **录一段（录音 ＋ 回放）**（主人 2026-09-27）：与上面那个表单**无关** ——
       //   它不碰钥匙、不走上游：**只验这台设备的麦克风**。
       //   ⚠️ 排在「试一下」**前面**："先能成功把录音录下来"是更基础的那一件事。
+      // ★ **「读出来」**（`D5.16`）：能念的时候才画（念不出来 ⇒ 不摆按不动的东西）。
+      if (tab == credTabVoice && speech.canSpeak && onToggleAutoSpeak != null)
+        Card(
+          child: SwitchListTile(
+            key: settingsAutoSpeakKey,
+            value: autoSpeak,
+            onChanged: onToggleAutoSpeak,
+            title: const Text(speakAutoOnWords),
+            subtitle: Text(autoSpeak ? speakAutoHintOn : speakAutoHintOff),
+          ),
+        ),
       if (tab == credTabVoice && vr != null) VoiceRecord(handlers: vr),
       if (tab == credTabVoice && vt != null)
         VoiceTry(handlers: vt, hasOwn: credsFor(tab), canHear: canHear),
@@ -862,3 +884,6 @@ class SettingsScreen extends StatelessWidget {
   ///    「注销账号」是这一列里的一个子页（`_cancelAccountCard`）。
 
 }
+
+/// 「读出来」那个开关在设置里的 key（判据要按它）。
+const Key settingsAutoSpeakKey = ValueKey<String>('settings-auto-speak');

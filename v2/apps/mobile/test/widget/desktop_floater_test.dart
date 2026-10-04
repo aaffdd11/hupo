@@ -170,20 +170,9 @@ void main() {
     expect(tester.getSize(find.byKey(chatMicButtonKey)).width, d.barButtonBox);
     expect(tester.getSize(find.byKey(chatMicButtonKey)).height, d.barButtonBox);
 
-    // ③ home 那颗：**正方形圆角框**（2026-09-29 主人：*"变成正方形圆角框……做大一些"*）
-    final face = find
-        .descendant(of: find.byKey(chatHomeButtonKey), matching: find.byType(Material))
-        .first;
-    final fm = tester.widget<Material>(face);
-    expect(fm.color, p.bgLayer2, reason: '★ home 那颗没有实底');
-    expect(fm.shape, isNot(isA<CircleBorder>()),
-        reason: '★ 还是圆的 —— 主人要的是"正方形圆角框"');
-    final size = tester.getSize(face);
-    expect(size.width, d.barButtonBox, reason: '★ 那一框没有做大');
-    expect(size.height, d.barButtonBox);
-    // 负向对照：**两颗同尺寸**（home 与录音 —— 他说的是"都要做大一些"）
-    expect(tester.getSize(find.byKey(chatMicButtonKey)), size,
-        reason: '★ home 与录音那颗不一样大');
+    // ③ **那颗 home 2026-10-04 取消了**（`D3.15`：出口搬到每个 app 的右上角，
+    //    见 `test/widget/mini_app_exit_test.dart`）⇒ 这一段量它的判据**随功能一起走**。
+    //    ⚠️ 这一行里现在只剩**一颗**可点的（那颗话筒）。
   });
 
   testWidgets('🔴 话筒在**这一行的最右**（不在输入框里面了）', (tester) async {

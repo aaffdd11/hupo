@@ -15,6 +15,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:hupo_app/widgets/mini_app_host.dart';
 import 'package:hupo_app/models/dev_harness.dart';
 import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/harness.dart';
@@ -315,7 +316,7 @@ void main() {
     await tester.tap(find.text(harnessAppLabel));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(chatHomeButtonKey));
+    await tester.tap(find.byKey(miniAppExitKey));
     await tester.pumpAndSettle();
 
     expect(feed.closes, greaterThanOrEqualTo(1), reason: '★ 走了就要把这一头收掉');

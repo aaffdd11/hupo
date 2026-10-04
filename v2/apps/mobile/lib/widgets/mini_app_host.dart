@@ -48,6 +48,7 @@ class MiniAppHost extends StatefulWidget {
     this.fromRect,
     this.icon,
     this.onSettled,
+    this.onExit,
   });
 
   /// 现在有 app 开着吗。
@@ -69,6 +70,13 @@ class MiniAppHost extends StatefulWidget {
 
   /// **收起时那条压住了多少**（含边距）⇒ 内容底部按它内缩（§6.4 规则 1）。
   final double bottomInset;
+
+  /// ★ **2026-10-04（`D3.15`）：这一屏右上角那颗「退出」。**
+  ///
+  /// 主人原话：*「所有的app，右上角都有一个退出按钮。所以我不再需要home按钮」*
+  /// ⇒ 出口从**底下那条最前面那颗 home** 搬到了**每一屏的右上角**。
+  /// ⚠️ `null` ⇒ 不画（收回动画里那几帧、以及测试搭的壳）。
+  final VoidCallback? onExit;
 
   /// ★ **2026-10-01（主人报的"没铺满、底色不同"）：这一屏的页面要铺满整屏**。
   ///
@@ -286,6 +294,8 @@ class _MiniAppHostState extends State<MiniAppHost>
                 child: Stack(
               fit: StackFit.expand,
               children: [
+                // ★ **右上角那颗「退出」**（`D3.15`）：浮在这一屏内容之上。
+                //   ⚠️ 被聊天盖住时**不画**（他看不见它，画了也点不到）。
                 ClipRRect(
                 key: miniAppSurfaceKey,
                 // 小的时候有点圆角（像一张卡），长到全屏就是直角
@@ -332,6 +342,47 @@ class _MiniAppHostState extends State<MiniAppHost>
                       ),
                     ),
                   ),
+                if (widget.onExit != null && !covered && widget.open)
+                  // ⚠️ **这一层 `OverflowBox` 与下面内容那一层同一个理由**：
+                  //    收起/展开那几帧里这一格只剩十几像素宽，直接摆上去这一行会
+                  //    **横向溢出**（`RenderFlex overflowed`）—— 判据 E1 当场抓到过。
+                  //    ⇒ 给它"屏幕那么大"的坐标，再在里面靠右上。
+                  OverflowBox(
+                    alignment: Alignment.topRight,
+                    minWidth: screen.width,
+                    maxWidth: screen.width,
+                    minHeight: screen.height,
+                    maxHeight: screen.height,
+                    child: SafeArea(
+                      minimum: const EdgeInsets.all(d.gapM),
+                      child: Align(
+                        alignment: Alignment.topRight,
+                        child: Material(
+                        color: d.card,
+                        borderRadius: BorderRadius.circular(d.radiusChip),
+                        child: InkWell(
+                          key: miniAppExitKey,
+                          borderRadius: BorderRadius.circular(d.radiusChip),
+                          onTap: widget.onExit,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(minHeight: d.barButtonBox),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: d.gapM),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.close_rounded, size: 20),
+                                  const SizedBox(width: d.gapXs),
+                                  Text(miniAppExitLabel),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      ),
+                    ),
+                  ),
               ],
             )),
             );
@@ -349,3 +400,9 @@ class _MiniAppHostState extends State<MiniAppHost>
     );
   }
 }
+
+/// 右上角那颗「退出」（判据要按它 —— `D3.15`）。
+const Key miniAppExitKey = ValueKey<String>('mini-app-exit');
+
+/// 那颗按钮上的字（**不许叫"返回 / 关闭"**：一件事只有一个说法）。
+const String miniAppExitLabel = '退出';

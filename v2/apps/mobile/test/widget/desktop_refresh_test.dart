@@ -17,6 +17,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hupo_app/widgets/mini_app_host.dart';
 import 'package:hupo_app/models/app_words.dart';
 import 'package:hupo_app/models/design.dart' as d;
 import 'package:hupo_app/models/space.dart';
@@ -127,7 +128,7 @@ void main() {
     }
     expect(find.text(appRuntimeNotHere), findsOneWidget, reason: '前提：他真进了那一屏');
     h.server.building = true; // 假装"离开的这一会儿，桌面那一格又变了"
-    await tester.tap(find.byKey(chatHomeButtonKey));
+    await tester.tap(find.byKey(miniAppExitKey));
     for (var i = 0; i < 6; i++) {
       await tester.pump(const Duration(milliseconds: 120));
     }
