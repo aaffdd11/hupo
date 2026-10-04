@@ -412,20 +412,62 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   final _wallpaperStore = WallpaperStore();
 
-  /// 进来时读一次"上次挑的那张"（读不出来 / 认不出来 ⇒ 那张暖纸）。
-  /// ⚠️ 与 `_loadAppearance` 同一条取舍：**先画第一帧、读到了再换**。
+  /// 进来时读一次壁纸。**两段走**（2026-10-04 起 · 契约 `docs/dev/183`）：
+  ///
+  ///   ① 先按**本机缓存**画（离线 / 慢网也不白屏、不闪一下 —— 与 `_loadAppearance` 同一条取舍）；
+  ///   ② 再问**账号那一份**（壁纸跟着账号走）：
+  ///      · 问上了、跟我这儿不一样 ⇒ **换成账号那一张**（这就是"换台设备也看得见"）；
+  ///      · 账号里**没记录**、而我这台有 ⇒ **把本机这份顶上去**
+  ///        （老用户升级上来的第一下：他挑过的那张不该被"没记录"抹成默认）；
+  ///      · **没问上** ⇒ 什么都不动（网不通不等于他改了）。
+  ///   ③ 顺带补一次"上次没同步上的那一下"（`pending`）。
   Future<void> _loadWallpaper() async {
-    final s = await _wallpaperStore.read();
-    if (!mounted || s == _wallpaper) return;
-    setState(() => _wallpaperVN.value = s);
+    final local = await _wallpaperStore.read();
+    if (mounted && local != _wallpaper) setState(() => _wallpaperVN.value = local);
+
+    final token = widget.controller.token;
+    if (token == null) return; // 还没登录 ⇒ 只有本机这一份（不问、不写）
+    final pending = await _wallpaperStore.readPending();
+    final remote = await widget.controller.api.prefsWallpaper(token);
+    final r = resolveWallpaper(remote: remote, local: local);
+    if (!mounted) return;
+    if (r.pushUp) {
+      unawaited(_pushWallpaper(token, r.value));
+    } else if (pending && remote != null) {
+      // 他上次在这台设备上挑的那张没写进账号 ⇒ 补一次（网通了就补上）
+      unawaited(_pushWallpaper(token, local));
+    }
+    if (remote != null && !r.pushUp && r.value != local) {
+      await _wallpaperStore.write(r.value);
+      if (mounted) setState(() => _wallpaperVN.value = r.value);
+    }
+  }
+
+  /// 把"本机这一张"写进账号（写成了就清掉 `pending`）。
+  Future<void> _pushWallpaper(String token, String id) async {
+    final ok = await widget.controller.api.setWallpaperPref(token, id);
+    await _wallpaperStore.writePending(!ok);
   }
 
   /// 用户挑了一张（设置里那一格）。**认不出来的一律当"不设"**（模型那一层兜底）。
+  ///
+  /// ⚠️ **先把本机这一份写死、屏幕当场换**（他按下就该看见），**然后**才去写账号：
+  ///    账号那一下没成 ⇒ 留个 `pending`，下次开机会补（**不许假装同步上了**）。
   void _setWallpaper(String id) {
     final n = wallpaperOf(id);
     if (n == _wallpaper) return; // 点当前那一张 = 空动作（不许有死键）
     setState(() => _wallpaperVN.value = n);
-    unawaited(_wallpaperStore.write(n));
+    unawaited(_saveWallpaper(n));
+  }
+
+  Future<void> _saveWallpaper(String n) async {
+    await _wallpaperStore.write(n);
+    final token = widget.controller.token;
+    if (token == null) {
+      await _wallpaperStore.writePending(true); // 登录之后补
+      return;
+    }
+    await _pushWallpaper(token, n);
   }
 
   // ── 多选态（契约 `docs/dev/106-CHAT-SELECT.md` §一）──────────────

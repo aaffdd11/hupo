@@ -493,6 +493,16 @@ export function createServer({
   /** **那四样有没有**（只看存在与否，**永远不回值**）。`credStatusOf(userId)`。 */
   credStatusOf = null,
   /**
+   * ★ **跟着账号走的偏好**（2026-10-04 主人定：*"壁纸不要按设备存"* · 契约 `docs/dev/183`）。
+   *
+   * ⚠️ 约定：`prefs = { read(userId), write(userId, patch) }`，返回值里**只有界面那一格偏好**
+   *    （今天只有 `wallpaper`），**绝不含钥匙那类东西**。
+   *    `read` ⇒ `{wallpaper: string|null}`（`null` = **从没记过**，不是"不设"）；
+   *    `write` ⇒ `{ok, why, prefs}`（形状不对 ⇒ `why:'bad-wallpaper'`，路由据此回 400）。
+   * ⚠️ 不给 ⇒ 这两条口 404（同 `/api/creds` 那条规矩：没接线就不假装有）。
+   */
+  prefs = null,
+  /**
    * ★ **语音这条路现在能不能用**（`voiceReadyOf(userId)` ⇒ boolean）。
    *
    * 🔴 为什么要它：`creds.voice` 只说他**自己填没填**；而"能不能用"还要算上
@@ -1571,6 +1581,45 @@ export function createServer({
           });
         }
         return sendJson(res, 200, { ok: true, creds: r?.creds ?? null });
+      }
+
+      /**
+       * ★ **跟着账号走的偏好**（2026-10-04 主人定：壁纸不按设备存 · 契约 `docs/dev/183`）。
+       *
+       * 🔴 **为什么要它**：壁纸原来跟"亮暗 / 字号"一样存在**设备**里 ⇒ 换一台设备登录
+       *    就回到默认那张纸。主人看到文稿里的截图当场问出这件事，并拍了板：**跟账号走**。
+       *
+       * ⚠️ **身份只从令牌来**（`claim.sub`）：读的、写的都是**他自己**那一份。
+       * ⚠️ **读**回 `wallpaper: null` 是有意义的：那是"**从没记过**"——
+       *    客户端据此把**本机那份**顶上去（老用户升级上来的第一下，别把他的壁纸抹成默认）。
+       * ⚠️ 写只认 `''`（不设）与 `wp-<数字>`；别的形状**如实 400**（这一格不是随便塞的袋子）。
+       */
+      if (path === '/api/prefs' && (req.method === 'GET' || req.method === 'POST')) {
+        if (!prefs) return sendJson(res, 404, { error: 'not-found' });
+        if (req.method === 'GET') {
+          let got = null;
+          try {
+            got = prefs.read?.(claim.sub) ?? null;
+          } catch {
+            got = null; // 读不出来 ⇒ 当"没记过"（客户端用本机那份兜底）
+          }
+          return sendJson(res, 200, { wallpaper: typeof got?.wallpaper === 'string' ? got.wallpaper : null });
+        }
+        let body;
+        try {
+          body = await readJson(req, 4 * 1024);
+        } catch {
+          return sendJson(res, 400, { error: 'bad-json' });
+        }
+        const r = prefs.write?.(claim.sub, { wallpaper: body?.wallpaper });
+        if (!r?.ok) {
+          const bad = r?.why === 'bad-wallpaper';
+          return sendJson(res, bad ? 400 : 409, {
+            error: r?.why ?? 'cannot-set',
+            ...(bad ? { text: '这一张我认不出来，先不存。' } : {}),
+          });
+        }
+        return sendJson(res, 200, { ok: true, wallpaper: r?.prefs?.wallpaper ?? null });
       }
 
       // ── 用户填自己的模型凭据（多租户 ②-4b）──────────────────────────

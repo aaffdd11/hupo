@@ -23,6 +23,7 @@ import '../models/scope.dart';
 import '../models/server_address.dart';
 import '../models/space.dart';
 import '../models/trash.dart';
+import '../models/wallpaper.dart';
 
 /// 说话的结果。**把"为什么没成功"分清楚**——
 /// 因为对用户说的话不一样，能做的事也不一样。
@@ -389,6 +390,52 @@ class Api {
       return appEditOutcomeOf(r.statusCode, r.body);
     } catch (_) {
       return const AppEditFailed();
+    }
+  }
+
+  /// ★ **跟着账号走的偏好：壁纸那一格**（主人 2026-10-04 定：*"壁纸不要按设备存"* ·
+  /// 契约 `docs/dev/183-WALLPAPER-ACCOUNT.md`）。
+  ///
+  /// 🔴 三种结果**必须分得开**（分不开就会拿"网不通"当成"账号里没有"，
+  /// 于是把他在别的设备上挑的那张**抹成默认**）：
+  ///   · `null` ⇒ **这一次没问上**（网络 / 非 200 / 读不懂）⇒ 调用方**什么都不许动**；
+  ///   · `WallpaperRemote(null)` ⇒ 问了，**账号里没记录**（⇒ 本机那份往上顶）；
+  ///   · `WallpaperRemote('wp-07' | '')` ⇒ 账号里就是这一份。
+  Future<WallpaperRemote?> prefsWallpaper(String token) async {
+    try {
+      final r = await _c
+          .get(_u('/api/prefs'), headers: {'authorization': 'Bearer $token'})
+          .timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) return null;
+      final j = jsonDecode(r.body);
+      if (j is! Map) return null;
+      final w = j['wallpaper'];
+      if (w == null) return const WallpaperRemote(null);
+      if (w is String) return WallpaperRemote(w);
+      return null; // 认不出来的形状 ⇒ 当"没问上"（不猜）
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 把壁纸**写进账号**（⇒ 别的设备下次登录就是这一张）。
+  ///
+  /// ⚠️ 回执**只有服务端明说 `{ok:true}` 才算成了**（同 `appRename` 那条纪律：
+  ///    没成就不许让界面以为同步上了）。`true` = 存上了。
+  Future<bool> setWallpaperPref(String token, String wallpaper) async {
+    try {
+      final r = await _c
+          .post(
+            _u('/api/prefs'),
+            headers: {'content-type': 'application/json', 'authorization': 'Bearer $token'},
+            body: jsonEncode({'wallpaper': wallpaper}),
+          )
+          .timeout(const Duration(seconds: 12));
+      if (r.statusCode != 200) return false;
+      final j = jsonDecode(r.body);
+      return j is Map && j['ok'] == true;
+    } catch (_) {
+      return false;
     }
   }
 

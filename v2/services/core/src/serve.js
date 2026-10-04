@@ -41,6 +41,7 @@ import { createAsrRelay } from './asr.js';
 import { createHarnessRelay } from './harness-session.mjs';
 import { createDevWebRelay } from './dev-mode.js';
 import { readUserCreds, tenantCredsPack, writeUserCreds } from './creds-store.js';
+import { readUserPrefs, writeUserPrefs } from './prefs-store.js';
 import { makeDrawImage } from './image-use.js';
 import { OWNER_KEY_REF, writeOwnerKey } from './owner-creds.js';
 import { describeVoiceCreds, resolveVoiceCreds, voiceCredsFor } from './asr-creds.js';
@@ -1121,6 +1122,11 @@ const { listen, listenTrusted, close, askApp, agentAsk, agentPoll, deliverAppTas
   setModelKey,
   setCreds,
   credStatusOf,
+  // ★ **跟着账号走的偏好**（2026-10-04：壁纸不按设备存）——按人一份的存档，同 `creds` 那一族
+  prefs: {
+    read: (sub) => readUserPrefs(cfg.dataDir, sub),
+    write: (sub, patch) => writeUserPrefs(cfg.dataDir, sub, patch),
+  },
   // ★ 语音"现在能不能用"（他自己的两样 或 部署默认那份）——只读，见 `server.js` 那个参数
   voiceReadyOf,
   drawImage,

@@ -65,3 +65,51 @@ String wallpaperLabel(String id) {
   return n == null ? wallpaperDefaultLabel : '$wallpaperLabelPrefix$n';
 }
 
+
+// ── ★ 2026-10-04：壁纸**跟着账号走**（主人拍板 · 契约 `docs/dev/183`）──────────
+//
+// 原来它跟"亮暗 / 字号"一样**按设备存** ⇒ 换一台设备登录就回到默认那张纸。
+// 主人看到文稿里的截图当场问出这件事，并定了：**跟账号走**。
+//
+// ⇒ 下面这两个东西是**纯逻辑**（不 import flutter / services ⇒ 判据在 VM 上直接量）：
+//    服务端那一份**怎么读**、它和本机这一份**怎么合**。
+
+/// **服务端那一份回答**。
+///
+/// 🔴 `wallpaper == null` 与 `wallpaper == ''` **是两件事**：
+///    · `null` = **账号里从没记过**这一格（⇒ 要拿本机那份顶上去，见 [resolveWallpaper]）；
+///    · `''`   = 他**明确选了"不设"**（默认那张暖纸）——这是他的选择，不许被本机那份盖掉。
+class WallpaperRemote {
+  const WallpaperRemote(this.wallpaper);
+
+  /// `null` = 账号里没记录；`''` = 明确不设；`'wp-07'` = 就那一张。
+  final String? wallpaper;
+}
+
+/// 合出来之后该怎么办。
+class WallpaperResolved {
+  const WallpaperResolved({required this.value, required this.pushUp});
+
+  /// 最后该铺哪一张（已归一化：认不出来 ⇒ `''`）。
+  final String value;
+
+  /// 要不要把**本机这一份**写回账号（只有"账号里没记录"那一种会要）。
+  final bool pushUp;
+}
+
+/// **账号那一份 ＋ 本机这一份 ⇒ 该铺哪一张、要不要往上顶**。
+///
+/// 三条规矩（别的都不许加）：
+///   ① **没问上**（`remote == null`，网络不通 / 非 200 / 读不懂）⇒ **本机这一份照旧**
+///      （什么都不写、什么都不动 —— 网不通不等于"他改了"）；
+///   ② **账号里没记录**（`null`）⇒ 本机有就**往上顶**（老用户升级上来的第一下：
+///      他设备上挑过的那张不该被"没记录"抹成默认）；本机也没有 ⇒ 不设；
+///   ③ **账号里有记录**（含 `''`）⇒ **听账号的**（这就是"跟着账号走"）。
+WallpaperResolved resolveWallpaper({WallpaperRemote? remote, required String local}) {
+  final mine = wallpaperOf(local);
+  if (remote == null) return WallpaperResolved(value: mine, pushUp: false);
+  if (remote.wallpaper == null) {
+    return WallpaperResolved(value: mine, pushUp: mine != wallpaperNone);
+  }
+  return WallpaperResolved(value: wallpaperOf(remote.wallpaper), pushUp: false);
+}
