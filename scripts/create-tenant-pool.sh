@@ -113,12 +113,26 @@ UNIT
         #    CPU 那条没有 ⇒ 一个租户里跑飞的 agent 能把整机（32 线程）吃满。
         # ⚠️ **2026-09-29 主人拍板：内存 768m → 1536m**。依据是真机读数：B 盒 `memory.peak`
         #    737 MiB / 768 MiB（**96%**，只剩 30 MB），A 盒才 49 MiB —— 768 是真的紧。
-        #    模板 `max_tenants=8` ⇒ 满编也只占 12 GiB（本机 62.8 GiB / 可用 48 GiB）。
         #    `--memory-swap` **跟着同值** ⇒ swap 仍然禁用（cgroup `memory.swap.max=0`），
         #    不是「多给了一份 swap」。
         #    ⚠️ 同 `--cpus=4` 那句：**只对以后新建/重开的容器生效** —— 跑着的那两台
         #    要重开一次才带上（`sudo bash scripts/create-tenant-pool.sh --yes`）。
-        printf '  --pids-limit=512 --memory=1536m --memory-swap=1536m --cpus=4 \\\n'
+        #
+        # 🔴🔴 **2026-10-04 主人：*「大幅放宽内存，原则上我的机器有 32g 内存，
+        #    你可以至少给每个容器四个 g 内存啊」* ⇒ 1536m → `4g`**。
+        #    依据（真机读数 · `docs/dev/173`）：B 盒那台容器
+        #      · 本轮 `memory.peak` **589 MB / 768 MB（77%）**；
+        #      · 9-25 被内核 OOM 杀 **58 次**、9-26 杀 **52 次**（共 112 次，
+        #        全是盒里那个 agent 进程）—— 那正是"活干到一半凭空没了"的根。
+        # 🔴 **而且这里记一笔教训**：09-29 那条"1536m"**从来没生效过** ——
+        #    脚本改了，但**没人重跑这个脚本**（跑着的单元里写的还是 `768m`，
+        #    2026-10-04 实测：`/home/hupo-b/.config/systemd/user/hupo-tenant.service`
+        #    第 30 行仍是 `--memory=768m`）⇒ **改这里 ≠ 生效**，
+        #    要真带上必须**重跑本脚本**（它才会重写单元并 `--replace` 重开容器）。
+        # 容量：本机 **62 GiB** 总内存（不是 32 GiB，主人记的那个数偏小）·
+        #    当前可用 **51 GiB**；模板 `max_tenants=8` ⇒ 满编 8 × 4 GiB = 32 GiB，
+        #    仍在总内存之内（但**满编时别再指望宿主还有富余**）。
+        printf '  --pids-limit=512 --memory=4g --memory-swap=4g --cpus=4 \\\n'
         printf '  --env HUPO_CHANNEL=/run/hupo-host/channel.sock \\\n'
         printf '  --env HUPO_CHANNEL_WAIT_MS=60000 \\\n'
         printf '  %s\n' "$IMG"
