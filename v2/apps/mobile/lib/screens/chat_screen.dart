@@ -170,7 +170,7 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _scroll = ScrollController();
 
   /// 浮窗那一层的把手（外面要叫它"拉满"/"收起"）。
@@ -447,6 +447,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     widget.controller.addListener(_onChanged);
+    // ★ **2026-10-04：他离开这一屏 / 回到这一屏，桌面都要重拉一次**（见 `didChangeAppLifecycleState`）
+    WidgetsBinding.instance.addObserver(this);
     // ★ **"读出来"这个开关**存盘读过一次（设备级偏好；读不出来当关）。
     unawaited(widget.controller.loadAutoSpeak());
     // ★ **我的小程序**（乙-1）：登录之后拉一次。⚠️ 拉不到就是空清单，**不许**因此把界面弄坏。
@@ -495,6 +497,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.controller.removeListener(_onChanged);
     FocusManager.instance.removeListener(_onFocusChanged);
     // 离开这一屏 ⇒ 把「我自己那台」那一头收干净（对面就不会留一个孤儿进程）
@@ -506,6 +509,21 @@ class _ChatScreenState extends State<ChatScreen> {
     _wallpaperVN.dispose();
     _scroll.dispose();
     super.dispose();
+  }
+
+  /// ★ **2026-10-04（主人报的"桌面并没有自动刷新"）—— 刷新机制的第二半：**
+  ///   他**回到这一屏**（手机从后台切回来 / 浏览器标签切回来）⇒ **重拉一次清单**。
+  ///
+  /// 🔴 **为什么光有服务端那几帧不够**：那些帧是**实时**的（瞬态事件不补发）——
+  ///    他不在看的那段时间里发生的事（盒子里的助手把小程序的入口写完了），
+  ///    这一屏**一条都收不到**。回到屏幕前那一下不重拉，他看到的就还是旧样子
+  ///    （灰的"在建"格），只能靠手动刷新页面。
+  /// ⚠️ 就一次很小的清单请求；拉不到不许把界面弄坏（`_loadMyApps` 自己吞）。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    if (!mounted) return;
+    unawaited(_loadMyApps());
   }
 
   void _onChanged() {
@@ -1248,6 +1266,12 @@ class _ChatScreenState extends State<ChatScreen> {
     //    （控制器按房间分开留着），所以这一下只是"换回它"，
     //    不是"重新拉一遍"。
     unawaited(c.setScope(mainScope));
+    // ★ **2026-10-04（主人报的"桌面并没有自动刷新"）：退回桌面 = 重拉一次清单。**
+    //   🔴 他开着某一间小程序的那段时间里，桌面那一格可能已经变了（做完了 / 活收口了），
+    //      而"正开着那一间"的那条连接**收不到**那些帧（服务端按焦点路由）
+    //      ⇒ 回到桌面这一下不重拉，他看到的就还是旧样子。
+    //   ⚠️ 一次很小的清单请求（清单本来也是现签 URL 的，重复拉没有副作用）。
+    unawaited(_loadMyApps());
     // 顺手把聊天收起来：他要的是"回到桌面"，而展开的聊天是盖满屏的
     _floaterKey.currentState?.collapse();
   }

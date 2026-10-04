@@ -19,6 +19,8 @@ import nodeOs from 'node:os';
 import nodePath from 'node:path';
 import test, { after } from 'node:test';
 
+import { WebSocket } from 'ws';
+
 import { AgentRuntime } from '../src/agent-runtime.js';
 import { Apps } from '../src/apps.js';
 import { createBoxApps } from '../src/apps-box.js';
@@ -51,6 +53,17 @@ function guard(fn) {
 }
 
 const tmp = (tag = 'hupo-178-') => nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), tag));
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function waitFor(pred, why, ms = 8000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    if (pred()) return;
+    await sleep(20);
+  }
+  throw new Error(`等不到：${why}（等了 ${ms}ms）`);
+}
 
 function cfgFor(dataDir, tag) {
   return {
@@ -283,4 +296,151 @@ test('W3 🔴 租户：盒子里说他那一间在做 ⇒ 亮（宿主自己那�
   assert.deepEqual(list.map((a) => a.id).sort(), ['busy', 'idle'], '前提：盒子那份清单到了宿主这儿');
   assert.equal(workingOf(list, 'busy'), true, '★ 盒子里那本活账说他那一间在做 ⇒ 桌面要亮');
   assert.equal(workingOf(list, 'idle'), false, '🔴 宿主那份说他那一间在做 —— 这一格**不许**亮');
+});
+
+// ════════════════════════════════════════════════════════════
+// W4 —— 🔴 **那条信号真的推得到客户端**（真服务 ＋ 真 WebSocket 连接）
+//
+//   为什么非有这一条：主人 2026-10-04 报的那件事正是**这一段的缝** ——
+//   *"桌面并没有自动刷新。就是app做好了没有刷新。我们要有刷新机制。"*
+//   ⇒ 这条判据从"写进入口那一份"（＝做好了）与"活账动一下"（＝在做）两头各推一次，
+//     量**客户端那条连接收不收得到**（收不到 ⇒ 桌面就不会重拉，屏幕上就是旧样子）。
+// ════════════════════════════════════════════════════════════
+test('W4 🔴 写进入口 / 活账动一下 ⇒ 他那条连接**收得到** `app/installed`（桌面据此重拉）', async (t) => {
+  const { worlds } = await bootWorlds(t);
+  const srv = await bootServer(t, { worlds });
+  const addr = await srv.listen(0);
+  const origin = `http://127.0.0.1:${addr.port}`;
+  const token = srv.auth.issue({ sub: 'owner' }).token;
+  const made = await (await postCreate(origin, token, { title: '要做的' })).json();
+  assert.ok(made.id, '前提：先建出一格（占位页还在 ⇒ 它"在建"）');
+
+  // ── 真连一条（形状照 `test/app-live.test.js` V5）────────────────
+  const frames = [];
+  const ws = new WebSocket(`${origin.replace(/^http/, 'ws')}/api/stream?sinceSeq=0`, ['bearer', token]);
+  t.after(guard(async () => {
+    try {
+      ws.close();
+    } catch {
+      /* 已经没了 */
+    }
+  }));
+  ws.on('message', (d) => {
+    try {
+      frames.push(JSON.parse(d.toString()));
+    } catch {
+      /* 不是 JSON 的帧不算 */
+    }
+  });
+  await new Promise((resolve, reject) => {
+    ws.on('open', resolve);
+    ws.on('error', reject);
+  });
+  await waitFor(() => frames.some((e) => e.type === 'client/hello'), '先握上手（拿到 hello）');
+
+  const installed = (id) => frames.filter((e) => e.type === 'app/installed' && e.appId === id);
+
+  // ── ① **"做好了"那一下**：入口那一份被真内容顶掉 ──────────────
+  const w = worlds.worldFor('owner');
+  w.workspaces.write(made.id, { 'index.html': '<!doctype html><p>真的内容</p>' });
+  await waitFor(() => installed(made.id).length > 0, '★ 写进入口那一份 ⇒ 那条连接要收到 app/installed');
+  const one = installed(made.id)[0];
+  assert.equal(one.seq, undefined, '★ 瞬态：不占号（不占号才不会进历史被重放）');
+  assert.equal(
+    w.timeline.readAll().some((e) => e.type === 'app/installed'),
+    false,
+    '★ 不许落盘（落盘 ⇒ 重连时桌面会莫名其妙闪一下）',
+  );
+
+  // ── ② **"在做"那一下**：活账开票 / 收口 ───────────────────────
+  const before = installed(made.id).length;
+  w.work.declare({ scopeId: made.id, ref: 'r-w4' });
+  await waitFor(() => installed(made.id).length > before, '★ 活账开票 ⇒ 那条连接也要收到（桌面亮角标）');
+  const opened = installed(made.id).length;
+  w.work.closeByRef({ scopeId: made.id, ref: 'r-w4', outcome: WORK_STATES.done });
+  await waitFor(() => installed(made.id).length > opened, '★ 收口 ⇒ 再收一条（桌面灭角标）');
+
+  // 负向对照：**别的 app** 的信号不许数到这一格头上
+  assert.equal(
+    frames.some((e) => e.type === 'app/installed' && e.appId !== made.id && e.appId !== 'main'),
+    false,
+    '★ 只有这一格的信号（别人那几格一个字节都不许跟着喊）',
+  );
+});
+
+// ════════════════════════════════════════════════════════════
+// W5 —— 🔴 **"助手在那一间目录里直接把文件写完"这一条路，桌面也要收到信号**
+//
+//   主人 2026-10-04 报的原话：*"桌面并没有自动刷新。就是app做好了没有刷新。
+//   我们要有刷新机制。"* ⇒ 查出来的**正是这一条**：
+//   助手最常用的"部署"方式是在那一间目录里**直接写文件**（`docs/dev/112`）——
+//   它**不经过** `AppWorkspaces.write()` ⇒ 不会有 `app/installed`；
+//   而那条路上唯一的一声是 `app/workspace-changed`，它是**按焦点路由**的
+//   （只推给"正开着这一间"的那条连接）⇒ 站在桌面前的人**一个字节都收不到**。
+// ════════════════════════════════════════════════════════════
+test('W5 🔴 直接写盘把入口写完 ⇒ 桌面那条连接也收得到（免得那一格一直是灰的）', async (t) => {
+  const { worlds } = await bootWorlds(t);
+  const srv = await bootServer(t, { worlds });
+  const addr = await srv.listen(0);
+  const origin = `http://127.0.0.1:${addr.port}`;
+  const token = srv.auth.issue({ sub: 'owner' }).token;
+  const made = await (await postCreate(origin, token, { title: '直接写的' })).json();
+  assert.ok(made.id);
+
+  const w = worlds.worldFor('owner');
+  assert.equal(w.apps.meta(made.id).building, true, '前提：它现在"在建"（桌面那一格是灰的）');
+
+  // 真连一条**主线**（桌面那一屏就是主线）
+  const frames = [];
+  const ws = new WebSocket(`${origin.replace(/^http/, 'ws')}/api/stream?sinceSeq=0`, ['bearer', token]);
+  t.after(guard(async () => {
+    try {
+      ws.close();
+    } catch {
+      /* 已经没了 */
+    }
+  }));
+  ws.on('message', (d) => {
+    try {
+      frames.push(JSON.parse(d.toString()));
+    } catch {
+      /* 不是 JSON 的帧不算 */
+    }
+  });
+  await new Promise((resolve, reject) => {
+    ws.on('open', resolve);
+    ws.on('error', reject);
+  });
+  await waitFor(() => frames.some((e) => e.type === 'client/hello'), '先握上手');
+  const installed = () => frames.filter((e) => e.type === 'app/installed' && e.appId === made.id);
+
+  // ── ① 负向对照：**还在建**的时候，watcher 那一声不许把桌面叫起来 ──
+  //   （`emitLiveChange` 就是 `serve.js` 那条 watcher 的唯一出口）
+  nodeFs.writeFileSync(nodePath.join(w.workspaces.dirFor(made.id), 'note.txt'), '先记一笔', 'utf8');
+  assert.equal(worlds.emitLiveChange('owner', made.id), true, '前提：这一声本身推出去了');
+  await sleep(200);
+  assert.equal(installed().length, 0, '★ 入口还没写 ⇒ 桌面那一格没变 ⇒ 一个信号都不许发');
+
+  // ── ② 入口那一份**直接写盘**（助手在那一间目录里干活就是这个形状）──
+  nodeFs.writeFileSync(
+    nodePath.join(w.workspaces.dirFor(made.id), 'index.html'),
+    '<!doctype html><p>真的内容</p>',
+    'utf8',
+  );
+  assert.equal(w.apps.meta(made.id).building, false, '前提：现在不是"在建"了');
+  assert.equal(worlds.emitLiveChange('owner', made.id), true);
+  await waitFor(() => installed().length > 0, '★ 桌面那条连接要收到那一声（否则那一格永远是灰的）');
+  assert.equal(installed()[0].seq, undefined, '★ 瞬态：不占号');
+
+  // ── ③ 负向对照：**不是他的小程序**（scratch 那种房间）⇒ 一个信号都不发 ──
+  w.workspaces.ensure('job-x9', { title: '派活那间', entry: 'index.html' });
+  nodeFs.writeFileSync(
+    nodePath.join(w.workspaces.dirFor('job-x9'), 'index.html'),
+    '<!doctype html><p>派活那间的东西</p>',
+    'utf8',
+  );
+  const before = installed().length;
+  assert.equal(worlds.emitLiveChange('owner', 'job-x9'), true);
+  await sleep(200);
+  assert.equal(installed().length, before, '★ 派活那间变了跟桌面那一格没关系');
 });

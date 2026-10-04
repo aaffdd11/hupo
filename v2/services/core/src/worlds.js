@@ -1186,6 +1186,35 @@ export class Worlds {
       this.#warn(`  ⚠️ "${id} 的内容变了"没喊出去：${err?.message ?? err}`);
       return false;
     }
+    /**
+     * ★★ **2026-10-04（主人报的"桌面并没有自动刷新"）—— 桌面那一格也要说一声。**
+     *
+     * 🔴 **为什么上面那一帧不够**：`app/workspace-changed` 是**按焦点路由**的
+     *    （只推给"正开着这一间"的那条连接）。而这条路的起点是
+     *    **助手在那一间的目录里直接写文件**（`docs/dev/112`：那是最常见的"部署"方式，
+     *    它**不经过** `AppWorkspaces.write()` ⇒ 也就**不会**有 `app/installed`）。
+     *    ⇒ 那一下之后：**桌面那一格还是灰的**（在"在建"），而屏幕前的人
+     *    **正看着桌面**（他没开着那一间）—— 一个字节都收不到，只能刷新页面。
+     *
+     * ⚠️ **只在"真的会变"的时候说**：入口那一份现在**有真内容**了
+     *    （`isBuilding() === false`）才算 —— 那正是桌面上唯一会因为一次文件写入
+     *    而变化的那一格（`building`）。还在建 / 不是他的小程序 / 认不出 ⇒ 一个字都不喊
+     *    （一次多余的清单重拉，对租户就是**多开一趟隧道**）。
+     * ⚠️ **不会成灾**：文件事件在 watcher 那一层已经**按间合成**（`debounceMs`），
+     *    一次"写一堆文件"最多喊一次。
+     * ⚠️ 喊不出去**不许**把上面那一帧带走（与 `onQueueChanged` 同一条纪律）。
+     */
+    try {
+      if (w.apps?.has?.(id) && w.workspaces?.isBuilding?.(id) === false) {
+        w.timeline.emitTransient({
+          type: 'app/installed',
+          appId: id,
+          title: titleOfApp(w.apps, id) ?? null,
+        });
+      }
+    } catch (err) {
+      this.#warn(`  ⚠️ "${id}" 的桌面那一格没喊出去：${err?.message ?? err}`);
+    }
     return true;
   }
 

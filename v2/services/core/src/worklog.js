@@ -438,7 +438,19 @@ export class WorkLog {
     if (!rec) throw new Error(`收一条没开过的活：${id}`);
     if (!isOpen(rec.state)) return { record: rec, closed: false, event: null };
     const finalOutcome = CLOSED_OUTCOMES.includes(outcome) ? outcome : WORK_STATES.stopped;
-    const event = this.#append({ type: WORK_CLOSE, id, outcome: finalOutcome, reason });
+    // 🔴 **收口这一条也要带 `scopeId`**（2026-10-04 主人报的"桌面没刷新"那一轮查出来的）：
+    //    `work/open` 一直带着它，`work/close` 原来**没带** ⇒ "某一间的活收口了"
+    //    这件事**说不出是哪一间**，而桌面上那一格就是靠它把"在做"那个圈灭掉的
+    //    ⇒ 症状是"那个圈永远亮着"（判据 W4 抓到的就是这个）。
+    //    ⚠️ 盘上老的那种 `work/close`（没有这个字段）**照旧读得回来**：
+    //      重放是**按 `id`** 找那一件活的（见 `replayWork`），不看这一格。
+    const event = this.#append({
+      type: WORK_CLOSE,
+      id,
+      scopeId: rec.scopeId ?? 'main',
+      outcome: finalOutcome,
+      reason,
+    });
     const next = { ...rec, state: finalOutcome, outcome: finalOutcome, closedAt: event.at, reason };
     this.#items.set(id, next);
     return { record: next, closed: true, event };
