@@ -19,7 +19,7 @@ import nodePath from 'node:path';
 import { AgentRuntime } from '../src/agent-runtime.js';
 import { Apps } from '../src/apps.js';
 import { AppsSocket, appsSocketPath } from '../src/apps-socket.js';
-import { NEEDS_ASK, asksToMakeApp } from '../src/apps-consent.js';
+import { NEEDS_ASK, askedRecently, asksToMakeApp } from '../src/apps-consent.js';
 import { Worlds } from '../src/worlds.js';
 
 const HERE = nodePath.dirname(new URL(import.meta.url).pathname);
@@ -63,17 +63,28 @@ const APP = {
 };
 
 /** 起一套真链路：真制品库 + 真套接字。`said` 就是"这一轮他说的那句话"。 */
-function setup(said) {
+function setup(said, recent = []) {
   const dir = tmp();
   const apps = new Apps({ dir, sub: 'u1' });
   let said_ = said;
+  let recent_ = recent;
   const sock = new AppsSocket({
     apps,
     socketPath: appsSocketPath(dir),
-    // 🔴 这一份就是服务端该拿到的形状：一个**取值函数**
-    ctx: { sub: 'u1', turnInput: () => said_ },
+    // 🔴 这一份就是服务端该拿到的形状：**取值函数**（绝不从请求里读）
+    ctx: {
+      sub: 'u1',
+      turnInput: () => said_,
+      recentInputsFor: () => recent_,
+    },
   }).listen();
-  return { dir, apps, sock, setSaid: (t) => { said_ = t; } };
+  return {
+    dir,
+    apps,
+    sock,
+    setSaid: (t) => { said_ = t; },
+    setRecent: (list) => { recent_ = list; },
+  };
 }
 
 function mcpClient(env) {
@@ -112,6 +123,13 @@ test('① 他说了"帮我做一个…" ⇒ 认；没说 ⇒ 不认（**真值�
     '麻烦你造一个抽签的',
     '请你写一个小程序',
     '来个计时的小程序',
+    // ★ 2026-10-04（真机读数）：主人这句话**当初被拒了**，而他明明就是在要一个东西 ——
+    //   `请` 后面不接"问"、动词是"创建"、或者干脆不带动词只说"一个…的东西"，都该认。
+    '请创建一个可以玩五子棋的游戏。',
+    '请创建一个可以玩飞行棋的游戏，而且需要有梯子和骰子。',
+    '请你立刻把数独内容放到小程序里面。',
+    '我要一个能记账的东西',
+    '想要个能玩的小页面',
   ]) {
     assert.equal(asksToMakeApp(t), true, `这句是"他要我做"，该认：${t}`);
   }
@@ -124,6 +142,11 @@ test('① 他说了"帮我做一个…" ⇒ 认；没说 ⇒ 不认（**真值�
     '这个小程序挺好看的',                  // 评价
     '请问这是什么',                        // 有"请"，不是要东西
     '把小程序的图标换一下',                // 改 ≠ 造（那是另一条规矩）
+    '把这个页面颜色调深一点',              // 同上：改 ≠ 造
+    // ★ 2026-10-04：**接着说**那几句也**不算**"他要我造一个新的" ——
+    //   它们靠 `askedRecently()` 那条"最近说过"的窗口兜（见下面那一条判据）。
+    '要有存储啊',
+    '骰子要放在各自停机坪旁边',
     '',                                    // 空
     '   ',                                 // 空白
   ]) {
@@ -135,6 +158,22 @@ test('⑤ **助手自己发起的那一轮**（没有"他那句话"）⇒ 一律
   for (const t of [null, undefined, 0, {}, [], true]) {
     assert.equal(asksToMakeApp(t), false, `不是他说的句子 ⇒ 不认：${JSON.stringify(t) ?? String(t)}`);
   }
+});
+
+test('①·补 2026-10-04：**"接着说"那几轮**靠"最近说过"兜（含负向对照）', () => {
+  // 真机读数那一串：先要一个飞行棋，接下来几轮全是"接着说"
+  const said = [
+    '骰子要放在各自停机坪旁边',   // 新的在前
+    '要有存储啊',
+    '请创建一个可以玩飞行棋的游戏，而且需要有梯子和骰子。',
+  ];
+  assert.equal(askedRecently(said), true, '★ 最近三句里有一句是"他要我做" ⇒ 该认');
+  assert.equal(askedRecently(['要有存储啊', '骰子要放在各自停机坪旁边']), false,
+    '★ 只有"接着说"那几句（没有要过）⇒ 不认（负向对照）');
+  assert.equal(askedRecently(['随便聊聊', '今天天气怎么样', '帮我做一个记账的'], 2), false,
+    '★ 窗口就是那几句：第 3 句不在窗口里 ⇒ 不认');
+  assert.equal(askedRecently(null), false, '拿不到 ⇒ 不认（保守）');
+  assert.equal(askedRecently([]), false, '空 ⇒ 不认');
 });
 
 // ── 真链路：闸真的挡在写盘前面 ──────────────────────────────
@@ -194,6 +233,36 @@ test('④ 🔴 **换了一轮**（他那句话变了）⇒ 闸跟着变：伪造
   } finally {
     c.child.kill();
     await s.sock.close();
+  }
+});
+
+test('⑤ 2026-10-04 真链路：**接着说**那一轮靠"最近说过"放行（含负向对照）', async () => {
+  // 他说的是"骰子要放在各自停机坪旁边"（同一件事里的改动，句子里没有"造"）；
+  // 而他上一轮说的是"帮我做一个飞行棋的小程序"。
+  const follow = '骰子要放在各自停机坪旁边';
+  const s1 = setup(follow, ['帮我做一个可以玩飞行棋的游戏。']);
+  const c1 = mcpClient({ HUPO_APPS_SOCKET: appsSocketPath(s1.dir) });
+  try {
+    await c1.call('initialize', { protocolVersion: '2024-11-05', capabilities: {} });
+    const ok = await c1.call('tools/call', { name: 'app_create', arguments: APP });
+    assert.equal(ok.result.isError, false,
+      `★ 他刚要过这个东西，"接着说"那一轮不该被拒：${JSON.stringify(ok.result)}`);
+  } finally {
+    c1.child.kill();
+    await s1.sock.close();
+  }
+
+  // 🔴 负向对照：**把"最近说过"清空**（＝他没要过）⇒ 同样那句话一律拒
+  const s2 = setup(follow, []);
+  const c2 = mcpClient({ HUPO_APPS_SOCKET: appsSocketPath(s2.dir) });
+  try {
+    await c2.call('initialize', { protocolVersion: '2024-11-05', capabilities: {} });
+    const no = await c2.call('tools/call', { name: 'app_create', arguments: APP });
+    assert.equal(no.result.isError, true, '★ 没要过就不许造（负向对照）');
+    assert.equal(s2.apps.list().length, 0, '盘上也不许有');
+  } finally {
+    c2.child.kill();
+    await s2.sock.close();
   }
 });
 
@@ -271,6 +340,12 @@ test('🔴 真接线：`worlds` 里那句话说了算 —— 没说就拒 / 说�
     });
     assert.equal(after.result.isError, true, '★ 一轮结束后"他那句话"必须作废，不许留到下一轮');
     assert.equal(world.apps.list().some((a) => a.id === 'dice3'), false);
+
+    // ⑤ ★ 2026-10-04：那一小串"他最近说过"**真的被记下来了**（接线那半边）。
+    //    ⚠️ "接着说"那一轮**从工具那一侧**成不成，由下面那条真链路判据量
+    //      （这条 fixture 的 agent 是 `hang` 场景，第二句投不进来 ⇒ 这里只验记录）。
+    assert.deepEqual(world.dispatcher.recentInputsOf('main'), ['帮我做一个掷骰子的小程序'],
+      '★ 他说过的那句该进"最近说过"那一小串（新的在前）');
   } finally {
     c.child.kill();
     await worlds.shutdownDispatchers().catch(() => {});

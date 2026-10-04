@@ -21,7 +21,7 @@ import nodePath from 'node:path';
 import { lintApp, lintReport } from './app-lint.js';
 import { AppsError, isAnAppRoom } from './apps.js';
 import { shouldTellAppFail } from './app-fail-words.js';
-import { INSIDE_APP_NO_CREATE, NEEDS_ASK, asksToMakeApp } from './apps-consent.js';
+import { INSIDE_APP_NO_CREATE, NEEDS_ASK, askedRecently, asksToMakeApp } from './apps-consent.js';
 import { NEEDS_ASK_IMAGE, asksToDrawImage } from './image.js';
 import { NEEDS_ASK_VIDEO, asksToMakeVideo } from './video.js';
 import { OutboundError, assertOutboundAllowed } from './outbound.js';
@@ -129,7 +129,19 @@ async function runAppsOp(apps, req, ctx = {}) {
         const turnInput = typeof ctx.turnInputFor === 'function'
           ? ctx.turnInputFor(typeof req.scope === 'string' && req.scope.trim() !== '' ? req.scope.trim() : null)
           : (typeof ctx.turnInput === 'function' ? ctx.turnInput() : null);
-        if (!asksToMakeApp(turnInput)) {
+        // ★ **2026-10-04：他也是"分好几轮"说的** —— 当轮那句不认时，再看一眼
+        //   **同一间里他最近说过的那几句**（`askedRecently`，窗口很小）。
+        //   真机读数：他说完"请创建一个可以玩飞行棋的游戏"之后，接着几轮
+        //   "骰子要放在各自停机坪旁边""要有存储啊"全被这条闸拒了 ——
+        //   而那明明还在同一件事里。
+        //   ⚠️ 仍然**只读服务端自己记的他的话**（请求里带什么一个字都不看）。
+        const hasTurnInput = typeof turnInput === 'string' && turnInput.trim() !== '';
+        const recent = hasTurnInput && typeof ctx.recentInputsFor === 'function'
+          ? ctx.recentInputsFor(typeof req.scope === 'string' && req.scope.trim() !== '' ? req.scope.trim() : null)
+          : [];
+        // 🔴 **两道都在**：① 当轮那句认不认；② 不认的话，看**他最近说过的那几句**
+        //    （只有"这一轮他确实说了话"时才看 —— 助手自己发起的那一轮仍然一律拒）。
+        if (!asksToMakeApp(turnInput) && !askedRecently(recent)) {
           return { ok: false, error: NEEDS_ASK, refused: 'needs-ask' };
         }
         // ★ **已经在一个小程序里了 ⇒ 不许再开一个**（主人 2026-09-27）：

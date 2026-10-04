@@ -112,6 +112,14 @@ export function isWriteLeaseError(err) {
 export const TURN_DEADLINE_MS = 0;
 
 /**
+ * ★ **"他最近说过"留几句**（2026-10-04 · 给 `asksToMakeApp` 那条闸用）。
+ *
+ * ⚠️ 这个数**住代码**（手册纪律 1）。取 3 的依据：真机上他"要一个东西"和
+ *    "接着说怎么改"之间通常隔着一两句；再大就变成"很久以前那句一直生效"了。
+ */
+export const RECENT_INPUTS_MAX = 3;
+
+/**
  * ★ P1：**多久还没做完 ⇒ 当成"长活"**（契约 `88` §三：长活默认进后台，但**必须告诉用户**）。
  *
  * ⚠️ 为什么是"等一段"而不是"投递那一刻按他怎么说猜"：
@@ -318,9 +326,29 @@ class Session {
    */
   #turnInput = '';
 
+  /**
+   * ★ **他在这条会话里最近说过的那几句话**（2026-10-04；给"他明说才许写"那条闸用）。
+   *
+   * ── 为什么要有它（真机读数）──────────────────────────────
+   *   主人做一个小程序是**分好几轮**说的：先说「请创建一个可以玩飞行棋的游戏」，
+   *   接下来几轮全是「骰子要放在各自停机坪旁边」「要有存储啊」这种**接着说** ——
+   *   那些句子单看**没有"造"的意思**，只看当轮就会一轮一轮地被拒
+   *   （他看到的还是"它又要我补一句"）。
+   *
+   * ⚠️ **小窗口、只留最近几句**（`RECENT_INPUTS_MAX`）：这是"他刚才说过"，
+   *    不是"他历史上说过" —— 窗口越大，"很久以前那句被网页带出来的话"越可能一直生效。
+   * ⚠️ 只在这个进程里活着（重启就空）⇒ 重启后回落到**只看当轮**那条保守口径。
+   */
+  #recentInputs = [];
+
   /// 见 [#turnInput]。
   get turnInput() {
     return this.#turnInput;
+  }
+
+  /// 见 [#recentInputs]（**新的在前**）。
+  get recentInputs() {
+    return [...this.#recentInputs];
   }
   /**
    * turn 号 → **是主人哪句话引起来的**（我们这边的 `messageId`）。
@@ -514,6 +542,11 @@ class Session {
       if (owner?.job === true) this.#jobTurns.set(turn, this.#lastJobWhere ?? '');
       // ★ P1-22：**这一轮他说了什么** = 引起来的那句话（没有票 ⇒ 空 ⇒ 不许造东西）
       this.#turnInput = owner?.text ?? '';
+      // ★ 2026-10-04：把那句话也记进"最近说过"那一小串（**只记他自己那几句**，
+      //   助手自己发起的一轮没有票 ⇒ 不记）—— 给"接着说"那几轮兜底。
+      if (typeof owner?.text === 'string' && owner.text.trim() !== '') {
+        this.#recentInputs = [owner.text, ...this.#recentInputs].slice(0, RECENT_INPUTS_MAX);
+      }
       // ★ P1：**逐件落盘**（契约 T2）。有票 ⇒ 绑到 `(generation, turn)`；
       //   无票（助手自己发起的一轮）⇒ 也记一件，但**归属是 `null`**（T1 的反例正身）。
       this.#openWork({ turn, generation, owner });
@@ -2262,6 +2295,15 @@ export class Dispatcher {
   turnInputOf(scope = null) {
     const s = this.sessionFor(scope);
     return s ? s.turnInput : null;
+  }
+
+  /**
+   * ★ **他在这条会话里最近说过的那几句话**（新的在前 · 2026-10-04）。
+   * ⚠️ 拿不到 ⇒ **空数组**（调用方按"没有"处理 —— 那时只剩当轮那一条口径）。
+   */
+  recentInputsOf(scope = null) {
+    const s = this.sessionFor(scope);
+    return s ? s.recentInputs : [];
   }
 
   /** 主线那间未收口的气泡（老接口）。 */

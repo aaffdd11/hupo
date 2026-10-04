@@ -775,6 +775,19 @@ export class Worlds {
             return null;
           }
         },
+        // ★ **他最近说过的那几句**（2026-10-04）：做一个小程序常常**分好几轮**说 ——
+        //   先说"做一个飞行棋"，接下来几轮是"骰子要放在…旁边""要有存储啊"。
+        //   只看当轮那一个问题，后面每一轮都会被拒（他看到的还是"它又要我补一句"）。
+        //   ⇒ 那一小串（同一间、最近几句）给闸当"他刚才说过"用。
+        //   ⚠️ 与上一条同源、同一份服务端记录**按房间**取；拿不到 ⇒ 空数组（保守）。
+        recentInputsFor: (scope) => {
+          try {
+            const got = dispatcher?.recentInputsOf?.(scope);
+            return Array.isArray(got) ? got : [];
+          } catch {
+            return [];
+          }
+        },
         // ★ **画一张图**（P1-27 后半）：工具只递请求，真正去花他那把钥匙的是这里。
         //   ⚠️ 与 `/api/image`（配置页那个「试一张」）**同一套规则**（`image-use.js`）。
         drawImage: makeDrawImage({ dataDir: t.dir, log: (m) => this.#warn(`  ${m}`) }),
