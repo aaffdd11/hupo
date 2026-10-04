@@ -94,7 +94,6 @@ const Key chatBodyKey = Key('chat-body');
 /// **聊天条最前面那颗 home**（主人 2026-09-27：*"点击 home 就是回到桌面"*）。
 
 /// 进小程序之后那条浮窗（同一天：*"点击 home 那个 icon 上面会有一个浮窗"*）。
-const Key chatHomeHintKey = Key('chat-home-hint');
 
 /// 那颗 home 的**图形**多大（原来 18 —— 主人 2026-09-27：*"扩大一些"*）。
 const double homeButtonIcon = 22;
@@ -223,10 +222,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// ★ **进小程序之后那条浮窗**（主人 2026-09-27）：现在正画着吗。
   /// ⚠️ 它与 `_openApp` **不是一回事**：关掉那一屏之后它可能还在（3.5 秒没到），
   ///    所以他还能看到"点这里回桌面"那句话 —— 但它**在输入条上面浮着**，不挡任何东西。
-  bool _homeHint = false;
 
   /// 那条浮窗**到点自己走**用的钟（换屏/离开这一屏都要收掉）。
-  Timer? _homeHintTimer;
 
   /// 聊天**展开着**吗（展开 = 桌面小程序被盖住 —— 手册 §6.4 规则 2/3）。
   /// ⚠️ 由浮窗自己报（它换档时调 `onTier`），不是这里猜的。
@@ -546,7 +543,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     // 离开这一屏 ⇒ 把「我自己那台」那一头收干净（对面就不会留一个孤儿进程）
     _closeHarness();
     // ★ 那条浮窗的钟也要收（不然它到点会去动一棵已经没了的树）
-    _homeHintTimer?.cancel();
     // ★ 那两个"会通知订阅者"的状态也得收（子页订阅着它们）
     _appearanceVN.dispose();
     _wallpaperVN.dispose();
@@ -681,7 +677,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _openApp = '$_minePrefix$want';
     });
     // ★ 和"自己点开图标"同一条：进屏就把那颗 home 的说明浮一下（主人 2026-09-27）
-    _startHomeHint();
   }
 
   /// **钉到最新**（`jumpTo`，不带条件）。
@@ -1239,7 +1234,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   ///   ② 再把聊天**收起来**（桌面才露得出来 —— 展开的聊天是盖满屏的）。
   /// ⚠️ 在桌面上按它也一样有结果：只有 ②（把聊天收起来）—— 所以它**任何时候都不是一颗空按钮**。
   void _backToDesktop(ChatController c) {
-    _hideHomeHint();
     if (_openApp != null) {
       _closeApp(c);
       return;
@@ -1276,42 +1270,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   ///   · **自己会走**（`homeHintFor` = 3.5 秒）—— 它是一句说明，不是待办；
   ///   · **再进一次会重新计一遍**（不是"一辈子只看一次"：他这次进的是**另一个**小程序）；
   ///   · 他真按了 home ⇒ 立刻收（[`_hideHomeHint`]）。
-  void _startHomeHint() {
-    _homeHintTimer?.cancel();
-    if (!_homeHint) setState(() => _homeHint = true);
-    _homeHintTimer = Timer(homeHintFor, () {
-      if (mounted) setState(() => _homeHint = false);
-    });
-  }
-
-  void _hideHomeHint() {
-    _homeHintTimer?.cancel();
-    _homeHintTimer = null;
-    if (_homeHint && mounted) setState(() => _homeHint = false);
-  }
-
   /// **那条浮窗长什么样**（主人：*"点击 home 那个 icon 上面会有一个浮窗"*）。
   ///
   /// ⚠️ **位置不归它管**：它交给 `Composer` 的 `hintAbove`，由那一层挂在**输入条那一行**
   ///    上面（`Positioned` ＋ `FractionalTranslation` ⇒ 不占排版、不动窗口；
   ///    `IgnorePointer` 也在那一层包着）。
-  Widget _homeHintBubble(DshLook look) => Container(
-    key: chatHomeHintKey,
-    // ⚠️ 用 token（不写数字）：与输入条那几条 strip（`composer.dart` 的 `_noticeStrip`）
-    //    同一套留白 —— 而且 `design_tokens_test` 那条棘轮只许往下走。
-    padding: const EdgeInsets.symmetric(horizontal: d.radiusField, vertical: d.gapS),
-    decoration: BoxDecoration(
-      color: look.palette.bgLayer2,
-      borderRadius: BorderRadius.circular(d.radiusField),
-      border: Border.all(color: look.palette.borderL2),
-    ),
-    child: Text(
-      homeHintWords,
-      // ★ 2026-10-01：这一句是提示，不是回答 ⇒ 走非主要那一档（原来这里写死 13）
-      style: dshTextStyle(look.quiet, look.palette.labelSecondary),
-    ),
-  );
-
   /// 替**现在开着的那一个小程序**问一句（乙-4b）。
   ///
   /// ⚠️ `appId` 取自**壳自己的状态**（`_openMine()`），不是页面说了算 ——
@@ -1835,7 +1798,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _openApp = which;
     });
     // ★ **进屏那条浮窗**（主人 2026-09-27）：3.5 秒后自己走
-    _startHomeHint();
     // 🔴 **跟着图标走**（契约 `83-APP-WORKSPACE.md` §五·甲）：
     //    打开哪个小程序，**下面那条聊天就是它的对话**。
     //    ⚠️ 判定是**纯函数**（`models/scope.dart`）：内置那几格（设置 / 发现 /
@@ -1985,7 +1947,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               speakable: canSpeak,
               onMic: () => unawaited(c.toggleVoiceCompose()),
               onTyped: (text) => unawaited(c.answerVoiceCompose(text)),
-              hintAbove: _homeHint ? _homeHintBubble(look) : null,
             ),
           ],
         ),
