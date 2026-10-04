@@ -182,12 +182,18 @@ void main() {
     //   而"开一个小程序"那一下浮窗自己也在收（两个动画叠着）⇒ 整段动画直接卡没。
     //   ⇒ 钉死：它只许用**只往下记**的 `_barH`，一个字节都不许提到 `_floaterH`。
     final src = File('lib/screens/chat_screen.dart').readAsStringSync();
-    final line = src.split('\n').firstWhere((l) => l.trimLeft().startsWith('bottomInset:'), orElse: () => '');
-    expect(line, isNotEmpty, reason: '找不到 `bottomInset:` 那一行（这一条判据要跟着它走）');
+    // ⚠️ 2026-10-04：那一处现在是**一个三元**（页面画了外壳 ⇒ 0；否则照旧那条稳定值）
+    //    ⇒ 判据要看**整段表达式**，不是第一行（改口径时别把这条保护丢了）。
+    final lines = src.split('\n');
+    final at = lines.indexWhere((l) => l.trimLeft().startsWith('bottomInset:'));
+    expect(at >= 0, isTrue, reason: '找不到 `bottomInset:` 那一处（这一条判据要跟着它走）');
+    final line = lines.sublist(at, at + 4).join(' ');
     expect(line.contains('_floaterH'), false,
         reason: '★ 那一行提到了 `_floaterH` —— 它是**每帧都变**的浮窗高度，'
             '喂给平台视图 = 每帧 resize 一个真 iframe（2026-10-01 那次"动效全没了"就是这么来的）');
     expect(line.contains('_barH'), true, reason: '★ 用的是**收起档那个稳定值**（只往下记）');
+    expect(line.contains('_domChromeFor'), true,
+        reason: '★ 页面那一层画了外壳的那一档必须**一点都不留**（`D3.14` 甲：内容真全屏）');
   });
 
 

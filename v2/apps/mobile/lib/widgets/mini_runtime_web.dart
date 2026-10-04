@@ -115,6 +115,7 @@ Widget buildMiniAppView({
   required String title,
   Future<String> Function(String prompt)? onAsk,
   void Function()? onExit,
+  void Function()? onMic,
 }) {
   // 🔴 **viewId 的算法只有一处**（`models/mini_frame.dart`）——
   //    `MiniAppFrame` 记账用的是同一个函数。
@@ -170,7 +171,51 @@ Widget buildMiniAppView({
         final fn = _exits[viewId];
         if (fn != null) fn();
       });
-      wrap.children.addAll(<html.Element>[f, exitBtn]);
+      // ★ **2026-10-04（`D3.14` 甲）：小程序内容**真全屏**之后，底下那颗圆圈与它左边那句字
+      //   也**必须画在页面这一层**（不然被 iframe 盖住：看不见、也点不到）。
+      //   🔴 **只有那颗圆圈收点击**：字那一层 `pointer-events:none` ⇒ 点它会穿到小程序里
+      //      （这样"最后一行点不到"那条老毛病也不会有 —— 见 `MiniAppHost` 的 `bottomInset`）。
+      _mics[viewId] = onMic;
+      final words = html.DivElement()
+        ..className = 'hupo-mini-words'
+        ..style.position = 'absolute'
+        ..style.bottom = '28px'
+        ..style.right = '92px'
+        ..style.maxWidth = '60%'
+        ..style.textAlign = 'right'
+        ..style.color = '#3a3226'
+        ..style.fontSize = '15px'
+        ..style.lineHeight = '1.3'
+        ..style.whiteSpace = 'pre-wrap'
+        ..style.pointerEvents = 'none';
+      final micBtn = html.ButtonElement()
+        ..className = 'hupo-mini-mic'
+        ..text = '🎤'
+        ..title = miniMicTalkLabel
+        ..setAttribute('aria-label', miniMicTalkLabel);
+      micBtn.style
+        ..position = 'absolute'
+        ..bottom = '16px'
+        ..right = '16px'
+        ..zIndex = '2147483647'
+        ..width = '56px'
+        ..height = '56px'
+        ..padding = '0'
+        ..border = 'none'
+        ..borderRadius = '50%'
+        ..background = '#FFFFFF'
+        ..color = '#2b2b2b'
+        ..fontSize = '24px'
+        ..lineHeight = '56px'
+        ..cursor = 'pointer'
+        ..boxShadow = '0 2px 8px rgba(0,0,0,.18)';
+      micBtn.onClick.listen((_) {
+        final fn = _mics[viewId];
+        if (fn != null) fn();
+      });
+      _words[viewId] = words;
+      _micBtns[viewId] = micBtn;
+      wrap.children.addAll(<html.Element>[f, words, micBtn, exitBtn]);
       // ⚠️ 新建的这一帧也要立刻跟上当前那一档（展开着的时候它一建出来就该是 `none`）
       _frames[viewId] = f;
       // ⚠️ 槽可能**刚**建出来 ⇒ 建完这一帧再统一设一次（同一个函数，一处口径）
@@ -228,6 +273,44 @@ Widget buildMiniAppView({
 ///    （见上面那段注释 —— 平台视图压着画布，Flutter 那一条收不到）。
 final Map<String, void Function()?> _exits = <String, void Function()?>{};
 
+/// 每一帧那颗**麦克风圆圈**要调的回调（同上：它也是 DOM 画的）。
+final Map<String, void Function()?> _mics = <String, void Function()?>{};
+
+/// 每一帧"我说的话"那一行（DOM 画的，浮在小程序上面）。
+final Map<String, html.DivElement> _words = <String, html.DivElement>{};
+
+/// 每一帧那颗麦克风按钮（要改它的样子：在录/没在录）。
+final Map<String, html.ButtonElement> _micBtns = <String, html.ButtonElement>{};
+
+/// **这一帧的麦克风圆圈**：挂上回调（`MiniAppFrame` 建视图时叫一次）。
+void setMiniAppMic(String viewId, void Function()? onMic) => _mics[viewId] = onMic;
+
+/// **正在录吗** ⇒ 换那颗圆圈的样子（在录 = 实心那张 + 停）。
+///
+/// ⚠️ 只在**真画过**（`buildMiniAppView` 建过这一帧）时才有东西可改；没有就安静忽略。
+void updateMiniAppMic(String viewId, {required bool listening, required String label}) {
+  final b = _micBtns[viewId];
+  if (b == null) return;
+  b.text = listening ? '■' : '🎤';
+  b.title = label;
+  b.setAttribute('aria-label', label);
+  b.style.background = listening ? '#E8B84B' : '#FFFFFF';
+}
+
+/// **我说的话**那一行（圆圈左边）—— 空的就把那一行藏起来（**不许留一句空白**）。
+void updateMiniAppWords(String viewId, String text) {
+  final w = _words[viewId];
+  if (w == null) return;
+  w.text = text;
+  w.style.display = text.trim().isEmpty ? 'none' : 'block';
+}
+
+/// **这一帧在页面这一层画了东西吗**（界面据此决定要不要再画一遍 Flutter 的）。
+bool miniAppDomChrome(String entryUrl) => _micBtns.containsKey(miniViewIdOf(entryUrl));
+
+/// 那颗麦克风圆圈的读屏名（DOM 按钮上用）。
+const String miniMicTalkLabel = '说一句';
+
 /// **这一帧换掉了 / 关掉了 ⇒ 收干净**（由 `MiniAppFrame` 在换帧与 `dispose` 时叫）。
 ///
 /// 🔴 退的是**消息监听**；平台那边注册过的那个 viewType **不退** ——
@@ -238,5 +321,8 @@ void releaseMiniAppView(String viewId) {
   final sub = _subs.remove(viewId);
   if (sub != null) sub.cancel();
   _exits.remove(viewId);
+  _mics.remove(viewId);
+  _words.remove(viewId);
+  _micBtns.remove(viewId);
   _frames.remove(viewId);
 }
