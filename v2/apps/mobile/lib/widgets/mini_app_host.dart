@@ -259,7 +259,9 @@ class _MiniAppHostState extends State<MiniAppHost>
                   //    的 edge-to-edge 用的（当年"第一行压在时钟底下"）；可**网页里**
                   //    那条本来就不该有（浏览器自己让开了状态栏）—— 而手机上那条白边
                   //    就是这么来的 ⇒ **网页一律 0**，安卓那个壳照旧让。
-                  padding: EdgeInsets.only(top: kIsWeb ? 0 : safe.top, bottom: _inset),
+                  // ★ **2026-10-05 主人定：网页那条也按安全区让开**（他两次截图都还在 ⇒
+                  //   他的浏览器确实报了安全区）—— 所以**不再分网页/安卓**，一律 `safe.top`。
+                  padding: EdgeInsets.only(top: safe.top, bottom: _inset),
                   child: Navigator(
                     key: _nav,
                     onGenerateRoute: (_) =>

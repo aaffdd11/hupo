@@ -154,8 +154,10 @@ Widget buildMiniAppView({
         ..style.position = 'absolute'
         ..style.top = '0'
         ..style.left = '0'
-        ..style.right = '0'
-        ..style.bottom = '0'
+        // ⚠️ **往右下多铺 2 像素**（"1 像素白线"那一族的老办法）：宁可盖出去一点，
+        //    也不许在右/下留一条缝（主人两次报的右侧那条白边）。
+        ..style.right = '-2px'
+        ..style.bottom = '-2px'
         ..style.overflow = 'hidden';
       final exitBtn = html.ButtonElement()
         ..className = 'hupo-mini-exit'
