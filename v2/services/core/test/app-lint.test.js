@@ -11,8 +11,18 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { httpsHostsIn, lintApp, lintReport } from '../src/app-lint.js';
+import { placeholderIndex } from '../src/workspace.js';
 
-const page = (body) => ({ files: { 'index.html': `<!doctype html><meta charset=utf-8><title>x</title>${body}` } });
+// ⚠️ 2026-10-04：夹具补上 `viewport` —— ⑧ 那档新规则会**如实**报「没写视口」（见 `186`），
+//    而这一份判据量的是别的几档，夹具就该是一份**正常的页面**。
+const page = (body) => ({
+  files: {
+    'index.html':
+      '<!doctype html><meta charset=utf-8>'
+      + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+      + `<title>x</title>${body}`,
+  },
+});
 
 test('① 自包含：引外部资源 ⇒ **报错**（脚本/样式/图片/CSS import/WebSocket/Google 字体）', () => {
   for (const bad of [
@@ -73,6 +83,39 @@ test('★ ④ 🔴 **存储默认有**：用 `/db` 不报"没声明"；"声明�
     permissions: ['db'],
   });
   assert.equal(withParams.warnings.some((w) => w.code === 'no-entry-params'), false);
+});
+
+test('⑧ ★ 外观基线（`docs/dev/186`）：每条都**抓得住**，改对了就**不再响**（各带负向对照）', () => {
+  // ① 手机视口：没有 ⇒ 报；有 ⇒ 不报
+  const noVp = lintApp({ files: { 'index.html': '<html><body><p>x</p></body></html>' } });
+  assert.equal(noVp.warnings.some((w) => w.code === 'no-viewport'), true, '★ 没有 viewport ⇒ 要报（手机上会按桌面宽渲染）');
+  assert.equal(lintApp(page('<p>x</p>')).warnings.some((w) => w.code === 'no-viewport'), false, '★ 有 viewport ⇒ 不报');
+
+  // ② 焦点框：关掉却没替代 ⇒ 报；关掉但给了 `:focus-visible` ⇒ 不报
+  const killed = lintApp(page('<style>:focus{outline:none}</style>'));
+  assert.equal(killed.warnings.some((w) => w.code === 'focus-removed'), true, '★ 关掉焦点框没替代 ⇒ 要报');
+  const fixed = lintApp(page('<style>:focus{outline:none}:focus-visible{outline:2px solid #333;outline-offset:2px}</style>'));
+  assert.equal(fixed.warnings.some((w) => w.code === 'focus-removed'), false, '★ 给了替代焦点样式 ⇒ 不报（负向对照）');
+
+  // ③ 字号下限：<12px ⇒ 报；≥12px ⇒ 不报
+  assert.equal(lintApp(page('<p style="font-size:11px">x</p>')).warnings.some((w) => w.code === 'tiny-text'), true, '★ 11px ⇒ 要报');
+  assert.equal(lintApp(page('<p style="font-size:12px">x</p>')).warnings.some((w) => w.code === 'tiny-text'), false);
+  assert.equal(lintApp(page('<p style="font-size:15px">x</p>')).warnings.some((w) => w.code === 'tiny-text'), false);
+
+  // ④ 渐变字 ⇒ 报（两种写法都认）；普通字色 ⇒ 不报
+  for (const css of ['background-clip:text', '-webkit-background-clip: text']) {
+    assert.equal(
+      lintApp(page(`<style>h1{${css};background:linear-gradient(#f00,#00f)}</style>`)).warnings.some((w) => w.code === 'gradient-text'),
+      true,
+      `★ ${css} ⇒ 要报`,
+    );
+  }
+  assert.equal(lintApp(page('<style>h1{color:#221f1b;font-weight:700}</style>')).warnings.some((w) => w.code === 'gradient-text'), false);
+
+  // 🔴 **那份起步页自己必须一条都不响**（它就是"基线"的样子，也是 agent 照着改的骨架）
+  const starter = lintApp({ files: { 'index.html': placeholderIndex({ id: 'x', title: '记账本' }) } });
+  assert.deepEqual(starter.warnings, [], '★ 起步页自己响了 ⇒ 说明基线与脚手架不是一套话');
+  assert.deepEqual(starter.errors, []);
 });
 
 test('⑤ 网络：连了没声明的站 ⇒ **报错**；声明了没连 ⇒ 提示；没声明 net 却连外站 ⇒ 报错', () => {

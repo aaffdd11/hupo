@@ -108,19 +108,50 @@ function writeAtomic(fs, file, data, mode = 0o644) {
   fs.renameSync(tmp, file);
 }
 
-/** 骨架里那个占位页面。**他一行字都没写的时候，工作区里也得有个东西能打开。** */
+/**
+ * **骨架里那个页面**。他一行字都没写的时候，工作区里也得有个东西能打开。
+ *
+ * ★ 2026-10-04（主人：*"也要用这个经验来完善小程序的开发美感"*）：
+ *   它原来是三行（`<p>这里还空着。</p>`）—— 现在它是**一份像样的起步页**：
+ *   手机视口、读得清的字号、舒服的行距、一个正经的"空状态"，而且**一个外部资源都不引**。
+ *   🔴 两条不许破：① **它仍然是"占位页"** —— "在建"那个判断靠它逐字节的 hash
+ *   （`AppWorkspaces.isBuilding()`），内容换了没关系，但**必须由 `placeholderIndex` 统一生成**
+ *   （谁也别手写第二份）；② **「这里还空着」这句话要留着** —— 判据与用户都靠它认。
+ */
 export function placeholderIndex({ id, title = null } = {}) {
   const name = String(title ?? id ?? '');
+  const safe = name.replace(/[<>&"]/g, '');
   return [
     '<!doctype html>',
-    '<html lang="zh">',
+    '<html lang="zh-CN">',
     '<head>',
     '  <meta charset="utf-8">',
     '  <meta name="viewport" content="width=device-width, initial-scale=1">',
-    `  <title>${name.replace(/[<>&]/g, '')}</title>`,
+    `  <title>${safe}</title>`,
+    '  <style>',
+    '    /* 起步页的样式就是"外观基线"的样子（docs/dev/186）：',
+    '       系统字体 · 正文 16px/1.7 · 小字 13px · 一屏里只有一个重心。 */',
+    '    :root { --ink: #221f1b; --muted: #6b6257; --card: #fffdf9; --line: #e6ded0; --paper: #f8f5ee; }',
+    '    * { box-sizing: border-box; }',
+    '    body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 24px;',
+    '           background: var(--paper); color: var(--ink);',
+    '           font: 16px/1.7 system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif; }',
+    '    main { width: 100%; max-width: 22rem; background: var(--card); border: 1px solid var(--line);',
+    '           border-radius: 14px; padding: 28px 24px; }',
+    '    h1 { margin: 0 0 8px; font-size: 20px; line-height: 1.4; }',
+    '    p { margin: 0; color: var(--muted); font-size: 14px; }',
+    '    .hint { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }',
+    '    @media (prefers-color-scheme: dark) {',
+    '      :root { --ink: #f2eee8; --muted: #a89f92; --card: #1f1c18; --line: #38322b; --paper: #14120f; }',
+    '    }',
+    '  </style>',
     '</head>',
     '<body>',
-    '  <p>这里还空着。</p>',
+    '  <main>',
+    `    <h1>${safe || '这里'}</h1>`,
+    '    <p>这里还空着。</p>',
+    '    <p class="hint">跟你的助手说一句想让它做什么，它就把它做出来；做好之后这一页自己就变了。</p>',
+    '  </main>',
     '</body>',
     '</html>',
     '',

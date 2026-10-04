@@ -162,6 +162,41 @@ export function lintApp({ files = {}, permissions = [], net = [], tasks = [], ti
     }
   }
 
+  /**
+   * ⑧ ★ **外观基线**（2026-10-04 · 契约 `docs/dev/186-APP-DESIGN-BASELINE.md`）。
+   *
+   * 🔴 为什么这一档值得进自查：做小程序的 agent **看不见浏览器**（这一份文件的头一段就写着）。
+   *    它写得出来、跑得通、功能也对，**但屏幕上可能很难看或者很难用** —— 而看的人里有
+   *    "看不清小字、点不准"的那一端（`01-PROJECT.md`）。下面这几条**都是机械可判、
+   *    而且判出来就是真毛病**的，不是口味问题：
+   *      · 手机上看，没有 `viewport` ⇒ 整页按桌面宽渲染，字小到看不清；
+   *      · `outline: none` 却没有替代的焦点样式 ⇒ 键盘/读屏用户不知道焦点在哪；
+   *      · 字号小到 12px 以下 ⇒ 与"3 倍字号不破版"那条服务的人直接冲突；
+   *      · `background-clip: text` 那种渐变字 ⇒ 对比度随底色变，读不清。
+   *    ⚠️ **只报不拦**（warnings），而且**说清怎么改**。
+   */
+  if (text !== '') {
+    if (!/<meta[^>]+name\s*=\s*["']?viewport/i.test(text)) {
+      W('no-viewport', '没写 `<meta name="viewport" content="width=device-width, initial-scale=1">` —— 他那边是按手机那点宽度打开的，少了它整页会按桌面宽渲染（字小到看不清）。');
+    }
+    const killsFocus = /outline\s*:\s*(none|0)\b/i.test(text);
+    // ⚠️ **"有没有替代的焦点样式"要看得更细**：`:focus{outline:none}` 本身也会命中
+    //    "focus 里出现 outline"那种粗判 ⇒ 必须看那一块里 outline 的**值**是不是又给了东西。
+    const focusBlocks = [...text.matchAll(/:focus(?:-visible)?\b[^{]*\{([^}]*)\}/gi)].map((m) => m[1]);
+    const hasFocusStyle = focusBlocks.some((b) => /outline\s*:\s*(?!none\b|0\b)/i.test(b));
+    if (killsFocus && !hasFocusStyle) {
+      W('focus-removed', '把焦点框关掉了（`outline: none`）却没给替代的焦点样式 —— 用键盘或用读屏的人就不知道焦点在哪儿。改法：`:focus-visible { outline: 2px solid …; outline-offset: 2px; }`。');
+    }
+    const sizes = [...text.matchAll(/font-size\s*:\s*([0-9]+(?:\.[0-9]+)?)px/gi)].map((m) => Number(m[1]));
+    const tiny = sizes.filter((n) => n < 12);
+    if (tiny.length > 0) {
+      W('tiny-text', `有 ${tiny.length} 处字号小于 12px（最小 ${Math.min(...tiny)}px）—— 这一份是给"看不清小字"的人也用的（界面那条线是"3 倍字号不破版"）。改法：正文 ≥15px、小字 ≥12px，靠字重和颜色分层，别靠缩小。`);
+    }
+    if (/background-clip\s*:\s*text/i.test(text) || /-webkit-background-clip\s*:\s*text/i.test(text)) {
+      W('gradient-text', '用了渐变字（`background-clip: text`）—— 它的对比度跟着底色变，常常读不清，而且是一眼认得出的"模板感"。改法：要点靠**字重或字号**。');
+    }
+  }
+
   // ⑦ 名字/标题这类小事（页面标题空着不好看，但不拦）
   if (text !== '' && !/<title[^>]*>\s*\S/i.test(text)) {
     W('no-page-title', '页面里没写 `<title>` —— 加一句它的名字（他那边有些地方会用到）。');
