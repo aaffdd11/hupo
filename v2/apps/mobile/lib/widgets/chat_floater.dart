@@ -441,9 +441,24 @@ class ChatFloaterState extends State<ChatFloater> {
                           onPointerDown: _onDown,
                           onPointerMove: _onMove,
                           onPointerUp: _onUp,
+                          // ★ **2026-10-04 主人：*"展开聊天的按钮，放到录音按钮上方。"***
+                          //   ⇒ 收起档那个展开入口（那颗平箭头）从**正中央**挪到**右边**，
+                          //     也就是**顶在录音那颗圆圈上方**（不再占中间那一条）。
+                          //   ⚠️ 位置与圆圈对齐（右边留出圆圈那一列），展开 ⇄ 收起都在同一处。
                           child: Padding(
                             padding: const EdgeInsets.only(top: 2),
-                            child: _handle(p),
+                            // ⚠️ **要占满整行**再靠右（`Align` 单摆会被 Column 居中：
+                            //    第一版就是这么错的 —— 屏幕上那箭头还在正中央，截图当场看出来）。
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(right: d.gapM),
+                                  child: _handle(p),
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       // ── 展开态：标题行（**收起态不画它** —— 那一档就是"一行"）──
