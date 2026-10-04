@@ -871,7 +871,23 @@ export class Worlds {
     //     硬杀之后逐件答得出"还在/已停/做完了"，而**不是查无此件**。
     //     ⚠️ 开机时**没有任何 agent 活着**（`aliveGenerations: []`）⇒ 全收；
     //        一次开机只做一次，之后新开的活归这一代。
-    const work = new WorkLog({ store: t.store, log: (m) => this.#warn(m) });
+    const work = new WorkLog({
+      store: t.store,
+      log: (m) => this.#warn(m),
+      // ★ **2026-10-04**：哪一间的活开始了 / 结束了 ⇒ 让他的**桌面自己重拉一次清单**
+      //   （那一格上的"在做"要靠它点亮与熄灭）。
+      //   ⚠️ 复用现成那条瞬态信号（`app/installed` 的语义就是"桌面可能变了"）——
+      //      **不新造事件类型**（老客户端也照旧安全）。
+      //   ⚠️ 一条工作事件喊一次（开票 / 认领 / 收口各一次）；一次拉清单是很小的请求。
+      onChange: (rec) => {
+        try {
+          if (typeof rec?.scopeId !== 'string' || rec.scopeId === '') return;
+          timeline.emitTransient({ type: 'app/installed', appId: rec.scopeId, title: null });
+        } catch (err) {
+          this.#warn(`  ⚠️ "${rec?.scopeId}" 的在做状态没喊出去：${err?.message ?? err}`);
+        }
+      },
+    });
     const promises = new PromiseBook({ store: t.store });
     // ★ **D 期三本账**（一个人各一份）：
     //   · `handoffs` —— 转交（落盘：D-7"回收前必须在盘上"要它）；

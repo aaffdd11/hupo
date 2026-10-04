@@ -223,14 +223,25 @@ export class WorkLog {
    * @param {() => number} [o.now]
    * @param {(m:string)=>void} [o.log]
    */
-  constructor({ store, timelineId = WORK_LOG, now = Date.now, log = () => {} }) {
+  constructor({ store, timelineId = WORK_LOG, now = Date.now, log = () => {}, onChange = null }) {
     if (!store) throw new Error('WorkLog 需要 store（逐件落盘靠它）');
     this.#store = store;
     this.#timelineId = timelineId;
     this.#now = now;
     this.#log = log;
+    this.#onChange = typeof onChange === 'function' ? onChange : null;
     this.seed();
   }
+
+  /**
+   * ★ **"某一间的活开始/结束了"那一下**（2026-10-04 · 主人要的"桌面上那个小程序要有状态"）。
+   *
+   * 每一次落一条工作事件（开票 / 认领 / 收口）都会叫它一次，带**那一条**（`scopeId` / `state`）。
+   * ⚠️ 调用方自己决定要不要缓存 —— 这里**不判"开还是关"**（那是调用方的事，
+   *    这条账的规矩是"一条事件一次回调"，不在这一层做去重）。
+   * ⚠️ 回调里抛错**不许**让"这一笔落盘"失败（落盘已经发生了）——见 [#append]。
+   */
+  #onChange = null;
 
   /** 从盘上把账重建出来（重启第一步）。**读不懂照抛**（坏账不许静默吞）。 */
   seed() {
@@ -254,6 +265,14 @@ export class WorkLog {
   #append(event) {
     const full = { ...event, at: event.at ?? this.#now() };
     this.#store.append(this.#timelineId, full); // 写失败**上抛**
+    // ★ 落盘之后叫一声（**先落盘、再喊** —— 喊是给别人看的，盘上那份才是事实）
+    if (this.#onChange) {
+      try {
+        this.#onChange(full);
+      } catch (err) {
+        this.#log(`  ⚠️ 工作账变了那一声没喊出去：${err?.message ?? err}`);
+      }
+    }
     return full;
   }
 

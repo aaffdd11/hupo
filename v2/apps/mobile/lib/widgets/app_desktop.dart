@@ -30,6 +30,7 @@ import 'package:flutter/material.dart';
 import 'dart:math' as math;
 
 import '../models/app_tint.dart';
+import '../models/app_words.dart';
 import '../models/desktop_grid.dart';
 import '../models/design.dart' as d;
 import '../models/space_words.dart';
@@ -58,6 +59,7 @@ class DesktopApp {
     this.onCopy,
     this.isCreate = false,
     this.isBuilding = false,
+    this.isWorking = false,
   });
 
   final String label;
@@ -106,6 +108,14 @@ class DesktopApp {
   /// 🔴 长得跟别的不一样：**灰底 ＋ 灰图形 ＋ 转一圈的圈**（不是它那个亮色底）。
   /// ⚠️ 点它**不打开**（那一间里只有一页"这里还空着"）—— 由上层接 [onOpen] 时说一句。
   final bool isBuilding;
+
+  /// ★ **这一间现在有活在做**（`/api/apps` 的 `working` · 2026-10-04 主人：
+  ///   *"如果某个小程序的聊天还在运行，我们应该给这个小程序有一个状态。"*）。
+  ///
+  /// 🔴 长得跟别的不一样的只是**右下角一个小圈**（转着的，托在白底上）——
+  ///    **不改这一格的排版**（多一行字会让整片桌面抖一下，那是 D4.8 不许的）。
+  /// ⚠️ 与 [isBuilding] 是两件事：在建 = 里面还没有东西可看；在做 = 里面正跑着一件活。
+  final bool isWorking;
 }
 
 /// 图标格边长：**≥44** 是 D3.6 的硬要求。
@@ -117,6 +127,13 @@ const double desktopIconBox = 64;
 
 /// 桌面上那一格图标的 key（判据量它的底色：**在建 = 灰的** · 2026-10-04）。
 Key desktopIconBoxKey(String label) => ValueKey<String>('desktop-box-$label');
+
+/// ★ **"在做"那个小圈**（2026-10-04）：外圈直径 / 里面转的那个 / 离角的边距。
+/// 🔴 **都跟图标格成比例，不写死尺寸**（第一条纪律：数值只住 `design.dart` 那一档；
+///    这一族的比例本来就属于这一格，所以住在这儿 —— 但**不许**再冒出裸数字）。
+const double workingDotBox = desktopIconBox * 0.28;
+const double workingDotRing = desktopIconBox * 0.17;
+const double workingDotInset = desktopIconBox * 0.03;
 
 /// **加号那一格**里那个加号多大（比普通图标大一点：它没有名字可认，全靠形状）。
 /// ⚠️ 它量的是**图形**；命中区仍由整个图标格（`desktopIconBox` ≥44）撑着。
@@ -525,6 +542,36 @@ class _DesktopIconState extends State<_DesktopIcon> {
                           decoration: const BoxDecoration(
                             color: d.accent,
                             shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                    // ★ **在做**（2026-10-04）：右下角一个小圈，**转着的** ——
+                    //   一眼看出"这一间里正有活在跑"。托一层白底 ⇒ 什么底色上都看得清。
+                    //   ⚠️ 它**只画在角上**，这一格的大小与排版一个字都不动。
+                    if (app.isWorking)
+                      Positioned(
+                        right: workingDotInset,
+                        bottom: workingDotInset,
+                        child: Semantics(
+                          label: appWorkingLine,
+                          child: Container(
+                            width: workingDotBox,
+                            height: workingDotBox,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: d.card,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: d.line),
+                            ),
+                            child: const SizedBox(
+                              width: workingDotRing,
+                              height: workingDotRing,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: d.amber,
+                                backgroundColor: Colors.transparent,
+                              ),
+                            ),
                           ),
                         ),
                       ),

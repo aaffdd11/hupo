@@ -52,6 +52,26 @@ void main() {
     expect(MiniApp.parse(ok()..['granted'] = 'db')!.granted, isNull);
   });
 
+  // ★ 2026-10-04（契约 `docs/dev/{175,178}`）：桌面上那两格状态 ——
+  //   `building`＝"还在做"（灰的在建图标）· `working`＝"正有活在做"（右下角转着的小圈）。
+  //   🔴 **只认 `true`**；没回 / 回了个"像真的但不是 true"的东西 ⇒ 一律 false。
+  //     宁可晚一拍，也不许把做好的显示成"还在做 / 还在忙"（那种假话最容易被当真）。
+  test('🔴 `building` 与 `working`：只认 `true`；没回 / 回别的 ⇒ 一律 false', () {
+    final none = MiniApp.parse(ok())!;
+    expect(none.building, isFalse, reason: '老服务端不回 ⇒ 不许画成"在建"');
+    expect(none.working, isFalse, reason: '★ 不知道就不亮（不点亮"它还在做"）');
+
+    final both = MiniApp.parse(ok()..['building'] = true..['working'] = true)!;
+    expect(both.building, isTrue);
+    expect(both.working, isTrue);
+
+    for (final junk in <Object?>['yes', 1, 0, <String>[], <String, Object?>{}]) {
+      final a = MiniApp.parse(ok()..['building'] = junk..['working'] = junk)!;
+      expect(a.building, isFalse, reason: '★ `$junk` 不许当 true');
+      expect(a.working, isFalse, reason: '★ `$junk` 不许当 true');
+    }
+  });
+
   test('`withGranted` 只换那一份（别的字段一个都不动）', () {
     final a = MiniApp.parse(ok()..['granted'] = <String>[])!;
     final b = a.withGranted(const ['db']);

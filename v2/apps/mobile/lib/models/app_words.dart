@@ -16,6 +16,10 @@ const String appRuntimeLoading = '正在打开…';
 /// ⚠️ 说人话：不用"生成中/构建中/部署中"那类词（他不是工程师）。
 const String appBuildingLine = '这个小程序还在做，做好了我告诉你。';
 
+/// ★ **这一间现在有活在跑**（2026-10-04 主人要的那个"状态"）—— 说给读屏听的，
+/// 屏幕上画的是**右下角一个转着的小圈**（不占地方、也不改这一格的排版）。
+const String appWorkingLine = '这个小程序正在做一件事';
+
 /// 没打开成功（签名过期 / 制品取不到）。
 const String appRuntimeFailed = '这个小程序没打开成功。';
 

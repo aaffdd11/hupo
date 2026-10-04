@@ -796,6 +796,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     // ★ **还在做**（`/api/apps` 的 `building` · 2026-10-04）：
                     //   那一格画**灰的、转着圈的在建图标**（主人：*"就像 ios 那个开发中的那个"*）。
                     isBuilding: a.building,
+                    // ★ **这一间现在有活在做**（`/api/apps` 的 `working` · 2026-10-04）：
+                    //   右下角一个小圈（转着的）—— 与在建是两件事。
+                    isWorking: a.working,
                     // 🔴 在建的那一格**点了不打开**（那一间里只有一页"这里还空着"）——
                     //   但要**说一句**（点了没反应 = 屏幕上说假话），所以走 `_say`。
                     onOpen: (from) => a.building

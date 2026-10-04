@@ -525,6 +525,27 @@ export function createServer({
   };
 
   /**
+   * ★ **哪几间现在有活在做**（2026-10-04 · 主人：*"如果某个小程序的聊天还在运行，
+   * 我们应该给这个小程序有一个状态。就是某项工作还在工作中。"*）。
+   *
+   * 🔴 **事实只有一个出处**：这个人那本**逐件活账**（`world.work.live()` ——
+   *    与 `work_status` 那条工具读的**同一本**）。⇒ 桌面上那一格亮着"在做"、
+   *    和助手回答"那件怎么样了"，不可能给出两个答案。
+   * ⚠️ 拿不到（盒子那条路还没接 / 老部署 / 身份不合法）⇒ **空集合**：
+   *    宁可**不亮**，也不许凭猜点亮（"它还在做"这种假话最容易被当真）。
+   */
+  const workingScopes = (sub) => {
+    const out = new Set();
+    try {
+      const live = worldFor?.(sub)?.work?.live?.() ?? [];
+      for (const r of live) if (typeof r?.scopeId === 'string' && r.scopeId !== '') out.add(r.scopeId);
+    } catch {
+      /* 读不到就是"不知道" ⇒ 空集合（不点亮） */
+    }
+    return out;
+  };
+
+  /**
    * **按 scope 取房间**（契约 `83-APP-WORKSPACE.md` §三·3）。
    *
    * ⚠️ 缺省 / `'main'` ⇒ 主线那一份世界（**逐字不变**）。
@@ -1388,10 +1409,22 @@ export function createServer({
             return [];
           }
         });
+        const working = workingScopes(claim.sub);
         return sendJson(res, 200, {
           apps: items.map((a, i) => ({
             ...a,
             granted: Array.isArray(grantedList[i]) ? grantedList[i] : [],
+            /**
+             * ★ **这一间现在有活在做**（2026-10-04）：桌面上那一格据此亮一个"在做"。
+             *
+             * 🔴 **租户那一条以盒子里那份为准**（`a.working` 是盒子算的）——
+             *    和上面 `granted` / `unanswered` **同一条道理**：活是**在他盒子里**跑的，
+             *    盒子里那本活账才是事实；宿主这一侧根本没有他的活账
+             *    （实测：`data/users/<他>/` 下没有他那一份流水）⇒ 拿宿主那份去覆盖，
+             *    症状就是"**桌面上永远不亮**"，而单租户判据全绿（正是"验在哪一端"那一课）。
+             * ⚠️ 盒子那边老版本**不带**这个字段 ⇒ 退回本机那份（单租户 / 主人走这条）。
+             */
+            working: typeof a.working === 'boolean' ? a.working : working.has(a.id),
             /** ★ 还没表过态的（非空 ⇒ 打开它时要弹那张窗） */
             unanswered: Array.isArray(unansweredList[i]) ? unansweredList[i] : [],
             entryUrl: liveEntryUrl({
@@ -3129,6 +3162,7 @@ const TENANT_ROUTES = [
        *    二十个 app 就是二十次往返（B15-5 那条判据量的就是"这一趟开了几次隧道"）。
        *    ⇒ **一趟带回**（`granted`）。
        */
+      const workingBox = workingScopes(trustedSub);
       return sendJson(res, 200, {
         apps: items.map((a) => {
           let granted = [];
@@ -3143,7 +3177,8 @@ const TENANT_ROUTES = [
           } catch {
             unanswered = [];
           }
-          return { ...a, granted, unanswered };
+          // ★ **这一间现在有活在做**（与公网那条同一本活账 · 2026-10-04）
+          return { ...a, granted, unanswered, working: workingBox.has(a.id) };
         }),
       });
     }

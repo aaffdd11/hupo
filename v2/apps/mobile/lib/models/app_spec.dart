@@ -36,6 +36,7 @@ class MiniApp {
     this.unanswered,
     this.net = const [],
     this.building = false,
+    this.working = false,
     this.expiresAt = 0,
   });
 
@@ -85,6 +86,14 @@ class MiniApp {
   /// ⚠️ **缺字段 / 不是 `true` ⇒ `false`**（老服务端不给这个字段 ⇒ 照旧画正常图标；
   ///    把一个做好的小程序画成灰的，比"晚一秒才变灰"坏得多）。
   final bool building;
+
+  /// ★ **这一间现在有活在做**（`/api/apps` 回的 `working` · 2026-10-04 主人：
+  ///   *"如果某个小程序的聊天还在运行，我们应该给这个小程序有一个状态。"*）。
+  ///
+  /// 🔴 服务端那条事实 = 他这本**逐件活账**里这一间还开着（与 `work_status` 同一本）
+  ///    ⇒ 桌面上那一格亮一个"在做"（右下角一个转着的小圈）。
+  /// ⚠️ **缺字段 / 不是 `true` ⇒ `false`**（老服务端不给 ⇒ 照旧不亮；宁可不亮，不许猜亮）。
+  final bool working;
 
   /// 这条 URL 什么时候过期（毫秒）。
   final int expiresAt;
@@ -186,6 +195,8 @@ class MiniApp {
       net: hosts,
       // ⚠️ 只有**明说 `true`** 才算在建（缺字段 / 别的值 ⇒ 照旧）
       building: raw['building'] == true,
+      // ⚠️ 同上：只有明说 `true` 才亮"在做"
+      working: raw['working'] == true,
       expiresAt: expires,
     );
   }
