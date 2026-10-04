@@ -26,6 +26,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../models/design.dart' as d;
 import '../models/dsh_design.dart';
 import '../models/process_words.dart';
 import 'dsh_look.dart';
@@ -72,7 +73,8 @@ class ReasoningBlock extends StatelessWidget {
     return Align(
       alignment: Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 760),
+        // ★ 2026-10-05：与聊天正文那一格同一个数（`design.dart` 的 `contentMaxWidth`）
+        constraints: const BoxConstraints(maxWidth: d.contentMaxWidth),
         child: Container(
           margin: const EdgeInsets.only(top: 6),
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),

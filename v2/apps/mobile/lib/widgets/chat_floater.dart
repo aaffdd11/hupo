@@ -445,17 +445,38 @@ class ChatFloaterState extends State<ChatFloater> {
                           //   ⇒ 收起档那个展开入口（那颗平箭头）从**正中央**挪到**右边**，
                           //     也就是**顶在录音那颗圆圈上方**（不再占中间那一条）。
                           //   ⚠️ 位置与圆圈对齐（右边留出圆圈那一列），展开 ⇄ 收起都在同一处。
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 2),
-                            // ⚠️ **要占满整行**再靠右（`Align` 单摆会被 Column 居中：
-                            //    第一版就是这么错的 —— 屏幕上那箭头还在正中央，截图当场看出来）。
-                            child: SizedBox(
-                              width: double.infinity,
-                              child: Align(
-                                alignment: Alignment.centerRight,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(right: d.gapM),
-                                  child: _handle(p),
+                          // 🔴 **2026-10-05 补第二处**：光靠"贴浮窗右边"还不够 ——
+                          //   输入条那一格是 **`d.contentMaxWidth` 居中**的（宽屏上它比浮窗窄）
+                          //   ⇒ 圆圈其实在**那一列的右边**。所以这里套**同一格限宽**，
+                          //   箭头的中心才与圆圈的中心**同一条竖线**（截图量过：不套就差 250 像素）。
+                          child: Center(
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(
+                                maxWidth: d.contentMaxWidth,
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                // ⚠️ **要占满整行**再靠右（`Align` 单摆会被 Column 居中）。
+                                // 🔴 **真正的坑在 `_handle` 里那颗 `Center`**（2026-10-05 查出来的）：
+                                //    `Center` 会**撑满给它的宽度**再把内容摆中间 ⇒ 外面这层
+                                //    `Align(centerRight)` 摆的是一个"整行宽的盒子"⇒ 屏幕上那颗箭头
+                                //    **还在正中央**（主人报过、截图两次作证）。⇒ 两处一起改：
+                                //    ① `_handle` 不再自带 `Center`；② 这里给它**一颗圆圈那么宽**的
+                                //    格子（`d.voiceCircleBox`），它就跟右下角那颗圆圈**同一列**了。
+                                child: SizedBox(
+                                  width: double.infinity,
+                                  child: Align(
+                                    alignment: Alignment.centerRight,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(right: d.gapM),
+                                      // 🔴 宽度 = 那颗圆圈 ⇒ 箭头中心与圆圈中心**同一条竖线**
+                                      //    （主人 2026-10-04：*"展开聊天的按钮，放到录音按钮上方。"*）
+                                      child: SizedBox(
+                                        width: d.voiceCircleBox,
+                                        child: _handle(p),
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
@@ -537,12 +558,15 @@ class ChatFloaterState extends State<ChatFloater> {
               );
   }
 
-  /// **抓手**（主人 2026-09-24）：上边框正中央**一条杠 + 一个平的小箭头**。
+  /// **抓手**（主人 2026-09-24 那条杠 ＋ 2026-10-04 挪位）：**平的小箭头**。
   ///
   /// 🔴 三条约束，缺一条都会退回到"上一版那种看不出来的东西"：
-  ///   ① **位置固定在上边框正中**（收起/展开都在同一个位置 ⇒ 他知道戳哪儿）；
+  ///   ① **位置**：它在**右下角那颗录音圆圈的正上方**（主人 2026-10-04 原话：
+  ///      *"展开聊天的按钮，放到录音按钮上方。"*）—— 由**调用处**给它一颗圆圈那么宽的
+  ///      格子来对齐（这里**不要**自带 `Center`：那玩意儿会撑满整行 ⇒ 又回到正中央）；
   ///   ② **箭头要平**（浅角 —— 26×7 ≈ 15°，不是那种尖尖的 `keyboard_arrow_up`）；
-  ///   ③ **命中区 ≥44**（D3.6）：外面那颗按钮给的是 **96×44**，图形只占中间一小块。
+  ///   ③ **命中区 ≥44**（D3.6）：那颗按钮给的是 **96×44**，图形只占中间一小块
+  ///      （外面那格窄到比 96 还窄时按约束走，仍 ≥44）。
   ///
   /// ⚠️ **单击 = 收起 ⇄ 展开**（不再有双击：两次单击会互相抵消 ⇒ "点了没反应"）。
   /// ⚠️ 字挂在 `Tooltip`（web 上悬停看得见）+ 无障碍名上（D3.8 的"带字"由 2026-09-24 改掉）。
@@ -570,11 +594,9 @@ class ChatFloaterState extends State<ChatFloater> {
     //    展开态**不挂** —— 标题行已经有一个「收起」按钮，两个控件挂同一句话
     //    会让"屏幕上到底有几个收起"这种判据（和读屏）分不清。
     //    无障碍名两种状态都给（`Semantics` 那句在下面）。
-    return Center(
-      child: Tooltip(
-        message: '展开',
-        child: Semantics(button: true, label: '展开', child: button),
-      ),
+    return Tooltip(
+      message: '展开',
+      child: Semantics(button: true, label: '展开', child: button),
     );
   }
 }

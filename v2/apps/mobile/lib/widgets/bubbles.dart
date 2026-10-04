@@ -381,7 +381,8 @@ class AnswerBubble extends StatelessWidget {
       alignment: Alignment.centerLeft,
       child: Container(
         // 限宽：太宽的长行没人读得下去（平板上一行 70 个字）
-        constraints: const BoxConstraints(maxWidth: 760),
+        //  ★ 2026-10-05：与聊天正文那一格同一个数（`d.contentMaxWidth`）
+        constraints: const BoxConstraints(maxWidth: d.contentMaxWidth),
         // ★ 2026-10-01：同上（每一条之间那一条空当）
         margin: const EdgeInsets.symmetric(vertical: DshChatSpace.bubbleGap),
         child: Material(

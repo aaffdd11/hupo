@@ -1943,7 +1943,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     return Center(
       child: ConstrainedBox(
         // 内容列限宽（手册 D4.6 / R5）：平板上一行七十个字读不下去
-        constraints: const BoxConstraints(maxWidth: 760),
+        //  ★ 2026-10-05：那个数收进 `design.dart`（`d.contentMaxWidth`）——
+        //    展开那颗箭头要跟**输入条里那颗圆圈**对齐 ⇒ 两边必须是同一个数。
+        constraints: const BoxConstraints(maxWidth: d.contentMaxWidth),
         // ⚠️ **更早那句提示不许放在列表外面**（2026-09-23 实测栽过）：
         //    它一出现就会把列表的**视口**压小 —— 而"最老那条消息在不在树里"
         //    是 a11y 那条判据量的东西（3.1 倍字号下当场红）。⇒ 它现在当
@@ -1981,7 +1983,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Widget _composerBody(ChatController c, DshLook look) {
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 760),
+        // ★ 2026-10-05：这一格与上面正文那一格**同一个数**（`d.contentMaxWidth`）——
+        //   那颗录音圆圈住在这里，展开那颗箭头按这一格对齐（见 `chat_floater.dart`）。
+        constraints: const BoxConstraints(maxWidth: d.contentMaxWidth),
         // ★ **`117`：排队那条横条画在输入条**上面**、浮窗里面**（契约
         //   `docs/dev/117-QUEUE-VISIBLE.md` §四）。空队时它一个像素都不占
         //   （`QueueStrip` 自己画 `SizedBox.shrink()`）。

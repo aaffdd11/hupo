@@ -13,6 +13,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/about_facts.dart';
+import '../models/design.dart' as d;
 import '../services/hearing.dart' as hearing_service;
 
 class AboutScreen extends StatelessWidget {
@@ -29,7 +30,8 @@ class AboutScreen extends StatelessWidget {
       body: Center(
         child: ConstrainedBox(
           // 内容列限宽，同主界面（平板上一行七十个字没人读）
-          constraints: const BoxConstraints(maxWidth: 760),
+          //  ★ 2026-10-05：那个数收进 `design.dart`（一处出处）
+          constraints: const BoxConstraints(maxWidth: d.contentMaxWidth),
           child: ListView.builder(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
             itemCount: facts.length,
