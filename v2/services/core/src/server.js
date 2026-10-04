@@ -99,7 +99,11 @@ import { isCredField } from './creds.mjs';
 /// ⚠️ **`apk` 也算**（2026-09-28 加）：安卓包放在 `web/` 里由这条路发出去；
 ///    它要是没了而回了 index.html，用户会把一段 HTML **存成 .apk** 去装 —— 那是同一个坑的第二种形态。
 const LOOKS_LIKE_ASSET =
-  /\.(js|mjs|css|json|wasm|map|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|txt|webmanifest|apk)$/i;
+  // ⚠️ 加一项**就是加一条**："带这个扩展名的路径找不到 ⇒ 如实 404"。
+  //    ★ 2026-10-04 补 `pdf`（参赛文稿那个下载）：不补的话，一个**不存在的**
+  //      `xxx.pdf` 会掉进 SPA 回退拿回一段 HTML（200）—— 正是 P1-14 要修的
+  //      "把缺文件变成白屏/假页面"那种形状。
+  /\.(js|mjs|css|json|wasm|map|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|txt|webmanifest|apk|pdf)$/i;
 
 /**
  * 内部写入口**一条请求最大多少字节**（B15 迁移那条）。
@@ -131,6 +135,10 @@ const MIME = {
   // 安卓包（`web/hupo.apk`，首页那颗「下载安卓版」指向它）。
   // ⚠️ 这个 MIME 是安卓那边认的正式名字 —— 写错的话有些浏览器会把它当**文本**打开。
   '.apk': 'application/vnd.android.package-archive',
+  // ★ 参赛文稿（`web/hupo-design-note.pdf` —— 作品设计说明，给评委/老师下载）。
+  //   ⚠️ 不写这一条就会落到 `application/octet-stream`：能下，但浏览器一律"另存为"，
+  //      不会当场打开读（那几个字是"作品设计说明"，本来就该点开就能读）。
+  '.pdf': 'application/pdf',
 };
 
 // ── 过程档位（决策 D7 / 契约 `docs/dev/122-TWO-PROCESS-LEVELS.md`）────────

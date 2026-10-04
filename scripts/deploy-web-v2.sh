@@ -150,6 +150,25 @@ else
   echo "     要发就补一句：scripts/publish-apk.sh --no-build（或 build-apk.sh 重新打一个）"
 fi
 
+# ★ **参赛文稿（作品设计说明）也放回来**（2026-10-04 主人：*"把文件放在网站上供下载"*）：
+#   上面那句 `rm -rf "$WEB"` 同样会把它删掉 ⇒ 每次部署都从仓库那一份拷一次。
+#   ⚠️ 两个名字指同一份文件（**逐字节相同**）：
+#     · `hupo-design-note.pdf` —— ASCII 名，发链接、贴到别处不容易被弄坏；
+#     · `琥珀-作品设计说明.pdf` —— 中文名，他（和评委）看着就知道是什么。
+#   ⚠️ 源文件在 `docs/contest/`（**仓库里那一份是权威**：它由 `submission.html` 渲染出来，
+#      改文字改那个 HTML 再重出 PDF，别直接改 PDF）。
+CONTEST_PDF="$ROOT/docs/contest/琥珀-作品设计说明.pdf"
+if [ -f "$CONTEST_PDF" ]; then
+  cp -f "$CONTEST_PDF" "$WEB/hupo-design-note.pdf"
+  echo "  ✓ 参赛文稿也放回来了：/hupo-design-note.pdf（$(du -h "$WEB/hupo-design-note.pdf" | cut -f1)）"
+else
+  echo "  ⚠️ 没有 $CONTEST_PDF ⇒ 这次那个下载链接会 404（改完文稿要重出 PDF）"
+fi
+# 🔴 **只发 ASCII 那一个名字**（2026-10-04 实测）：中文名在**公网**那一段会坏 ——
+#    前面那台 nginx 把百分号编码的路径弄丢，`/琥珀-….pdf` 拿到的是**页面**（200 + text/html），
+#    而不是文件。本机直连是好的，所以这不是我们的路由问题，是那一段转发。
+#    ⇒ 一个"点了会返回页面"的链接比没有链接更坏（页面在说假话）——**不摆它**。
+
 mv "$WEB/main.dart.js" "$WEB/main.$STAMP.dart.js"
 mv "$WEB/flutter_bootstrap.js" "$WEB/flutter_bootstrap.$STAMP.js"
 # 入口文件只留最近 KEEP_ENTRIES 份（再多就没意义了：更老的访客只会拿到更老的资源）
