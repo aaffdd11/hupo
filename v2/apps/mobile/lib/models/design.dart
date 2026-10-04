@@ -208,3 +208,8 @@ const Duration motionPage = Duration(milliseconds: 400);
 ///    一个是"换一屏"，一个是"从那个图标长出来"。别为了统一把它们并成一个数。
 /// ⚠️ 曲线不在这儿（`models` 不碰 UI 类型）：见 `widgets/motion.dart` 的 [miniAppOpenCurve]。
 const Duration motionAppOpen = Duration(milliseconds: 500);
+
+/// ★ **乙期（`D3.14`）：聊天底下那颗圆圈** —— 点一下开始录音、再点一下停。
+/// ⚠️ 它是那一屏**唯一**的入口 ⇒ 要比别处都大（服务的正是"打不了字、眼神不好"的人）。
+const double voiceCircleBox = 64; // ≥44（D3.6）
+const double voiceCircleIcon = 30;

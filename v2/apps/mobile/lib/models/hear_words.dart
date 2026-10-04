@@ -60,3 +60,9 @@ const String hearDrillAnswer = '就这句';
 
 /// 最终那一份的抬头（他看得见的那一份原话）。
 const String hearDrillHeardLabel = '我听成的是：';
+
+/// 那颗圆圈的读屏名（没在录时）。
+const String hearDrillTalkLabel = '说一句';
+
+/// 那颗圆圈的读屏名（正在录时）。
+const String hearDrillStopLabel = '说完了';

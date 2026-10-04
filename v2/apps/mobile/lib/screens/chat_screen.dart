@@ -71,8 +71,8 @@ import '../widgets/bubble_menu.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/chat_floater.dart';
 import '../widgets/mini_app_host.dart';
+import '../widgets/voice_bar.dart';
 import '../widgets/mini_app_frame.dart';
-import '../widgets/composer.dart';
 import '../widgets/notice.dart';
 import '../widgets/queue_strip.dart';
 import '../widgets/process_view.dart';
@@ -575,6 +575,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     //    ⚠️ 必须在下面那次 setState **之前**：不然屏幕上会先闪一帧"没折"的样子。
     _applyAutoFold(widget.controller);
     setState(() {});
+    // ★ **乙期：语音那一档自己发出去了** ⇒ 把那扇**聊天记录窗口**打开（`D3.14`）
+    //   （他说完 → 听懂 → 通顺就发；发的那一下不用他点任何东西，但**要让他看见**）
+    final sent = widget.controller.voiceSent;
+    if (sent != _voiceSent) {
+      _voiceSent = sent;
+      _floaterKey.currentState?.maximize();
+    }
     // ★ **服务端说"装上了一个小程序"** ⇒ 重拉一次清单（桌面**自己长出来**，不用刷新页面）
     final rev = widget.controller.appsRevision;
     if (rev != _appsRevision) {
@@ -1385,6 +1392,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// **上一次看到的"我的小程序"版本号**（乙-3：服务端说"装上了"就重拉）。
   int _appsRevision = 0;
 
+  /// 语音那一档**发出去几次**（`D3.14`：发一次就把记录窗口打开一次）。
+  int _voiceSent = 0;
+
   /// **上一次处理过的"有新版"那一条**（契约 `docs/dev/111-APP-LIVE-UPDATE.md`）。
   int _appUpdateRevision = 0;
 
@@ -2027,42 +2037,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               // 🔴 2026-10-03：「拿回来」那条路砍了 ⇒ 这一条不再挂撤销按钮。
               NoticeStrip(notice: c.notice!, onDismiss: c.dismissNotice),
             QueueStrip(queue: c.queue, onCancel: c.unsay),
-            Composer(
-          // ★ **那条浮窗**（主人 2026-09-27）：挂在**这一行**上（锚点 = 那颗 home 的上面），
-          //   一个像素都不占排版；`IgnorePointer` 在 `Composer` 里那一层包着。
-          hintAbove: _homeHint ? _homeHintBubble(look) : null,
-          // ★ **这一行最前面那个图标：这句话是在哪儿说的**（桌面 = 家；进了小程序 = 它自己的图标）。
-          //   ⚠️ 2026-09-24：聊天窗口收成**一行**之后，它从抓手行搬到了这一行的最前面
-          //      （主人：*"homeicon 放在聊天窗口左边"*）。
-          leading: _homeButton(c),
-          // ★ **打字框草稿**（主人 2026-09-22）：*"要有一个空的输入框，但如果用户输入过，
-          //   没发送，则显示在上面作为草稿。草稿也是要记住的。"*
-          //   ⚠️ 它和"已发未认领那句话"（`draft_store.dart`）**不是同一本账**。
-          draft: c.composeDraft,
-          onDraftChanged: c.saveComposeDraft,
-          onDraftCleared: c.clearComposeDraft,
-          // ★ **点了打字框 ⇒ 把窗口打开**（主人 2026-09-22：*"点击说点什么，聊天窗口会自动打开。"*）
-          //   ⚠️ 收起态那条里也有这个框。展开**不会丢字**：两态用的是**同一个 Composer 实例**，
-          //      Flutter 认得出它、把它**挪过去**（不是重建）—— 有判据钉着。
-          onFocused: () => _floaterKey.currentState?.expand(),
-          // ★ **读出来那个开关**（替掉原来演示用的"听筒/扬声器"）
-          autoSpeak: c.autoSpeak,
-          onToggleAutoSpeak: (on) => c.setAutoSpeak(on),
-          canSpeak: canSpeak,
-          // ★ **真开麦**（主人 2026-09-23：*"你做一下按钮。是按一下开始语音跟踪…
-          //   再按一下结束。然后将文字展示出来。用户可以选择发送。"*）
-          //   ⚠️ 开不了麦（不是网页 / 不是 https）⇒ **不画那个话筒**。
-          canHear: canHear,
-          hearing: c.hearing,
-          onMicToggle: c.toggleHearing,
-          // 🔴 **用户按下发送 ⇒ 最大化**（§6.2"发就拉满"）。
-          //    ⚠️ 反过来不成立：**状态变化不许动窗口**（D4.8：新增助手消息的高度变化 = 0px）。
-          //    ★ 现在**收起态也能发**（那儿也有输入框）⇒ 发出去就拉满，这一步比以前更有用。
-          onSend: (text) {
-            _floaterKey.currentState?.maximize();
-            c.clearComposeDraft(); // 发出去了 ⇒ 上面那条草稿该消失
-            c.send(text);
-          },
+            VoiceBar(
+              flow: c.voiceFlow,
+              canHear: canHear,
+              speakable: canSpeak,
+              onMic: () => unawaited(c.toggleVoiceCompose()),
+              onTyped: (text) => unawaited(c.answerVoiceCompose(text)),
+              // ⚠️ 出口**暂时**还挂在这一行最前面（那颗 home）—— 它搬到每个 app 右上角之前，
+              //    少了它就"进去出不来"（`D3.15` 还没做，见 `183`）。
+              leading: _homeButton(c),
+              hintAbove: _homeHint ? _homeHintBubble(look) : null,
             ),
           ],
         ),
