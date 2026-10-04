@@ -263,10 +263,7 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
     //   ⚠️ 迁移那天**只改这一处**（不留半行代码改动要跟着走）。
     appsPublicBase: env.HUPO_APPS_PUBLIC_BASE ?? null,
     // 制品页只许**壳**嵌它（CSP 的 frame-ancestors）。默认给本机那个口。
-    // 🔴 **2026-10-05：两个源都要认** —— 主那个源（Flutter 那一页直接嵌它，老路）＋
-    //   **制品那个源**（我们自己那个"壳"就在它上面：`184` 丙 ⇒ 壳里再嵌小程序那一页）。
-    //   少了后者 ⇒ 浏览器按 CSP **拒绝**那一帧 ⇒ 主人看到的"小程序里内容都没了"。
-    appsFrameAncestors:
+appsFrameAncestors:
       env.HUPO_APPS_FRAME_ANCESTORS ??
       `http://${env.HUPO_HOST ?? '127.0.0.1'}:${Number.parseInt(env.HUPO_PORT ?? '8020', 10)} http://${env.HUPO_HOST ?? '127.0.0.1'}:${Number.parseInt(env.HUPO_APPS_PORT ?? '8021', 10)}`,
     // 签名密钥（**不进日志**）。没有就现生成一个 0600 的（见 `app-serve.js` 的 `loadSignKey`）。
