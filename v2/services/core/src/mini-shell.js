@@ -115,6 +115,18 @@ export function shellJs() {
   addEventListener('message', function (e) {
     var d = e && e.data;
     if (!d || typeof d !== 'object') return;
+    // ★ **小程序问一句那条路：壳只做"转发"**（丙 · 契约 184 的 S5）。
+    //   🔴 壳**不看**正文（那一段 prompt 一个字都不读）—— 它只把这条消息原样递给外面，
+    //      外面那条闸（app-ask 那四道）照旧一道不落。
+    if (d.kind === 'ask') {
+      try { parent.postMessage({ kind: 'ask', prompt: d.prompt }, '*'); } catch (e2) {}
+      return;
+    }
+    if (d.kind === 'hupo-reply' || d.kind === 'hupo-error') {
+      // 外面答回来的那一句 ⇒ 交给**里面那一层**（小程序那一页）
+      try { if (f.contentWindow) f.contentWindow.postMessage(d, '*'); } catch (e3) {}
+      return;
+    }
     if (d.kind === 'hupo-words') {
       var w = document.getElementById('words');
       var t = typeof d.text === 'string' ? d.text : '';
