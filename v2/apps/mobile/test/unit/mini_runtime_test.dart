@@ -205,12 +205,15 @@ void main() {
 //      真机那一下要靠人在浏览器里点。
 test('🔴 Web 那一颗「退出」是**画在 iframe 上面**的（DOM ＋ z-index），不是 Flutter 画的', () {
   final src = File('lib/widgets/mini_runtime_web.dart').readAsStringSync();
-  expect(src.contains('_exits[viewId] = onExit'), isTrue,
-      reason: '★ 那一帧的回调要存下来（DOM 按钮点击时才找得到）');
-  expect(src.contains('exitBtn.onClick.listen'), isTrue, reason: '★ 点击必须落在 DOM 那一侧');
-  expect(src.contains('zIndex'), isTrue, reason: '★ 必须压在 iframe 上面（不然点不到）');
-  expect(src.contains('miniAppExitLabel'), isTrue, reason: '★ 那个词只有一处出处（models）');
-  expect(src.contains('wrap.children.addAll'), isTrue,
-      reason: '★ iframe 与那颗圆圈要在**同一个容器**里（不然定位对不上）');
+  // ⚠️ **2026-10-05（丙 · `184`）：浮层搬进"我们自己的壳"里了** —— 判据跟着改：
+  //   · 嵌的是**壳那一条**（`/one/shell?u=…`）；
+  //   · 旧那套"在壳外面再画一遍"**还在，但在开关后面**（一行能回退）；
+  //   · 壳自己那一份（浮层 ＋ 沙箱 ＋ 不拿钥匙）由 `test/mini-shell.test.js` 钉着。
+  expect(src.contains('_useShell'), isTrue, reason: '★ 开关要在（一行回退）');
+  expect(src.contains('/one/shell'), isTrue, reason: '★ 嵌的是我们自己的壳');
+  expect(src.contains('if (!_useShell)'), isTrue, reason: '★ 旧那套浮层在开关后面（回退用）');
+  expect(src.contains('_exits[viewId] = onExit'), isTrue, reason: '★ 回调照样存（壳点击时要用）');
+  expect(src.contains("d0['kind'] == 'hupo-chrome'"), isTrue,
+      reason: '★ 壳报"哪个按钮被按了"要接住');
 });
 }

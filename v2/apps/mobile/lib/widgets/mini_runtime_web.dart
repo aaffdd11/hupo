@@ -123,8 +123,11 @@ Widget buildMiniAppView({
   // ⚠️ **同一个 viewType 只许注册一次**（重复注册当场抛）⇒ 这本账只增不减。
   if (miniViewLedger.register(viewId)) {
     ui_web.platformViewRegistry.registerViewFactory(viewId, (int _) {
+      // ★ **2026-10-05（丙 · `184`）：嵌的是"我们自己的壳"** —— 浮层（麦克风 / ✕ / 那行字）
+      //   由壳里画（一份实现、天然在小程序之上）；旧那套"在壳外面再画一遍"由 `_useShell` 关掉。
+      //   ⚠️ **开关留在这儿**：万一壳那一层不对劲，把它改成 `false` 就回到原来那一版（一行）。
       final f = html.IFrameElement()
-        ..src = entryUrl
+        ..src = _useShell ? _shellUrlFor(entryUrl) : entryUrl
         ..title = title
         // 🔴 **只给 allow-scripts**：给了 allow-same-origin 就等于把壳的存储和它共享
         ..setAttribute('sandbox', 'allow-scripts')
@@ -159,6 +162,8 @@ Widget buildMiniAppView({
         ..style.right = '-2px'
         ..style.bottom = '-2px'
         ..style.overflow = 'hidden';
+      // ⚠️ 旧那套浮层**只在不用壳时**才建（用壳 ⇒ 壳里画）
+      if (!_useShell) {
       final exitBtn = html.ButtonElement()
         ..className = 'hupo-mini-exit'
         ..text = '✕'
@@ -232,9 +237,16 @@ Widget buildMiniAppView({
         final fn = _mics[viewId];
         if (fn != null) fn();
       });
-      _words[viewId] = words;
-      _micBtns[viewId] = micBtn;
-      wrap.children.addAll(<html.Element>[f, words, micBtn, exitBtn]);
+        _words[viewId] = words;
+        _micBtns[viewId] = micBtn;
+      }
+      wrap.children.add(f);
+      if (!_useShell) {
+        final words = _words[viewId];
+        final micBtn = _micBtns[viewId];
+        if (words != null) wrap.children.add(words);
+        if (micBtn != null) wrap.children.add(micBtn);
+      }
       // ⚠️ 新建的这一帧也要立刻跟上当前那一档（展开着的时候它一建出来就该是 `none`）
       _frames[viewId] = f;
       // ⚠️ 槽可能**刚**建出来 ⇒ 建完这一帧再统一设一次（同一个函数，一处口径）
@@ -257,6 +269,19 @@ Widget buildMiniAppView({
           //      页面发过来的消息**一条都进不来**（服务端那时一次都没被调用）。
           // ⚠️ 再加两条保险：页面的 CSP 是 `default-src 'none'`（**它嵌不了自己的 iframe**
           //    来冒充），而且同一时刻壳里只开着一个页面。
+          // ★ **壳发来的"哪个按钮被按了"**（丙：麦克风 / ✕ 由壳画，点它只报个名字）
+          final d0 = e.data;
+          if (d0 is Map && d0['kind'] == 'hupo-chrome') {
+            final what = d0['what'];
+            for (final entry in _frames.entries) {
+              if (identical(entry.value.contentWindow, e.source)) {
+                if (what == 'mic') _mics[entry.key]?.call();
+                if (what == 'exit') _exits[entry.key]?.call();
+                return;
+              }
+            }
+            return;
+          }
           final origin = e.origin;
           if (origin != 'null' && origin != '') return;
           final data = e.data;
@@ -284,6 +309,21 @@ Widget buildMiniAppView({
     });
   }
   return HtmlElementView(viewType: viewId);
+}
+
+/// **丙（`184`）：嵌我们自己的壳吗**（浮层由壳画）。
+///
+/// ⚠️ **一行回退**：改成 `false` ⇒ 回到"在壳外面再画一遍"那一版（那套代码还在，只是不建）。
+/// ⚠️ 壳只在**网页**上有（手机上那支还是老路）⇒ 关掉它网页也照样能跑。
+const bool _useShell = true;
+
+/// 活地址 → **壳那一条**：`/one/shell?u=<路径?查询>`（与活地址**同一个原点**）。
+String _shellUrlFor(String entryUrl) {
+  final u = Uri.parse(entryUrl);
+  final inner = u.path + (u.hasQuery ? '?${u.query}' : '');
+  return Uri.parse('${u.scheme}://${u.authority}/one/shell')
+      .replace(queryParameters: <String, String>{'u': inner})
+      .toString();
 }
 
 /// 每一帧那颗"退出"要调的回调（`viewId → 回调`）。
@@ -338,7 +378,8 @@ void updateMiniAppWords(String viewId, String text) {
 }
 
 /// **这一帧在页面这一层画了东西吗**（界面据此决定要不要再画一遍 Flutter 的）。
-bool miniAppDomChrome(String entryUrl) => _micBtns.containsKey(miniViewIdOf(entryUrl));
+bool miniAppDomChrome(String entryUrl) =>
+    _useShell || _micBtns.containsKey(miniViewIdOf(entryUrl));
 
 /// 那颗麦克风圆圈的读屏名（DOM 按钮上用）。
 const String miniMicTalkLabel = '说一句';
