@@ -291,6 +291,24 @@ class ChatController extends ChangeNotifier {
   ConnState _conn = ConnState.idle;
   bool _needsSetup = false;
   String? _lastError;
+
+  /// ★ 上一次那条错误是不是**"网没通"**那一类（2026-10-04 主人报）。
+  ///
+  /// 🔴 **只有它能在"连回来"的时候自动清掉**：别的（登录过期 / 机器没设密码 /
+  ///    忙不过来 / 太频繁 / 被拒）都**不是网的事**，网一通就抹掉它们 = 把该说的话吞了。
+  bool _lastErrorIsNetwork = false;
+
+  /// ★ **因为网没通而没发出去的那几句**（`messageId`）。
+  ///
+  /// 连回来的那一刻**自动替他再发一次** —— 主人 2026-10-04 报的就是
+  /// *"网没通，这条没发出去，这个状态在恢复后依然还在"*：
+  /// 网回来了，屏幕上却还挂着"没发出去"，而那件事其实早就该走了。
+  ///
+  /// 🔴 **为什么敢自动发**：重发用的**还是同一个 `messageId`** ⇒ 服务端按它幂等
+  ///    （重复那一次回 `duplicate`，**不落盘、不重放**）⇒ 不会让 agent 干两遍。
+  /// ⚠️ **只收"网没通"这一类**：忙不过来 / 太频繁 / 被拒 / 要登录那几种**不收进来**
+  ///    （重试它们要么白打服务端、要么根本没意义），仍旧留给他自己按「重发」。
+  final Set<String> _networkFailed = <String>{};
   int _localSeq = 0;
 
   /// 现在这一幕给用户看多少过程（契约 §三）。**开档前是默认档 `doing`**。
@@ -988,6 +1006,9 @@ class ChatController extends ChangeNotifier {
     await compose.clear();
     await tokens.clear();
     _conn = ConnState.idle;
+    // ★ 换人 / 退出：那一串"因网没通没发出去的"**跟着这一份世界一起走**
+    _networkFailed.clear();
+    _lastErrorIsNetwork = false;
     notifyListeners();
   }
 
@@ -1011,6 +1032,16 @@ class ChatController extends ChangeNotifier {
       if (st == ConnState.unauthorized) {
         // ⚠️ 只有这一种情况才清令牌。**网络失败不清**（B1 的修法）
         _lastError = '登录过期了，重新登录一下';
+        _lastErrorIsNetwork = false;
+      } else if (st == ConnState.connected) {
+        // ★ **2026-10-04（主人报的）**：网回来了 ⇒ ① 那句"网没通"**不许再挂着**
+        //   （它已经不真了 —— 屏幕上说假话是这一档最忌的）；② 因它没发出去的那几句
+        //   **自己再走一次**（同一个 `messageId`，服务端幂等）。
+        if (_lastErrorIsNetwork) {
+          _lastError = null;
+          _lastErrorIsNetwork = false;
+        }
+        unawaited(_retryNetworkFailed());
       }
       notifyListeners();
     });
@@ -1448,6 +1479,13 @@ class ChatController extends ChangeNotifier {
         // **不能拿 HTTP 200 冒充"服务端收到了我这句"**：
         // 那只能说"请求到过"，不能说"我看见了"。
         room.timeline.setLocalState(messageId, MessageState.sent);
+        // ★ 发送成功了 ⇒ 这条不再是"因网没通没发出去"的；顺手把那句陈旧的
+        //   "网没通"也撤掉（它已经不真了：刚才这一下通了）。
+        _networkFailed.remove(messageId);
+        if (_lastErrorIsNetwork) {
+          _lastError = null;
+          _lastErrorIsNetwork = false;
+        }
       case SayUnauthorized():
         room.timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '登录过期了，重新登录一下';
@@ -1491,6 +1529,15 @@ class ChatController extends ChangeNotifier {
       case SayNetworkError():
         room.timeline.setLocalState(messageId, MessageState.failed);
         _lastError = '网没通，这条没发出去';
+        // ★ 记下来：网一回来就替他再走一次（见 `_networkFailed` 那段）
+        _lastErrorIsNetwork = true;
+        _networkFailed.add(messageId);
+    }
+    // ⚠️ 别的分支都是"服务端明说了什么"（忙 / 太频繁 / 被拒 / 要重新登录…）——
+    //    那些**不是网的事**，不该被下一次"连上了"自动清掉或自动重发。
+    if (outcome is! SayNetworkError) {
+      _networkFailed.remove(messageId);
+      _lastErrorIsNetwork = false;
     }
     // ⚠️ 上面每一条分支都改了那条的态（`sent` 或 `failed`）⇒ 存档要跟着走。
     //    `sent` 存进去时会被降成 `failed`（理由见 `draft_store.storableState`）：
@@ -1543,6 +1590,25 @@ class ChatController extends ChangeNotifier {
     final r = await api.trashRemove(messageIds: messageIds, token: t);
     if (r is TrashOk<bool>) await _forgetTurn(messageIds);
     return r;
+  }
+
+  /// ★ **连回来之后，把"因为网没通"没发出去的那几句自动再走一次**（2026-10-04）。
+  ///
+  /// 🔴 用的是**同一个 `messageId`** ⇒ 服务端幂等（重复那次回 `duplicate`，
+  ///    不落盘、不重放）⇒ **不会让 agent 干两遍**。
+  /// ⚠️ **一次一条**：别在刚连上那一瞬间打一串请求（那正是"网刚恢复"最脆弱的时候）。
+  /// ⚠️ 期间已经成了 / 被撤了 / 正文没了 ⇒ 跳过（不硬发）。
+  Future<void> _retryNetworkFailed() async {
+    if (_networkFailed.isEmpty) return;
+    for (final id in _networkFailed.toList()) {
+      if (_token == null) return; // 退了 / 换了人 ⇒ 一条都不发
+      if (!_networkFailed.contains(id)) continue;
+      if (_textOf(id) == null) {
+        _networkFailed.remove(id);
+        continue;
+      }
+      await resend(id);
+    }
   }
 
   /// 就地收拾"这一轮已经不在了"：藏起来（或丢掉）+ **清本机那两份**。
