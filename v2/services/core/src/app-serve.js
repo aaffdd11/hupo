@@ -16,6 +16,7 @@
 // ⚠️ **不许发 `X-Frame-Options`** —— 发了壳里就嵌不进去（那是"页面白屏"的经典成因）。
 
 import nodeCrypto from 'node:crypto';
+import { SHELL_CSP, SHELL_CSS_PATH, SHELL_JS_PATH, SHELL_PATH, shellCss, shellHtml, shellJs, shellKindOf } from './mini-shell.js';
 import nodeHttp from 'node:http';
 import nodeFs from 'node:fs';
 import nodePath from 'node:path';
@@ -833,6 +834,27 @@ export function createAppServer({
             /* 已经断了 */
           }
         });
+        return;
+      }
+      // ★ **丙（`184`）：壳那一页**（小程序那一屏的浮层由它画 —— 一份实现，网页与手机同一套）。
+      //   🔴 它**不拿钥匙**：里面嵌的是**已经签好名的活地址**（`?u=`），而且那条地址
+      //      在壳里还要再被认一遍（只认 `/w/`|`/a/` 且带 `s=`）。判据 S1–S3。
+      const shellKind = shellKindOf(parsed.pathname ?? '');
+      if (shellKind) {
+        const body = shellKind === 'html' ? shellHtml() : shellKind === 'css' ? shellCss() : shellJs();
+        const type = shellKind === 'html'
+          ? 'text/html; charset=utf-8'
+          : shellKind === 'css'
+            ? 'text/css; charset=utf-8'
+            : 'application/javascript; charset=utf-8';
+        res.writeHead(200, {
+          'content-type': type,
+          'content-security-policy': SHELL_CSP,
+          // ⚠️ 壳**不许**被缓存住（它跟着产品层一起变；缓存住会让旧壳一直跑）
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
+        });
+        res.end(body);
         return;
       }
       if ((parsed.pathname ?? '') === DB_PATH) {
