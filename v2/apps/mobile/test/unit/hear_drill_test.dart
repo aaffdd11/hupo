@@ -111,6 +111,22 @@ void main() {
     expect(again.heard, '');
   });
 
+  test('🔴 同一句被两个段号各来一次 ⇒ **只算一遍**（不许发两遍给对面）', () {
+    // 真机上那一串：`asr/final` 带 index 0、`asr/end` 带 index 1，字一模一样
+    var dr = const HearDrill().startListening();
+    dr = dr.event({'type': 'asr/final', 'text': '你好啊，你怎么没有反应啊？', 'index': 0});
+    dr = dr.event({'type': 'asr/end', 'text': '你好啊，你怎么没有反应啊？', 'index': 1});
+    expect(dr.phase, DrillPhase.thinking);
+    expect((dr.payload()['text'] as String), '你好啊，你怎么没有反应啊？',
+        reason: '★ 两遍要合成一遍（不然发出去对面看到的是他说了两遍）');
+    // 负向对照：**真的说了两遍不一样的话** ⇒ 一个字都不许动
+    final two = const HearDrill().startListening().utterance('今天天气不错，出去走走');
+    expect(two.payload()['text'], '今天天气不错，出去走走');
+    // 半句相同但不是"整句重复" ⇒ 也不动
+    expect(onceOnly('哈哈哈'), '哈哈哈');
+    expect(onceOnly('好吗好吗'), '好吗');
+  });
+
   test('④ 没在等答的时候说一句 = 那是"这一场的第一句"（不许把状态搞乱）', () {
     final dr = const HearDrill().startListening();
     final after = dr.utterance('随便说一句');

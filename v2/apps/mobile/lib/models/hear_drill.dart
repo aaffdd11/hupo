@@ -156,7 +156,7 @@ class HearDrill {
   /// * 正等着他答（`question` 非空）⇒ 这就是那一答：记进 [turns]，回 `thinking`；
   /// * 否则 ⇒ 这是这一场的**第一句**：`first` 记下，回 `thinking`。
   HearDrill utterance(String text, {Hearing? hearing}) {
-    final t = text.trim();
+    final t = onceOnly(text);
     if (t.isEmpty) return this;
     if (question.isNotEmpty) {
       return _copy(
@@ -208,4 +208,19 @@ class HearDrill {
         'text': first.isNotEmpty ? first : said,
         if (turns.isNotEmpty) 'history': turns.map((t) => t.toWire()).toList(),
       };
+}
+
+/// **同一句被说了两遍 ⇒ 只算一遍**（2026-10-04 主人报的"识别的时候出现了两次"）。
+///
+/// 🔴 为什么会重：语音那边**同一句**有时会以**两个段号**各来一次
+///    （`Hearing` 是按段号拼的 ⇒ 段号不同就接成两遍）。后果不只是字难看 ——
+///    这句会**两遍一起发出去**，对面看到的就是他说了两遍。
+/// ⚠️ 只认**正好一分为二、两半逐字相同**那种（半句相同的正常话不受影响）。
+String onceOnly(String raw) {
+  final s = raw.trim();
+  if (s.length < 4 || s.length.isOdd) return s;
+  final half = s.length ~/ 2;
+  final a = s.substring(0, half);
+  final b = s.substring(half);
+  return a == b ? a : s;
 }
