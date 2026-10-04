@@ -12,6 +12,7 @@ import 'package:flutter/foundation.dart';
 import '../models/conn_state.dart';
 import '../models/chat_queue.dart';
 import '../models/hearing_session.dart';
+import '../models/hear_drill.dart';
 import '../models/job_ask.dart';
 import '../models/job_words.dart';
 import '../models/message_state.dart';
@@ -830,6 +831,93 @@ class ChatController extends ChangeNotifier {
     _hearing = _hearing.event(e);
     // ⚠️ 半句也要刷（"实时转文字"就是靠它）；事件很稀（一句一两个），不是热路径
     notifyListeners();
+  }
+
+  // ── ★ 乙期：语音那一档（主人 2026-10-04 · 手册 `D3.14`／`D5.19`／`D5.18`）──
+  //
+  //  一颗圆圈：点一下开始录音、再点一下停 ⇒ 字长在屏幕上 ⇒ **听懂那一层只改错别字** ⇒
+  //  **通顺就自己发出去**（不用点确认）；不确定就问一句，**他答的那句用来修正前面那**句**；
+  //  发出去之后界面把**聊天记录窗口**打开（`voiceSent` 那一个号）。
+  //
+  //  ⚠️ 状态机复用 `models/hear_drill.dart`（就是设置里那场演练那台）—— **不是第二套**：
+  //     甲期那 5 条判据与这一条链子量的是同一件事。
+  //  ⚠️ 这一层**只回话**：字从哪儿来（说话 / 打字兜底）、发不发，全在这一侧决定。
+
+  HearDrill _voiceFlow = const HearDrill();
+
+  /// 现在这一场说到哪儿了（界面照着画：听着 / 在懂 / 在问 / 可以了）。
+  HearDrill get voiceFlow => _voiceFlow;
+
+  /// **发出去几次**（界面据此把那扇聊天记录窗口打开 —— `D3.14`）。
+  int voiceSent = 0;
+
+  /// 那一颗圆圈：按一下开始录，再按一下停。
+  Future<void> toggleVoiceCompose() async {
+    if (_voiceFlow.hearing.listening) {
+      _stopHear();
+      return;
+    }
+    if (_voiceFlow.phase == DrillPhase.thinking) return; // 正在懂，别抢
+    _voiceFlow = _voiceFlow.startListening();
+    notifyListeners();
+    final why = await hearOnce(_onComposeFrame);
+    if (why != null) {
+      _stopHear();
+      _voiceFlow = _voiceFlow.micFailed(why);
+      notifyListeners();
+    }
+  }
+
+  /// **打字那条兜底路**（麦克风真用不了时）：那一句与"说出来的"同一个去处。
+  Future<void> answerVoiceCompose(String text) async {
+    _voiceFlow = _voiceFlow.utterance(text);
+    notifyListeners();
+    await _composeThink();
+  }
+
+  void _onComposeFrame(Map<String, dynamic> e) {
+    final before = _voiceFlow;
+    final after = _voiceFlow.event(e);
+    _voiceFlow = after;
+    notifyListeners();
+    // 他这一段说完了（`asr/end`）⇒ 送进听懂那一层
+    if (before.phase != DrillPhase.thinking && after.phase == DrillPhase.thinking) {
+      unawaited(_composeThink());
+    }
+  }
+
+  /// 听不懂就问；**通顺就发**（这一步不问他"要不要发" —— `D5.19`）。
+  Future<void> _composeThink() async {
+    final t = _token;
+    final payload = _voiceFlow.payload();
+    final said = (payload['text'] as String?) ?? '';
+    if (t == null || said.isEmpty) {
+      _voiceFlow = _voiceFlow.heardBack(ok: false, note: '这句我没听清，再说一遍。');
+      notifyListeners();
+      return;
+    }
+    final history = (payload['history'] as List?)?.cast<Map<String, String>>() ?? const <Map<String, String>>[];
+    final got = await api.hear(t, said, history: history);
+    if (!got.ok) {
+      _voiceFlow = _voiceFlow.heardBack(ok: false, note: got.error ?? '这条现在还接不上，等下再试。');
+      notifyListeners();
+      return;
+    }
+    final next = _voiceFlow.heardBack(ok: true, heard: got.heard!, ask: got.ask);
+    _voiceFlow = next;
+    notifyListeners();
+    if (next.phase == DrillPhase.asking) {
+      // 问回去那一下：**用话说一遍**（念得出来才念）+ 屏幕上一直有字
+      _speak(next.question);
+      return;
+    }
+    if (next.phase == DrillPhase.ready) {
+      final text = next.finalText;
+      _voiceFlow = const HearDrill(); // 这一场收干净
+      voiceSent += 1; // ★ 界面据此把聊天记录窗口打开
+      notifyListeners();
+      await send(text); // ★ **自己发出去**（不点确认）
+    }
   }
 
   // ── ★ 批 7：配置页「语音」那一屏的「试一下」（主人 2026-09-26）──────────
