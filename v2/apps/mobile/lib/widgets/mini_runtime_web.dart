@@ -132,8 +132,13 @@ Widget buildMiniAppView({
         // ⚠️ `allow` 一个都不给：摄像头/麦克风/定位这些它一个都用不上
         ..setAttribute('allow', '');
       f.style.border = 'none';
+      // ⚠️ 绝对定位、四边贴 0（比 `width/height:100%` 更硬：不受行内基线/盒模型影响）
+      f.style.position = 'absolute';
+      f.style.top = '0';
+      f.style.left = '0';
       f.style.width = '100%';
       f.style.height = '100%';
+      f.style.display = 'block';
       f.style.background = 'transparent';
       // 🔴 **小程序那一屏是真的 DOM 元素、压在 Flutter 画布上面**
       //    （`docs/dev/183` §一那段注释）：Flutter 画的按钮**盖不住它、也收不到点击**
@@ -142,10 +147,16 @@ Widget buildMiniAppView({
       //      半透明的圆圈浮在页面右上角）。Flutter 那一颗留给**内置那几屏**
       //      （它们不是平台视图，Flutter 自己就收得到点击）。
       _exits[viewId] = onExit;
+      // 🔴 **2026-10-05 主人截图：右侧一条白边** ⇒ 让这一帧**精确等于槽**
+      //    （`inset: 0` ＋ `overflow: hidden`；iframe 也绝对定位、四边贴 0 ——
+      //     不留"行内元素基线"和"块级宽度"那点缝）。
       final wrap = html.DivElement()
-        ..style.position = 'relative'
-        ..style.width = '100%'
-        ..style.height = '100%';
+        ..style.position = 'absolute'
+        ..style.top = '0'
+        ..style.left = '0'
+        ..style.right = '0'
+        ..style.bottom = '0'
+        ..style.overflow = 'hidden';
       final exitBtn = html.ButtonElement()
         ..className = 'hupo-mini-exit'
         ..text = '✕'

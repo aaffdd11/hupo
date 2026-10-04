@@ -24,6 +24,7 @@
 //    它跑在**容器自己的 `Navigator`** 里，所以它内部怎么跳都**跳不出这个容器**。
 //    （上一代 `mini_app_container.dart` 就是这个形状，`50-DESKTOP-FLOATER.md` §四 记着。）
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
@@ -254,7 +255,11 @@ class _MiniAppHostState extends State<MiniAppHost>
                   //    ⚠️ 网页（含手机浏览器）那条内边距是 0 ⇒ 一个像素都不变。
                   //    ⚠️ 它和底部那条内缩（`_inset`）走**同一个 `Padding`**：一处口径，
                   //      免得页面高度被两处各算一遍。
-                  padding: EdgeInsets.only(top: safe.top, bottom: _inset),
+                  // 🔴 **2026-10-05 主人截图：上方一条白边**。顶上那条内缩是给**安卓 App**
+                  //    的 edge-to-edge 用的（当年"第一行压在时钟底下"）；可**网页里**
+                  //    那条本来就不该有（浏览器自己让开了状态栏）—— 而手机上那条白边
+                  //    就是这么来的 ⇒ **网页一律 0**，安卓那个壳照旧让。
+                  padding: EdgeInsets.only(top: kIsWeb ? 0 : safe.top, bottom: _inset),
                   child: Navigator(
                     key: _nav,
                     onGenerateRoute: (_) =>
