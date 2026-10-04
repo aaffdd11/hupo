@@ -144,7 +144,16 @@ class HearDrill {
     //      原来这里只认"那台状态机走到 `idle`" ⇒ 带原因的收尾全被当成"断了"，
     //      屏幕上就只剩那几个字、**没有后文**。
     if (e['type'] == 'asr/end') {
-      final got = next.text.trim();
+      // 🔴 **用"这一场结束时那一份"，不是把段拼起来**（2026-10-04 主人指出来的）：
+      //    *"应该是用户说完，然后 stream 完成，再去判断语义……stream 进来的 message 可能有两条：
+      //      一条是 stream，还有一条是 stream 结束后的总结。"*
+      //    ⇒ 服务端那条 `asr/end` **带着整段最后那一份字**（`asr.js` 的 `finish(lastText)`），
+      //      它就是"总结"那一份 —— **以它为准**。
+      //    ⚠️ 拼段（`hearing.text`）会得到"半句 ＋ 整句"那种重复/半截文本，
+      //      而那一层就是拿这份去判语义的 ⇒ 判出奇怪的结论（反问、或者发出去两遍）。
+      //    ⚠️ 它没带字（老引擎 / 空收尾）⇒ 退回拼起来那一份（不许一个字都没有）。
+      final summ = (e['text'] as String?)?.trim() ?? '';
+      final got = summ.isNotEmpty ? summ : next.text.trim();
       if (got.isEmpty) return _copy(hearing: next, phase: DrillPhase.failed, note: next.why.isEmpty ? '' : next.why);
       return utterance(got, hearing: next);
     }

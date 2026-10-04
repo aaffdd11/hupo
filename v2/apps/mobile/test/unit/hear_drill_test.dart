@@ -111,6 +111,22 @@ void main() {
     expect(again.heard, '');
   });
 
+  test('🔴 判语义要用**stream 结束那一份（总结）**，不是把段拼起来', () {
+    // 真机那一串：半句 → 整句 → end（带整段那一份）
+    var dr = const HearDrill().startListening();
+    dr = dr.event({'type': 'asr/partial', 'text': '你好啊，你怎么', 'index': 0});
+    dr = dr.event({'type': 'asr/final', 'text': '你好啊，你怎么', 'index': 0});
+    dr = dr.event({'type': 'asr/end', 'text': '你好啊，你怎么没有东西反应啊？', 'index': 0, 'reason': 'upstream'});
+    expect(dr.phase, DrillPhase.thinking);
+    expect(dr.payload()['text'], '你好啊，你怎么没有东西反应啊？',
+        reason: '★ 送去判语义的必须是**整段那一份**');
+    // 负向对照：end 没带字（老引擎）⇒ 退回拼起来那一份（不许一个字都没有）
+    var old = const HearDrill().startListening();
+    old = old.event({'type': 'asr/final', 'text': '帮我看看天气', 'index': 0});
+    old = old.event({'type': 'asr/end'});
+    expect(old.payload()['text'], '帮我看看天气');
+  });
+
   test('🔴 同一句被两个段号各来一次 ⇒ **只算一遍**（不许发两遍给对面）', () {
     // 真机上那一串：`asr/final` 带 index 0、`asr/end` 带 index 1，字一模一样
     var dr = const HearDrill().startListening();
