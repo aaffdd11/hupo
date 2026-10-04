@@ -27,7 +27,7 @@ void main() {
     expect(dr.phase, DrillPhase.idle);
 
     // 按一下麦 ⇒ 在听
-    dr = dr.tapMic();
+    dr = dr.startListening();
     expect(dr.phase, DrillPhase.listening);
 
     // 听到一段字（半句也显示）
@@ -46,8 +46,8 @@ void main() {
     expect(dr.phase, DrillPhase.asking);
     expect(dr.question, '是上周还是上个月？');
 
-    // 他答一句（语音那条路：又是一句）
-    dr = dr.answer('上周');
+    // 他答一句（语音那条路：`asr/end` 带回来的字走同一个去处）
+    dr = dr.utterance('上周');
     expect(dr.phase, DrillPhase.thinking);
     expect(dr.turns.length, 1);
     expect(dr.turns.first.ask, '是上周还是上个月？');
@@ -65,14 +65,14 @@ void main() {
   });
 
   test('② 🔴 最多问两轮：到上限就按已经听懂的那份走（不吹毛求疵）', () {
-    var dr = const HearDrill().tapMic().event(_final('上周的账')).event(_end());
+    var dr = const HearDrill().startListening().event(_final('上周的账')).event(_end());
     dr = dr.heardBack(ok: true, heard: '上周的账', ask: '哪一周？');
     expect(dr.phase, DrillPhase.asking);
-    dr = dr.answer('上一周');
+    dr = dr.utterance('上一周');
     dr = dr.heardBack(ok: true, heard: '上周的账', ask: '要不要按天分开？');
     expect(dr.phase, DrillPhase.asking, reason: '第二轮还能问');
     expect(dr.round, 1);
-    dr = dr.answer('要');
+    dr = dr.utterance('要');
     expect(dr.canAskMore, false, reason: '★ 问满两轮了');
     // 它还想问 ⇒ **不许再问**：按当前这份走
     dr = dr.heardBack(ok: true, heard: '上周的账，按天分开。', ask: '要发给谁吗？');
@@ -84,14 +84,14 @@ void main() {
   test('③ 没成 / 开不了麦 / 没听到 —— 每一档都说得出口，而且都不发送', () {
     // 那一层没答上来（网不通 / 那边没接上）
     final no = const HearDrill()
-        .tapMic()
+        .startListening()
         .event(_final('嗯'))
         .event(_end())
         .heardBack(ok: false, note: '这条现在还接不上，等下再试');
     expect(no.phase, DrillPhase.failed);
     expect(no.note, '这条现在还接不上，等下再试');
     // 一个字都没听到（对面说完了，可 text 是空的）
-    final nothing = const HearDrill().tapMic().event(_end());
+    final nothing = const HearDrill().startListening().event(_end());
     expect(nothing.phase, DrillPhase.failed);
     // 开麦就失败
     final denied = const HearDrill().micFailed('没给权限');
@@ -111,9 +111,12 @@ void main() {
     expect(again.heard, '');
   });
 
-  test('④ 不在"在问"的时候答一句 = 不算数（不许把状态搞乱）', () {
-    final dr = const HearDrill().tapMic();
-    expect(dr.answer('随便说一句').turns, isEmpty);
+  test('④ 没在等答的时候说一句 = 那是"这一场的第一句"（不许把状态搞乱）', () {
+    final dr = const HearDrill().startListening();
+    final after = dr.utterance('随便说一句');
+    expect(after.turns, isEmpty);
+    expect(after.phase, DrillPhase.thinking, reason: '当成第一句往下走');
+    expect(after.first, '随便说一句');
   });
 
   test('🔴 ⑤ 与服务端那个上限对表：两边都是 2（写死两处迟早漂）', () {

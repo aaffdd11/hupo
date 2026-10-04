@@ -19,6 +19,7 @@ import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/screens/hear_drill_screen.dart';
 import 'package:hupo_app/screens/settings_screen.dart';
+import 'package:hupo_app/services/hearing.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
@@ -105,6 +106,36 @@ Future<void> _typeAndSend(WidgetTester tester, String text) async {
   }
 }
 
+/// **一条假的"真开麦"**（把原生那个钩子装上 ⇒ 界面上那颗麦就会画出来）。
+///
+/// 🔴 这一条是**补的**：2026-10-04 主人在真机上试出来"能转文字、没有后文" ——
+///    根子是**麦克风那条路从没被判据走过**（打字那条路验了，说话那条没有）。
+///    这一份就照着**真机那一串帧**喂：`asr/ready` → `asr/partial` → `asr/final` → `asr/end`，
+///    而且 `asr/end` **带原因**（网页那一份在停顿处收尾时就是带原因的）。
+class _FakeHearing implements NativeHearingApi {
+  void Function(Map<String, dynamic>)? _on;
+  bool started = false;
+
+  @override
+  bool get canHear => true;
+
+  @override
+  Future<String?> start({
+    required Uri url,
+    required String token,
+    required void Function(Map<String, dynamic>) onEvent,
+  }) async {
+    started = true;
+    _on = onEvent;
+    return null;
+  }
+
+  @override
+  void stop() {}
+
+  void push(Map<String, dynamic> e) => _on?.call(e);
+}
+
 void main() {
   testWidgets('🔴 从设置进得去，整条链子走一遍；**一次都不发出去**', (tester) async {
     final s = await _pump(tester);
@@ -174,5 +205,45 @@ void main() {
     expect(find.textContaining('第 3 遍听懂的'), findsOneWidget, reason: '★ 到上限就按这份走');
     expect(find.text(hearDrillReadyFoot), findsOneWidget);
     expect(s.sayCalls, 0, reason: '★★ 还是不许发');
+  });
+
+  testWidgets('🔴 用嘴说那条路：字出来了就要有**后文**（问一句 / 最终那一份）', (tester) async {
+    final fake = _FakeHearing();
+    nativeHearingApi = fake;
+    addTearDown(clearNativeHearing);
+
+    final s = await _pump(tester);
+    await _openDrill(tester);
+    // 这颗麦：开得了 ⇒ 界面上就该有它
+    expect(find.byKey(hearDrillMicKey), findsOneWidget);
+    await tester.tap(find.byKey(hearDrillMicKey));
+    await tester.pump();
+    expect(fake.started, true, reason: '前提：麦真开起来了');
+
+    // ── 真机那一串帧（收尾**带原因** —— 网页那一份在停顿处就是这样）──
+    fake.push({'type': 'asr/ready'});
+    fake.push({'type': 'asr/partial', 'text': '帮我把上周的账'});
+    await tester.pump();
+    expect(find.textContaining('帮我把上周的账'), findsWidgets, reason: '半句也要看得见');
+    fake.push({'type': 'asr/final', 'text': '帮我把上周的账理一下'});
+    fake.push({'type': 'asr/end', 'text': '帮我把上周的账理一下', 'reason': 'upstream'});
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+    // ★ 这一条就是主人报的那个缺陷：原来是**没有后文**（一个字都不再动）
+    expect(s.hearCalls, 1, reason: '★ 说完了就要送进听懂那一层（带原因收尾也算说完）');
+    expect(find.text('是上周还是上个月？'), findsOneWidget, reason: '★ 要有后文：它得问回来');
+
+    // ── 他答一句（还是用嘴）⇒ 最终那一份 ──
+    await tester.tap(find.byKey(hearDrillMicKey));
+    await tester.pump();
+    fake.push({'type': 'asr/final', 'text': '上周'});
+    fake.push({'type': 'asr/end', 'text': '上周'});
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+    expect(s.hearCalls, 2, reason: '★ 答完要再懂一遍');
+    expect(find.text('帮我把上周的账理清楚。'), findsOneWidget, reason: '★ 最终那一份要看得见');
+    expect(s.sayCalls, 0, reason: '★★ 演练里仍然一次都不发');
   });
 }

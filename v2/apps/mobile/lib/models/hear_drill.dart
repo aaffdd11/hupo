@@ -122,8 +122,14 @@ class HearDrill {
         note: note ?? this.note,
       );
 
-  /// **按了一下那颗麦**：开始听（上一场的字与错都清掉 —— 他在重试）。
-  HearDrill tapMic() => HearDrill(phase: DrillPhase.listening, hearing: const Hearing().tapped());
+  /// **按了一下那颗麦**：开始听。
+  ///
+  /// 🔴 **上下文一个字都不许丢**：他答那一句时也走这一个动作 ——
+  ///    把 `first` / `heard` / `turns` 清掉，第二轮送上去的就只剩一句"上周"了。
+  ///    （2026-10-04 主人真机上试出来的那个"能转文字、没有后文"，根子就在这一族：
+  ///     这一层当时只认"从零开始的那一下"。）
+  HearDrill startListening() => _copy(phase: DrillPhase.listening, hearing: const Hearing().tapped(), note: '');
+
 
   /// 语音那边回来的一帧（**原样喂给那台状态机**，与聊天那颗话筒同一条路）。
   ///
@@ -131,38 +137,49 @@ class HearDrill {
   HearDrill event(Map<String, dynamic> e) {
     if (phase != DrillPhase.listening) return this;
     final next = hearing.event(e);
-    if (next.phase == HearingPhase.idle) {
-      // 对面说"这一段完了" ⇒ 该送进听懂那一层了（界面看到 `thinking` 就去问）
+    // 🔴 **`asr/end` ＝ "他这一段说完了"** —— 这就是该送进听懂那一层的那一刻。
+    //   ⚠️ **不看引擎给的那个 `reason`**：真机（网页那一份）在**每次停顿**处都会收一段，
+    //      而且往往带 `upstream`/`engine` —— 那是"这一段结束了"，**不是"这一场断了"**
+    //      （`voice_try.dart` 那一屏为同一件事专门写过一个模型）。
+    //      原来这里只认"那台状态机走到 `idle`" ⇒ 带原因的收尾全被当成"断了"，
+    //      屏幕上就只剩那几个字、**没有后文**。
+    if (e['type'] == 'asr/end') {
       final got = next.text.trim();
-      if (got.isEmpty) return _copy(hearing: next, phase: DrillPhase.failed, note: next.why);
-      return _copy(
-        hearing: next,
-        phase: DrillPhase.thinking,
-        note: '',
-        // 第一轮那一句**留着**（后面每一轮送的都是它，见 [first]）
-        first: turns.isEmpty ? got : first,
-      );
+      if (got.isEmpty) return _copy(hearing: next, phase: DrillPhase.failed, note: next.why.isEmpty ? '' : next.why);
+      return utterance(got, hearing: next);
     }
     return _copy(hearing: next, note: next.why.isEmpty ? '' : next.why);
+  }
+
+  /// **他这一句（或这一答）是什么** —— 麦克风那条与打字那条**同一个去处**。
+  ///
+  /// * 正等着他答（`question` 非空）⇒ 这就是那一答：记进 [turns]，回 `thinking`；
+  /// * 否则 ⇒ 这是这一场的**第一句**：`first` 记下，回 `thinking`。
+  HearDrill utterance(String text, {Hearing? hearing}) {
+    final t = text.trim();
+    if (t.isEmpty) return this;
+    if (question.isNotEmpty) {
+      return _copy(
+        phase: DrillPhase.thinking,
+        hearing: hearing,
+        turns: [...turns, DrillTurn(ask: question, answer: t)],
+        question: '',
+        note: '',
+      );
+    }
+    return _copy(
+      phase: DrillPhase.thinking,
+      hearing: hearing,
+      first: turns.isEmpty ? t : first,
+      note: '',
+    );
   }
 
   /// **打字那条兜底路**（开不了麦的机器上才有）：把这一句当成"他说的"。
   ///
   /// ⚠️ 与真说话走的是**同一个去处**（进 `thinking` ⇒ 界面拿去问那一层），
   ///    只是没有经过麦克风。开不了麦就**别装作能听**：界面上给的是这一格。
-  HearDrill saidByTyping(String text) {
-    final t = text.trim();
-    if (t.isEmpty) return this;
-    return HearDrill(
-      phase: DrillPhase.thinking,
-      hearing: const Hearing(),
-      heard: heard,
-      first: turns.isEmpty ? t : first,
-      turns: turns,
-      done: false,
-      note: '',
-    );
-  }
+  HearDrill saidByTyping(String text) => utterance(text, hearing: const Hearing());
 
   /// 开麦那一步就失败了（权限 / 没配钥匙 / 开不了）。
   HearDrill micFailed(String why) => _copy(phase: DrillPhase.failed, hearing: hearing.unavailable(), note: why);
@@ -179,20 +196,6 @@ class HearDrill {
       return _copy(phase: DrillPhase.ready, heard: heard, question: '', done: true, note: '');
     }
     return _copy(phase: DrillPhase.asking, heard: heard, question: wants, note: '');
-  }
-
-  /// **他答了那一句**（语音转文字来的，或者是打字兜底那条路）。
-  ///
-  /// ⇒ 把这一轮记下来，再回到"在听懂"（界面看到 `thinking` 就拿新的这一份再问一次）。
-  HearDrill answer(String text) {
-    if (phase != DrillPhase.asking) return this;
-    final a = text.trim();
-    if (a.isEmpty) return this;
-    return _copy(
-      phase: DrillPhase.thinking,
-      turns: [...turns, DrillTurn(ask: question, answer: a)],
-      question: '',
-    );
   }
 
   /// 这一场重来。

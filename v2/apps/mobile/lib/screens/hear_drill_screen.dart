@@ -18,7 +18,6 @@ import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
 import '../models/hear_drill.dart';
-import '../models/hearing_session.dart';
 import '../models/hear_words.dart';
 import '../services/chat_controller.dart';
 import '../services/speech.dart' as speech;
@@ -64,17 +63,14 @@ class _HearDrillScreenState extends State<HearDrillScreen> {
       _c.stopHearingNow();
       return;
     }
-    _set(_drill.tapMic());
+    _set(_drill.startListening());
     final why = await _c.hearOnce((e) {
       final before = _drill;
       final after = _drill.event(e);
       _set(after);
-      // 对面说"这一段完了" ⇒ 该送进听懂那一层了（`thinking` 就是那个信号）
+      // 他这一段说完了（`asr/end`）⇒ 该送进听懂那一层了（`thinking` 就是那个信号）
       if (before.phase != DrillPhase.thinking && after.phase == DrillPhase.thinking) {
         unawaited(_think());
-      }
-      if (after.phase == DrillPhase.failed && after.hearing.phase == HearingPhase.idle) {
-        // 什么都没听到：**如实说**（那台状态机已经把它写进 note）
       }
     });
     if (why != null) {
@@ -125,11 +121,11 @@ class _HearDrillScreenState extends State<HearDrillScreen> {
     }
   }
 
-  /// 他答了一句（语音那条路：又按一次麦说；或者打字兜底）。
+  /// 他答了一句 / 说了第一句（**打字那条兜底路**；麦克风那条走 `_tapMic` → `event`）。
   Future<void> _answer(String text) async {
     final a = text.trim();
     if (a.isEmpty) return;
-    _set(_drill.answer(a));
+    _set(_drill.utterance(a));
     _type.clear();
     await _think();
   }
@@ -276,15 +272,8 @@ class _HearDrillScreenState extends State<HearDrillScreen> {
               onPressed: _busy
                   ? null
                   : () {
-                      if (_drill.phase == DrillPhase.asking) {
-                        unawaited(_answer(_type.text));
-                      } else {
-                        final v = _type.text.trim();
-                        if (v.isEmpty) return;
-                        _type.clear();
-                        _set(_drill.saidByTyping(v));
-                        unawaited(_think());
-                      }
+                      // 两条路都走 `_answer`（它就是 `utterance` ＋ 问那一层）
+                      unawaited(_answer(_type.text));
                     },
               child: const Text(hearDrillAnswer),
             ),
