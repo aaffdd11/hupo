@@ -1327,9 +1327,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// （`D3.14` 甲）—— 是的话 Flutter 这一侧**一件都不许再画**，而且内容**不许留边**。
   bool _domChromeFor(ChatController c) {
     if (!kIsWeb || _openApp == null || !_openApp!.startsWith(_minePrefix)) return false;
-    final mine = _openMine();
-    if (mine == null) return false; // 认不出 ⇒ 不当作"页面画了"（宁可多画一颗，也别两颗都没有）
-    return miniAppDomChrome(mine.entryUrl);
+    // 🔴 **2026-10-04 主人：*"说过了，语音按钮在最上层。小程序里面怎么也有语音按钮？不应该有这个按钮。"***
+    //   ⇒ 这是**又出现了两颗**（跟当初那两个 ✕ 同一个病）：原来这里还问了一句
+    //     `miniAppDomChrome(...)`（= "页面那一层建出来了吗"），而它**建得比这一帧晚**
+    //     ⇒ 头几帧判 false ⇒ Flutter 这一颗画了，随后页面那一颗也建出来 ⇒ **两颗**。
+    //   ⇒ 判据只按**这一屏是不是他自己的小程序 ＋ 网页**（与页面那一层建不建是同一件事，
+    //     只是**不再看它建好了没有**）—— 一个竞态都不留。
+    return true;
   }
 
   /// **页面那一层那句字**现在该显示什么（`D3.14` 甲）。
