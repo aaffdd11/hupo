@@ -202,6 +202,16 @@ export class AppWorkspaces {
     log = () => {},
     env = process.env,
     uid = process.getuid?.(),
+    /**
+     * ★ **2026-10-04：这一间的"占位页"被真内容顶掉的那一刻**（主人要的"在建图标"）。
+     *
+     * 桌面那一格在"他一行字都还没写"时画**灰的在建图标**（`apps.js` 的 `building`）；
+     * 到了这一刻它就**不灰了** ⇒ 得让界面知道"可以重拉清单了"。
+     * ⚠️ 复用现成那条"桌面可能变了"的信号（`app/installed`，宿主侧接在 `worlds.js`）——
+     *    **不新造事件类型**（协议纪律 2：能加不破，但没必要就不加）。
+     * ⚠️ 只在**入口那一份**的占位被顶掉时叫一次（不是每写一个文件都叫）。
+     */
+    onReady = null,
   }) {
     if (!dir) throw new AppsError('dir 必填');
     this.dir = dir;
@@ -210,6 +220,49 @@ export class AppWorkspaces {
     this.log = log;
     this.env = env;
     this.uid = uid;
+    this.onReady = onReady;
+  }
+
+  /**
+   * ★ **这一间还在做吗**（＝ 打开它**没有真东西可看**）。
+   *
+   * ── 判据（两条，任一成立就是"还在做"）──────────────────────
+   *   ① **入口那一份文件不在**（`ensure()` 那页占位被顶掉之后、真入口还没写进来
+   *      —— 这正是"刚建出来、还在做"的样子）；
+   *   ② 入口在，但它**逐字节还是我们写的那页占位**（清单 `placeholder` 里记着它的 hash）。
+   *
+   * 🔴 **为什么不是"看 `placeholder` 那一格还在不在"**：`write()` 会在**任何一次写入**
+   *    时把"没被改写过的占位文件"删掉（既有行为）⇒ 只写了一个 `note.txt` 也会让那一格
+   *    消失，而那间**仍然没有东西可看**。用它当判据会在"还在做"的时候把灰的摘掉。
+   *
+   * ⚠️ **没有清单 / 读不出来 ⇒ `false`**："不知道"**不许**当成"还在做"
+   *    （把一个做好的小程序画成灰的，比"晚一秒才变灰"坏得多）。
+   */
+  isBuilding(scope) {
+    let man = null;
+    let dir = null;
+    try {
+      const id = checkScope(scope);
+      man = this.manifestOf(id);
+      dir = this.dirFor(id);
+    } catch {
+      return false;
+    }
+    if (!man || !dir) return false;
+    const entry = typeof man.entry === 'string' && man.entry !== '' ? man.entry : 'index.html';
+    let bytes = null;
+    try {
+      bytes = this.fs.readFileSync(nodePath.join(dir, entry));
+    } catch {
+      return true; // ① 入口不在 ⇒ 打开它什么都没有 ⇒ 还在做
+    }
+    const sha = man.placeholder && typeof man.placeholder === 'object' ? man.placeholder[entry] : null;
+    if (typeof sha !== 'string' || sha === '') return false; // 没有占位记录 ⇒ 当它是真内容
+    try {
+      return sha256hex(bytes) === sha; // ② 还是那页占位
+    } catch {
+      return false;
+    }
   }
 
   /** 工作区根（`<dir>/workspaces`）。它**不在**主目录里面 —— 平行。 */
@@ -439,6 +492,20 @@ export class AppWorkspaces {
       }
       man.placeholder = kept;
       writeAtomic(this.fs, this.manifestPath(id), Buffer.from(`${JSON.stringify(man, null, 2)}\n`), 0o644);
+    }
+    // ★ **"入口那一份被写进来了"** ⇒ 叫一声（桌面据此重拉清单：那一格可能不再"在建"）。
+    //   ⚠️ 判据看的是**写进来的文件名**，不是"占位那一格还在不在"
+    //      （后者只写一个 `note.txt` 也会变 —— 那间其实还没东西可看）。
+    if (man) {
+      const entryRel = typeof man.entry === 'string' && man.entry !== '' ? man.entry : 'index.html';
+      if (checked.some((f) => f.rel === entryRel)) {
+        try {
+          this.onReady?.(id);
+        } catch (err) {
+          // ⚠️ 喊不出去不许让"内容写成了"这件事失败（内容已经落盘了）
+          this.log(`  ⚠️ "${id} 入口写好了"那一声没喊出去：${err?.message ?? err}`);
+        }
+      }
     }
     // ★ 新写的那些文件也要交给干活的那个 uid（同上）
     this.hand(id);

@@ -499,6 +499,24 @@ export class Apps {
     this.dbCalls = new Map();
   }
 
+  /**
+   * ★ **2026-10-04：这一格现在是不是"在建"**（主人要的"灰色的在建图标"）。
+   *
+   * 🔴 事实只有一个出处：**工作区那一间里，入口还是不是我们写的占位页**
+   *    （`AppWorkspaces.isBuilding()`）—— 不另存一个会漂的字段。
+   * ⚠️ 取不到工作区那一层（老部署 / 单测 / 盒代理）⇒ **`false`**
+   *    （"不知道"不许画成"在建"：那会把做好的小程序显示成灰的）。
+   */
+  #building(id) {
+    const w = this.#liveWorkspaces();
+    if (!w || typeof w.isBuilding !== 'function') return false;
+    try {
+      return w.isBuilding(id) === true;
+    } catch {
+      return false;
+    }
+  }
+
   /** 惰性取"活的那一份"要用的那两样（工作区）。取不到 ⇒ `null`（调用方如实说）。 */
   #liveWorkspaces() {
     try {
@@ -616,6 +634,8 @@ export class Apps {
         minShellVersion: m.minShellVersion,
         createdAt: m.createdAt,
         live: false,
+        /** ★ 桌面画不画"灰的在建图标"（2026-10-04） */
+        building: this.#building(id),
       };
     }
     if (v === null) {
@@ -634,6 +654,8 @@ export class Apps {
         minShellVersion: 1,
         createdAt: live.createdAt ?? null,
         live: true,
+        /** ★ 桌面画不画"灰的在建图标"（2026-10-04） */
+        building: this.#building(id),
       };
     }
     const m = this.manifest(id, v);
@@ -653,6 +675,8 @@ export class Apps {
       minShellVersion: m.minShellVersion,
       createdAt: live.createdAt ?? m.createdAt,
       live: true,
+      /** ★ 桌面画不画"灰的在建图标"（2026-10-04） */
+      building: this.#building(id),
     };
   }
 

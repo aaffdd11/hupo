@@ -35,6 +35,7 @@ class MiniApp {
     this.granted,
     this.unanswered,
     this.net = const [],
+    this.building = false,
     this.expiresAt = 0,
   });
 
@@ -76,6 +77,14 @@ class MiniApp {
   /// ⚠️ 只有**打开时那张弹窗**会摆出来（"它想连的是这几个站"）—— 那是他**要点头
   ///    才生效**的那一样里唯一会让他意外的细节。设置页那张卡上**不摆**（摆一列域名看不懂）。
   final List<String> net;
+
+  /// ★ **它还在做**（`/api/apps` 回的 `building` · 2026-10-04 主人要的"灰色的在建图标"）。
+  ///
+  /// 🔴 服务端那条事实：**这一间的入口还是那个占位页**（`workspace.isPlaceholder()`）
+  ///    ⇒ 桌面上那一格画**灰的、转着圈的在建图标**，点它**不打开**（只说一句"还在做"）。
+  /// ⚠️ **缺字段 / 不是 `true` ⇒ `false`**（老服务端不给这个字段 ⇒ 照旧画正常图标；
+  ///    把一个做好的小程序画成灰的，比"晚一秒才变灰"坏得多）。
+  final bool building;
 
   /// 这条 URL 什么时候过期（毫秒）。
   final int expiresAt;
@@ -175,6 +184,8 @@ class MiniApp {
       granted: granted,
       unanswered: unanswered,
       net: hosts,
+      // ⚠️ 只有**明说 `true`** 才算在建（缺字段 / 别的值 ⇒ 照旧）
+      building: raw['building'] == true,
       expiresAt: expires,
     );
   }

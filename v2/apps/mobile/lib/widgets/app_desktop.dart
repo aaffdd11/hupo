@@ -57,6 +57,7 @@ class DesktopApp {
     this.onRename,
     this.onCopy,
     this.isCreate = false,
+    this.isBuilding = false,
   });
 
   final String label;
@@ -98,6 +99,13 @@ class DesktopApp {
   /// 未读小点（`02-ARCHITECTURE.md`：**动作可静默，事实不能静默**）。
   /// `0` = 不画。⚠️ 现在还没有人给它赋值 —— 等真有"未读"这件事时再接。
   final int badge;
+
+  /// ★ **这一格还在做**（`/api/apps` 的 `building` · 2026-10-04 主人：
+  ///   *"icon 是一个灰色的在建图标。就像 ios 那个开发中的那个。"*）。
+  ///
+  /// 🔴 长得跟别的不一样：**灰底 ＋ 灰图形 ＋ 转一圈的圈**（不是它那个亮色底）。
+  /// ⚠️ 点它**不打开**（那一间里只有一页"这里还空着"）—— 由上层接 [onOpen] 时说一句。
+  final bool isBuilding;
 }
 
 /// 图标格边长：**≥44** 是 D3.6 的硬要求。
@@ -106,6 +114,9 @@ class DesktopApp {
 ///   "不会拼音 / 视力弱"的人（`01-PROJECT.md`），52 那一档在手机上看着像一粒纽扣。
 ///   判据 `test/widget/desktop_test.dart` 钉住"不许再缩回去"。
 const double desktopIconBox = 64;
+
+/// 桌面上那一格图标的 key（判据量它的底色：**在建 = 灰的** · 2026-10-04）。
+Key desktopIconBoxKey(String label) => ValueKey<String>('desktop-box-$label');
 
 /// **加号那一格**里那个加号多大（比普通图标大一点：它没有名字可认，全靠形状）。
 /// ⚠️ 它量的是**图形**；命中区仍由整个图标格（`desktopIconBox` ≥44）撑着。
@@ -443,6 +454,9 @@ class _DesktopIconState extends State<_DesktopIcon> {
             children: [
               // 图标格：**永远是那个小方块**（`desktopIconBox`，≥44 见 D3.6）
               Container(
+                // ★ 给判据用的（量"在建那一格的底色是不是灰的"）——
+                //   名字是桌上唯一认得出这一格的东西（id 在界面上带前缀）。
+                key: desktopIconBoxKey(app.label),
                 width: desktopIconBox,
                 height: desktopIconBox,
                 decoration: BoxDecoration(
@@ -452,7 +466,11 @@ class _DesktopIconState extends State<_DesktopIcon> {
                   //   ⇒ 底色**按这个 app 的身份算**（`appTintFor`，同一个 app 永远同一色；
                   //     没有 id 的用名字兜底 —— 桌面上不许出现"没底"的一格）。
                   //   ⚠️ 图标本身还是**墨色**（下面那行），底色那一族都够浅（见 `app_tint.dart`）。
-                  color: app.isCreate ? Colors.transparent : appTintFor(app.id ?? app.label),
+                  // ★ 在建那一格**不按它的身份色**（主人要的"灰色"）—— 一眼看出"还没好"；
+                  //   ⚠️ 仍然不是透明的（那是一格实心的灰，不是"空位"）。
+                  color: app.isCreate
+                      ? Colors.transparent
+                      : (app.isBuilding ? d.line : appTintFor(app.id ?? app.label)),
                   borderRadius: BorderRadius.circular(d.radiusCard),
                   // ★ 主人 2026-09-22：*"小程序图标要有阴影。"*
                   //   浅一点（图标是一小块，用浮窗那种 α.45 会脏）
@@ -475,12 +493,28 @@ class _DesktopIconState extends State<_DesktopIcon> {
                         opacity: hideIcon ? 0 : 1,
                         child: Icon(
                           app.icon,
-                          color: app.isCreate ? d.muted : d.ink,
+                          // ★ 在建：图形也是灰的（那个亮色底已经不在了）
+                          color: (app.isCreate || app.isBuilding) ? d.muted : d.ink,
                           // 加号那一格：**大一点**（它没有名字可认，全靠形状）
                           size: app.isCreate ? desktopAddIconSize : null,
                         ),
                       ),
                     ),
+                    // ★ **在建的那一圈**（主人：*"就像 ios 那个开发中的那个"*）——
+                    //   一个转着的细圈压在图形上，一眼看出"它在动、还没好"。
+                    //   ⚠️ 只在**在建**时画；命中区仍由整格撑着（D3.6 那条不算它）。
+                    if (app.isBuilding)
+                      Center(
+                        child: SizedBox(
+                          width: desktopIconBox * 0.62,
+                          height: desktopIconBox * 0.62,
+                          child: const CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: d.ink,
+                            backgroundColor: Colors.transparent,
+                          ),
+                        ),
+                      ),
                     if (app.badge > 0)
                       Positioned(
                         top: d.gapS,

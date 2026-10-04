@@ -664,7 +664,20 @@ export class Worlds {
     //   ⚠️ 保留 id 那道闸**不在这层**（`UserWorkspaces` 已删）：它住 `apps.js`，
     //      由 `AppWorkspaces.ensure/write` 与 `apps.create` 两个写入漏斗共用一个函数
     //      （见上面 `RESERVED_APP_SCOPES` 那段说明）。
-    const workspaces = new AppWorkspaces({ dir: t.dir, log: (m) => this.#warn(m) });
+    const workspaces = new AppWorkspaces({
+      dir: t.dir,
+      log: (m) => this.#warn(m),
+      // ★ **2026-10-04：入口那份占位页被真内容顶掉的那一刻** ⇒ 让他的桌面自己重拉清单
+      //   （那一格从"灰的在建图标"变成正常图标）。**复用现成那条信号**
+      //   （`app/installed` 的语义就是"桌面可能变了"），不新造事件类型。
+      onReady: (id) => {
+        try {
+          timeline.emitTransient({ type: 'app/installed', appId: id, title: titleOfApp(apps, id) ?? null });
+        } catch (err) {
+          this.#warn(`  ⚠️ ${t.userId} 的"做完了"没喊出去：${err?.message ?? err}`);
+        }
+      },
+    });
     // ★ **用量账（93 §五）**：**按 app（scopeId）记 token**，含它触发的子任务；
     //   落 `<dir>/hupo/apps/<id>/usage.jsonl`（**贴现有布局，不新造第二套**）。
     //   ⚠️ 它只记量（token 三格／次数／张数／秒数），**不记任何访问日志**。

@@ -793,7 +793,14 @@ class _ChatScreenState extends State<ChatScreen> {
                     label: a.title,
                     id: '$_minePrefix${a.id}',
                     icon: miniAppIconFor(a.icon),
-                    onOpen: (from) => _openMiniApp(from, '$_minePrefix${a.id}'),
+                    // ★ **还在做**（`/api/apps` 的 `building` · 2026-10-04）：
+                    //   那一格画**灰的、转着圈的在建图标**（主人：*"就像 ios 那个开发中的那个"*）。
+                    isBuilding: a.building,
+                    // 🔴 在建的那一格**点了不打开**（那一间里只有一页"这里还空着"）——
+                    //   但要**说一句**（点了没反应 = 屏幕上说假话），所以走 `_say`。
+                    onOpen: (from) => a.building
+                        ? _say(appBuildingLine)
+                        : _openMiniApp(from, '$_minePrefix${a.id}'),
                     // ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §一 ·
                     //   `docs/dev/104-APP-MENU.md` §一）：
                     //   **只有"他自己做的那几个"才给这个面板** —— 内置那几格

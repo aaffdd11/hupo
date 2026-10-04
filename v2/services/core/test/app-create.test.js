@@ -193,6 +193,50 @@ test('S2 `registerBlankApp`：建工作区 ＋ 登记 ＋ 占位页；描述存�
 });
 
 // ════════════════════════════════════════════════════════════
+// S2′ —— ★ 2026-10-04：桌面那一格**"在建"**（主人：*"icon 是一个灰色的在建图标。
+//        就像 ios 那个开发中的那个。"*）
+// ════════════════════════════════════════════════════════════
+test('S2′ 占位页还在 ⇒ `building=true`；入口被真内容顶掉 ⇒ `false`（含负向对照）', () => {
+  const root = tmp();
+  const ready = [];
+  const workspaces = new AppWorkspaces({
+    dir: nodePath.join(root, 'workspaces'),
+    now: () => NOW,
+    onReady: (id) => ready.push(id),
+  });
+  // 🔴 与生产同一条接线：`Apps` 要拿得到工作区那一层才判得出"在建"
+  const apps = new Apps({ dir: nodePath.join(root, 'apps'), sub: 'u1', live: () => ({ workspaces }) });
+
+  registerBlankApp({ apps, workspaces, id: 'zaijian', title: '在建的' });
+  // ⚠️ 断言打在 `meta()` / `list()` 上 —— 那**正是桌面读的那两条路**
+  //    （`register()` 的返回值是**落盘那份 `app.json`**：`building` 是**算出来的**，
+  //     不许写进那个文件，否则它就成了一个会漂的存量字段）
+  assert.equal(apps.meta('zaijian').building, true, '★ 刚建出来（只有占位页）⇒ 桌面该画"在建"');
+  assert.equal(apps.list().find((a) => a.id === 'zaijian').building, true, '清单那一份也一样');
+
+  // 🔴 负向对照：写一份**别的**文件（入口那份还是占位）⇒ **仍然在建**
+  workspaces.write('zaijian', { 'note.txt': '先记一笔' });
+  assert.equal(apps.meta('zaijian').building, true, '入口没换 ⇒ 不该摘掉"在建"');
+  assert.deepEqual(ready, [], '★ 那一声"做完了"这时候**一次都不许叫**');
+
+  // 真内容来了（入口那一份被顶掉）⇒ 不再在建，而且**叫一声**（桌面据此重拉清单）
+  workspaces.write('zaijian', { 'index.html': '<!doctype html><html><body>真的内容</body></html>' });
+  assert.equal(apps.meta('zaijian').building, false, '★ 入口换成真内容 ⇒ 不该再画灰的');
+  assert.deepEqual(ready, ['zaijian'], '★ "做完了"那一声要叫，而且只叫一次');
+
+  // 负向对照：**没接工作区那一层**（老部署 / 盒代理）⇒ `building` 一律 false
+  //   （"不知道"不许画成"在建"：那会把做好的小程序显示成灰的）
+  const bare = new Apps({ dir: nodePath.join(root, 'apps2'), sub: 'u1' });
+  registerBlankApp({
+    apps: bare,
+    workspaces: new AppWorkspaces({ dir: nodePath.join(root, 'workspaces2'), now: () => NOW }),
+    id: 'bare',
+    title: '没接线那一份',
+  });
+  assert.equal(bare.meta('bare').building, false, '★ 拿不到工作区 ⇒ 不许说"在建"');
+});
+
+// ════════════════════════════════════════════════════════════
 // S3 —— 那一条 HTTP 口（主人这一份）：名字必填 · 描述可选 · 清单里马上看得见
 // ════════════════════════════════════════════════════════════
 test('S3 `/api/app-create`：建成 ⇒ 清单立刻看得见 ＋ 盘上有占位页；空名字 / 太长的都拒', async (t) => {
