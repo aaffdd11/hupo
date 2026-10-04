@@ -411,7 +411,7 @@ export function loadConfig(env = process.env, cwd = process.cwd()) {
      *    关掉之后 agent 一卡就是永远卡，而且它还永远占着一个位置
      *    （`running` 恒真 ⇒ LRU"跑着的不许卸" ⇒ 永不淘汰）。
      */
-    turnDeadlineMs: Number.parseInt(env.HUPO_TURN_DEADLINE_MS ?? '180000', 10),
+    turnDeadlineMs: Number.parseInt(env.HUPO_TURN_DEADLINE_MS ?? '0', 10),
 
     /**
      * **预审那次模型调用的上限**（96 第 3／4 条 · `review-agent.js`）。
@@ -568,12 +568,14 @@ export function preflight(cfg) {
     );
   }
 
-  // ⚠️ 硬收口可以被设成 0（关掉），但**必须大声说出来**——
-  //    关掉之后 agent 卡住就是永远卡住，而现场看起来只是"它今天有点慢"。
+  // ⚠️ `0` = 不设那一枪。**今天这就是默认**（主人 2026-10-04：*"不设时长限制"*），
+  //    所以这里不再把它当"异常配置"报警，但仍要把代价**大声说一遍**：
+  //    没有那一枪之后，真卡住的那一轮就没有收尾了。
   if (!Number.isFinite(cfg.turnDeadlineMs) || cfg.turnDeadlineMs < 0) {
     problems.push(`turnDeadlineMs 必须 ≥0，收到 ${cfg.turnDeadlineMs}`);
   } else if (cfg.turnDeadlineMs === 0) {
-    notes.push('⚠️ 单轮硬收口被关掉了（turnDeadlineMs=0）——agent 卡住就不会有收尾。**生产上不该这样。**');
+    notes.push('单轮硬收口：**关着**（turnDeadlineMs=0，主人 2026-10-04 定的）——'
+      + '卡住的那一轮靠"进程死了"那条心跳判定兜底，**没有时间上限**。');
   }
   return { problems, notes };
 }
