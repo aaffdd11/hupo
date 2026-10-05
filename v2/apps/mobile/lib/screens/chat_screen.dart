@@ -491,6 +491,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     // ★ **"读出来"这个开关**存盘读过一次（设备级偏好；读不出来当关）。
     unawaited(widget.controller.loadAutoSpeak());
+    // ★ **2026-10-05：网页的音色是异步给的** ⇒ 到位之后重建一次，
+    //   那颗「播放语音」才会出现（不然要等下一次别的原因重建 —— 见 `speech_web.dart`）。
+    //   ⚠️ 念不出来的平台这一句是空操作。
+    watchSpeakReady(() {
+      if (mounted) setState(() {});
+    });
     // ★ **我的小程序**（乙-1）：登录之后拉一次。⚠️ 拉不到就是空清单，**不许**因此把界面弄坏。
     unawaited(_loadMyApps());
     // ⚠️ **首屏也要跟一次**：本机缓存那一屏（`17-LOCAL-FIRST.md`）可能
@@ -1000,6 +1006,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   setState(() => _barH = h);
                 }
               },
+              // ★ **2026-10-05 主人**：*"语音按钮的右侧，需要两个按钮。一个是展开聊天，
+              //   一个是播放语音。"* —— 那两颗由浮窗画在输入条右边（它跟那颗圆圈同一行）。
+              //   ⚠️ 展开那颗是**浮窗自己的**（同一个 key），这里只需给"播放语音"那一颗。
+              //   🔴 念不出来的设备（`canSpeak` 假）⇒ `onToggleSpeak` 传 `null` ⇒ 不画。
+              speakOn: c.autoSpeak,
+              onToggleSpeak: canSpeak ? () => unawaited(c.setAutoSpeak(!c.autoSpeak)) : null,
               child: _sheetBody(c),
             ),
           ),

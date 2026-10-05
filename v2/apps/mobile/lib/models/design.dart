@@ -129,6 +129,13 @@ const Duration recPulsePeriod = Duration(milliseconds: 900);
 const Color accentLit = Color(0xFFE2684F);
 const Duration recBlinkPeriod = Duration(milliseconds: 800);
 
+/// ★ **2026-10-05：录音圆圈右边那两颗**（展开聊天 / 播放语音）。
+///
+/// 主人：*"语音按钮的右侧，需要两个按钮。"* ⇒ 两颗都是**图形按钮**，
+/// 但命中区照旧 ≥44（D3.6 硬闸）：这一档是"好点"的保证，不是好看的保证。
+const double voiceAuxBox = 44;
+const double voiceAuxIcon = 22;
+
 /// ── 一条规矩（2026-09-23 整理 UI 时定下来）──────────────────
 ///
 /// **平面用描边，浮起来用阴影，两样不许同时上。**

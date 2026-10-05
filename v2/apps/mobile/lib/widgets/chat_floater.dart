@@ -43,6 +43,7 @@ import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
 import '../models/dsh_design.dart';
+import '../models/speak_words.dart';
 import '../models/space_words.dart';
 import 'appearance_scope.dart';
 import 'dsh_look.dart';
@@ -64,6 +65,9 @@ const Key chatHandleKey = Key('chat-handle');
 
 /// **右侧那颗「收起聊天」按钮**的 key（判据用它点它 —— 字与 tooltip 都可能有别的同名）。
 const Key chatCollapseKey = Key('chat-collapse');
+
+/// **那一行最右那颗「播放语音」**的 key（开启 / 关停；判据用它点它、也用它读状态）。
+const Key chatSpeakKey = Key('chat-speak');
 
 /// 浮窗自己的几条常量（**不散在代码里**）。
 class FloaterMetrics {
@@ -111,6 +115,8 @@ class ChatFloater extends StatefulWidget {
     this.initialTier = FloaterTier.collapsed,
     this.onTier,
     this.onHeight,
+    this.speakOn = false,
+    this.onToggleSpeak,
   });
 
   /// **父层量好给它的可用高度**（父层是 `LayoutBuilder`）。
@@ -143,6 +149,18 @@ class ChatFloater extends StatefulWidget {
   /// ⚠️ 收起档的高度是**内容算出来**的（D3.5）⇒ 只能**画完再报**，
   ///    所以它在 post-frame 里回调；上层自己判"变了没有"再 setState（免得抖）。
   final ValueChanged<double>? onHeight;
+
+  /// ★ **2026-10-05 主人**：*"语音按钮的右侧，需要两个按钮。一个是展开聊天，
+  ///   一个是播放语音。"*
+  ///
+  /// ⇒ 收起档那一行现在是：**（他说的话 ＋ 那颗圆圈）＋ 展开 ＋ 播放语音**。
+  ///    展开那颗就是原来"录音圆圈上方"那颗（同一个 key、同一个形状，只是**挪到了右边**）。
+  ///
+  /// 播放语音 = **开启 / 关停**那一个状态（`speakOn`）：开着 ⇒ 它新说的话会被念出来。
+  /// ⚠️ 念不出来的设备（`services/speech.dart` 的 `canSpeak`）**一个按钮都不许画** ——
+  ///    屏幕上不许出现按不动的东西；那种设备上 `onToggleSpeak` 传 `null`。
+  final bool speakOn;
+  final VoidCallback? onToggleSpeak;
 
   @override
   State<ChatFloater> createState() => ChatFloaterState();
@@ -435,51 +453,27 @@ class ChatFloaterState extends State<ChatFloater> {
                       //        （那根 44×4 的杠删掉）。
                       //   ⚠️ 拖动（§6.3：竖向拖 = 改高度）跟着这一行走：
                       //      收起态绑在抓手这一行、**展开态绑在标题行**（下面那个 `Listener`）。
+                      // ★ **2026-10-05（主人定的最终形状）**：*"语音按钮的右侧，需要两个按钮。
+                      //   一个是展开聊天，一个是播放语音。"*
+                      //   ⇒ 收起档那一行 = **（他说的话 ＋ 那颗圆圈）＋ 展开 ＋ 播放语音**。
+                      //     ⚠️ 展开那颗**不再是"圆圈上方那一行"**（那一行整条撤掉：省下的正是
+                      //        主人一直在嫌的那点占地），它只是**挪到了右边**（同一个 key/形状）。
+                      //     ⚠️ 拖动（§6.3：竖向拖 = 改高度）改绑在**整条 bar** 上：
+                      //        `Listener` 不吃子节点的事件 ⇒ 圆圈与那两颗照样点得动。
                       if (collapsed)
                         Listener(
                           behavior: HitTestBehavior.opaque,
                           onPointerDown: _onDown,
                           onPointerMove: _onMove,
                           onPointerUp: _onUp,
-                          // ★ **2026-10-04 主人：*"展开聊天的按钮，放到录音按钮上方。"***
-                          //   ⇒ 收起档那个展开入口（那颗平箭头）从**正中央**挪到**右边**，
-                          //     也就是**顶在录音那颗圆圈上方**（不再占中间那一条）。
-                          //   ⚠️ 位置与圆圈对齐（右边留出圆圈那一列），展开 ⇄ 收起都在同一处。
-                          // 🔴 **2026-10-05 补第二处**：光靠"贴浮窗右边"还不够 ——
-                          //   输入条那一格是 **`d.contentMaxWidth` 居中**的（宽屏上它比浮窗窄）
-                          //   ⇒ 圆圈其实在**那一列的右边**。所以这里套**同一格限宽**，
-                          //   箭头的中心才与圆圈的中心**同一条竖线**（截图量过：不套就差 250 像素）。
-                          child: Center(
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(
-                                maxWidth: d.contentMaxWidth,
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.only(top: 2),
-                                // ⚠️ **要占满整行**再靠右（`Align` 单摆会被 Column 居中）。
-                                // 🔴 **真正的坑在 `_handle` 里那颗 `Center`**（2026-10-05 查出来的）：
-                                //    `Center` 会**撑满给它的宽度**再把内容摆中间 ⇒ 外面这层
-                                //    `Align(centerRight)` 摆的是一个"整行宽的盒子"⇒ 屏幕上那颗箭头
-                                //    **还在正中央**（主人报过、截图两次作证）。⇒ 两处一起改：
-                                //    ① `_handle` 不再自带 `Center`；② 这里给它**一颗圆圈那么宽**的
-                                //    格子（`d.voiceCircleBox`），它就跟右下角那颗圆圈**同一列**了。
-                                child: SizedBox(
-                                  width: double.infinity,
-                                  child: Align(
-                                    alignment: Alignment.centerRight,
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(right: d.gapM),
-                                      // 🔴 宽度 = 那颗圆圈 ⇒ 箭头中心与圆圈中心**同一条竖线**
-                                      //    （主人 2026-10-04：*"展开聊天的按钮，放到录音按钮上方。"*）
-                                      child: SizedBox(
-                                        width: d.voiceCircleBox,
-                                        child: _handle(p),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
+                          child: Row(
+                            children: [
+                              Expanded(child: widget.composer),
+                              _handle(p),
+                              // 念不出来的设备**一个按钮都不画**（`onToggleSpeak` 传 null）
+                              if (widget.onToggleSpeak != null) _speakButton(p),
+                              const SizedBox(width: d.gapS),
+                            ],
                           ),
                         ),
                       // ── 展开态：标题行（**收起态不画它** —— 那一档就是"一行"）──
@@ -538,11 +532,9 @@ class ChatFloaterState extends State<ChatFloater> {
                           ),
                         ),
                         ),
-                      // 收起态：**只画输入条**（时间线不画 —— 免得它被压成一条时还在偷偷布局，
-                      // 那正是上一版溢出的来源）。主人 2026-09-22："收缩的时候也有一个输入框。"
-                      if (collapsed)
-                        widget.composer
-                      else ...[
+                      // 收起态那一行**上面已经画过了**（`Row` 里那一个 `Expanded`）——
+                      // 这一支只剩"展开态"要补的东西。
+                      if (!collapsed) ...[
                         // ★ 批次 4：发丝线（0.5，不是 1.0）＋ 这一档的描边色。
                         Divider(
                           height: 1,
@@ -561,12 +553,11 @@ class ChatFloaterState extends State<ChatFloater> {
   /// **抓手**（主人 2026-09-24 那条杠 ＋ 2026-10-04 挪位）：**平的小箭头**。
   ///
   /// 🔴 三条约束，缺一条都会退回到"上一版那种看不出来的东西"：
-  ///   ① **位置**：它在**右下角那颗录音圆圈的正上方**（主人 2026-10-04 原话：
-  ///      *"展开聊天的按钮，放到录音按钮上方。"*）—— 由**调用处**给它一颗圆圈那么宽的
-  ///      格子来对齐（这里**不要**自带 `Center`：那玩意儿会撑满整行 ⇒ 又回到正中央）；
+  ///   ① **位置**：它在**录音圆圈右边那一颗**（主人 2026-10-05 定的最终形状：
+  ///      *"语音按钮的右侧，需要两个按钮。一个是展开聊天，一个是播放语音。"*
+  ///      ⇒ 它不再自己找位置，由**那一行**摆（`Row` 里紧跟输入条那一格）；
   ///   ② **箭头要平**（浅角 —— 26×7 ≈ 15°，不是那种尖尖的 `keyboard_arrow_up`）；
-  ///   ③ **命中区 ≥44**（D3.6）：那颗按钮给的是 **96×44**，图形只占中间一小块
-  ///      （外面那格窄到比 96 还窄时按约束走，仍 ≥44）。
+  ///   ③ **命中区 ≥44**（D3.6）：那颗按钮给的是 **44×44**，图形只占中间一小块。
   ///
   /// ⚠️ **单击 = 收起 ⇄ 展开**（不再有双击：两次单击会互相抵消 ⇒ "点了没反应"）。
   /// ⚠️ 字挂在 `Tooltip`（web 上悬停看得见）+ 无障碍名上（D3.8 的"带字"由 2026-09-24 改掉）。
@@ -579,8 +570,9 @@ class ChatFloaterState extends State<ChatFloater> {
       onPressed: () => _setTier(_lastOpen, auto: false),
       style: TextButton.styleFrom(
         // 命中区 ≥44（D3.6，硬闸）：图形只有 26×7，外面这一圈是"好点"的保证
-        minimumSize: const Size(96, 44),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+        // （两年前给的是 96 宽；2026-10-05 它并进那一行之后收成 44 —— 仍等于下限）
+        minimumSize: const Size(44, 44),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
         foregroundColor: p.labelTertiary,
       ),
       // 🔴 2026-09-29：**那根杠删掉了**（主人：*"我不要那根杠了。"*）——
@@ -597,6 +589,33 @@ class ChatFloaterState extends State<ChatFloater> {
     return Tooltip(
       message: '展开',
       child: Semantics(button: true, label: '展开', child: button),
+    );
+  }
+
+  /// **播放语音**那一颗（主人 2026-10-05）：*"所谓播放语音，就是开启和关停的状态，
+  ///   如果开启，会将对 agent 的回复进行语音转换和实时播报。如果关闭，则不播报。"*
+  ///
+  /// * 开 = 实心喇叭 + **琥珀色**（状态一眼看得出）；关 = 划掉的喇叭 + 弱色；
+  /// * 命中区 ≥44（D3.6 硬闸）；
+  /// * 🔴 **念不出来的设备根本不画它**（调用处 `onToggleSpeak` 传 `null`）；
+  /// * 字挂在 `Tooltip` 与无障碍名上（`models/speak_words.dart` 一处出处）。
+  Widget _speakButton(DshPalette p) {
+    final on = widget.speakOn;
+    return Tooltip(
+      message: on ? speakAutoHintOn : speakAutoHintOff,
+      child: Semantics(
+        button: true,
+        toggled: on,
+        label: speakAutoOnWords,
+        child: IconButton(
+          key: chatSpeakKey,
+          onPressed: widget.onToggleSpeak,
+          // 命中区 ≥44（D3.6）：`IconButton` 默认就是 48×48，不另写尺寸
+          iconSize: d.voiceAuxIcon,
+          color: on ? d.accent : p.labelTertiary,
+          icon: Icon(on ? Icons.volume_up_rounded : Icons.volume_off_rounded),
+        ),
+      ),
     );
   }
 }

@@ -9,6 +9,8 @@
 //      不是我们在传；界面上那句"读出来"说的就是这个能力，不承诺"纯本地"。）
 
 // ignore: avoid_web_libraries_in_flutter, deprecated_member_use
+import 'dart:async';
+// ignore: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'dart:html' as html;
 
 /// 网页上**能不能念**：光有 `speechSynthesis` 不够，还得**真有音色**。
@@ -28,6 +30,33 @@ bool get canSpeak {
     return synth.getVoices().isNotEmpty;
   } catch (_) {
     return false; // 问不出来 ⇒ 当作念不了（不画比画一个假的强）
+  }
+}
+
+/// **音色到位时举手一次**（2026-10-05 加的）。
+///
+/// 🔴 为什么非要它：浏览器给音色是**异步**的（`onVoicesChanged`），而 `canSpeak` 是
+///    **同步**读的 ⇒ 页面第一帧上"还没有音色" ⇒ 那颗「播放语音」**先不画**。
+///    没有这一手的话，它要等到**下一次重建**才出现 —— 而主人刚说完"要下这颗按钮"，
+///    打开页面却看不见它，那就是"我要的东西没做"（哪怕它下一秒会冒出来）。
+/// ⇒ 界面在 `initState` 里叫一次它；音色到位就叫回来（**只叫一次**，幂等）。
+void watchSpeakReady(void Function() onReady) {
+  final synth = html.window.speechSynthesis;
+  if (synth == null) return;
+  try {
+    if (synth.getVoices().isNotEmpty) {
+      // 已经到位 ⇒ 晚一步叫（`initState` 里同步 setState 是不许的）
+      scheduleMicrotask(onReady);
+      return;
+    }
+    // ⚠️ 事件名**只有一处写法**（`dart:html` 的 `SpeechSynthesis` 没有现成的 getter）
+    html.EventStreamProvider<html.Event>('voiceschanged')
+        .forTarget(synth)
+        .listen((_) {
+      if (synth.getVoices().isNotEmpty) onReady();
+    });
+  } catch (_) {
+    // 问不出来 ⇒ 什么都不做（界面那一侧按"念不了"走）
   }
 }
 

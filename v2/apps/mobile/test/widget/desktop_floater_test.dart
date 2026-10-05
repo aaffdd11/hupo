@@ -377,24 +377,20 @@ void main() {
     expect(desk.size, screen.size, reason: '桌面该铺满整屏（实测过它只有 ${desk.size}）');
   });
 
-  testWidgets('🔴 抓手的命中区 ≥44，而且**就在上边框正中央**（D3.6 + 主人 2026-09-24）', (tester) async {
+  testWidgets('🔴 抓手的命中区 ≥44，而且它在**录音圆圈右边那一行**（D3.6 + 主人 2026-10-05）', (tester) async {
     await _pump(tester);
-    // 图形本身小（26×7 的箭头 + 44×4 的杠），但**它那个按钮**要够大
+    // 图形本身小（26×7 的箭头），但**它那个按钮**要够大
     final btn = tester.getRect(find.byKey(chatHandleKey));
     expect(btn.height >= 44, true, reason: '抓手命中区只有 ${btn.height}');
     expect(btn.width >= 44, true, reason: '抓手命中区只有 ${btn.width}');
-    // ★ 位置：**上边框的正中央**（主人原话）
+    // ★ 位置：主人 2026-10-05 定的是"**语音按钮的右侧**两颗按钮"——
+    //   它不再在浮窗顶上（那一行整条撤掉了）、也不在正中央：
+    //   🔴 它在**下面那一行**，而且在**右半边**（录音圆圈再往右）。
     final f = _floaterRect(tester);
-    expect(
-      (btn.center.dx - f.center.dx).abs() < 1,
-      true,
-      reason: '抓手该在水平正中（差 ${(btn.center.dx - f.center.dx).abs()}）',
-    );
-    expect(
-      (btn.top - f.top).abs() < 6,
-      true,
-      reason: '抓手该贴着上边框（差 ${(btn.top - f.top).abs()}）',
-    );
+    expect(btn.center.dx > f.center.dx, true,
+        reason: '抓手该在右半边（差 ${btn.center.dx - f.center.dx}）—— 主人要的是"语音按钮的右侧"');
+    expect(btn.center.dy > f.center.dy, true,
+        reason: '抓手该在**下面那一行**（差 ${btn.center.dy - f.center.dy}）—— 顶上那一行撤掉了');
   });
 
   testWidgets('🔴 收起 ⇄ 展开各有一颗看得见的东西负责（2026-09-29 换过形状）', (tester) async {

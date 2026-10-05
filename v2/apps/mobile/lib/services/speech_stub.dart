@@ -12,3 +12,7 @@ bool speakAloud(String text, {void Function()? onEnd}) => false;
 
 /// 没什么可停的。
 void stopSpeaking() {}
+
+/// **音色到位时举手**（网页那一份等浏览器异步给音色）—— 这一份**没有那种事**：
+/// 念不出来的平台永远不会"稍后就能念了" ⇒ 空操作。
+void watchSpeakReady(void Function() onReady) {}
