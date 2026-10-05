@@ -137,15 +137,23 @@ const Duration recBlinkPeriod = Duration(milliseconds: 800);
 ///   展开在上，开启关闭在下。然后他们都要有一个长方形的按钮轮廓。"*）：
 ///   那两颗改成**竖着叠一列**（在录音圆圈的右边），每颗都是**长方形 ＋ 一圈轮廓**。
 ///   ⚠️ **宽 = 那颗圆圈的宽**（一列对齐它），**高 ≥44**（D3.6 硬闸：它俩是要点的东西）。
-const double voiceAuxW = 64;
+/// ⚠️ **2026-10-05 再改**（主人：*"那两个按钮可以缩小一些，然后需要底色的。"*）：
+///   看得见的那一块**缩小**，而且**要有底色**（原来只有一圈线，压在壁纸上像个空框）。
+/// 🔴 **缩小的只是"看得见的那一块"**：手势能打到的那一格仍是 [voiceAuxW]×[voiceAuxH]
+///   （D3.6 原话就是"视觉仍小，用透明 padding 撑命中区"）—— 判据量的是**布局盒子**。
+const double voiceAuxW = 44;
 const double voiceAuxH = 44;
-const double voiceAuxGap = 4;
+const double voiceAuxGap = 2;
 
-/// 那一列里每一颗的圆角（长方形，不是圆 —— 与聊天窗口那几颗按钮同一族的形状）。
-const double voiceAuxRadius = 12;
+/// **看得见的那一块**（里面那个有底色的长方形）。
+const double voiceAuxFaceW = 40;
+const double voiceAuxFaceH = 28;
 
-/// 里面那个图形的大小（两支箭头的宽 / 喇叭）。
-const double voiceAuxIcon = 22;
+/// 那一块的圆角（长方形，不是圆 —— 与聊天窗口那几颗按钮同一族的形状）。
+const double voiceAuxRadius = 9;
+
+/// 里面那个图形的大小（那支箭头 / 喇叭）。
+const double voiceAuxIcon = 18;
 
 /// ── 一条规矩（2026-09-23 整理 UI 时定下来）──────────────────
 ///

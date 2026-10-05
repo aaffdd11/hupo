@@ -157,3 +157,19 @@
 **判据**（`test/widget/voice_buttons_test.dart` ①）：两颗**同一条竖线**（`dx` 相等）、
 **展开在上**（`bottom <= speak.top`）、两颗都有**圆角矩形轮廓**且 `width > 0`
 （负向对照：没有轮廓 / 轮廓宽度为 0 都会被点出来）。
+
+### 6.6 缩小一些 ＋ 要有底色（主人 2026-10-05 原话）
+
+> *「那两个按钮可以缩小一些，然后需要底色的。」*
+
+* **看得见的那一块缩小**：`Container` 40×28（`voiceAuxFaceW/H`，圆角 9），里面图形 18；
+* **要有底色**：平时 `d.card`（与录音那颗圆圈同一个底）＋ 一圈弱描边（`p.borderL3`）；
+  **开着**的「播放语音」整块 `d.accent` ＋ 白图形（状态一眼看得出）；
+* 🔴 **手势那一格不动**：外面仍是 44×44（`voiceAuxW/H`，`tapTargetSize: shrinkWrap`）——
+  这正是 D3.6 那句"**视觉仍小，用透明 padding 撑命中区**"；
+  判据量的是**布局盒子**（`accessibility_test` 的 `sweep()`），所以两边都成立。
+* 这一列的高度随之从 92 落到 90（44+2+44），浮窗那条 bar 也跟着矮一点。
+
+**判据**（`test/widget/voice_buttons_test.dart` ①）：那次量的是**里面那一块**
+（`Container` 的 `BoxDecoration`）——**有底色**（`color != null`）、**有轮廓**（`border`）、
+**是圆角矩形**（`borderRadius != null`），而且**它比手势那一格小**（缩小的负向对照）。

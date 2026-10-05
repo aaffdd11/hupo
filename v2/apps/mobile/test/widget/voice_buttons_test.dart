@@ -77,15 +77,24 @@ void main() {
         reason: '★ 上下关系反了：展开该在**上**（${expand.center.dy} vs ${speak.center.dy}）');
     expect(expand.bottom <= speak.top + 0.5, true, reason: '★ 两颗叠在一起了（该是上下两格）');
 
-    // 🔴 **两颗都要有"长方形的按钮轮廓"**（主人 2026-10-05 原话）
+    // 🔴 **两颗都是"长方形 ＋ 一圈轮廓 ＋ 有底色"**（主人 2026-10-05：
+    //   *"他们都要有一个长方形的按钮轮廓"* + *"需要底色的"*）
+    //   ⚠️ 看得见的那一块在**按钮里面**（外面那一格是透明的、只撑命中区 ≥44）——
+    //      所以这里量的是里面那块 `Container`。
     for (final (name, k) in [('展开', chatHandleKey), ('播放', chatSpeakKey)]) {
-      final b = tester.widget<TextButton>(find.byKey(k));
-      final shape = b.style?.shape?.resolve({});
-      expect(shape, isA<RoundedRectangleBorder>(),
-          reason: '★ $name 那颗不是长方形（圆角矩形）');
-      final side = b.style?.side?.resolve({});
-      expect(side, isNotNull, reason: '★ $name 那颗没有轮廓');
-      expect(side!.width > 0, isTrue, reason: '★ $name 那颗的轮廓宽度是 0（等于没画）');
+      final face = tester.widget<Container>(
+        find.descendant(of: find.byKey(k), matching: find.byType(Container)).first,
+      );
+      final box = face.decoration! as BoxDecoration;
+      expect(box.color, isNotNull, reason: '★ $name 那颗没有底色');
+      expect(box.border, isNotNull, reason: '★ $name 那颗没有轮廓');
+      expect(box.border!.top.width > 0, isTrue, reason: '★ $name 那颗的轮廓宽度是 0（等于没画）');
+      expect(box.borderRadius, isNotNull, reason: '★ $name 那颗不是长方形（圆角矩形）');
+      // 看得见的那一块**要比手势那一格小**（D3.6：视觉仍小、命中区撑够）
+      final r = tester.getSize(find.descendant(of: find.byKey(k), matching: find.byType(Container)).first);
+      final hit = tester.getSize(find.byKey(k));
+      expect(r.width < hit.width || r.height < hit.height, isTrue,
+          reason: '★ $name 那颗"缩小"没生效（看得见那块 $r vs 命中区 $hit）');
     }
 
     // 🔴 命中区 ≥44（D3.6 硬闸）—— 两颗都要

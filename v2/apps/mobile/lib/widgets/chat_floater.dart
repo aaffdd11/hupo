@@ -455,22 +455,33 @@ class ChatFloaterState extends State<ChatFloater> {
         ],
       );
 
-  /// 那一列里每颗按钮的**共同样子**：长方形 ＋ 一圈轮廓（主人 2026-10-05 要的"轮廓"）。
+  /// 那一列里每颗按钮的**共同样子**：外面是**透明的一格**（只撑命中区 ≥44），
+  /// 里面那块**看得见的长方形**由 [_auxFace] 画（**有底色 ＋ 一圈轮廓**）。
   ///
-  /// ⚠️ 尺寸住 `design.dart`（`voiceAuxW/H/Radius`）：宽 = 那颗圆圈的宽（一列对齐它），
-  ///    高 ≥44（D3.6 硬闸 —— 它俩是要点的东西）。
-  ButtonStyle _auxStyle(DshPalette p, {bool lit = false}) => TextButton.styleFrom(
+  /// ⚠️ 尺寸住 `design.dart`：`voiceAuxW/H` = 手势能打到的那一格（D3.6 硬闸量的就是它），
+  ///    `voiceAuxFaceW/H` = 看得见的那一块（主人 2026-10-05："可以缩小一些，然后需要底色的"）。
+  ButtonStyle _auxStyle() => TextButton.styleFrom(
         minimumSize: const Size(d.voiceAuxW, d.voiceAuxH),
         padding: EdgeInsets.zero,
-        // ⚠️ Material 默认 `padded` 会把点击区撑到 48 ⇒ 与"空位"那一格差 4 像素
+        // ⚠️ Material 默认 `padded` 会把盒子撑到 48 ⇒ 与"空位"那一格差 4 像素
         //    （2026-10-05 判据当场量到 506 vs 510）⇒ shrinkWrap 让它就是那个尺寸
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        foregroundColor: lit ? d.accent : p.labelTertiary,
-        // 🔴 **那一圈轮廓**（"长方形的按钮轮廓"）：亮着的时候用琥珀色，平时用弱线
-        side: BorderSide(color: lit ? d.accent : p.borderL3),
-        shape: RoundedRectangleBorder(
+      );
+
+  /// **看得见的那一块**：长方形 ＋ 底色（开着的时候是琥珀底白图形，关着是纸底墨图形）。
+  ///
+  /// 🔴 它必须**小于**外面那一格 —— 这是 D3.6 那条"视觉仍小、命中区撑够"的落点。
+  Widget _auxFace(DshPalette p, {required bool lit, required Widget child}) => Container(
+        width: d.voiceAuxFaceW,
+        height: d.voiceAuxFaceH,
+        decoration: BoxDecoration(
+          // ★ 底色（主人 2026-10-05 要的）：平时就是那张纸（与录音那颗圆圈同一个底），
+          //   开着时整块变琥珀 —— 状态一眼看得出
+          color: lit ? d.accent : d.card,
           borderRadius: BorderRadius.circular(d.voiceAuxRadius),
+          border: Border.all(color: lit ? d.accent : p.borderL3),
         ),
+        child: Center(child: child),
       );
 
   /// **展开**那一颗（**上面那颗**）：那颗"平"的小箭头。
@@ -481,10 +492,14 @@ class ChatFloaterState extends State<ChatFloater> {
     final button = TextButton(
       key: chatHandleKey,
       onPressed: expand,
-      style: _auxStyle(p),
-      child: CustomPaint(
-        size: const Size(26, 7),
-        painter: _FlatChevron(color: p.labelTertiary, up: true),
+      style: _auxStyle(),
+      child: _auxFace(
+        p,
+        lit: false,
+        child: CustomPaint(
+          size: const Size(22, 6),
+          painter: _FlatChevron(color: p.labelTertiary, up: true),
+        ),
       ),
     );
     return Tooltip(
@@ -511,10 +526,15 @@ class ChatFloaterState extends State<ChatFloater> {
         child: TextButton(
           key: chatSpeakKey,
           onPressed: widget.onToggleSpeak,
-          style: _auxStyle(p, lit: on),
-          child: Icon(
-            on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-            size: d.voiceAuxIcon,
+          style: _auxStyle(),
+          child: _auxFace(
+            p,
+            lit: on,
+            child: Icon(
+              on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+              size: d.voiceAuxIcon,
+              color: on ? d.card : p.labelTertiary,
+            ),
           ),
         ),
       ),
