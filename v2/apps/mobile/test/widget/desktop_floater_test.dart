@@ -233,7 +233,8 @@ void main() {
     await tester.tap(find.byType(TextField));
     await tester.pumpAndSettle();
 
-    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '★ 点输入框 ⇒ 窗口该打开');
+    // ⚠️ 2026-10-05：展开态里「收起」有**两颗**了（标题行那颗 ＋ 录音旁边那颗翻过来的）
+    expect(find.byTooltip(chatCollapse), findsWidgets, reason: '★ 点输入框 ⇒ 窗口该打开');
     expect(find.byKey(chatBodyKey), findsOneWidget, reason: '打开之后时间线那一块该在');
     expect(
       tester.widget<TextField>(find.byType(TextField)).controller!.text,
@@ -276,7 +277,7 @@ void main() {
 
     expect(_floaterRect(tester).height > before, true,
         reason: '★ 从收起态发出去 ⇒ 该拉满（$before → ${_floaterRect(tester).height}）');
-    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '拉满之后该有「收起」');
+    expect(find.byTooltip(chatCollapse), findsWidgets, reason: '拉满之后该有「收起」');
   });
 
   testWidgets('🔴 点「展开」⇒ 真的开（时间线那一块出来、多出「收起」）', (tester) async {
@@ -284,14 +285,14 @@ void main() {
     expect(find.byTooltip(chatCollapse), findsNothing);
     await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
-    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '开了之后该有「收起」');
+    expect(find.byTooltip(chatCollapse), findsWidgets, reason: '开了之后该有「收起」');
     expect(find.byKey(chatBodyKey), findsOneWidget, reason: '开了之后状态条 + 时间线该在');
-    // 🔴 2026-09-29 主人：*"展开对话那一小排的占地空间太大……展开后右上角有个收起按钮。"*
-    //    ⇒ **展开态那一行整条不画了**（收起来的出口 = 标题行右端那颗「收起」）。
-    expect(find.byKey(chatHandleKey), findsNothing,
-        reason: '★ 展开态还占着一整行抓手 ⇒ 那一行的空间又白花了');
+    // ★ **2026-10-05 主人改了这一处**：*"把它变成展开以后是变成缩小窗口的按钮啊，
+    //   所以它位置就不变"* ⇒ 展开态那一颗**还在原处**（不再留空），只是朝下、点它收起。
+    expect(find.byKey(chatHandleKey), findsOneWidget,
+        reason: '★ 展开态那一颗该"翻成收起"（位置不许动）');
     // 而它带来的代价要如实钉住：**滑动改高度**在展开态改绑在**标题行**上（§6.3）
-    expect(find.byTooltip(chatCollapse), findsOneWidget);
+    expect(find.byTooltip(chatCollapse), findsWidgets);
   });
 
   testWidgets('🔴 点桌面空白 ⇒ 收起；点浮窗**内部** ⇒ 无反应（负向对照）', (tester) async {
@@ -305,7 +306,7 @@ void main() {
     await tester.tap(find.text(appName));
     await tester.pumpAndSettle();
     expect(_floaterRect(tester).height, before, reason: '点浮窗内部不该动它（更不该漏到桌面）');
-    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '还是展开着');
+    expect(find.byTooltip(chatCollapse), findsWidgets, reason: '还是展开着');
 
     // ② 点桌面空白 ⇒ 收起。
     //    ⚠️ **得点浮窗盖不到的地方**：桌面现在是整页底图，浮窗贴底盖住了中间那一大块，
@@ -409,16 +410,16 @@ void main() {
     expect(find.byKey(chatHandleKey), findsOneWidget, reason: '收起态该有那颗平箭头');
     await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
-    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '点平箭头该再展开');
+    expect(find.byTooltip(chatCollapse), findsWidgets, reason: '点平箭头该再展开');
   });
 
   // ── ★ 2026-09-29：**展开态不再单独占一行**（主人："展开对话那一小排的占地空间太大。
   //    我不要那根杠了。" ＋ "展开后右上角有个收起按钮。"）────────────────────
 
-  testWidgets('🔴 展开态**没有**那一行抓手；收起态**只剩箭头**（那根杠没了）', (tester) async {
+  testWidgets('🔴 展开态**不再单独占一行**（同一颗按钮翻成收起）；收起态**只剩箭头**', (tester) async {
     await _pump(tester, tier: FloaterTier.full);
-    expect(find.byKey(chatHandleKey), findsNothing,
-        reason: '★ 展开态还占着一整行抓手 —— 那一行的空间白花了');
+    expect(find.byKey(chatHandleKey), findsOneWidget,
+        reason: '★ 展开态那颗该在（翻成收起），不是消失');
 
     // 省下来的空间**要能量得出来**：标题行上沿离浮窗上沿只有那一点点内边距
     final floater = _floaterRect(tester);
@@ -429,16 +430,18 @@ void main() {
     expect(title.top - floater.top, lessThan(30),
         reason: '★ 标题行上面还压着一块（差 ${title.top - floater.top}）—— 那一行没真的省掉');
 
-    // 收起态：抓手在，而且**里面没有那根 44×4 的杠**（它的子树里一个方块都没有）
+    // 收起态：抓手在，而且里面**不是那根 44×4 的杠**（而是那块有底的小长方形）
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
     await _pump(tester);
     expect(find.byKey(chatHandleKey), findsOneWidget, reason: '收起态留着那颗平箭头（展开入口）');
-    expect(
-      find.descendant(of: find.byKey(chatHandleKey), matching: find.byType(Container)),
-      findsNothing,
-      reason: '★ 那根杠还在（主人：*"我不要那根杠了。"*）',
+    // ⚠️ 2026-10-05：那颗按钮里现在有一块**有底色的长方形**（主人要的"底色/轮廓"）——
+    //    所以"子树里一个方块都没有"这条断言过期了；改成"那不是那根 4 像素的杠"。
+    final face = tester.getSize(
+      find.descendant(of: find.byKey(chatHandleKey), matching: find.byType(Container)).first,
     );
+    expect(face.height, greaterThan(10),
+        reason: '★ 那根 44×4 的杠又回来了（量到 $face）—— 主人：*"我不要那根杠了。"*');
     // 负向对照：那颗箭头**还在**（不是把整个抓手都删了）
     expect(
       find.descendant(of: find.byKey(chatHandleKey), matching: find.byType(CustomPaint)),
@@ -474,6 +477,6 @@ void main() {
     // "全开"＝贴着上下那两条边距（不是"可用高度的百分之多少"）
     expect(open.top, closeTo(screen.top + FloaterMetrics.margin, 1),
         reason: '★ 展开后上边距不是"完全展开"那一档（top=${open.top}）');
-    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '展开之后该有「收起」');
+    expect(find.byTooltip(chatCollapse), findsWidgets, reason: '展开之后该有「收起」');
   });
 }

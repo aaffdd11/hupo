@@ -119,7 +119,8 @@ void main() {
     await _frames(tester);
 
     expect(s.said, ['帮我查一下明天北京的天气预报'], reason: '★ 发出去的是改过错别字那句');
-    expect(find.byTooltip(chatCollapse), findsOneWidget,
+    // ⚠️ 2026-10-05：展开态里「收起」有**两颗**（标题行那颗 ＋ 录音旁边那颗翻过来的）
+    expect(find.byTooltip(chatCollapse), findsWidgets,
         reason: '★★ 发出去之后聊天记录窗口**自己打开**了（他没点任何东西）');
   });
 

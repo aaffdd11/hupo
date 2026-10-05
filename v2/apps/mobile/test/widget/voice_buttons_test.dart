@@ -156,10 +156,18 @@ void main() {
         reason: '★ 播放那颗在两档里不在同一个位置');
     expect(openSpeak.top, closeTo(closedSpeak.top, 0.5));
 
-    // 负向对照：展开档**不画那颗展开箭头**（收起来的出口只有标题行那颗「收起」——
-    //   "同一件事只有一条路"），但它的**位置留着**（上面那两条量到的就是这件事）。
-    expect(find.byKey(chatHandleKey), findsNothing, reason: '★ 展开档不该再摆一颗展开箭头');
-    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '收起来的出口是标题行那一颗');
+    // ★ **展开档那一颗不挪窝，只是"翻个方向"**（主人 2026-10-05：
+    //   *"把它变成展开以后是变成缩小窗口的按钮啊，所以它位置就不变"*）：
+    //   它还在原处、还是同一个 key，只是**朝下**、按下去 = 收起。
+    final openHandle = tester.getRect(find.byKey(chatHandleKey));
+    expect(openHandle.center, closedExpand.center,
+        reason: '★ 展开之后那颗挪位置了（${closedExpand.center} → ${openHandle.center}）');
+    expect(find.byTooltip(chatCollapse), findsWidgets,
+        reason: '★ 展开档那一颗该是「收起」（标题行那颗也还在）');
+    // 点它 ⇒ 收回收起档
+    await tester.tap(find.byKey(chatHandleKey));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip(chatCollapse), findsNothing, reason: '★ 点它没收起来');
     expect(closedExpand.width >= 44, true);
   });
 }

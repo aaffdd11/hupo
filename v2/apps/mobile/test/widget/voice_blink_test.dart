@@ -63,7 +63,34 @@ bool _between(Color c, Color a, Color b) {
   return ok(c.r, a.r, b.r) && ok(c.g, a.g, b.g) && ok(c.b, a.b, b.b);
 }
 
+/// 那颗圆圈这一帧的"外圈"（有没有琥珀色描边）。
+BorderSide _circleRing(WidgetTester tester) {
+  final m = tester.widget<Material>(
+    find
+        .descendant(of: find.byKey(voiceBarCircleKey), matching: find.byType(Material))
+        .first,
+  );
+  final shape = m.shape;
+  expect(shape, isA<CircleBorder>(), reason: '★ 那颗圆圈该是圆的');
+  return (shape! as CircleBorder).side;
+}
+
 void main() {
+  testWidgets('🔴 那颗圆圈：**白底 ＋ 一圈琥珀色**（主人 2026-10-05）', (tester) async {
+    // 主人原话：*"那个语音按钮呢上外面要加一个边框啊，这个边框就是有那个琥珀色，
+    //   就是按下去录音时候的那个颜色，然后……录音按钮和展开按钮他们也都有一个白色的底色"*
+    await _pump(tester, const HearDrill());
+    final ring = _circleRing(tester);
+    expect(ring.color, d.accent, reason: '★ 外面那一圈不是琥珀色（按下去录音时的那个颜色）');
+    expect(ring.width > 0, isTrue, reason: '★ 那圈边框宽度是 0（等于没画）');
+    // 白底：不在录的时候就是那张纸（与聊天窗口同一个白）
+    expect(_circleColor(tester), d.card, reason: '★ 那颗圆圈没有白底');
+
+    // 负向对照：在录的时候**整颗变琥珀**（那一圈还在，只是与底同色了）
+    await _pump(tester, _listening());
+    expect(_circleRing(tester).color, d.accent);
+  });
+
   testWidgets('③ 🔴 按停（收尾中）⇒ **当场**换成那句话，而且不闪了', (tester) async {
     // 主人 2026-10-05：*"我们录音和停止录音上，点击停止录音响应很慢。"*
     //   ⇒ 这一档是"按下去那一刻"的样子：字换了、底色不再是"在录"那个红。

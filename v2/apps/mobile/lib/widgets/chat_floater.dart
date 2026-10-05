@@ -441,11 +441,11 @@ class ChatFloaterState extends State<ChatFloater> {
           Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (collapsed)
-                _handle(p)
-              else
-                // 展开档：**同一个位置空着**（不是把它挪走 —— 位置一动，那一行就跳）
-                const SizedBox(width: d.voiceAuxW, height: d.voiceAuxH),
+              // ★ **上下两颗里上面那颗：位置永远不动，只是"翻个方向"**
+              //   （主人 2026-10-05：*"那个展开窗口，你要帮我把它变成展开以后是变成缩小窗口的
+              //   按钮啊，所以它位置就不变"*）—— 收起档是「展开」（平箭头朝上）；
+              //   展开档就它自己变成「收起」（朝下，点一下收回去）。
+              _handle(p, collapsed: collapsed),
               const SizedBox(height: d.voiceAuxGap),
               // 念不出来的设备**一个按钮都不画**（`onToggleSpeak` 传 null）
               if (widget.onToggleSpeak != null) _speakButton(p),
@@ -484,27 +484,35 @@ class ChatFloaterState extends State<ChatFloater> {
         child: Center(child: child),
       );
 
-  /// **展开**那一颗（**上面那颗**）：那颗"平"的小箭头。
+  /// **上面那一颗**：收起档是「展开」（箭头朝上），展开档是「收起」（箭头朝下）。
   ///
-  /// ⚠️ **单击 = 一次拉满**（2026-10-05：不再有"半开"、也不再有"拖着改高度"）。
+  /// 🔴 **2026-10-05 主人**：*"那个展开窗口，你要帮我把它变成展开以后是变成缩小窗口的按钮啊，
+  ///   所以它位置就不变"* ⇒ **同一颗按钮**（同一个 key、同一个位置、同一个样子），
+  ///   只是**朝上/朝下**、**按下去做的事**跟着这一档换。
+  ///   ⚠️ 展开档**不再留空格**了（那正是他说的"变成缩小窗口的按钮"）。
+  /// ⚠️ **单击 = 一次拉满 / 一次收起**（不再有"半开"、也不再有"拖着改高度"）。
   /// ⚠️ 字挂在 `Tooltip`（web 上悬停看得见）＋ 无障碍名上。
-  Widget _handle(DshPalette p) {
+  Widget _handle(DshPalette p, {required bool collapsed}) {
     final button = TextButton(
       key: chatHandleKey,
-      onPressed: expand,
+      onPressed: collapsed ? expand : collapse,
       style: _auxStyle(),
       child: _auxFace(
         p,
         lit: false,
         child: CustomPaint(
           size: const Size(22, 6),
-          painter: _FlatChevron(color: p.labelTertiary, up: true),
+          painter: _FlatChevron(color: p.labelTertiary, up: collapsed),
         ),
       ),
     );
     return Tooltip(
-      message: '展开',
-      child: Semantics(button: true, label: '展开', child: button),
+      message: collapsed ? '展开' : chatCollapse,
+      child: Semantics(
+        button: true,
+        label: collapsed ? '展开' : chatCollapse,
+        child: button,
+      ),
     );
   }
 

@@ -172,8 +172,13 @@ class _VoiceBarState extends State<VoiceBar> {
               final busy = widget.flow.phase == DrillPhase.wrapping;
               final on = _listening;
               return Material(
+                // ★ **白底**（主人 2026-10-05：*"录音按钮……也都有一个白色的底色"*）：
+                //   平时就是那张纸；在录时整颗变琥珀（一明一暗地闪）。
                 color: on ? recBlinkColor(glow) : d.card,
-                shape: const CircleBorder(),
+                // ★ **外面那一圈琥珀色**（主人 2026-10-05：*"外面要加一个边框啊，
+                //   这个边框就是有那个琥珀色，就是按下去录音时候的那个颜色"*）——
+                //   平时也带着它：一眼看得出"这颗是录音那颗"。
+                shape: CircleBorder(side: BorderSide(color: d.accent, width: d.voiceCircleRing)),
                 child: InkWell(
                   customBorder: const CircleBorder(),
                   onTap: busy ? null : widget.onMic,

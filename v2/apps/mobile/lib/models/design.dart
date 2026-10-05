@@ -255,3 +255,7 @@ const Duration motionAppOpen = Duration(milliseconds: 500);
 /// ⚠️ 它是那一屏**唯一**的入口 ⇒ 要比别处都大（服务的正是"打不了字、眼神不好"的人）。
 const double voiceCircleBox = 64; // ≥44（D3.6）
 const double voiceCircleIcon = 30;
+
+/// ★ **2026-10-05：那颗圆圈外面那一圈琥珀色**（主人：*"外面要加一个边框啊，这个边框就是
+///   有那个琥珀色，就是按下去录音时候的那个颜色"*）—— 平时也带着它。
+const double voiceCircleRing = 1.5;
