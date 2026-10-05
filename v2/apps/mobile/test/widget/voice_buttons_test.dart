@@ -13,6 +13,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/design.dart' as d;
+import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 
 /// 直接泵浮窗（收起档）—— **不经过 `chat_screen`**，因为那颗播放按钮画不画
@@ -21,7 +22,12 @@ Future<void> _pumpFloater(
   WidgetTester tester, {
   bool speakOn = false,
   VoidCallback? onToggleSpeak = _noop,
+  FloaterTier tier = FloaterTier.collapsed,
 }) async {
+  // ⚠️ **先清一次**：同一个 `ChatFloater` 连着泵两次会**复用同一个 State**
+  //    （`initialTier` 只在 `initState` 读一次）⇒ 第二次那一档根本没换。
+  await tester.pumpWidget(const SizedBox());
+  await tester.pump();
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
@@ -31,6 +37,7 @@ Future<void> _pumpFloater(
             width: 420,
             child: ChatFloater(
               maxHeight: 600,
+              initialTier: tier,
               title: '琥珀聊天',
               speakOn: speakOn,
               onToggleSpeak: onToggleSpeak,
@@ -104,5 +111,31 @@ void main() {
     expect(line.isNotEmpty, isTrue, reason: '找不到 `onToggleSpeak:` 那一处（判据要跟着它走）');
     expect(line.contains('canSpeak'), isTrue,
         reason: '★ 那句门不见了：念不出来的设备上会摆出一颗按不动的按钮');
+  });
+
+  testWidgets('④ 🔴 打开聊天窗口那一下，**语音那颗一个像素都不许动**（主人当场看出来的那件事）', (tester) async {
+    // 主人 2026-10-05：*"打开聊天历史窗口后，我发现按键变了。语音按键位置改变了。"*
+    //   根子：那两颗原来**只画在收起档** ⇒ 打开窗口那一下外面少了 ~96 像素
+    //   ⇒ 圆圈与它左边那句字整块往右跳。⇒ 现在两档同一个形状（那一格留着）。
+    await _pumpFloater(tester, tier: FloaterTier.collapsed);
+    final closedMicRow = tester.getRect(find.byKey(_fakeComposerKey));
+    final closedSpeak = tester.getRect(find.byKey(chatSpeakKey));
+    final closedExpand = tester.getRect(find.byKey(chatHandleKey));
+
+    await _pumpFloater(tester, tier: FloaterTier.full);
+    final openMicRow = tester.getRect(find.byKey(_fakeComposerKey));
+    final openSpeak = tester.getRect(find.byKey(chatSpeakKey));
+
+    expect(openMicRow.right, closeTo(closedMicRow.right, 0.5),
+        reason: '★ 打开窗口之后录音那一格挪了（${closedMicRow.right} → ${openMicRow.right}）—— 那颗圆圈跟着跳');
+    expect(openSpeak.left, closeTo(closedSpeak.left, 0.5),
+        reason: '★ 播放那颗在两档里不在同一个位置');
+    expect(openSpeak.top, closeTo(closedSpeak.top, 0.5));
+
+    // 负向对照：展开档**不画那颗展开箭头**（收起来的出口只有标题行那颗「收起」——
+    //   "同一件事只有一条路"），但它的**位置留着**（上面那两条量到的就是这件事）。
+    expect(find.byKey(chatHandleKey), findsNothing, reason: '★ 展开档不该再摆一颗展开箭头');
+    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '收起来的出口是标题行那一颗');
+    expect(closedExpand.width >= 44, true);
   });
 }

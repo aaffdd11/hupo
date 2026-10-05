@@ -351,16 +351,7 @@ class ChatFloaterState extends State<ChatFloater> {
                       //     🔴 **2026-10-05：不再有"拖着改高度"**（主人：*"我希望不要有
                       //        移动聊天窗口高度的选项，就是完全展开或者完全收起。"*）
                       //        ⇒ 那两层 `Listener`（以及跟手那一套）整段删了。
-                      if (collapsed)
-                        Row(
-                          children: [
-                            Expanded(child: widget.composer),
-                            _handle(p),
-                            // 念不出来的设备**一个按钮都不画**（`onToggleSpeak` 传 null）
-                            if (widget.onToggleSpeak != null) _speakButton(p),
-                            const SizedBox(width: d.gapS),
-                          ],
-                        ),
+                      if (collapsed) _bottomRow(p, collapsed: true),
                       // ── 展开态：标题行（**收起态不画它** —— 那一档就是"一格"）──
                       if (!collapsed)
                         Padding(
@@ -421,13 +412,40 @@ class ChatFloaterState extends State<ChatFloater> {
                           color: p.borderL3,
                         ),
                         Expanded(child: widget.child),
-                        widget.composer,
+                        // ★ **2026-10-05**：展开档那一行**跟收起档同一个形状**
+                        //   （圆圈 ＋ 那两颗**占着同一个位置**）—— 见 `_bottomRow` 的注释：
+                        //   不然打开聊天窗口那一下，语音那颗会**往右跳 44**，
+                        //   主人当场就看出来了（*"打开聊天历史窗口后……语音按键位置改变了"*）。
+                        _bottomRow(p, collapsed: false),
                       ],
                     ],
                   ),
                 ),
               );
   }
+
+  /// **底下那一行**（两个档**同一个形状**）：`（他说的话 ＋ 圆圈）→ 展开 → 播放语音`。
+  ///
+  /// 🔴 **2026-10-05 主人**：*"打开聊天历史窗口后，我发现按键变了。语音按键位置改变了。"*
+  ///   根子：那两颗原来**只画在收起档**（展开档那一行是光秃秃的一条 composer）
+  ///   ⇒ 打开聊天窗口那一下，外面少了那 ~96 像素 ⇒ 圆圈与它左边那句字**整块往右跳**。
+  ///   ⇒ 现在两档都走这一个函数：**播放那颗一直在**；展开那颗只在收起档**画**，
+  ///     但它的**位置留着**（展开档是一个等宽的空白格）——
+  ///     ⇒ 语音那颗在两个档里**一个像素都不动**（而且没有第二条"收起"的路：
+  ///       收起来的出口仍是标题行右端那颗「收起」，见 `D3.15` 那一族）。
+  Widget _bottomRow(DshPalette p, {required bool collapsed}) => Row(
+        children: [
+          Expanded(child: widget.composer),
+          if (collapsed)
+            _handle(p)
+          else
+            // 展开档：**同一个位置空着**（不是把它挪走 —— 位置一动，那一行就跳）
+            const SizedBox(width: d.voiceAuxBox, height: d.voiceAuxBox),
+          // 念不出来的设备**一个按钮都不画**（`onToggleSpeak` 传 null）
+          if (widget.onToggleSpeak != null) _speakButton(p),
+          const SizedBox(width: d.gapS),
+        ],
+      );
 
   /// **抓手**（主人 2026-09-24 那条杠 ＋ 2026-10-04 挪位）：**平的小箭头**。
   ///
@@ -451,6 +469,11 @@ class ChatFloaterState extends State<ChatFloater> {
         // 命中区 ≥44（D3.6，硬闸）：图形只有 26×7，外面这一圈是"好点"的保证
         // （两年前给的是 96 宽；2026-10-05 它并进那一行之后收成 44 —— 仍等于下限）
         minimumSize: const Size(44, 44),
+        // 🔴 **宽度必须真的等于 44**（2026-10-05 量出来的 4 像素）：
+        //    Material 默认 `padded` 会把点击区撑到 48 ⇒ 收起档那一格 48、展开档那个
+        //    空位 44 ⇒ 录音那一格**差 4 像素**（判据当场量到 506 vs 510）。
+        //    `shrinkWrap` 让它就是 44×44（仍 ≥44，硬闸照过）。
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
         foregroundColor: p.labelTertiary,
       ),
