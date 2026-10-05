@@ -39,7 +39,16 @@ android {
     }
 
     defaultConfig {
-        applicationId = "chat.hupo.hupo_app"
+        // 🔴 **2.0 是另一个 app**（主人 2026-10-05：*「打包apk，这次是2.0版本了，
+        //    我想起另一个app，不要覆盖1.0。名字叫琥珀聊天」*）。
+        //    ⇒ **装上去的身份换了一个**：1.0 那个是 `chat.hupo.hupo_app`（tag `v1.0`），
+        //      两个包**身份不同 ⇒ 可以并排装在同一台手机上**，谁也覆盖不了谁。
+        //    ⚠️ **这一行不许改回 `chat.hupo.hupo_app`** —— 改回去 = 新包会**顶掉**他手上
+        //      那个 1.0（安卓按 `applicationId` 认"是不是同一个 app"）。判据钉着它
+        //      （`test/unit/android_manifest_test.dart`）。
+        //    ⚠️ `namespace` 与 Kotlin 那几份**不动**（`.MainActivity` 是相对它解析的）：
+        //      `applicationId` 才是"装上去的身份"，`namespace` 只是代码的包名。
+        applicationId = "chat.hupo.hupo_chat"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

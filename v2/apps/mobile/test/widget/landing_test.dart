@@ -27,11 +27,14 @@ Future<void> _pump(
 }
 
 void main() {
-  testWidgets('🔴 那句承诺和三个入口都在屏幕上', (tester) async {
+  testWidgets('🔴 那句承诺和四个入口都在屏幕上（开始用 ＋ 两颗下载）', (tester) async {
     await _pump(tester);
     expect(find.text(landingPromise), findsOneWidget, reason: '手册 〇 那句承诺必须在这儿');
     expect(find.text(landingStart), findsOneWidget);
     expect(find.text(landingDownload), findsOneWidget);
+    // ★ 2026-10-05：老那一版那颗也在（主人："1.0 和 2.0 各一个"）
+    expect(find.text(landingDownloadV1), findsOneWidget,
+        reason: '★ 1.0 那颗下载按钮也要在屏幕上（老包原样留着）');
     // ⚠️ "第一次要等一下"必须**在点之前**就说（别让他登录完才发现）。
     //    ⚠️ 这句要在**滚动之前**查：它在顶上，滚到底之后 `ListView` 会把它回收掉（我栽过）。
     expect(find.text(landingStartHint), findsOneWidget);
@@ -76,6 +79,28 @@ void main() {
     expect(find.byType(LinearProgressIndicator), findsNothing);
     // 负向对照之二：那句旧的"还没上线"**必须已经不在**了（它就是这次改掉的假话）
     expect(find.textContaining('还没上线'), findsNothing, reason: '★ 安卓已经能下载了 ⇒ 那句是假话');
+  });
+
+  testWidgets('🔴 两颗下载按钮各交各的地址：2.0 与 1.0 **不是同一条路**', (tester) async {
+    // 主人 2026-10-05：*「打包apk，这次是2.0版本了，我想起另一个app，不要覆盖1.0」*
+    //   ＋ 他挑的首页形状："1.0 和 2.0 各一个"。
+    //   ⇒ 两颗按钮必须**各指各的**：一个指现在这一版、一个指老那一版。
+    //   ⚠️ 它们要是同一条路，屏幕上就是"两颗按钮下同一个包"（等于骗人，也等于没做）。
+    final asked = <String>[];
+    await _pump(tester, onDownload: (u) { asked.add(u); return true; });
+    await tester.tap(find.text(landingDownload));
+    await tester.pump();
+    await tester.tap(find.text(landingDownloadV1));
+    await tester.pump();
+
+    expect(asked, hasLength(2), reason: '★ 两颗按钮都得真交出一条地址');
+    final two = asked.map((u) => Uri.parse(u)).toList();
+    expect(two[0].path, hupoApkPath, reason: '★ 「下载安卓版 2.0」要指现在这一版');
+    expect(two[1].path, hupoApkPathV1, reason: '★ 「下载安卓版 1.0」要指老那一版（它原样留着）');
+    expect(two[0].path, isNot(two[1].path), reason: '★ 两条路不许是同一条');
+    for (final u in two) {
+      expect(u.hasAuthority, isTrue, reason: '★ 两条都得是绝对地址（`openExternal` 只认 http(s)）');
+    }
   });
 
   testWidgets('🔴 没开成 ⇒ 说清怎么办（**不是**"正在准备"）', (tester) async {

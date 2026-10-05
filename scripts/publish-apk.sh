@@ -33,7 +33,11 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEB="$ROOT/v2/services/core/web"
 APK_SRC="$ROOT/v2/apps/mobile/build/app/outputs/flutter-apk/app-release.apk"
-APK_NAME="hupo.apk"
+# 🔴 **2026-10-05：发出去那个文件名换了**（主人：*「这次是2.0版本了……不要覆盖1.0」*）——
+#    2.0 是**另一个 app**（`chat.hupo.hupo_chat`、桌面上叫「琥珀聊天」）⇒ 发在
+#    `hupo-chat.apk`；1.0 那一份（`hupo.apk`）**原样留着**（老链接不许 404、也不许被顶掉）。
+#    要发成别的名字：`HUPO_APK_NAME=xxx.apk scripts/publish-apk.sh …`。
+APK_NAME="${HUPO_APK_NAME:-hupo-chat.apk}"
 PUBLIC="${HUPO_PUBLIC:-https://w.stalkerai.cn}"
 
 # 🔴 **没有主人的话，不许打包**（2026-10-01 定的规矩）——

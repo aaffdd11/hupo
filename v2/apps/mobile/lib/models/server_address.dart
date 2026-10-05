@@ -41,7 +41,16 @@ Uri apiUriFor(String base, String path) => Uri.parse('$base$path');
 ///
 /// ⚠️ 它是**稳定名字**（不带指纹）：服务端那边对不带指纹的路径一律 `no-cache`，
 ///    所以换包之后访客拿到的一定是新的那一个（`08-SPEC.md` §8.3）。
-const String hupoApkPath = '/hupo.apk';
+///
+/// 🔴 **2026-10-05 起是两个包**（主人：*「打包apk，这次是2.0版本了，我想起另一个app，
+///    不要覆盖1.0。名字叫琥珀聊天」* ＋ 首页要**两颗按钮**）：
+///    · [hupoApkPath]   = 2.0（装上身份 `chat.hupo.hupo_chat`，桌面上叫「琥珀聊天」）；
+///    · [hupoApkPathV1] = 1.0（`chat.hupo.hupo_app`，桌面上叫「琥珀」；**原样留着**）。
+///    ⚠️ 两个包**身份不同** ⇒ 同一台手机上并排装着，谁也覆盖不了谁。
+const String hupoApkPath = '/hupo-chat.apk';
+
+/// 1.0 那个包**在老地址上原样留着**（老链接不许 404，也不许被 2.0 顶掉）。
+const String hupoApkPathV1 = '/hupo.apk';
 
 /// 把安装包那条路径变成一条**绝对**地址。
 ///
@@ -50,11 +59,12 @@ const String hupoApkPath = '/hupo.apk';
 ///    而这颗按钮**必须真的把包下下来**（判据钉着"交出去的是一条绝对地址"）。
 /// * [base] 非空（原生包带着地址）⇒ 用它的原点；
 /// * 空（网页 = 同源）⇒ 用**页面自己**那条地址去解析（`Uri.base` 就是地址栏那个）。
-Uri apkDownloadUri({required String base, required Uri page}) {
+/// * [path] 默认是**现在这一版**那个包；首页那颗「下载 1.0」显式传 [hupoApkPathV1]。
+Uri apkDownloadUri({required String base, required Uri page, String path = hupoApkPath}) {
   final raw = base.trim();
-  if (raw.isEmpty) return page.resolve(hupoApkPath);
+  if (raw.isEmpty) return page.resolve(path);
   final origin = raw.contains('://')
       ? Uri.parse(raw)
       : Uri.parse('http://${raw.replaceAll(RegExp(r'/+$'), '')}');
-  return origin.resolve(hupoApkPath);
+  return origin.resolve(path);
 }

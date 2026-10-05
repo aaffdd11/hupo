@@ -26,6 +26,9 @@
     <!-- 🔴 **桌面上显示的就是那个名字**（2026-09-28 改：原来是 Flutter 模板默认的
          `hupo_app` —— 装到手机上，桌面那一格就会写着 "hupo_app"，那是模板的残留、
          不是我们的名字）。判据：`test/unit/android_manifest_test.dart` 钉着它。
+         ★ **2026-10-05 改成「琥珀聊天」**（主人：*「这次是2.0版本了……不要覆盖1.0。
+         名字叫琥珀聊天」*）：1.0 那个 app 还叫「琥珀」、还装在他手机上 ⇒ 这一格必须
+         **一眼分得开**是谁（名字与身份都不同，见 `app/build.gradle.kts` 的 `applicationId`）。
 
          ⚠️ **注释只能住在这里**（标签外面）：写进 `<application …>` 的属性之间
          就是**不合法的 XML** —— 2026-09-28 我自己这么写过一次，
@@ -36,7 +39,7 @@
          不指的话，会要圆图标的那几个启动器只能拿方的去裁。
          ⚠️ 属性写进标签里、**注释留在标签外** —— 写进标签中间就不是合法 XML 了（上面那条注释说的就是这件事）。 -->
     <application
-        android:label="琥珀"
+        android:label="琥珀聊天"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round">

@@ -1056,6 +1056,26 @@ deepseek harness 才行。"* —— **他是对的**：在那之前我验的只�
 
 ---
 
+<a id="b71"></a>
+
+### 九·补71 · 2026-10-05（`#288` 这一轮 · **已重建 · 已核对 · 已重启**）
+
+| 改哪 | 改什么 | 为什么 |
+|---|---|---|
+| 🔴 `docs/handbook/05-DECISIONS.md` | D 组新增 **`D1.6`**（2.0 是另一个 app：身份不同、名字「琥珀聊天」、两个下载地址都留着） | 它是 **`strict`**（手册就是判据）⇒ 不重建 ⇒ 下次重启拒绝启动 |
+| 🔴 `docs/handbook/CHANGELOG.md` | 升 **v2.55** | 同上 |
+| （只报不拦） | `scripts/publish-apk.sh` · `scripts/deploy-web-v2.sh`（两个包各发各的） | `scripts/` 是只报不拦 |
+| （不在覆盖里） | 客户端那几份（`build.gradle.kts` / `AndroidManifest.xml` / `pubspec.yaml` / `landing_*` / `server_address.dart`） | `apps/` 不在开机清单里；这一批**服务端一个字没动** |
+
+**重建留痕**（`AGENTS.md` §8.1）：**时间** 2026-10-05 05:3x UTC＋8 · **命令** 与 §九·补50 同一条
+（绝对路径 `node` ＋ 口令走 stdin）· **动了哪几个文件**：只有 `/etc/hupo/integrity.json`
+（**222 个文件** · 只读 444 · `root:root`）· **重建后**：`verify-integrity` **✅ 对上了**。
+**重启**：`scripts/restart-core.sh`（由 `deploy-web-v2.sh` 带起）—— **预检过了** ·
+网页入口指纹 **`371db20dd542`**（源码 `d30d27d0f9bb`）· 公网 **200** ·
+两个包都核过（`/hupo-chat.apk` sha `003e1fad3dad…` · `/hupo.apk` sha `8d318676c7ec…` 与发 2.0 之前一致）。
+
+---
+
 <a id="b70"></a>
 
 ### 九·补70 · 2026-10-05（`#287` 这一轮 · **已重建 · 已核对 · 已重启**）

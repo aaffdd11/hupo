@@ -252,36 +252,47 @@ class LandingScreen extends StatelessWidget {
   }
 
   /// 顶栏：一个暖红色的方块标记 + 品牌名。
-  /// 两个入口：实心药丸 + 描边药丸。
+  /// 入口：实心药丸 + **两颗**描边药丸（2.0 / 1.0）。
   /// ⚠️ **`Wrap` 不是 `Row`**：最大字号下要能折到第二行，否则就是一条溢出。
-  Widget _ctaRow(BuildContext context, ThemeData theme) => Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        children: [
-          FilledButton(
-            onPressed: onStart,
-            style: FilledButton.styleFrom(
-              minimumSize: const Size(48, 52),
-              backgroundColor: _accent,
-              foregroundColor: Colors.white,
-              shape: const StadiumBorder(),
-              padding: const EdgeInsets.symmetric(horizontal: 28),
-            ),
-            child: const Text(landingStart),
+  /// ⚠️ 两颗下载按钮**共用同一份样式**（写两遍 = 两处会长歪，而且棘轮也数它）。
+  Widget _ctaRow(BuildContext context, ThemeData theme) {
+    final downloadStyle = OutlinedButton.styleFrom(
+      minimumSize: const Size(48, 52),
+      foregroundColor: _ink,
+      side: const BorderSide(color: _line),
+      shape: const StadiumBorder(),
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+    );
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children: [
+        FilledButton(
+          onPressed: onStart,
+          style: FilledButton.styleFrom(
+            minimumSize: const Size(48, 52),
+            backgroundColor: _accent,
+            foregroundColor: Colors.white,
+            shape: const StadiumBorder(),
+            padding: const EdgeInsets.symmetric(horizontal: 28),
           ),
-          OutlinedButton(
-            onPressed: () => _download(context),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size(48, 52),
-              foregroundColor: _ink,
-              side: const BorderSide(color: _line),
-              shape: const StadiumBorder(),
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-            ),
-            child: const Text(landingDownload),
-          ),
-        ],
-      );
+          child: const Text(landingStart),
+        ),
+        OutlinedButton(
+          onPressed: () => _download(context, hupoApkPath),
+          style: downloadStyle,
+          child: const Text(landingDownload),
+        ),
+        // 🔴 **2026-10-05：老那一颗也留着**（主人："1.0 和 2.0 各一个"）——
+        //    两个包身份不同，谁也不会顶掉谁；想要老那一版的还下得着。
+        OutlinedButton(
+          onPressed: () => _download(context, hupoApkPathV1),
+          style: downloadStyle,
+          child: const Text(landingDownloadV1),
+        ),
+      ],
+    );
+  }
 
   /// 手机示意图（参考站 hero 右边那个）。
   /// ⚠️ 画的是一个**外壳**，里面是几行示意，不是真截图 —— 免得像在假装有产品。
@@ -351,20 +362,23 @@ class LandingScreen extends StatelessWidget {
         style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
       );
 
-  /// 点「下载安卓版」：**真的把那个包装下来**（2026-09-28 起它不再是"还没上线"）。
+  /// 点那两颗下载按钮之一：**真的把那个包装下来**（2026-09-28 起它不再是"还没上线"）。
   ///
   /// 三条边界：
   ///   · 交出去的必须是**绝对地址**（`openExternal` 只认 http(s)；相对路径它当场回 false）；
   ///   · 站在**安卓包里**点它 ⇒ 如实说"你正在用的就是这个安卓版"（不装出"正在下载"）；
   ///   · 没开成 ⇒ 说清怎么办（**绝不**转圈说"正在准备"）。
-  void _download(BuildContext context) {
+  ///
+  /// 🔴 **2026-10-05：两个包**（主人："1.0 和 2.0 各一个"）—— `path` 说清点的是哪一个：
+  ///    [hupoApkPath] 是 2.0（「琥珀聊天」），[hupoApkPathV1] 是 1.0（「琥珀」）。
+  void _download(BuildContext context, String path) {
     final messenger = ScaffoldMessenger.of(context);
     final open = onDownload;
     if (open == null && !canOpenLinks) {
       messenger.showSnackBar(const SnackBar(content: Text(landingAndroidOnIt)));
       return;
     }
-    final url = apkDownloadUri(base: hupoApiBase, page: Uri.base).toString();
+    final url = apkDownloadUri(base: hupoApiBase, page: Uri.base, path: path).toString();
     final ok = (open ?? openExternal)(url);
     messenger.showSnackBar(
       SnackBar(content: Text(ok ? landingAndroidStarted : landingAndroidCantHere)),

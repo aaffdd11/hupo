@@ -139,15 +139,27 @@ cp -f "$PREV_ENTRIES"/main.*.dart.js "$PREV_ENTRIES"/flutter_bootstrap.*.js "$WE
 rm -rf "$PREV_ENTRIES"
 
 # ★ **安卓包也要放回来**（2026-09-28）：上面那句 `rm -rf "$WEB"` 会把它一起删掉，
-#   而首页那颗「下载安卓版」指向的正是 `/hupo.apk`（`scripts/publish-apk.sh` 放进去的）。
+#   而首页那颗「下载安卓版」指向的正是它（`scripts/publish-apk.sh` 放进去的）。
 #   ⇒ 只要构建产物还在就再拷一次（不发新包也照旧发那一个），并如实报一句。
+#
+# 🔴 **2026-10-05 起是两个包、两文件名**（主人：*「打包apk，这次是2.0版本了……
+#    不要覆盖1.0」*）：
+#     · `hupo-chat.apk` ← 现在这一版（2.0 那份构建产物，每次部署刷新）；
+#     · `hupo.apk`      ← **1.0 那一份**（那一版最后一次发出去的包，原样留着；
+#       老链接（首页那颗按钮以前指的地址）不许变成 404，也**不许被 2.0 顶掉**）。
+#   ⚠️ 1.0 那一份的存档在 `data/hupo-1.0.apk`（`data/` 不进仓库；web/ 每次部署都被清空）。
 APK_BUILT="$APP/build/app/outputs/flutter-apk/app-release.apk"
 if [ -f "$APK_BUILT" ]; then
-  cp -f "$APK_BUILT" "$WEB/hupo.apk"
-  echo "  ✓ 安卓包也放回来了：web/hupo.apk（$(du -h "$WEB/hupo.apk" | cut -f1)）"
+  cp -f "$APK_BUILT" "$WEB/hupo-chat.apk"
+  echo "  ✓ 安卓包（2.0）放回来了：web/hupo-chat.apk（$(du -h "$WEB/hupo-chat.apk" | cut -f1)）"
 else
-  echo "  ⚠️ 没有现成的安卓包（$APK_BUILT）⇒ 这次首页那颗「下载安卓版」会 404。"
+  echo "  ⚠️ 没有现成的安卓包（$APK_BUILT）⇒ 这次那条下载会 404。"
   echo "     要发就补一句：scripts/publish-apk.sh --no-build（或 build-apk.sh 重新打一个）"
+fi
+APK_OLD="$ROOT/v2/services/core/data/hupo-1.0.apk"
+if [ -f "$APK_OLD" ]; then
+  cp -f "$APK_OLD" "$WEB/hupo.apk"
+  echo "  ✓ 1.0 那一份也放回来了：web/hupo.apk（$(du -h "$WEB/hupo.apk" | cut -f1) · 原样不动）"
 fi
 
 # ★ **参赛文稿（作品设计说明）也放回来**（2026-10-04 主人：*"把文件放在网站上供下载"*）：
