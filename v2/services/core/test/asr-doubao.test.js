@@ -19,6 +19,7 @@ import {
   DEFAULT_MODEL_NAME,
   DEFAULT_RESOURCE_ID,
   DOUBAO_ASR_URL,
+  createSegmentTracker,
   decodeServerFrame,
   doubaoConfigFromEnv,
   doubaoHeaders,
@@ -27,8 +28,8 @@ import {
   newConnectId,
 } from '../src/asr-doubao.js';
 
-/** 造一帧"上游回话"（照协议）。 */
-function serverFrame({ text = '', definite = null, index = 0, gzip = true, errCode = null, message = '' } = {}) {
+/** 造一帧"上游回话"（照协议）。`start` = 当前这一句的 `start_time`（认"换句了"靠它）。 */
+function serverFrame({ text = '', definite = null, index = 0, start = 0, gzip = true, errCode = null, message = '' } = {}) {
   if (errCode !== null) {
     const body = Buffer.from(message, 'utf8');
     const head = Buffer.alloc(8);
@@ -38,7 +39,8 @@ function serverFrame({ text = '', definite = null, index = 0, gzip = true, errCo
   }
   const utts = [];
   for (let i = 0; i < index; i += 1) utts.push({ text: `s${i}`, definite: true });
-  if (definite !== null) utts.push({ text: definite, definite: true });
+  if (definite !== null) utts.push({ text: definite, definite: true, start_time: start, end_time: start + 1 });
+  else if (text !== '') utts.push({ text, definite: false, start_time: start, end_time: start + 1 });
   const json = Buffer.from(JSON.stringify({ result: { text, utterances: utts } }), 'utf8');
   const payload = gzip ? nodeZlib.gzipSync(json) : json;
   const header = Buffer.from([0x11, 0x90, gzip ? 0x11 : 0x10, 0x00]);
@@ -129,10 +131,100 @@ test('D5 🔴 回帧：半句 / 定稿 / gzip 与不压缩，都解得对', () =
   assert.equal(f.text, '今天天气');
   assert.equal(f.definite, '今天天气');
   assert.equal(f.index, 0);
-  // 第 2 句 ⇒ 段号 1（`utterances` 是累积的）
+  // ⚠️ 这个 `index` 是**上游数组下标**（`utterances` 里最后那条确定句的位置）。
+  //    🔴 **真上游那个数组里只有当前这一句**（2026-10-06 真读数）⇒ 它实际总是 0，
+  //       而"段号"是**我们自己发的**（`createSegmentTracker`，见 D8）。
   const f2 = decodeServerFrame(serverFrame({ text: '今天天气挺好', definite: '挺好', index: 1 }));
   assert.equal(f2.definite, '挺好');
   assert.equal(f2.index, 1);
+  // 当前那一句也照原样带出来（`start` = 上游给的 `start_time`）
+  const u = decodeServerFrame(serverFrame({ text: '今天', index: 0, start: 4522 }));
+  assert.deepEqual(u.utterances, [{ text: '今天', definite: false, start: 4522, end: 4523 }],
+      '★ 当前这一句的 start_time 要带出来 —— 认"换句了"全靠它');
+});
+
+// ── ★ 2026-10-06：把"一段一段"接成"整段"（主人报的"前半段被砍掉"那个根）──
+//
+// ⚠️ 下面这些帧的形状是**照真读数抄的**（真连豆包 · 6.6 秒 · 两句 · 中间停顿）：
+//    `result.text` 与 `result.utterances` **只有当前这一句** —— 说第二句时第一句
+//    就不在里面了（不是累积）。⇒ 桩/判据都必须照这个形状喂。
+
+/** 造一帧**真形状**的上游回话（只有当前这一句）。`start`/`end` = 这一句占的那段音频（毫秒）。 */
+const said = (text, { definite = false, start = 0, end = start + 1 } = {}) => ({
+  text,
+  utterances: text === '' && !definite ? [] : [{ text, definite, start, end }],
+});
+
+test('★ D8 🔴 换句了（`start_time` 变了）⇒ 上一句攒住、段号自己往前走，整段接得起来', () => {
+  const t = createSegmentTracker();
+  assert.deepEqual(t.push(said('今天')), { partial: { text: '今天', index: 0 } });
+  // 同一句里字是**累积的** ⇒ 还是 0 号段（替换，不是接一串重复）
+  assert.deepEqual(t.push(said('今天天气')), { partial: { text: '今天天气', index: 0 } });
+  // 🔴 换句（`start_time` 变了）⇒ 段号必须往前走；不然客户端按段替换会把上一句顶掉
+  assert.deepEqual(t.push(said('怎么样', { start: 5000 })), { partial: { text: '怎么样', index: 1 } });
+  assert.equal(t.whole(), '今天天气怎么样', '★ 整段 = 前面几段 ＋ 正在长的这一段');
+  // 第二句说定了 ⇒ 定稿带的是 1 号段；整段照旧
+  assert.deepEqual(t.push(said('怎么样', { definite: true, start: 5000 })),
+      { partial: { text: '怎么样', index: 1 }, final: { text: '怎么样', index: 1 } });
+  assert.equal(t.whole(), '今天天气怎么样');
+  // 第三句 ⇒ 2 号段
+  assert.equal(t.push(said('好的', { start: 9000 })).partial.index, 2);
+  assert.equal(t.whole(), '今天天气怎么样好的');
+});
+
+test('★ D9 同一句又回一次：一模一样 ⇒ 当回声丢掉；又准了一点 ⇒ 替换（不许接成两遍）', () => {
+  const t = createSegmentTracker();
+  t.push(said('今天', { definite: true }));
+  assert.deepEqual(t.push(said('今天', { definite: true })), {}, '★ 同一段重复回话 ⇒ 什么都不发');
+  assert.equal(t.whole(), '今天', '★ 更不许攒成"今天今天"');
+  // 上游把最后那句又准了一点（标点/字更全）⇒ 替换那一段、再发一次定稿
+  assert.deepEqual(t.push(said('今天天气。', { definite: true })),
+      { final: { text: '今天天气。', index: 0 } });
+  assert.equal(t.whole(), '今天天气。');
+});
+
+test('★ D10 没有 `start_time` 的引擎 ⇒ 退回"共同前缀"那一条（补个句号不算换句）', () => {
+  const t = createSegmentTracker();
+  t.push({ text: '我们出去走走' });
+  // 补了句号 ⇒ 同一句（不许当成新的一句）
+  assert.deepEqual(t.push({ text: '我们出去走走吧。' }), { partial: { text: '我们出去走走吧。', index: 0 } });
+  assert.equal(t.whole(), '我们出去走走吧。');
+  // 完全换了内容 ⇒ 新的一句
+  assert.equal(t.push({ text: '明天见' }).partial.index, 1);
+  assert.equal(t.whole(), '我们出去走走吧。明天见');
+});
+
+test('★ D12 🔴 上游把**同一句重新划一遍**（起点还往前挪了）⇒ 不许接成两遍', () => {
+  // 🔴 真读数原样（2026-10-06 真连豆包，跑第二遍才露出来的那一族）：
+  //      #50 4522-4602 「我们」      ← 先给一小条
+  //      #56 4382-5322 「我们出去」   ← 同一句的修订（起点**往前**挪了、区间叠着）
+  //    ⇒ 照"起点变了就是新句"会接成「我们我们出去…」（把同一段话说两遍）。
+  const t = createSegmentTracker();
+  assert.deepEqual(t.push(said('我们', { start: 4522, end: 4602 })), { partial: { text: '我们', index: 0 } });
+  assert.deepEqual(t.push(said('我们出去', { start: 4382, end: 5322 })),
+      { partial: { text: '我们出去', index: 0 } }, '★ 叠着 ⇒ 是修订，段号不许往前推');
+  assert.equal(t.whole(), '我们出去', '★ 同一个字不许攒成两遍');
+  // 这一句说定；下一句从它的**终点之后**开始 ⇒ 那才是真的换句
+  assert.deepEqual(t.push(said('我们出去走走吧。', { definite: true, start: 4382, end: 6282 })),
+      { partial: { text: '我们出去走走吧。', index: 0 }, final: { text: '我们出去走走吧。', index: 0 } });
+  assert.deepEqual(t.push(said('明天见', { start: 6282, end: 7000 })), { partial: { text: '明天见', index: 1 } });
+  assert.equal(t.whole(), '我们出去走走吧。明天见');
+  // 负向对照：下一句**和上一句时间叠着、字也不像** ⇒ 绝不并进上一句（那会丢一句）
+  const t2 = createSegmentTracker();
+  t2.push(said('我们出去走走吧。', { definite: true, start: 4382, end: 6282 }));
+  assert.deepEqual(t2.push(said('明天见', { start: 6000, end: 7000 })), { partial: { text: '明天见', index: 1 } });
+  assert.equal(t2.whole(), '我们出去走走吧。明天见', '★ 说定的那一句一个字都不许被顶掉');
+});
+
+test('★ D11 空字不许把已经听到的擦掉（收尾帧不带 result 那一族）', () => {
+  const t = createSegmentTracker();
+  t.push(said('今天天气'));
+  assert.deepEqual(t.push(said('')), {}, '空帧 ⇒ 什么都不发');
+  assert.equal(t.whole(), '今天天气', '★ 一个字都不许丢');
+  // 空的定稿 ⇒ 把当前这句收住，不是把它擦掉
+  assert.deepEqual(t.push(said('', { definite: true })),
+      { partial: { text: '今天天气', index: 0 }, final: { text: '今天天气', index: 0 } });
+  assert.equal(t.whole(), '今天天气');
 });
 
 test('D6 🔴 错误帧：两种形状都认得出（并且把它那句原话带出来）', () => {

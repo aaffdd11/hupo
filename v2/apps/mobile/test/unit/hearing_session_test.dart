@@ -81,6 +81,31 @@ void main() {
     expect(h.event({'type': 'asr/end', 'index': 0}).text, '今天天气怎么样？');
   });
 
+  test('🔴 多段（中间有停顿）⇒ 收尾那条是**整段**，整段换掉拼起来的那一份（不许重复）', () {
+    // ★ 2026-10-06：服务端现在这样给（照真读数）—— 半句/定稿**按段**，
+    //   收尾那条 `asr/end` 给**整段**（前半段 ＋ 后半段已经接好了）。
+    //   🔴 修之前它只带最后那一段，主人报的就是这个：*"我说的话前半段会被砍掉"*。
+    final h = const Hearing()
+        .tapped()
+        .event({'type': 'asr/partial', 'text': '今天天气', 'index': 0})
+        .event({'type': 'asr/partial', 'text': '怎么样', 'index': 1})
+        .event({'type': 'asr/final', 'text': '怎么样', 'index': 1})
+        .event({'type': 'asr/end', 'text': '今天天气怎么样', 'index': 1});
+    expect(h.text, '今天天气怎么样',
+        reason: '★ 前半段 ＋ 后半段，一个字都不许丢；也不许重复成"今天天气今天天气怎么样"');
+    expect(h.phase, HearingPhase.idle);
+  });
+
+  test('★ 半路断了（reason=upstream）但字是整段 ⇒ 留着、说明白、不切走', () {
+    final h = const Hearing()
+        .tapped()
+        .event({'type': 'asr/final', 'text': '今天天气', 'index': 0})
+        .event({'type': 'asr/end', 'text': '今天天气怎么样', 'index': 0, 'reason': 'upstream'});
+    expect(h.text, '今天天气怎么样', reason: '★ 断了也要把他说出来的那份留住');
+    expect(h.why, hearCutOff);
+    expect(h.phase, HearingPhase.failed, reason: '停在失败这一档 ⇒ 界面不切回键盘（再按一下就能接着说）');
+  });
+
   test('★ 段号变了 ⇒ 接在后面（多说几句的情形）', () {
     final h = const Hearing()
         .tapped()

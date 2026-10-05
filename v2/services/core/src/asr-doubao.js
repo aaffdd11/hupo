@@ -198,6 +198,131 @@ export function decodeServerFrame(raw, { zlib = nodeZlib } = {}) {
     definite,
     index,
     logid: typeof j?.logid === 'string' ? j.logid : null,
+    // ★ 2026-10-06：**这段回话里的"当前那一句"原样带出来**（形状见 `createSegmentTracker`）。
+    //   🔴 真读数告诉我们的：`result.text` 与 `utterances` **只管当前这一句** ——
+    //      说第二句时第一句就不在里面了（不是累积）。所以"接成整段"那件事
+    //      不能靠这里，得靠 `createSegmentTracker`（它认 `start_time`）。
+    utterances: utts.map((u) => ({
+      text: typeof u?.text === 'string' ? u.text : '',
+      definite: u?.definite === true,
+      start: Number.isFinite(u?.start_time) ? u.start_time : null,
+      end: Number.isFinite(u?.end_time) ? u.end_time : null,
+    })),
+  };
+}
+
+/**
+ * **把上游"一段一段"的话接成"他这一整段"**（纯逻辑 · 判据直接喂帧）。
+ *
+ * 🔴 为什么非要有它（2026-10-06 · **真读数**，不是猜的）：豆包那一套里
+ *    `result.text` 与 `result.utterances` **只是"当前这一句"** —— 说第二句时
+ *    `result.text` 就变成第二句的字（`utterances` 里也只剩那一条），第一句**不在里面**。
+ *    实测（6.6 秒 · 两句 · 中间停顿，真的连豆包）：
+ *    ```
+ *    result.text=「今天」 utterances=[（在说）「今天」]      ← 第一句
+ *    result.text=「我们」 utterances=[（在说）「我们」]      ← 换句 ⇒ 第一句被顶掉了
+ *    ```
+ *    ⇒ 照原样转发，屏幕上与**发出去**的都只剩后半段 —— 主人 2026-10-06 报的
+ *      *"我说的话前半段会被砍掉"* 就是这个（`docs/dev/193-SPEAK-ACCUMULATE.md`）。
+ *    ⇒ 我们自己攒：**那一条翻篇了 = 换了一段** ⇒ 把上一段落进 `done`、段号往前推，
+ *      `asr/end` 那条要的是 `whole()`（整段），不是最后那一段。
+ *
+ * 🔴 **怎么算"翻篇了"：看时间那一对 `start_time`/`end_time`，不是看起点变没变**
+ *    （2026-10-06 第二遍真读数抓到的）：上游会把**同一句重新划一遍** —— 实测
+ *    ```
+ *    4522-4602  「我们」        ← 先给一小条
+ *    4382-5322  「我们出去」     ← 同一句的修订（起点还**往前挪了**）
+ *    ```
+ *    ⇒ 照"起点变了就是新句"会把这一句接成「我们我们出去…」（重复一遍）。
+ *    ⇒ 规矩：**两段在时间上叠着 = 还是同一句（那是修订）**；
+ *      **后一段的起点 ≥ 前一段的终点 = 真换了句**（一句话说完、下一句才开始）。
+ *
+ * ⚠️ **段号是我们自己发的**，不是上游数组下标（那个每一句都从 0 开始 ⇒ 客户端的
+ *    按段替换会**顶掉**前一段，这正是"前半段没了"的第二半原因）。
+ * ⚠️ 没有那对时间的上游（别的引擎 / 老形状）⇒ 退回"共同前缀够长就算同一段"。
+ *
+ * @returns {{push:(frame:object)=>{partial?:{text:string,index:number},final?:{text:string,index:number}},
+ *            whole:()=>string}}
+ */
+export function createSegmentTracker() {
+  /** 已经翻篇的段（按顺序接起来就是"整段"）。 */
+  const done = [];
+  /** 当前这一段到目前为止的字。 */
+  let cur = '';
+  /** 当前这一段占的那一段音频（上游给的毫秒；没有就是 `null`）。 */
+  let curSpan = null;
+  /** 刚说定的那一段占的那一段音频 —— 同一段又回一次（收尾那一包之后就是这样）就当回声。 */
+  let doneSpan = null;
+
+  /** 上游那一条的 `{start,end}`（缺一个就当没有）。 */
+  const spanOf = (u) =>
+    u && Number.isFinite(u.start) && Number.isFinite(u.end) ? { start: u.start, end: u.end } : null;
+  /** 两段音频**叠着**吗（叠着 = 同一句的修订；紧挨着/隔开 = 换句）。 */
+  const overlaps = (a, b) => (a && b ? a.start < b.end && b.start < a.end : false);
+  const sameStart = (a, b) => (a && b ? a.start === b.start : false);
+
+  /** 两句话像不像"同一句"（一个字都不许改的前缀关系太严：补个句号、改个标点都算同一句）。 */
+  const looksLikeSame = (a, b) => {
+    if (a === '' || b === '') return true;
+    const m = Math.min(a.length, b.length);
+    let n = 0;
+    while (n < m && a[n] === b[n]) n += 1;
+    // 短的整个是长的开头 ⇒ 一样（"我们出去走走吧" → "我们出去走走吧。"）
+    if (n === m) return true;
+    return n / m >= 0.5;
+  };
+
+  return {
+    /** 喂**一帧**上游回话 ⇒ 该往上发的半句 / 定稿（没有就什么都不带）。 */
+    push(frame) {
+      const list = Array.isArray(frame?.utterances) ? frame.utterances : [];
+      const u = list.length > 0 ? list[list.length - 1] : null;
+      const raw = u ? u.text : frame?.text;
+      const span = spanOf(u);
+      const definite = u ? u.definite === true : false;
+      const rawText = typeof raw === 'string' ? raw : '';
+      // 空帧（还在听、没字）⇒ 什么都不动
+      if (rawText === '' && !definite) return {};
+      // 🔴 **空字的"定稿"不许把已经听到的擦掉**（收尾那帧有时不带 result）——
+      //    它只是把**当前这一句**收住（字用我们手里那份）。
+      const text = rawText !== '' ? rawText : cur;
+      if (text === '') return {};
+      // 刚说定过的那一段又回一次（上游会把最后那一帧再吐一遍，收尾那一包之后也是它）
+      // 刚说定过的那一段又回一次（上游会把最后那一帧再吐一遍，收尾那一包之后也是它）——
+      // ⚠️ 这里**从严**：只有"起点一模一样"或"时间叠着**且**字像是同一句"才算它，
+      //    不然会把**下一句**误并进上一句（那就丢了一句）。
+      if (cur === '' && done.length > 0 && span && doneSpan
+        && (sameStart(doneSpan, span)
+          || (overlaps(doneSpan, span) && looksLikeSame(done[done.length - 1], text)))) {
+        // 一模一样 ⇒ 纯回声，丢掉；**又准了一点 ⇒ 换掉那一段**（不许接成两遍）
+        if (text === done[done.length - 1]) return {};
+        done[done.length - 1] = text;
+        doneSpan = span;
+        return { final: { text, index: done.length - 1 } };
+      }
+      // 换句了？（有时间那一对就认它：**叠着 = 同一句的修订**；没有才看共同前缀）
+      const fresh = cur !== '' && (curSpan && span ? !overlaps(curSpan, span) : !looksLikeSame(cur, text));
+      if (fresh) {
+        done.push(cur);
+        curSpan = null;
+      }
+      cur = text;
+      if (span) curSpan = span;
+      const index = done.length;
+      const out = { partial: { text: cur, index } };
+      if (definite) {
+        done.push(cur);
+        doneSpan = curSpan;
+        out.final = { text: cur, index };
+        cur = '';
+        curSpan = null;
+      }
+      return out;
+    },
+    /** **整段**（前面几段 ＋ 正在长的这一段）—— `asr/end` 要的就是它。 */
+    whole() {
+      return done.join('') + cur;
+    },
   };
 }
 
@@ -222,6 +347,8 @@ export function createDoubaoUpstream({ config, connectId = newConnectId, log = (
   /** 还没握上手时先攒着（音频不能丢：丢一段就是丢一句话的开头）。 */
   const queue = [];
   let onEvt = {};
+  /** ★ **把"一段一段"接成"整段"**（这条连接自己那份账，见 `createSegmentTracker`）。 */
+  const tracker = createSegmentTracker();
 
   const send = (buf) => {
     if (!up) return;
@@ -284,10 +411,13 @@ export function createDoubaoUpstream({ config, connectId = newConnectId, log = (
           ready = true;
           onEvt.onReady?.();
         }
-        // ⚠️ 每一帧都带"到目前为止的整段字"（`result.text`）⇒ 那就是"半句"；
-        //    而"确定句"（`definite: true`）才是**这一段说完了**。
-        if (ev.text) onEvt.onPartial?.({ text: ev.text, index: ev.index });
-        if (ev.definite !== null) onEvt.onFinal?.({ text: ev.definite, index: ev.index });
+        // ★ 2026-10-06：**自己把段接起来**（根因见 `createSegmentTracker` 上面那段）——
+        //    上游按"这一句"给字，说下一句时上一句就不在里面了 ⇒ 我们按 `start_time`
+        //    认出"换段了"，把前面的攒住、段号自己往前推。
+        //    ⚠️ 这里**不许**再直接转发 `ev.text`（那正是"前半段被砍掉"）。
+        const seg = tracker.push(ev);
+        if (seg.partial) onEvt.onPartial?.(seg.partial);
+        if (seg.final) onEvt.onFinal?.(seg.final);
         // 🔴 **"最后一包"之后的第一帧 = 整段说完了**（上游不一定马上关连接）——
         //    不发这一下的话，用户按了"停"之后界面会一直挂着（判据 W/那条测试抓过）。
         if (finished && !ended) {

@@ -118,11 +118,14 @@ async function boot({ asrConfig = null, maxMs = ASR_MAX_MS } = {}) {
  *
  * @param {object} o
  * @param {number} [o.errCode] 建连之后先回一个**错误帧**（非 0 = 上游不收）
- * @param {Array<{at:number,text:string,definite?:string,index?:number}>} [o.scripts]
- *        收到多少字节之后吐哪一句（`definite` 非空 = 那是一句"确定句"）
+ * @param {Array<{at:number,text:string,definite?:string,start?:number}>} [o.scripts]
+ *        收到多少字节之后吐哪一句：`text` = **这一句到目前为止**的字；
+ *        `definite` 给了 = 这一句**说定了**；**`start` 换了 = 换了一句**
+ *        （真上游的 `utterances` 只带当前这一句，见 `reply` 那段批注）
+ * @param {object} [o.lastReply] "最后一包"之后那一帧（默认 = 整句定稿；回归判据要换掉它）
  * @param {boolean} [o.silentReady] 收到请求参数也**不回**（用来量"握不上手"那一档）
  */
-async function stubUpstream({ errCode = 0, scripts = [], silentReady = false } = {}) {
+async function stubUpstream({ errCode = 0, scripts = [], silentReady = false, lastReply = null } = {}) {
   const { encodeFullClientRequest, encodeAudioFrame, decodeServerFrame } = await import('../src/asr-doubao.js');
   const wss = new WebSocketServer({ port: 0 });
   await new Promise((r) => wss.once('listening', r));
@@ -137,15 +140,20 @@ async function stubUpstream({ errCode = 0, scripts = [], silentReady = false } =
     headers: null,
     scripts: [...scripts],
   };
-  /** 回一帧"识别结果"（照官方那份：`result.text` ＋ `result.utterances[].definite`）。 */
-  const reply = (ws, text, definite = null, index = 0) => {
-    // ⚠️ **`utterances` 是累积的**（真上游就是这样：每说出一个"确定句"就往数组后面加一条）
-    //    ⇒ 我们的解码器按**数组下标**当段号，正好等于测试脚本里那个 `index`。
-    const utts = [];
-    for (let i = 0; i < index; i += 1) utts.push({ text: `（第${i + 1}段）`, definite: true, start_time: 0, end_time: 1 });
-    if (definite !== null) utts.push({ text: definite, definite: true, start_time: 0, end_time: 1 });
+  /** 回一帧"识别结果"（照**真读数**那份形状：`result.text` ＋ `result.utterances[]`）。 */
+  const reply = (ws, { text = '', definite = null, start = 0 } = {}) => {
+    // 🔴 **2026-10-06：真上游给的是"当前这一句"** —— `utterances` 里**只有一条**
+    //    （说下一句时上一条就不在数组里了），`start_time` 是这一句自己的。
+    //    实测（真连豆包 · 两句 · 中间停顿）：`text=「今天」…[「今天」]` →
+    //    `text=「我们」…[「我们」]` ⇒ 第一句被顶掉（主人报的"前半段被砍掉"）。
+    //    ⚠️ 桩以前是"数组累积、按下标当段号"那种**假形状** ⇒ 这条缺陷一直没有判据。
+    //    ⇒ 换句就换 `start`；同一句里字是**累积的**（`text` 就是"这一句到目前为止"）。
+    const said = definite ?? text;
+    const utts = said === ''
+      ? []
+      : [{ text: said, definite: definite !== null, start_time: start, end_time: start + 1 }];
     const payload = Buffer.from(
-      JSON.stringify({ result: { text, utterances: utts } }),
+      JSON.stringify({ result: { text: said, utterances: utts } }),
       'utf8',
     );
     const header = Buffer.from([0x11, 0x90, 0x10, 0x00]); // 0b1001 = full server response，JSON，不压缩
@@ -175,7 +183,7 @@ async function stubUpstream({ errCode = 0, scripts = [], silentReady = false } =
         const ev = decodeServerFrame(buf);
         void ev;
         state.clientRequest = buf;
-        if (!silentReady) reply(ws, ''); // 握手那一拍：回一帧（空结果）
+        if (!silentReady) reply(ws, { text: '' }); // 握手那一拍：回一帧（空结果）
         return;
       }
       if (type === 0b0010) {
@@ -185,7 +193,8 @@ async function stubUpstream({ errCode = 0, scripts = [], silentReady = false } =
         if (last) {
           state.gotLast = true;
           state.gotEnd = true; // 老判据用的名字（同一件事）
-          reply(ws, '今天天气怎么样', '今天天气怎么样', 0);
+          // "最后一包"之后上游把**当前这一句**的定稿吐回来（`start` 与那一句一致）
+          reply(ws, lastReply ?? { text: '今天天气怎么样', definite: '今天天气怎么样', start: 0 });
           return;
         }
         state.bytes += pcm.length;
@@ -193,9 +202,8 @@ async function stubUpstream({ errCode = 0, scripts = [], silentReady = false } =
         state.pcm = Buffer.concat([state.pcm, pcm]);
         while (state.scripts.length && state.bytes >= state.scripts[0].at) {
           const sc = state.scripts.shift();
-          // ⚠️ 这个桩同时认两种写法：`definite`（新）与 `slice`（老那种：0=半句 1/2=一句）
-          const definite = sc.definite ?? (sc.slice === 1 || sc.slice === 2 ? sc.text : null);
-          reply(ws, sc.text, definite, sc.index ?? 0);
+          // 脚本一项 = 一帧：`definite` 给了就是"这一句说定了"，`start` 换了就是**换句了**
+          reply(ws, sc);
         }
       }
     });
@@ -313,8 +321,8 @@ test('这台部署连"语音那条"都没挂（`asr: null`）⇒ 同样如实说
 test('★ 配好了：音频一个字节不改地过去，半句/定稿/收尾映射对', async () => {
   const stub = await stubUpstream({
     scripts: [
-      { at: 3200, slice: 0, text: '今天' },
-      { at: 6400, slice: 1, text: '今天天气' },
+      { at: 3200, text: '今天' },                          // 半句
+      { at: 6400, text: '今天天气', definite: '今天天气' }, // 这一句说定了
     ],
   });
   const s = await boot({ asrConfig: asrConfigFromEnv({ HUPO_ASR_URL: stub.url }) });
@@ -341,6 +349,44 @@ test('★ 配好了：音频一个字节不改地过去，半句/定稿/收尾�
   const end = await waitFor(c.events, (e) => e.type === 'asr/end');
   assert.equal(end.text, '今天天气怎么样');
   assert.equal(stub.gotLast, true, '★ 没发"最后一包" ⇒ 上游不会把最后那几个字吐回来');
+  await stub.close();
+  await s.close();
+});
+
+test('🔴 **说了两句（中间有停顿）⇒ 收尾那条是"整段"，不是最后那一段**（主人 2026-10-06 报的缺陷）', async () => {
+  // 🔴 这一条是照**真读数**写的（2026-10-06 真连豆包 · 6.6 秒 · 两句 · 中间停顿）：
+  //    上游**按句给字**，说第二句时第一句就不在回话里了
+  //    （`result.text` 变成第二句的字、`utterances` 里也只剩那一条）。
+  //    ⇒ 修之前：客户端那条按段替换被**同一段号**顶掉 ⇒ 屏幕上只剩后半段，
+  //      `asr/end` 也只带后半段 ⇒ **发出去的话前半段被砍掉**。
+  const stub = await stubUpstream({
+    scripts: [
+      { at: 1600, text: '今天天气', start: 0 },                 // 第一句（还没说定）
+      { at: 3200, text: '怎么样', start: 5000 },                 // 换句了 ⇒ 段号该往前走
+      { at: 4800, text: '怎么样', definite: '怎么样', start: 5000 },
+    ],
+    // "最后一包"之后上游吐回来的是**最后那一句**的定稿（不是整段）
+    lastReply: { text: '怎么样', definite: '怎么样', start: 5000 },
+  });
+  const s = await boot({ asrConfig: asrConfigFromEnv({ HUPO_ASR_URL: stub.url }) });
+  const c = await connectAsr(s.wsBase, s.token);
+  c.ws.send(JSON.stringify({ type: 'asr/start' }));
+  await waitFor(c.events, (e) => e.type === 'asr/ready');
+  for (let n = 0; n < 3; n += 1) {
+    c.ws.send(Buffer.alloc(1600, 7));
+    await sleep(60);
+  }
+  const partials = c.events.filter((e) => e.type === 'asr/partial');
+  // ★ 两段**各占一个段号**（第二句不许顶掉第一句）
+  assert.deepEqual(partials.map((e) => `${e.index}:${e.text}`), ['0:今天天气', '1:怎么样', '1:怎么样'],
+      '★ 换句了段号必须往前走 —— 同一段号会被客户端按段替换，前半段就没了');
+  const finals = c.events.filter((e) => e.type === 'asr/final');
+  assert.deepEqual(finals.map((e) => `${e.index}:${e.text}`), ['1:怎么样']);
+
+  c.ws.send(JSON.stringify({ type: 'asr/stop' }));
+  const end = await waitFor(c.events, (e) => e.type === 'asr/end');
+  assert.equal(end.text, '今天天气怎么样',
+      '★ 收尾那条必须是**整段**（前半段 ＋ 后半段），不是最后那一段');
   await stub.close();
   await s.close();
 });
@@ -390,10 +436,11 @@ test('★ 连上之前推的音频不丢（先攒着，握上手就补发）', a
 test('★ `index` 要真的传下去（同一段替换全靠它 —— 少了它屏幕上就是一串重复）', async () => {
   const stub = await stubUpstream({
     scripts: [
-      { at: 1600, slice: 1, text: '今天', index: 0 },
-      { at: 3200, slice: 1, text: '今天天气', index: 0 },
-      { at: 4800, slice: 1, text: '挺好的。', index: 1 },
+      { at: 1600, text: '今天', definite: '今天', start: 0 },
+      { at: 3200, text: '今天天气', definite: '今天天气', start: 0 },   // 同一句又准了一点 ⇒ 还是 0 号段
+      { at: 4800, text: '挺好的。', definite: '挺好的。', start: 6000 }, // 换句 ⇒ 1 号段
     ],
+    lastReply: { text: '挺好的。', definite: '挺好的。', start: 6000 },
   });
   const s = await boot({ asrConfig: asrConfigFromEnv({ HUPO_ASR_URL: stub.url }) });
   const c = await connectAsr(s.wsBase, s.token);
@@ -406,13 +453,13 @@ test('★ `index` 要真的传下去（同一段替换全靠它 —— 少了它
     seen.push(ev.text);
   }
   const finals = c.events.filter((e) => e.type === 'asr/final');
-  // 三条都到了，而且**每一条都带着段号**（前两条 0、最后一条 1）
+  // 三条都到了，而且**每一条都带着段号**（同一句里 0、换句之后 1）
   assert.deepEqual(finals.map((e) => e.text), ['今天', '今天天气', '挺好的。']);
   assert.deepEqual(finals.map((e) => e.index), [0, 0, 1]);
-  // 收尾那条带上**最后听到的字**（不是空字）
+  // 收尾那条带上**整段**（两句接起来 —— 不是最后那一段）
   c.ws.send(JSON.stringify({ type: 'asr/stop' }));
   const end = await waitFor(c.events, (e) => e.type === 'asr/end');
-  assert.equal(end.text, '今天天气怎么样');
+  assert.equal(end.text, '今天天气挺好的。');
   await stub.close();
   await s.close();
 });

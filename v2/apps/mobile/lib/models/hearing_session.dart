@@ -167,6 +167,14 @@ class Hearing {
     return _put(index, text);
   }
 
+  /// ★ 2026-10-06：**整段那一份换掉拼起来的那一份**（收尾那条 `asr/end` 带的字）。
+  ///
+  /// 🔴 为什么不能按段塞进去：`asr/end` 带的是**整段**（服务端把前面几段接好了），
+  ///    而按段塞（`_put(index, 整段)`）会和前面那几段**重复一遍**
+  ///    —— 屏幕上就变成「今天今天天气怎么样」。⇒ 它是**整段**，就整段换掉。
+  Hearing replaceAll(String text) =>
+      text.trim().isEmpty ? this : _copy(segments: const <int, String>{}, settled: text);
+
   /// 整段收尾（服务端说 `asr/end`）⇒ 停下，**字留着**。
   ///
   /// ⚠️ **一个字都没听到的时候要说出来**（2026-09-23：主人手机上"按一下就没声了"，
@@ -259,9 +267,15 @@ class Hearing {
         //   ⚠️ `capped` 有它自己那句（"一次最多说一分钟"），不跟这条抢。
         final why = e['reason'];
         final cut = why == 'upstream' || why == 'engine';
-        final h = finalText(text, index: index);
+        // ★ 2026-10-06：收尾那条带的是**整段**（服务端 `asr.js` 把前面几段接好了）
+        //   ⇒ **整段换掉**拼起来的那一份（按段塞会和前面的段重复一遍）。
+        //   ⚠️ 它没带字（老引擎 / 空收尾）⇒ 一个字都不动，拼起来那份留着。
+        final h = replaceAll(text);
         if (!cut) return h.done();
-        return h.segments.isEmpty ? h.done() : h.broke('cut');
+        // ⚠️ 判"有没有字"要看**整份**（`hasText`），不是只看 `segments`：
+        //    `replaceAll` 之后字落在 `settled` 里，只看 segments 会把"断了但有字"
+        //    误判成"什么都没听到"（那就把原因擦掉了）。
+        return h.hasText ? h.broke('cut') : h.done();
       case 'asr/capped':
         return capped();
       case 'asr/unavailable':

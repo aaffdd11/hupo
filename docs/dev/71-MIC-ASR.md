@@ -71,9 +71,9 @@
 | 事件 | 意思 |
 |---|---|
 | `asr/ready` | 上游握手成了（`code:0`）——**这一条才算真开起来了** |
-| `asr/partial{text,index}` | 一段的**中间结果** |
+| `asr/partial{text,index}` | 一段的**中间结果**（`index` = **我们发的段号**；同一段里是"替换"，换段才往后走） |
 | `asr/final{text,index}` | 一段的结果（`slice_type` 1 或 2） |
-| `asr/end{text,index}` | 整段收尾（**带着最后听到的字**，不是空字） |
+| `asr/end{text,index}` | 整段收尾（**带着整段** —— 前面几段按段号接起来 ＋ 最后那一段，不是只有最后一段；见 `193-SPEAK-ACCUMULATE.md`） |
 | `asr/capped` | 到点了（上游内测版一条连接最多 1 分钟）⇒ 我们**提前**收手 |
 | `asr/error{reason,message,code?}` | 上游回错（鉴权 / 没开通 / 参数）——**只说它那句原话** |
 | `asr/unavailable{reason}` | 这台部署**没配钥匙**（如实说） |

@@ -275,8 +275,8 @@ async function runSpend() {
   const up = createDoubaoUpstream({ config: cfg, WebSocketImpl: TapWS, log: () => {} });
   up.open({
     onReady: () => events.push(['ready', '上游接了（第一帧回来了）']),
-    onPartial: (p) => events.push(['partial', p.text]),
-    onFinal: (p) => events.push(['final', p.text]),
+    onPartial: (p) => events.push(['partial', `${p.text}   [段号 ${p.index}]`]),
+    onFinal: (p) => events.push(['final', `${p.text}   [段号 ${p.index}]`]),
     onEnd: () => {
       events.push(['end', '（整段说完了）']);
       done = true;

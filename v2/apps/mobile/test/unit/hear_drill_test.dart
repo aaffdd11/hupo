@@ -127,6 +127,26 @@ void main() {
     expect(old.payload()['text'], '帮我看看天气');
   });
 
+  test('🔴 说了两句（停顿把它切成两段）⇒ **前半段不许被砍掉**', () {
+    // ★ 2026-10-06：主人 *"我说的话前半段会被砍掉。这个处理机制不对。"*
+    //   真读数（真连豆包 · 两句 · 中间停顿）：上游**按句给字**，说第二句时第一句
+    //   就不在回话里了 ⇒ 服务端现在自己按段攒（`createSegmentTracker`），
+    //   收尾那条 `asr/end` 带的是**整段**。这一条钉住客户端也跟着用整段。
+    var dr = const HearDrill().startListening();
+    dr = dr.event({'type': 'asr/partial', 'text': '今天天气', 'index': 0});
+    dr = dr.event({'type': 'asr/partial', 'text': '怎么样', 'index': 1});
+    dr = dr.event({'type': 'asr/final', 'text': '怎么样', 'index': 1});
+    dr = dr.event({'type': 'asr/end', 'text': '今天天气怎么样', 'index': 1, 'reason': 'user-stop'});
+    expect(dr.phase, DrillPhase.thinking);
+    expect(dr.said, '今天天气怎么样', reason: '★ 屏幕上那份"直白的字"也要是整段');
+    expect(dr.payload()['text'], '今天天气怎么样', reason: '★ 发出去（判语义）的更不许只剩后半段');
+    // 负向对照：**真只听到后半段**（前半段一个字都没有）⇒ 就照实的来，不许编
+    var half = const HearDrill().startListening();
+    half = half.event({'type': 'asr/final', 'text': '怎么样', 'index': 0});
+    half = half.event({'type': 'asr/end', 'text': '怎么样', 'index': 0});
+    expect(half.payload()['text'], '怎么样');
+  });
+
   test('🔴 同一句被两个段号各来一次 ⇒ **只算一遍**（不许发两遍给对面）', () {
     // 真机上那一串：`asr/final` 带 index 0、`asr/end` 带 index 1，字一模一样
     var dr = const HearDrill().startListening();

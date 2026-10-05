@@ -116,8 +116,27 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
     let ended = false;
     let cap = null;
     let lastText = '';
+    /**
+     * ★ 2026-10-06：**段号 → 那一段的字**（收尾那条要的是**整段**，见下 [`summary`]）。
+     *
+     * 🔴 为什么中继这一层也要攒一份：上游（豆包）按"这一句"给字，说下一句时
+     *    上一句就不在回话里了 —— 接成整段是上游那一跳（`createSegmentTracker`）干的，
+     *    而**收尾那条 `asr/end` 必须带整段**（主人 2026-10-06 报的
+     *    *"我说的话前半段会被砍掉"* 就是它只带了最后一段）。
+     *    ⚠️ 攒在这里（而不是让上游再送一个"整段"字段）**对换引擎也好使**：
+     *      哪个引擎只要按段号给字，这里拼出来就是整段。
+     * @type {Map<number, string>}
+     */
+    const segs = new Map();
     /** 最后见到的段号（收尾那条也带上，客户端好把最后一段收住）。 */
     let lastIndex = 0;
+
+    /** **整段**（按段号从小到大接起来）—— `asr/end` 那条带的字。 */
+    const summary = () =>
+      [...segs.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, t]) => t)
+        .join('') || lastText;
 
     const stopUpstream = () => {
       if (cap) clearTimeout(cap);
@@ -130,7 +149,7 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
     };
 
     /** 收尾：告诉客户端"整段结束了"，然后放掉两边。 */
-    const finish = (text = lastText) => {
+    const finish = (text = summary()) => {
       if (!ended) {
         ended = true;
         log(`asr：会话结束 · 收到 ${bytes} 字节 ≈ ${(bytes / 32000).toFixed(1)} 秒 · 原因：${why}`);
@@ -188,21 +207,30 @@ export function createAsrRelay({ config, now = Date.now, maxMs = ASR_MAX_MS, log
           send({ type: 'asr/ready', engine: config.engine });
         },
         onPartial: ({ text, index }) => {
-          if (text) lastText = text;
-          if (typeof index === 'number') lastIndex = index;
-          send({ type: 'asr/partial', text: text ?? '', index: typeof index === 'number' ? index : 0 });
+          const i = typeof index === 'number' ? index : 0;
+          if (text) {
+            lastText = text;
+            segs.set(i, text);
+          }
+          lastIndex = i;
+          send({ type: 'asr/partial', text: text ?? '', index: i });
         },
         onFinal: ({ text, index }) => {
-          // ⚠️ `definite` 是**这一段说完了**（上游按句给）；`index` 是它的位置 ——
-          //    客户端靠它**按段替换**（不然同一段会被接成一串重复的话）。
-          if (text) lastText = text;
-          if (typeof index === 'number') lastIndex = index;
-          send({ type: 'asr/final', text: text ?? '', index: typeof index === 'number' ? index : 0 });
+          // ⚠️ 上游说"这一段说完了"（`definite`）；`index` 是**我们发出去的那个段号**
+          //    （上游那一跳自己攒的，见 `createSegmentTracker`）—— 客户端靠它按段替换。
+          const i = typeof index === 'number' ? index : 0;
+          if (text) {
+            lastText = text;
+            segs.set(i, text);
+          }
+          lastIndex = i;
+          send({ type: 'asr/final', text: text ?? '', index: i });
         },
         onEnd: () => {
           why = '上游说整段说完了';
           reason = 'upstream';
-          finish(lastText);
+          // ⚠️ **带上整段**（默认参数就是 `summary()`）—— 不是最后那一段。
+          finish();
         },
         onError: (e) => {
           // ⚠️ **一句话都不许带密钥**（URL / token 都不进回话）
