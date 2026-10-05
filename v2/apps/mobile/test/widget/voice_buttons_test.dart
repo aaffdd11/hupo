@@ -170,4 +170,36 @@ void main() {
     expect(find.byTooltip(chatCollapse), findsNothing, reason: '★ 点它没收起来');
     expect(closedExpand.width >= 44, true);
   });
+
+  testWidgets('⑤ 🔴 三颗是**一体的**：那一列两块合起来 = 录音那颗的高度（上下也对齐）', (tester) async {
+    // 主人 2026-10-05：*"Chat按钮，展开聊天，播放语音，他们是一体的……他们高度不同。
+    //   就是展开关闭，播放语音两个合起来，高度应该和录音按钮是一样的。他们风格也应该统一。"*
+    await _pumpFloater(tester, onToggleSpeak: () {});
+    final expand = tester.getRect(find.byKey(chatHandleKey));
+    final speak = tester.getRect(find.byKey(chatSpeakKey));
+    Rect faceOf(Key k) => tester.getRect(
+          find.descendant(of: find.byKey(k), matching: find.byType(Container)).first,
+        );
+    final f1 = faceOf(chatHandleKey);
+    final f2 = faceOf(chatSpeakKey);
+
+    // ① 两块 + 中间那条缝 = 那颗圆圈的直径（公式在 `design.dart` 里被钉过）
+    expect(f1.height + d.voiceAuxGap + f2.height, d.voiceCircleBox,
+        reason: '★ 两块合起来不是 ${d.voiceCircleBox}（${f1.height} + ${d.voiceAuxGap} + ${f2.height}）');
+    // ② 那一列的两块**首尾相接、中间就是那条缝**
+    expect(f2.top - f1.bottom, d.voiceAuxGap, reason: '★ 两块之间的缝不是 ${d.voiceAuxGap}');
+    // ③ 手指能打到的仍是两颗各 ≥44（D3.6：视觉可以小，命中区不许小）
+    for (final r in [expand, speak]) {
+      expect(r.height >= 44 && r.width >= 44, true, reason: '★ 命中区只有 $r');
+    }
+    // ④ 风格统一：两颗的面与录音那颗圆圈**同一圈琥珀、同粗细**
+    for (final k in [chatHandleKey, chatSpeakKey]) {
+      final box = tester.widget<Container>(
+        find.descendant(of: find.byKey(k), matching: find.byType(Container)).first,
+      ).decoration! as BoxDecoration;
+      expect(box.border!.top.color, d.accent, reason: '★ 那一圈的顔色与录音那颗不一致');
+      expect(box.border!.top.width, d.voiceCircleRing, reason: '★ 那一圈的粗细与录音那颗不一致');
+      expect(box.color, d.card, reason: '★ 底色与录音那颗不一致（该是同一张纸的白）');
+    }
+  });
 }

@@ -33,6 +33,37 @@ bool get canSpeak {
   }
 }
 
+/// **音色一直在等**（2026-10-05 晚些时候加的）。
+///
+/// 🔴 为什么还要它：光靠 `voiceschanged` 那一条事件**会漏**（2026-10-05 主人报
+///    *"网页端无法显示播放语音按钮"*）—— 事件可能在页面听懂它之前就发过了，
+///    也可能这个浏览器**根本不发**那一条（各版本行为不一样，实测就是"那颗按钮不出现"）。
+/// ⇒ 再补一条**轮询**：每 [speakPollEvery] 看一次，最多看 [speakPollFor]；
+///    看到音色就举手（只举一次），到期还没有就安静收手（那颗按钮不画 —— 按规矩）。
+const Duration speakPollEvery = Duration(milliseconds: 500);
+const Duration speakPollFor = Duration(seconds: 20);
+
+void _pollVoices(void Function() onReady) {
+  final synth = html.window.speechSynthesis;
+  if (synth == null) return;
+  var waited = Duration.zero;
+  Timer.periodic(speakPollEvery, (t) {
+    waited += speakPollEvery;
+    var ok = false;
+    try {
+      ok = synth.getVoices().isNotEmpty;
+    } catch (_) {
+      ok = false;
+    }
+    if (ok) {
+      t.cancel();
+      onReady();
+      return;
+    }
+    if (waited >= speakPollFor) t.cancel();
+  });
+}
+
 /// **音色到位时举手一次**（2026-10-05 加的）。
 ///
 /// 🔴 为什么非要它：浏览器给音色是**异步**的（`onVoicesChanged`），而 `canSpeak` 是
@@ -43,6 +74,8 @@ bool get canSpeak {
 void watchSpeakReady(void Function() onReady) {
   final synth = html.window.speechSynthesis;
   if (synth == null) return;
+  // ⚠️ **轮询先挂上**：事件那条路会漏（见 `_pollVoices` 的注释）
+  _pollVoices(onReady);
   try {
     if (synth.getVoices().isNotEmpty) {
       // 已经到位 ⇒ 晚一步叫（`initState` 里同步 setState 是不许的）

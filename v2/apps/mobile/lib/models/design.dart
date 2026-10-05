@@ -143,11 +143,17 @@ const Duration recBlinkPeriod = Duration(milliseconds: 800);
 ///   （D3.6 原话就是"视觉仍小，用透明 padding 撑命中区"）—— 判据量的是**布局盒子**。
 const double voiceAuxW = 44;
 const double voiceAuxH = 44;
-const double voiceAuxGap = 2;
+const double voiceAuxGap = 4;
 
 /// **看得见的那一块**（里面那个有底色的长方形）。
+///
+/// 🔴 **2026-10-05 主人**：*"展开关闭，播放语音两个合起来，高度应该和录音按钮是一样的。
+///   他们风格也应该统一。"* ⇒ 两块 + 中间那条缝 = **正好等于那颗圆圈的直径**
+///   （`2 * voiceAuxFaceH + voiceAuxGap == voiceCircleBox`，判据钉着这条等式）。
+///   ⚠️ 外面那一格仍是 44 高（D3.6）：上面那颗的面**贴着下沿**、下面那颗**贴着上沿**
+///   ⇒ 那一列看起来是 64 高（与圆圈**上下对齐**），而手指能打到的仍是两颗各 44。
 const double voiceAuxFaceW = 40;
-const double voiceAuxFaceH = 28;
+const double voiceAuxFaceH = 30;
 
 /// 那一块的圆角（长方形，不是圆 —— 与聊天窗口那几颗按钮同一族的形状）。
 const double voiceAuxRadius = 9;

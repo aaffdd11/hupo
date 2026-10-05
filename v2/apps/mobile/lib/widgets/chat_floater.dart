@@ -438,6 +438,10 @@ class ChatFloaterState extends State<ChatFloater> {
   Widget _bottomRow(DshPalette p, {required bool collapsed}) => Row(
         children: [
           Expanded(child: widget.composer),
+          // ★ **那一列：两块合起来正好跟录音那颗圆圈一样高**（主人 2026-10-05：
+          //   *"展开关闭，播放语音两个合起来，高度应该和录音按钮是一样的。"*）
+          //   做法：外面那两格仍是 44 高（手指打得到，D3.6），但**看得见的面**贴着
+          //   内沿（上面那颗贴下沿、下面那颗贴上沿）⇒ 两块 + 中间那条缝 = 64。
           Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -445,10 +449,15 @@ class ChatFloaterState extends State<ChatFloater> {
               //   （主人 2026-10-05：*"那个展开窗口，你要帮我把它变成展开以后是变成缩小窗口的
               //   按钮啊，所以它位置就不变"*）—— 收起档是「展开」（平箭头朝上）；
               //   展开档就它自己变成「收起」（朝下，点一下收回去）。
-              _handle(p, collapsed: collapsed),
+              _handle(p, collapsed: collapsed, alignBottom: true),
               const SizedBox(height: d.voiceAuxGap),
-              // 念不出来的设备**一个按钮都不画**（`onToggleSpeak` 传 null）
-              if (widget.onToggleSpeak != null) _speakButton(p),
+              // 念不出来的设备**一个按钮都不画**（`onToggleSpeak` 传 null）——
+              // ⚠️ 但**那一格留着**：不留的话这一列会矮一半 ⇒ 上面那颗面与圆圈
+              //    对不齐（"他们是一体的"就散了）。位置恒定比省那 44 像素重要。
+              if (widget.onToggleSpeak != null)
+                _speakButton(p)
+              else
+                const SizedBox(width: d.voiceAuxW, height: d.voiceAuxH),
             ],
           ),
           const SizedBox(width: d.gapS),
@@ -479,7 +488,9 @@ class ChatFloaterState extends State<ChatFloater> {
           //   开着时整块变琥珀 —— 状态一眼看得出
           color: lit ? d.accent : d.card,
           borderRadius: BorderRadius.circular(d.voiceAuxRadius),
-          border: Border.all(color: lit ? d.accent : p.borderL3),
+          // 🔴 **风格统一**（主人 2026-10-05）：与录音那颗圆圈**同一圈琥珀色、同一个粗细**
+          //   —— 三颗长得是同一套东西，只是形状（圆 / 长方）不同。
+          border: Border.all(color: d.accent, width: d.voiceCircleRing),
         ),
         child: Center(child: child),
       );
@@ -492,17 +503,27 @@ class ChatFloaterState extends State<ChatFloater> {
   ///   ⚠️ 展开档**不再留空格**了（那正是他说的"变成缩小窗口的按钮"）。
   /// ⚠️ **单击 = 一次拉满 / 一次收起**（不再有"半开"、也不再有"拖着改高度"）。
   /// ⚠️ 字挂在 `Tooltip`（web 上悬停看得见）＋ 无障碍名上。
-  Widget _handle(DshPalette p, {required bool collapsed}) {
+  Widget _handle(DshPalette p, {required bool collapsed, bool alignBottom = false}) {
     final button = TextButton(
       key: chatHandleKey,
       onPressed: collapsed ? expand : collapse,
       style: _auxStyle(),
-      child: _auxFace(
-        p,
-        lit: false,
-        child: CustomPaint(
-          size: const Size(22, 6),
-          painter: _FlatChevron(color: p.labelTertiary, up: collapsed),
+      // ⚠️ **高度要写死成那一格**（44）：外面那一列的高度是**无界**的，
+      //    单摆一个 `Align` 会被框架自己那层 `Align(center)` 居中（实测：面与面之间
+      //    变成 18 而不是 4）⇒ 给一个**确定高度**的盒子，面才真的贴住内沿。
+      child: SizedBox(
+        height: d.voiceAuxH,
+        child: Align(
+        // ⚠️ 上面那一颗的面**贴着下沿**（这样两块 + 那条缝才 = 圆圈那么高）
+        alignment: alignBottom ? Alignment.bottomCenter : Alignment.topCenter,
+        child: _auxFace(
+          p,
+          lit: false,
+          child: CustomPaint(
+            size: const Size(22, 6),
+            painter: _FlatChevron(color: p.labelTertiary, up: collapsed),
+          ),
+        ),
         ),
       ),
     );
@@ -535,13 +556,20 @@ class ChatFloaterState extends State<ChatFloater> {
           key: chatSpeakKey,
           onPressed: widget.onToggleSpeak,
           style: _auxStyle(),
-          child: _auxFace(
-            p,
-            lit: on,
-            child: Icon(
-              on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-              size: d.voiceAuxIcon,
-              color: on ? d.card : p.labelTertiary,
+          child: SizedBox(
+            height: d.voiceAuxH,
+            child: Align(
+            // ⚠️ 下面那一颗的面**贴着上沿**（同上）
+            alignment: Alignment.topCenter,
+            child: _auxFace(
+              p,
+              lit: on,
+              child: Icon(
+                on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                size: d.voiceAuxIcon,
+                color: on ? d.card : p.labelTertiary,
+              ),
+            ),
             ),
           ),
         ),
