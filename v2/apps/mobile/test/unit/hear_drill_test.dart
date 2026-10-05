@@ -143,6 +143,40 @@ void main() {
     expect(onceOnly('好吗好吗'), '好吗');
   });
 
+  test('🔴 ⑥ 按停**当场**进"收尾中"，而且最后那一份字一个都不丢', () {
+    // 主人 2026-10-05：*"我们录音和停止录音上，点击停止录音响应很慢。"*
+    //   根子：按停之后这一台**还停在 `listening`**（要等 `asr/end` 才动）
+    //   ⇒ 那一秒多里屏幕上什么都没变（圆圈照旧闪着"我在录"）。
+    var dr = const HearDrill().startListening();
+    dr = dr.event({'type': 'asr/final', 'text': '帮我看看上海的天气', 'index': 0});
+    expect(dr.phase, DrillPhase.listening);
+
+    // 他按了停 ⇒ **立刻**换档（这就是"当场有反应"）
+    final stopped = dr.stopListening();
+    expect(stopped.phase, DrillPhase.wrapping, reason: '★ 按停必须当场换档，不许等对面');
+    expect(stopped.said, '帮我看看上海的天气', reason: '★ 已经听到的字留着');
+
+    // 🔴 负向对照：**收尾中来的帧照收**（丢了它 = "能转文字、没有后文"那一族）
+    final after = stopped.event({'type': 'asr/end', 'text': '帮我看看上海的天气', 'index': 0});
+    expect(after.phase, DrillPhase.thinking, reason: '★ 最后那一份字到了 ⇒ 进"听懂"那一层');
+    expect((after.payload()['text'] as String), '帮我看看上海的天气');
+
+    // 收尾中来的**半句**也要接得上（不是只认 end）
+    final more = stopped.event({'type': 'asr/partial', 'text': '帮我看看上海的天气', 'index': 0});
+    expect(more.phase, DrillPhase.wrapping, reason: '★ 收尾中仍旧在收字，别把它踢出这一场');
+
+    // 🔴 负向对照：**没在听、也没在收尾**的时候来的帧，不许把这一场弄乱
+    final idle = const HearDrill().event({'type': 'asr/end', 'text': '天上掉下来的'});
+    expect(idle.phase, DrillPhase.idle, reason: '★ 没开场就来的帧一个字都不许认');
+    final asking = const HearDrill()
+        .startListening()
+        .utterance('上周的账')
+        .heardBack(ok: true, heard: '上周的账', ask: '哪一本账？');
+    expect(asking.phase, DrillPhase.asking);
+    expect(asking.event({'type': 'asr/end', 'text': '迟到的定稿'}).phase, DrillPhase.asking,
+        reason: '★ 正在问他话的时候，迟到的定稿不许把那一问冲掉');
+  });
+
   test('④ 没在等答的时候说一句 = 那是"这一场的第一句"（不许把状态搞乱）', () {
     final dr = const HearDrill().startListening();
     final after = dr.utterance('随便说一句');

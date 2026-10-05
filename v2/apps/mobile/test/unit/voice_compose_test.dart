@@ -153,6 +153,33 @@ void main() {
     expect(b.s.said.first, '帮我把账理一下，按天分。');
   });
 
+  test('V6 🔴 按停**当场**有反应（不许等对面那一帧），而且字一个都不丢', () async {
+    // 主人 2026-10-05：*"我们录音和停止录音上，点击停止录音响应很慢。"*
+    //   量的是**按下去那一刻**的状态：原来它还是 `listening`（屏幕上照旧闪着"我在录"），
+    //   要等 `asr/end` 回来才动 ⇒ 那一段就是"点了没反应"。
+    final b = _boot([
+      {'heard': '帮我查一下明天的天气', 'ask': null, 'scene': 'do'},
+    ]);
+    await b.c.toggleVoiceCompose();
+    expect(b.c.voiceFlow.phase, DrillPhase.listening, reason: '起点：在听');
+    b.mic.on?.call({'type': 'asr/final', 'text': '帮我查一下明天的天气'});
+
+    // **按停这一下**（还没来任何一帧）
+    await b.c.toggleVoiceCompose();
+    expect(b.c.voiceFlow.phase, DrillPhase.wrapping,
+        reason: '★ 按停当场就得换档 —— 屏幕上那一下"收下了，正在整理……"就是从这儿来的');
+
+    // 再点一下**不许开第二场**（不然他刚说的那半句会被冲掉）
+    await b.c.toggleVoiceCompose();
+    expect(b.c.voiceFlow.phase, DrillPhase.wrapping, reason: '★ 收尾中再点也不许重开');
+
+    // 对面最后那一份字到了 ⇒ 照旧往下走（**一个字都没丢**）
+    b.mic.on?.call({'type': 'asr/end', 'text': '帮我查一下明天的天气', 'reason': 'upstream'});
+    await _waitFor(() => b.s.said.isNotEmpty, '收尾之后照样发得出去');
+    expect(b.s.said, ['帮我查一下明天的天气']);
+    expect(b.c.voiceFlow.phase, DrillPhase.idle, reason: '这一场收干净');
+  });
+
   test('V5 开麦失败 ⇒ 如实说、不发；打字那条兜底照样通', () async {
     final b = _boot([
       {'heard': '帮我查一下明天的天气', 'ask': null, 'scene': 'do'},

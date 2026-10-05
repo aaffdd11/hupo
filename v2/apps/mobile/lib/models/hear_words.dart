@@ -19,6 +19,13 @@ const String hearDrillIdleLead = '按一下下面那颗，说一句试试。';
 /// 正在听。
 const String hearDrillListeningLead = '我在听，说完按一下停。';
 
+/// 🔴 **他按了停、正在等最后那一份字**（2026-10-05 加的）。
+///
+/// ⚠️ 这一句是**给他一个即时回应**的：主人报*"点击停止录音响应很慢"* ——
+///    原来按停之后屏幕上那一秒多**一个字都不变**（看起来就是没反应）。
+///    它**只在这一档说**，`asr/end` 一到就换成"我在听懂你这句……"。
+const String hearDrillWrappingLead = '收下了，正在整理……';
+
 /// 正在听懂（那一下很短）。
 const String hearDrillThinkingLead = '我在听懂你这句……';
 

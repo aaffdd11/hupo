@@ -156,9 +156,22 @@ export async function netHostsFor(apps, id) {
       : (await apps.list()).find((a) => a.id === id);
     if (!meta) return [];
     if (!Array.isArray(meta.permissions) || !meta.permissions.includes('net')) return [];
+    /**
+     * 🔴 **"他点头了没有"有两个来源，按 store 是什么分岔**（2026-10-05 修的真缺陷）：
+     *   · 本机那份 `Apps` **有 `grants()`** ⇒ 问它；
+     *   · **盒代理没有 `grants()`**（`apps-box.js` 只有 `list()`）⇒ 只能读清单里那格
+     *     `granted` —— 盒子里那条 `/internal/apps` **本来就把 `granted` 一起带回来了**
+     *     （`server.js` 那段注释：一趟带回，省二十次隧道往返）。
+     *   ⚠️ **原来这里没读它** ⇒ 租户那一侧**永远读不到"他点头了"** ⇒
+     *     名单恒为空 ⇒ 响应头里 `connect-src` 只有 `'self'` ⇒
+     *     **主人报的那件事**：*"天气小程序，新增了网络访问权限，但是显示网络无法联通"*
+     *     （他确实点了授予，`/api/apps` 里那格也真是 `granted:['net']` —— 页面却连不出去）。
+     *   ⚠️ **没带 `granted` 那一格（老盒子）⇒ 仍是空名单**（fail-closed：宁可连不出去）。
+     */
     let granted = [];
     try {
-      granted = typeof apps.grants === 'function' ? apps.grants(id) : [];
+      if (typeof apps.grants === 'function') granted = apps.grants(id);
+      else if (Array.isArray(meta.granted)) granted = meta.granted;
     } catch {
       granted = [];
     }

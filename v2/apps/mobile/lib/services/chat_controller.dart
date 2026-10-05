@@ -342,6 +342,15 @@ class ChatController extends ChangeNotifier {
   ///    不承诺时间——"3 秒后消失"那类话是承诺，一个都不许有）。
   static const noticeLinger = Duration(seconds: 6);
 
+  /// 🔴 **他按了停之后，"收尾中"最多等多久**（2026-10-05 加的）。
+  ///
+  /// ⚠️ 与 `services/hearing_web.dart` / `hearing_native.dart` 的 `_lingerLimit`（8 秒）
+  ///    **同一个量级**：那个一到，那条连接就被收干净了 —— **之后再不会有任何一帧**。
+  ///    ⇒ 这一条必须不晚于它（今天取同值），否则屏幕上就永远停在"收下了，正在整理……"
+  ///    （"没有后文"那一族的老病）。
+  /// ⚠️ 时长住这一处、**不许写进任何给他看的话**（不承诺时间）。
+  static const stopLinger = Duration(seconds: 8);
+
   /// **这条连接还在读首屏那段历史吗**（见 `ingest()` 里 `__caught_up__` 那一段）。
   /// ⚠️ 每次连上都从 `true` 开始，读到服务端那条 `client/hello` 才变 `false`。
   bool _readingHistory = true;
@@ -852,12 +861,25 @@ class ChatController extends ChangeNotifier {
   int voiceSent = 0;
 
   /// 那一颗圆圈：按一下开始录，再按一下停。
+  ///
+  /// 🔴 **2026-10-05：按停要"当场有反应"**（主人报：*"点击停止录音响应很慢"*）——
+  ///    原来按停只做了一件事（把那一路麦撒手），**状态机不动、屏幕也不重画**
+  ///    ⇒ 要等 `asr/end` 那一帧回来（对面收尾，往往一秒多）屏幕上才变。
+  ///    ⇒ 现在按停**立刻**进 `wrapping`（圆圈不闪了、字说"收下了，正在整理……"）。
   Future<void> toggleVoiceCompose() async {
-    if (_voiceFlow.hearing.listening) {
+    if (_voiceFlow.phase == DrillPhase.listening) {
       _stopHear();
+      _voiceFlow = _voiceFlow.stopListening();
+      notifyListeners();
+      // ⚠️ 兜底：万一对面一直不吐最后那一份（连接被收掉就再也不会有帧），
+      //    也**不许停在"收尾中"** —— 到点就用手上已经听到的那一份往下走。
+      _stopTimer?.cancel();
+      _stopTimer = Timer(stopLinger, _wrappingTimedOut);
       return;
     }
-    if (_voiceFlow.phase == DrillPhase.thinking) return; // 正在懂，别抢
+    // 收尾中 / 正在懂：再点也不许开第二场（那会把他刚说的那半句冲掉）
+    if (_voiceFlow.phase == DrillPhase.wrapping) return;
+    if (_voiceFlow.phase == DrillPhase.thinking) return;
     _voiceFlow = _voiceFlow.startListening();
     notifyListeners();
     final why = await hearOnce(_onComposeFrame);
@@ -866,6 +888,21 @@ class ChatController extends ChangeNotifier {
       _voiceFlow = _voiceFlow.micFailed(why);
       notifyListeners();
     }
+  }
+
+  /// 收尾那条兜底定时器（见 [stopLinger]）。
+  Timer? _stopTimer;
+
+  /// 收尾等到头了（对面一直没吐）：**手上那份字照用**，一个字都不丢。
+  void _wrappingTimedOut() {
+    _stopTimer = null;
+    if (_voiceFlow.phase != DrillPhase.wrapping) return;
+    final said = _voiceFlow.said.trim();
+    _voiceFlow = said.isEmpty
+        ? _voiceFlow.heardBack(ok: false, note: '这句我没听清，再说一遍。')
+        : _voiceFlow.utterance(said);
+    notifyListeners();
+    if (_voiceFlow.phase == DrillPhase.thinking) unawaited(_composeThink());
   }
 
   /// **打字那条兜底路**（麦克风真用不了时）：那一句与"说出来的"同一个去处。
@@ -879,6 +916,11 @@ class ChatController extends ChangeNotifier {
     final before = _voiceFlow;
     final after = _voiceFlow.event(e);
     _voiceFlow = after;
+    // 已经离开"收尾中" ⇒ 那条兜底定时器不用了
+    if (after.phase != DrillPhase.wrapping) {
+      _stopTimer?.cancel();
+      _stopTimer = null;
+    }
     notifyListeners();
     // 他这一段说完了（`asr/end`）⇒ 送进听懂那一层
     if (before.phase != DrillPhase.thinking && after.phase == DrillPhase.thinking) {
@@ -1734,6 +1776,9 @@ class ChatController extends ChangeNotifier {
     //    通知器（而且在测试里**留一个没走完的定时器本身就是一种失败**）。
     _noticeTimer?.cancel();
     _noticeTimer = null;
+    // ⚠️ 收尾那条兜底钟同理（它到点会去动已经 dispose 的状态）
+    _stopTimer?.cancel();
+    _stopTimer = null;
     // ⚠️ 离开这一屏就**别再念了**（用户走了、声音还在说话 = 这一族最讨嫌的形状）
     _stopSpeaking();
     // 🔴 离开这一屏也**必须关麦**：麦克风开着而人已经走了，是这一族里最严重的一种

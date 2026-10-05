@@ -23,6 +23,16 @@ enum DrillPhase {
   /// 麦克风开着，正在听。
   listening,
 
+  /// 🔴 **他按了停，正在等对面把最后那一份字吐回来**（2026-10-05 加的）。
+  ///
+  /// 主人报的：*"我们录音和停止录音上，点击停止录音响应很慢。"*
+  /// 根子在**这一档原来不存在**：按了停之后，麦克风当场就撒手了，可这一台状态机
+  /// **还停在 `listening`**（要等 `asr/end` 那一帧回来才动）⇒ 那一秒多里屏幕上
+  /// **什么都没变**（圆圈照旧亮着/闪着、字照旧），看起来就是"点了没反应"。
+  /// ⇒ 现在按停**立刻**进这一档：圆圈不闪了、字说"收下了，正在整理……"，
+  /// 而 `asr/end` 一到就照旧进 [thinking]（**字一个都不丢** —— [event] 在这一档照收）。
+  wrapping,
+
   /// 说完了，正在把这一句送进听懂那一层。
   thinking,
 
@@ -130,12 +140,20 @@ class HearDrill {
   ///     这一层当时只认"从零开始的那一下"。）
   HearDrill startListening() => _copy(phase: DrillPhase.listening, hearing: const Hearing().tapped(), note: '');
 
+  /// 🔴 **他按了停**（2026-10-05）：**立刻**换档 —— 不再"装作还在听"。
+  ///
+  /// ⚠️ 这一下**一个字都不许丢**：`hearing` 原样留着，`asr/end` 回来时照旧进 [utterance]。
+  /// ⚠️ 它**不动 `hearing`**：那台状态机由它自己那几帧推（`asr/end` 一到就收干净）。
+  HearDrill stopListening() => _copy(phase: DrillPhase.wrapping);
+
 
   /// 语音那边回来的一帧（**原样喂给那台状态机**，与聊天那颗话筒同一条路）。
   ///
-  /// ⚠️ 只有"正在听"的时候才理它：别的档里来的帧（迟到的定稿）不许把这一场弄乱。
+  /// ⚠️ 只有"正在听"与**"收尾中"**这两档才理它：别的档里来的帧（迟到的定稿）不许把这一场弄乱。
+  ///    🔴 `wrapping` 那一档**必须收**：他按了停之后，最后那一份字正是这时候回来的
+  ///    （不许它被丢掉 —— 那就是"能转文字、没有后文"那一族的老病）。
   HearDrill event(Map<String, dynamic> e) {
-    if (phase != DrillPhase.listening) return this;
+    if (phase != DrillPhase.listening && phase != DrillPhase.wrapping) return this;
     final next = hearing.event(e);
     // 🔴 **`asr/end` ＝ "他这一段说完了"** —— 这就是该送进听懂那一层的那一刻。
     //   ⚠️ **不看引擎给的那个 `reason`**：真机（网页那一份）在**每次停顿**处都会收一段，

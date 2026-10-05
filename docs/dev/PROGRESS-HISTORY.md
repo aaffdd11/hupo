@@ -1056,6 +1056,28 @@ deepseek harness 才行。"* —— **他是对的**：在那之前我验的只�
 
 ---
 
+<a id="b72"></a>
+
+### 九·补72 · 2026-10-05（`#289` 这一轮 · **已重建 · 已核对 · 已重启**）
+
+| 改哪 | 改什么 | 为什么 |
+|---|---|---|
+| 🔴 `docs/handbook/05-DECISIONS.md` | `D3.14` 再补两处（按停当场有反应 · 在录时那颗圆圈一明一暗） | 它是 **`strict`**（手册就是判据）⇒ 不重建 ⇒ 下次重启拒绝启动 |
+| 🔴 `docs/handbook/CHANGELOG.md` | 升 **v2.56** | 同上 |
+| （只报不拦） | `src/app-serve.js`（`netHostsFor` 读清单里那格 `granted`） | `src/` 是只报不拦 |
+| （不在覆盖里） | 客户端那几份（`hear_drill` / `chat_controller` / `voice_bar` / `rec_blink` / `design`） | `apps/` 不在开机清单里 |
+
+**重建留痕**（`AGENTS.md` §8.1）：**时间** 2026-10-05 07:5x UTC＋8 · **命令** 与 §九·补50 同一条
+（绝对路径 `node` ＋ 口令走 stdin）· **动了哪几个文件**：只有 `/etc/hupo/integrity.json`
+（**222 个文件** · 只读 444 · `root:root`）· **重建后**：`verify-integrity` **✅ 对上了**。
+**重启**：`scripts/restart-core.sh` —— 横幅「完整性 **对上了**」· 产品层
+**`f107e13c082f → 8a055f4b8c91`**（`--verify` 过）· 网页入口指纹 **`0c581cc8536b`**
+（源码 `71bf985ac437`）· 公网 **200** · 浏览器那条路通（1 条 WS、131 帧、令牌续期）。
+🔴 **这一轮最要紧的那条真读数**：`shanghai-weather` 的签名活地址，
+响应头 `connect-src` 由 `'self'` 变成 **`'self' https://api.open-meteo.com`**。
+
+---
+
 <a id="b71"></a>
 
 ### 九·补71 · 2026-10-05（`#288` 这一轮 · **已重建 · 已核对 · 已重启**）

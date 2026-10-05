@@ -243,20 +243,34 @@ test('netHostsFor：三道闸缺一不可（没声明 / 他关掉 / 读不出来
   nodeFs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('租户那一侧也拿得到名单（盒代理没有 meta ⇒ 走它的清单）', async () => {
+test('租户那一侧也拿得到名单（盒代理没有 meta / grants ⇒ 读清单里那格 `granted`）', async () => {
   const dir = tmpdir();
   const apps = new Apps({ dir, sub: 'owner', now: () => NOW });
   apps.create({ id: 'shuju', title: '看数据', icon: 'dice', entry: 'index.html', files: { 'index.html': '<p>x</p>' }, permissions: ['net'], net: ['api.example.com'] });
-  // 一个"盒代理"的替身：只有 list()（没有 meta）—— 形状照 `apps-box.js`
-  const boxLike = {
+  /**
+   * 🔴 **2026-10-05 改的（真缺陷：主人报"天气小程序……显示网络无法联通"）**。
+   *
+   * 盒代理（`apps-box.js`）**只有 `list()`**，没有 `meta()`、也没有 `grants()` ——
+   * 而盒子里那条 `/internal/apps` **本来就把 `granted` 一起带回来了**
+   * （`server.js` 那段注释：一趟带回，省二十次隧道往返）。
+   * ⚠️ 这一份替身**必须照盒代理真的返回什么来造**（那次就是替身造得太好、把缺陷挡住了）。
+   */
+  const boxLike = (extra) => ({
     isBox: true,
-    list: async () => apps.list(),
-    grants: undefined,
-  };
-  // ⚠️ 盒代理没有 grants ⇒ `netHostsFor` 会当"他关掉了"处理吗？不会：
-  //    它只在**明确读出来是空**时才空 —— 读不出来（这里 grants 不存在）按"没有授予信息"处理。
-  //    🔴 这条如实钉住今天的行为，等盒子那一侧的 grants 接上再改（见 §二·欠）。
-  const got = await netHostsFor(boxLike, 'shuju');
-  assert.deepEqual(got, [], '盒代理今天读不到 grants ⇒ **fail-closed**（宁可连不出去）');
+    list: async () => apps.list().map((a) => ({ ...a, ...extra })),
+  });
+
+  // ① 盒子里说"他点头了" ⇒ **名单进得来**（这一条就是主人报的那件事）
+  const yes = await netHostsFor(boxLike({ granted: ['net'] }), 'shuju');
+  assert.deepEqual(yes, ['api.example.com'],
+      '★ 他授予了 net ⇒ 这个名字必须进得了响应头的 connect-src（不然页面就是"连不出去"）');
+
+  // ② 他关掉了（盒子里 `granted` 是空）⇒ 空名单
+  assert.deepEqual(await netHostsFor(boxLike({ granted: [] }), 'shuju'), [],
+      '★ 关掉 ⇒ 当场连不出去（那一下由浏览器执行，这条是"设置里能关"真的成立的地方）');
+
+  // ③ 老盒子**不带那一格** ⇒ 空名单（fail-closed：宁可连不出去，也不许猜"他点头了"）
+  assert.deepEqual(await netHostsFor(boxLike({}), 'shuju'), [],
+      '★ 读不出"他点头了没有" ⇒ 空名单（fail-closed）');
   nodeFs.rmSync(dir, { recursive: true, force: true });
 });

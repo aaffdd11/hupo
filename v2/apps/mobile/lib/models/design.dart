@@ -120,6 +120,15 @@ const double recPulseBarMin = 6;
 const double recPulseBarMax = 22;
 const Duration recPulsePeriod = Duration(milliseconds: 900);
 
+/// ★ **2026-10-05：在录时那颗圆圈"一明一暗"地闪**。
+///
+/// 主人原话：*"录音按钮在激活的时候，要有一个循环的效果，就是颜色一明一暗的闪烁。"*
+/// ⇒ 底色在 [accent] 与 [accentLit] 之间来回走（一个来回 = [recBlinkPeriod]）。
+/// ⚠️ 这只是**颜色**在变，圆圈的大小 / 位置 / 命中区一个像素都不动
+///    （动了就等于"按钮在自己跳"，反而更难按）。
+const Color accentLit = Color(0xFFE2684F);
+const Duration recBlinkPeriod = Duration(milliseconds: 800);
+
 /// ── 一条规矩（2026-09-23 整理 UI 时定下来）──────────────────
 ///
 /// **平面用描边，浮起来用阴影，两样不许同时上。**

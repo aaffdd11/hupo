@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import '../models/design.dart' as d;
 import '../models/hear_drill.dart';
 import '../models/hear_words.dart';
+import 'rec_blink.dart';
 
 /// 底下那一格。
 class VoiceBar extends StatefulWidget {
@@ -67,7 +68,12 @@ class _VoiceBarState extends State<VoiceBar> {
     super.dispose();
   }
 
-  bool get _listening => widget.flow.hearing.listening;
+  /// **那颗圆圈现在是不是在录**（🔴 **按 `phase` 判，不许按 `hearing.listening`**）。
+  ///
+  /// ⚠️ 2026-10-05：他按了停之后进的是 `wrapping`（等对面吐最后那一份字），
+  ///    那会儿 `hearing.listening` **还是 true**（要等 `asr/end` 才收）——
+  ///    拿它当判据的话，屏幕上会**继续闪着"我在录"**（那就是主人报的"按了没反应"）。
+  bool get _listening => widget.flow.phase == DrillPhase.listening;
 
   /// **打字那条退路**要不要摊开（默认不摊 —— 空白时屏幕上一个字都不许有）。
   bool _typing = false;
@@ -79,6 +85,9 @@ class _VoiceBarState extends State<VoiceBar> {
       case DrillPhase.listening:
         final said = f.said.trim();
         return (text: said.isEmpty ? hearDrillListeningLead : said, loud: true);
+      case DrillPhase.wrapping:
+        // 🔴 他刚按了停 ⇒ **当场给一句话**（不然那一秒多屏幕上什么都不变）
+        return (text: hearDrillWrappingLead, loud: true);
       case DrillPhase.thinking:
         final said = f.said.trim();
         return (text: said.isEmpty ? hearDrillThinkingLead : said, loud: true);
@@ -143,6 +152,10 @@ class _VoiceBarState extends State<VoiceBar> {
   }
 
   /// 那颗圆圈：**全局最显眼的一颗**（它服务的是打不了字、眼神不好的人）。
+  ///
+  /// 🔴 **2026-10-05：在录的时候它是"一明一暗"地闪的**（主人：*"录音按钮在激活的时候，
+  ///    要有一个循环的效果，就是颜色一明一暗的闪烁。"*）—— 亮的那个值由 [RecBlink] 给，
+  ///    这一层只负责把它画成底色（**尺寸/位置/命中区一个像素都不动**）。
   Widget _circle(ThemeData t) => Semantics(
         button: true,
         label: _listening ? hearDrillStopLabel : hearDrillTalkLabel,
@@ -150,18 +163,30 @@ class _VoiceBarState extends State<VoiceBar> {
           key: voiceBarCircleKey,
           width: d.voiceCircleBox,
           height: d.voiceCircleBox,
-          child: Material(
-            color: _listening ? d.accent : d.card,
-            shape: const CircleBorder(),
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: widget.onMic,
-              child: Icon(
-                _listening ? Icons.stop_rounded : Icons.mic_none_rounded,
-                size: d.voiceCircleIcon,
-                color: _listening ? d.card : d.ink,
-              ),
-            ),
+          child: RecBlink(
+            on: _listening,
+            builder: (context, glow) {
+              // 收尾中（`wrapping`）：**这颗圆圈这一小会儿没有可做的事**
+              //   ⇒ 画成"淡淡的、按不动"的样子（诚实：按了也没用），
+              //     而**不是**继续闪着"我在录"（那正是他报的那个"慢"）。
+              final busy = widget.flow.phase == DrillPhase.wrapping;
+              final on = _listening;
+              return Material(
+                color: on ? recBlinkColor(glow) : d.card,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: busy ? null : widget.onMic,
+                  child: Icon(
+                    on ? Icons.stop_rounded : Icons.mic_none_rounded,
+                    size: d.voiceCircleIcon,
+                    color: on
+                        ? d.card
+                        : (busy ? d.muted : d.ink),
+                  ),
+                ),
+              );
+            },
           ),
         ),
       );
