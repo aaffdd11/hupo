@@ -262,6 +262,11 @@ const Duration motionAppOpen = Duration(milliseconds: 500);
 const double voiceCircleBox = 64; // ≥44（D3.6）
 const double voiceCircleIcon = 30;
 
+/// ★ **2026-10-05：还没校正的那一份字下面那条下划线**（主人：*"第一步给下划线，
+///   第二步转换才去掉下划线"*）—— 颜色用琥珀（与"正在处理"那一族同色），一条细线：
+///   它只说"这一份还没校正"，不是装饰。
+const double voiceRawUnderline = 1.5;
+
 /// ★ **2026-10-05：那颗圆圈外面那一圈琥珀色**（主人：*"外面要加一个边框啊，这个边框就是
 ///   有那个琥珀色，就是按下去录音时候的那个颜色"*）—— 平时也带着它。
 const double voiceCircleRing = 1.5;

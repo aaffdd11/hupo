@@ -4,7 +4,7 @@
 // 这一份钉四件（每件都带反例）：
 //   ① 🔴 **正在录 ⇒ 底色真的在变**（拿同一个 widget 的颜色量，不看"像在闪"）；
 //   ② 🔴 **不录 ⇒ 一个像素都不动**（底色跨帧恒等）；
-//   ③ 🔴 **按停（收尾中）⇒ 不闪了，而且屏幕上当场换成那句"收下了，正在整理……"**
+//   ③ 🔴 **按停（收尾中）⇒ 不闪了，而且屏幕上当场有反应**（有字就留着他那份字，一个字都没说才给提示）
 //      —— 主人报的"点击停止录音响应很慢"修的就是这一条；
 //   ④ 🔴 **那个永不结束的动画必须读总开关**（手册 §6.1.1 M1–M4）：
 //      关掉之后判据**不超时**、而且**那一层照旧画**（M3：不动 ≠ 没有）。
@@ -94,9 +94,12 @@ void main() {
   testWidgets('③ 🔴 按停（收尾中）⇒ **当场**换成那句话，而且不闪了', (tester) async {
     // 主人 2026-10-05：*"我们录音和停止录音上，点击停止录音响应很慢。"*
     //   ⇒ 这一档是"按下去那一刻"的样子：字换了、底色不再是"在录"那个红。
+    // ⚠️ **2026-10-05 改了口径**（主人：*"第一步是把直白的语音转文字写出来……
+    //   不要直接结束"*）：收尾中**说的是他刚说的那份字**（带下划线），
+    //   **不再拿"收下了，正在整理……"把字盖掉** —— 那句只在他一个字都没说时才出来。
     await _pump(tester, _wrapping());
-    expect(find.text(hearDrillWrappingLead), findsOneWidget,
-        reason: '★ 按停之后屏幕上必须当场有一句话（不然就是"点了没反应"）');
+    expect(find.text('帮我看看天气'), findsOneWidget,
+        reason: '★ 收尾中该看见**他刚说的那份字**（不是把它换成一句提示）');
     expect(_circleColor(tester), d.card, reason: '★ 已经不在录了 ⇒ 不许还画着"在录"那个底色');
     expect(find.byIcon(Icons.mic_none_rounded), findsOneWidget);
     expect(find.byIcon(Icons.stop_rounded), findsNothing, reason: '★ 收尾中不许还摆着"停"那个方块');
@@ -104,7 +107,10 @@ void main() {
     // 负向对照：在录那一档**必须**是"停"那个方块 + 不是白底
     await _pump(tester, _listening());
     expect(find.byIcon(Icons.stop_rounded), findsOneWidget);
-    expect(find.text(hearDrillWrappingLead), findsNothing, reason: '★ 没按停就不许说"收下了"');
+    // ⚠️ 负向对照：**一个字都没说**的收尾中 ⇒ 那句提示要出来（不然屏幕上什么都没有）
+    await _pump(tester, const HearDrill().startListening().stopListening());
+    expect(find.text(hearDrillWrappingLead), findsOneWidget,
+        reason: '★ 一个字都没说的时候，收尾中必须有一句人话');
   });
 
   testWidgets('② 🔴 不在录 ⇒ 底色跨帧一个字节都不许变（不许自己闪）', (tester) async {
@@ -152,5 +158,45 @@ void main() {
     final before = _circleColor(tester);
     await tester.pump(const Duration(milliseconds: 400));
     expect(_circleColor(tester), before, reason: '★ 关着开关它还在动');
+  });
+
+  testWidgets('⑥ 🔴 第一步那份"直白的字"**带下划线**，校正回来才去掉（主人 2026-10-05）', (tester) async {
+    // 主人原话：*"第一步是把直白的语音转文字写出来，然后是语义校正。通用的办法是
+    //   第一步给下划线，第二步转换才去掉下划线。"*
+    TextDecoration? decoOf(WidgetTester t) {
+      final texts = t.widgetList<Text>(find.byType(Text)).toList();
+      for (final x in texts) {
+        final d = x.style?.decoration;
+        if (d != null) return d;
+      }
+      return null;
+    }
+
+    // ① 在听（字还在长）⇒ **带下划线**
+    await _pump(tester, const HearDrill().startListening().utterance('帮我看一下明天北京的天气予报'),
+        settle: true);
+    // ⚠️ `utterance` 会把它推进 `thinking`（那也是"还没校正"那一档）
+    expect(decoOf(tester), TextDecoration.underline, reason: '★ 还没校正的那份字没有下划线');
+
+    // ② 收尾中（他按了停、还没等到对面）⇒ **还是带下划线**
+    await _pump(tester, _wrapping());
+    expect(decoOf(tester), TextDecoration.underline, reason: '★ 收尾中那份字该还是"没校正"的样子');
+
+    // ③ 校正回来了（可以发了）⇒ **下划线去掉**
+    final ready = const HearDrill()
+        .startListening()
+        .utterance('帮我看一下明天北京的天气预报')
+        .heardBack(ok: true, heard: '帮我看一下明天北京的天气预报');
+    await _pump(tester, ready);
+    expect(decoOf(tester), isNot(TextDecoration.underline),
+        reason: '★ 校正回来了下划线还在 ⇒ 他分不出"这一步过了没有"');
+
+    // 负向对照：它在问那一档 ⇒ 也**不带**下划线（那一句是它问的，不是他说的那份字）
+    final asking = const HearDrill()
+        .startListening()
+        .utterance('那个东西弄一下')
+        .heardBack(ok: true, heard: '那个东西弄一下', ask: '哪个东西？');
+    await _pump(tester, asking);
+    expect(decoOf(tester), isNot(TextDecoration.underline));
   });
 }

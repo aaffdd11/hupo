@@ -153,7 +153,17 @@ class HearDrill {
   ///    🔴 `wrapping` 那一档**必须收**：他按了停之后，最后那一份字正是这时候回来的
   ///    （不许它被丢掉 —— 那就是"能转文字、没有后文"那一族的老病）。
   HearDrill event(Map<String, dynamic> e) {
-    if (phase != DrillPhase.listening && phase != DrillPhase.wrapping) return this;
+    if (phase != DrillPhase.listening && phase != DrillPhase.wrapping) {
+      // 🔴 **2026-10-05 主人**：*"用户点击结束录音，你要等待语音结束和语义转换结束。
+      //   不要直接结束。"* ⇒ 两条：
+      //   ① 按停之后**不直接收场**（见 [stopListening] 与控制器那条兜底钟）；
+      //   ② **迟到的定稿也不许扔掉** —— 正在"听懂"那一层跑的时候（`thinking`）
+      //      它到了就把字**收进来**：屏幕上那份"直白的字"当场补全
+      //      （⚠️ **不重跑**那一层：重跑要再花一次他的钱，而且那一条已经在路上了）。
+      //      ⚠️ 已经在问 / 已经可以了 ⇒ 一个字节都不动（那两步的显示不是这一份字）。
+      if (phase == DrillPhase.thinking) return _copy(hearing: hearing.event(e));
+      return this;
+    }
     final next = hearing.event(e);
     // 🔴 **`asr/end` ＝ "他这一段说完了"** —— 这就是该送进听懂那一层的那一刻。
     //   ⚠️ **不看引擎给的那个 `reason`**：真机（网页那一份）在**每次停顿**处都会收一段，

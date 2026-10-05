@@ -1056,6 +1056,24 @@ deepseek harness 才行。"* —— **他是对的**：在那之前我验的只�
 
 ---
 
+<a id="b83"></a>
+
+### 九·补83 · 2026-10-05（`#300` 这一轮 · **已重建 · 已核对 · 已重启**）
+
+| 改哪 | 改什么 | 为什么 |
+|---|---|---|
+| 🔴 `docs/handbook/05-DECISIONS.md` | `D3.14` 八补（下划线那份 ＋ 按停等两步） | 它是 **`strict`**（手册就是判据）⇒ 不重建 ⇒ 下次重启拒绝启动 |
+| 🔴 `docs/handbook/CHANGELOG.md` | 升 **v2.67** | 同上 |
+| （不在覆盖里） | 客户端那五份（`voice_bar` / `hear_drill` / `chat_controller` / `hearing_web` / `hearing_native` / `design`） | `apps/` 不在开机清单里 |
+
+**重建留痕**（`AGENTS.md` §8.1）：**时间** 2026-10-05 14:2x UTC＋8 · **命令** 与 §九·补50 同一条
+（绝对路径 `node` ＋ 口令走 stdin）· **动了哪几个文件**：只有 `/etc/hupo/integrity.json`
+（**222 个文件** · 只读 444 · `root:root`）· **重建后**：`verify-integrity` **✅ 对上了**。
+**重启**：`scripts/restart-core.sh` —— 横幅「完整性 **对上了**」· 网页入口指纹 **`fed7798611ff`**
+（源码 `1dae27e806c9`）· 公网 **200** · **新包** `/hupo-chat.apk`（`2.0.0+670` · sha256 `c37d3ed56f67…`）。
+
+---
+
 <a id="b82"></a>
 
 ### 九·补82 · 2026-10-05（`#299` 这一轮 · **已重建 · 已核对 · 已重启**）

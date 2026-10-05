@@ -79,30 +79,45 @@ class _VoiceBarState extends State<VoiceBar> {
   bool _typing = false;
 
   /// 圆圈左边那句话（**一句**：现在该让他看见什么）。
-  ({String text, bool loud}) get _line {
+  ///
+  /// ★ **2026-10-05 主人**：*"第一步是把直白的语音转文字写出来，然后是语义校正。
+  ///   通用的办法是第一步给下划线，第二步转换才去掉下划线。"*
+  ///   ⇒ 多一个 [raw]：**这句话还是"机器直白转出来的"**（听着 / 收尾中 / 在听懂）
+  ///     ⇒ 那一行**带下划线**；校正回来（可以发了 / 它在问）⇒ **下划线去掉**
+  ///     （"两条路"一眼分得开：带线的 = 还没校正，没线的 = 校正过了）。
+  ({String text, bool loud, bool raw}) get _line {
     final f = widget.flow;
     switch (f.phase) {
       case DrillPhase.listening:
         final said = f.said.trim();
-        return (text: said.isEmpty ? hearDrillListeningLead : said, loud: true);
+        // 还在听 ⇒ 字是**直白转出来的**（带下划线）
+        return (text: said.isEmpty ? hearDrillListeningLead : said, loud: true, raw: true);
       case DrillPhase.wrapping:
         // 🔴 他刚按了停 ⇒ **当场给一句话**（不然那一秒多屏幕上什么都不变）
-        return (text: hearDrillWrappingLead, loud: true);
+        final said = f.said.trim();
+        return (
+          text: said.isEmpty ? hearDrillWrappingLead : said,
+          loud: true,
+          raw: true,
+        );
       case DrillPhase.thinking:
         final said = f.said.trim();
-        return (text: said.isEmpty ? hearDrillThinkingLead : said, loud: true);
+        // 正在校正 ⇒ **还是那一份直白的字**（下划线还在）
+        return (text: said.isEmpty ? hearDrillThinkingLead : said, loud: true, raw: true);
       case DrillPhase.asking:
         // ⚠️ 问句后面**带上"怎么答"**：只摆一个问句，他就不知道下一步干什么
         //   （主人 2026-10-04：*"出现了一个问句，然后就没有然后"*）。
+        //   ⚠️ 这一句是**它问的**（不是他说的那一份直白字）⇒ **不带下划线**
         return (
           text: (f.question.isEmpty ? hearDrillAskingLead : f.question) + hearDrillAnswerHint,
           loud: true,
+          raw: false,
         );
       case DrillPhase.failed:
-        return (text: f.note.isEmpty ? hearDrillFailedLead : f.note, loud: true);
+        return (text: f.note.isEmpty ? hearDrillFailedLead : f.note, loud: true, raw: false);
       case DrillPhase.ready:
       case DrillPhase.idle:
-        return (text: '', loud: false);
+        return (text: '', loud: false, raw: false);
     }
   }
 
@@ -200,7 +215,7 @@ class _VoiceBarState extends State<VoiceBar> {
   ///
   /// ⚠️ 宽度是**跟着字长**的（`Flexible` ＋ 右对齐），最多占那一行的 76%；
   ///    超过就换行（`maxLines: 4` 兜底，真长到 4 行也该发出去了）。
-  Widget _bubble(ThemeData t, ({String text, bool loud}) line) => Container(
+  Widget _bubble(ThemeData t, ({String text, bool loud, bool raw}) line) => Container(
         constraints: const BoxConstraints(maxWidth: 420),
         padding: const EdgeInsets.symmetric(horizontal: d.gapM, vertical: d.gapS),
         decoration: BoxDecoration(
@@ -213,7 +228,14 @@ class _VoiceBarState extends State<VoiceBar> {
           textAlign: TextAlign.right,
           maxLines: 4,
           overflow: TextOverflow.ellipsis,
-          style: t.textTheme.bodyLarge?.copyWith(color: line.loud ? d.ink : d.muted),
+          style: t.textTheme.bodyLarge?.copyWith(
+            color: line.loud ? d.ink : d.muted,
+            // ★ **还没校正的那一份**：带一条下划线（主人 2026-10-05 要的"通用办法"）——
+            //   校正回来之后这条线**自己去掉**，一眼看得出"这一步过了"。
+            decoration: line.raw ? TextDecoration.underline : TextDecoration.none,
+            decorationColor: d.accent,
+            decorationThickness: d.voiceRawUnderline,
+          ),
         ),
       );
 

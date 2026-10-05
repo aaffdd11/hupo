@@ -50,7 +50,11 @@ const int _blockFrames = 4096;
 const Duration _readyLimit = Duration(seconds: 5);
 
 /// 说过"结束"之后，最多再等多久收尾（等那句最后的字回来）。
-const Duration _lingerLimit = Duration(seconds: 8);
+// ⚠️ **2026-10-05：20 秒**（原来 8）。主人叮嘱过*"要等待语音结束和语义转换结束，
+//    不要直接结束"* —— 控制器那条兜底钟（`stopLinger`，15 秒）**必须短于**这一条：
+//    这一条一到，连接就收了（之后再不会有任何一帧）⇒ 那边会比它先放弃。
+//    ⚠️ 长短关系有判据（`test/unit/hear_drill_test.dart`），改一个要一起改。
+const Duration _lingerLimit = Duration(seconds: 20);
 
 /// 手里开着的那些（通常 0 或 1 条；"正在等最后一句"那条也算开着）。
 final Set<_Session> _open = <_Session>{};

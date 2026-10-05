@@ -177,6 +177,54 @@ void main() {
         reason: '★ 正在问他话的时候，迟到的定稿不许把那一问冲掉');
   });
 
+  test('🔴 ⑦ 按停之后**不许直接结束**：等语音结束 ＋ 等语义转换；迟到的那一份也不丢', () {
+    // 主人 2026-10-05：*"用户点击结束录音，你要等待语音结束和语义转换结束。不要直接结束。"*
+    var dr = const HearDrill().startListening();
+    dr = dr.event({'type': 'asr/final', 'text': '帮我看看天气', 'index': 0});
+    final stopped = dr.stopListening();
+    // ① 按停**不是收场**：这一档还在等对面（屏幕上那句"收下了，正在整理……"就是从这儿来的）
+    expect(stopped.phase, DrillPhase.wrapping);
+    expect(stopped.said, '帮我看看天气', reason: '★ 已经听到的字留着');
+
+    // ② 语音结束那一份到了 ⇒ 进"听懂"那一层（**这一步才是"语义转换"开始**）
+    final thinking = stopped.event({'type': 'asr/end', 'text': '帮我看看天气', 'index': 0});
+    expect(thinking.phase, DrillPhase.thinking);
+
+    // ③ 🔴 **迟到的定稿在"听懂"那一层跑着的时候到了** ⇒ 收进来（屏幕上那份字补全），
+    //    而且**不重跑**那一层（重跑要再花一次他的钱）
+    final late = thinking.event({'type': 'asr/end', 'text': '帮我看看上海的天气', 'index': 0});
+    expect(late.phase, DrillPhase.thinking, reason: '★ 不许被这一帧打回去重跑');
+    expect(late.said, '帮我看看上海的天气', reason: '★ 迟到的那一份字不许扔');
+
+    // ④ 负向对照：**已经在问 / 已经可以了**的时候来一帧 ⇒ 一个字都不许动
+    final asking = thinking.heardBack(ok: true, heard: '帮我看看上海的天气', ask: '哪天？');
+    // ⚠️ 问都问了 ⇒ 那一份字（`said`）就是**当时**那份，不许被迟到的一帧改掉
+    expect(asking.event({'type': 'asr/end', 'text': '天上掉下来的'}).said, '帮我看看天气',
+        reason: '★ 问都问了，迟到的字不许把那一份改掉');
+    final ready = thinking.heardBack(ok: true, heard: '帮我看看上海的天气');
+    expect(ready.event({'type': 'asr/end', 'text': '天上掉下来的'}).heard, '帮我看看上海的天气');
+  });
+
+  test('🔴 ⑦·补 两条钟的长短关系：**控制器的兜底必须短于**那条连接自己的兜底', () {
+    // 那条连接一到点就被收干净（之后再不会有任何一帧）⇒ 控制器的钟要是更长，
+    // 屏幕上就永远停在"收下了，正在整理……"（"没有后文"那一族）。
+    final ctl = File('lib/services/chat_controller.dart').readAsStringSync();
+    final m1 = RegExp(r'stopLinger = Duration\(seconds: (\d+)\)').firstMatch(ctl);
+    expect(m1, isNotNull, reason: '找不到控制器那条兜底钟');
+    final stopLinger = int.parse(m1!.group(1)!);
+    for (final f in ['lib/services/hearing_web.dart', 'lib/services/hearing_native.dart']) {
+      final src = File(f).readAsStringSync();
+      final m2 = RegExp(r'_lingerLimit = Duration\(seconds: (\d+)\)').firstMatch(src);
+      expect(m2, isNotNull, reason: '$f 里找不到那条连接的兜底钟');
+      expect(stopLinger < int.parse(m2!.group(1)!), isTrue,
+          reason: '★ $f：连接那条（${m2.group(1)}s）不比控制器的兜底（${stopLinger}s）长 '
+              '⇒ 屏幕上会永远停在"收下了，正在整理……"');
+    }
+    // 而且它不是"到点就收场"那种短钟（他明确要"等语音结束和语义转换结束"）
+    expect(stopLinger, greaterThanOrEqualTo(10),
+        reason: '★ 兜底钟太短 ⇒ 长句子还没等到定稿就被当成"结束了"');
+  });
+
   test('④ 没在等答的时候说一句 = 那是"这一场的第一句"（不许把状态搞乱）', () {
     final dr = const HearDrill().startListening();
     final after = dr.utterance('随便说一句');
