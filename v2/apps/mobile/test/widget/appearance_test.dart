@@ -35,7 +35,7 @@ import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/stream.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
-import 'package:hupo_app/widgets/composer.dart';
+import 'package:hupo_app/widgets/mini_app_host.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 盘上那个 key（与 `AppearanceStore` 里那一个逐字相同）。
@@ -106,6 +106,32 @@ void _feedToolRow(ChatController c) {
   });
 }
 
+/// 时间线里那一条助手回话的正文（**聊天"主要"那一档**的载体）。
+///
+/// 🔴 2026-10-04 起底下那一格改成"语音优先"（手册 `D3.14`：**不再有输入框**）——
+///    原来量"主要那一档"是量输入框里那段字；现在改量**时间线里的正文**
+///    （同一个 `look.content` = `14+Δ` / `20+Δ`）。
+const String _answerText = '这周 7 小时。';
+
+/// 喂一条助手回话（`quick` 那一块 —— 它画在正文那一档上）。
+///
+/// ⚠️ **默认不收尾**（不喂 `message/end`）：这一轮一收，`_planSlots` 会把工具行
+///    折进"过程"那一条 ⇒ **非主要那一档（工具行）就不在树里了**，量不到。
+///    （要量两档的判据都得让它开着 —— 这正是"同一轮里两档同时在场"的真形状。）
+void _feedAnswer(ChatController c, {bool ended = false}) {
+  c.ingest({'type': 'message/start', 'seq': 5, 'messageId': 'm_a'});
+  c.ingest({
+    'type': 'message/text',
+    'seq': 6,
+    'messageId': 'm_a',
+    'block': 'quick',
+    'text': _answerText,
+  });
+  if (ended) {
+    c.ingest({'type': 'message/end', 'seq': 8, 'messageId': 'm_a', 'reason': 'completed'});
+  }
+}
+
 /// 一架屏 ＋ 一个控制器 ＋ 那条假流的账（真 `start` 一遍 —— 连接只建这一次）。
 ///
 /// ⚠️ **必须给令牌 + `onSendKey`**：没有它们，桌面上那个「设置」图标根本不会长出来，
@@ -133,6 +159,8 @@ Future<(Widget, ChatController, List<_FakeStream>)> _screen({
   );
   await c.start(token: 'tok');
   _feedToolRow(c);
+  // ★ 聊天"主要"那一档的载体（时间线里的正文）—— 这道屏上有它才量得到
+  _feedAnswer(c);
   return (
     ChatScreen(
       initialTier: tier,
@@ -146,18 +174,20 @@ Future<(Widget, ChatController, List<_FakeStream>)> _screen({
   );
 }
 
-/// 聊天窗口那块底的 `Material`（浮窗自己那一个 —— 深度优先里它排在最前面）。
-Material _floaterMaterial(WidgetTester tester) => tester.widget<Material>(
-  find.descendant(of: find.byType(ChatFloater), matching: find.byType(Material)).first,
-);
-
-/// **浮窗的底是哪一档色板**（**不看透明度**）。
+/// **浮窗现在用的是哪一档色板**（**不看透明度**）。
 ///
-/// ⚠️ 2026-09-29 起：**收起那条 bar 是半透明的**（主人要的"一个半透明的bar"，
-///    见 `132`）⇒ 那几个 alpha 不是 1 了。这一组判据问的是"**哪一档**"（亮/暗），
-///    不是"透不透" —— 透不透由 `desktop_floater_test.dart` 单独钉着。
-Color _floaterBg(WidgetTester tester) =>
-    _floaterMaterial(tester).color!.withValues(alpha: 1.0);
+/// ⚠️ 原来这一条量的是浮窗那块底的**实测颜色**（`Material.color`）。2026-10-04
+///    主人把底下那一格改成"语音优先"、收起档**不再画那个框**（*"语音按钮下面的平台
+///    不需要了"*）⇒ 收起档那个 `Material` 的颜色是**全透明的**，量颜色已经量不到"哪一档"。
+/// ⇒ 现在守的是**同一件事**：浮窗里面那一整棵套的是哪一档的 `Theme`
+///    （`chatThemeOf(variant)` 的 `cardColor` = 该档的 `bg-layer-1`）——
+///    它才是"这一面按哪一档画"的出处，收起 / 展开两档都读得到，值也没变。
+Color _floaterBg(WidgetTester tester) => tester
+    .widget<Theme>(
+      find.descendant(of: find.byType(ChatFloater), matching: find.byType(Theme)).first,
+    )
+    .data
+    .cardColor;
 
 /// **像用户那样**打开「设置」那一屏（点桌面上那个图标）。
 Future<void> _openSettings(WidgetTester tester) async {
@@ -199,16 +229,21 @@ Future<void> _scrollTo(WidgetTester tester, String label) async {
   expect(find.text(label), findsOneWidget, reason: '★「$label」没进这棵树 ⇒ 这一条量错了地方');
 }
 
-/// 输入条那个框的字号（收起档也在树上 —— 它一样是"聊天里的字"）。
+/// **聊天正文那一档**（时间线里助手那一句）的**渲染字号**。
 ///
-/// ⚠️ 必须**指名到 `Composer` 里那一个** `TextField`：设置那一屏自己也有一个
-///    （钥匙那个框），`find.byType(TextField).first` 会摸错人。
-double _composerFontSize(WidgetTester tester) => tester
-    .widget<TextField>(
-      find.descendant(of: find.byType(Composer), matching: find.byType(TextField)),
-    )
-    .style!
-    .fontSize!;
+/// ⚠️ 原来那一个（`_composerFontSize`）量的是输入框里那段字 —— 2026-10-04 起
+///    底下那一格不再有输入框（手册 `D3.14`）⇒ 同一档的字改住在**时间线的正文**上
+///    （`look.content` = `14+Δ` / `20+Δ`）。量法与 `_rowFontSize` 逐字相同。
+double _mainFontSize(WidgetTester tester) {
+  expect(find.text(_answerText), findsOneWidget,
+      reason: '★ 助手那一句不在树里 ⇒ 量不到聊天正文那一档（这一条会红）');
+  final p = tester.renderObject<RenderParagraph>(find.text(_answerText));
+  return p.textScaler.scale(p.text.style!.fontSize!);
+}
+
+/// 同一句的**渲染高度**（字号轴真的传到了布局，不只是样式字段）。
+double _mainHeight(WidgetTester tester) =>
+    tester.getSize(find.text(_answerText)).height;
 
 /// 聊天里那一行工具名的**渲染字号**。
 ///
@@ -220,6 +255,32 @@ double _rowFontSize(WidgetTester tester) {
       reason: '★ 工具行不在树里 ⇒ 量不到聊天里的字（这一条会红）');
   final p = tester.renderObject<RenderParagraph>(find.text(toolHumanName('bash')!));
   return p.textScaler.scale(p.text.style!.fontSize!);
+}
+
+/// **像用户那样**在设置里按一下字号那一颗（大一点 / 小一点）。
+///
+/// ⚠️ 打开某一屏会**自动把聊天收起来**（`_openMiniApp`）⇒ 要先把展开的那一档收回去，
+///    桌面上那个「设置」图标才点得到（展开的浮窗把桌面盖住了）。
+Future<void> _tapFontInSettings(WidgetTester tester, {required bool bigger}) async {
+  final collapse = find.byKey(chatCollapseKey);
+  if (collapse.evaluate().isNotEmpty) {
+    await tester.tap(collapse);
+    await tester.pumpAndSettle();
+  }
+  await _openSettings(tester);
+  await _scrollTo(tester, settingsFontSizeLabel);
+  await tester.tap(find.byTooltip(bigger ? settingsFontSizeBigger : settingsFontSizeSmaller));
+  await tester.pumpAndSettle();
+}
+
+/// 从设置那一屏退回去、把聊天展开 —— 时间线里的正文这才回到了树上（量得到）。
+Future<void> _backToChat(WidgetTester tester) async {
+  await tester.tap(find.text(settingsBack)); // 子页 ⇒ 设置那一列
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(miniAppExitKey)); // 设置那一屏 ⇒ 桌面
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(chatHandleKey)); // 桌面 ⇒ 展开聊天
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -301,14 +362,16 @@ void main() {
 
   testWidgets('🔴 改字号 ⇒ 聊天里那一行字的**渲染度量**真的变了', (tester) async {
     // 三档各来一次（12 / 14 / 17）—— 判据量的是**字号与高度**，不是"看起来像"。
-    // ⚠️ 量的是**输入框那一段的字**（聊天"主要"那一档 —— 它永远跟着那条轴走；
-    //    工具行那一档从 2026-10-01 起有个 11 的**地板**，12 与 14 两档它一样大，
-    //    拿它量这条轴会读成"轴没传下去"）。
+    // 原来量的是**输入框那一段的字**（"它永远跟着那条轴走"）。🔴 2026-10-04 起
+    // 底下那一格改成"语音优先"（手册 `D3.14`：不再有输入框）⇒ 现在守的是
+    // **等价的那一件事**：同一档（`look.content`）的字住在**时间线的正文**上，
+    // 量它的字号与渲染高度 —— 轴没传下去照样会红。
     final seen = <int, (double, double)>{};
     for (final n in <int>[12, 14, 17]) {
       SharedPreferences.setMockInitialValues(<String, Object>{kKey: 'system|$n'});
       final c = ChatController(api: Api(base: 'http://127.0.0.1:1'), tokens: TokenStore());
       _feedToolRow(c);
+      _feedAnswer(c);
       await tester.pumpWidget(
         MaterialApp(
           home: ChatScreen(
@@ -323,9 +386,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final box = find.descendant(of: find.byType(Composer), matching: find.byType(TextField));
-      final h = tester.getSize(box).height;
-      seen[n] = (_composerFontSize(tester), h);
+      seen[n] = (_mainFontSize(tester), _mainHeight(tester));
     }
     // 12 / 14 / 17 的字号**逐档对得上**那条轴（不是"都在变"就算过）
     expect(seen[12]!.$1, 12);
@@ -337,16 +398,16 @@ void main() {
   });
 
   testWidgets('★ 聊天那两块的字：主要 14/20 · 非主要 11/14（差 3 号、行高紧得多）', (tester) async {
+    // 原来"主要"量的是**输入框那一段**。🔴 输入框没了（手册 `D3.14`）⇒
+    // 主要那一档改量**时间线里的正文**（同一个 `look.content`）；非主要照旧量工具行。
     final (screen, _, _) = await _screen(tier: FloaterTier.full);
     await tester.pumpWidget(MaterialApp(home: screen));
     await tester.pumpAndSettle();
 
-    // ① **主要**：输入框那一段（他的话 / 它的话同一档）⇒ 14 / 行高 20
-    final box = tester.widget<TextField>(
-      find.descendant(of: find.byType(Composer), matching: find.byType(TextField)),
-    );
-    final mainSize = box.style!.fontSize!;
-    final mainLine = mainSize * box.style!.height!;
+    // ① **主要**：时间线里的正文 ⇒ 14 / 行高 20
+    final mainStyle = tester.widget<Text>(find.text(_answerText)).style!;
+    final mainSize = mainStyle.fontSize!;
+    final mainLine = mainSize * mainStyle.height!;
     expect(mainSize, 14, reason: '★ 主要那一档的字号');
     expect(mainLine, closeTo(20, 0.01), reason: '★ 主要那一档的行高（绝对值）');
 
@@ -361,7 +422,7 @@ void main() {
 
     // ③ 🔴 主人要的那两件事：**非主要更小**，而且**行间距小很多**
     expect(rowSize, lessThan(mainSize), reason: '★ 非主要没有比主要小');
-    expect(rowStyle.height!, lessThan(box.style!.height!),
+    expect(rowStyle.height!, lessThan(mainStyle.height!),
         reason: '★ 非主要的行高（倍数）没有更紧');
     expect(mainLine / mainSize, greaterThan(1.4));
     expect(rowLine / rowSize, lessThan(1.3), reason: '★ 行高比值没小下来');
@@ -371,45 +432,47 @@ void main() {
     SharedPreferences.setMockInitialValues(<String, Object>{kKey: 'system|12'});
     final c = ChatController(api: Api(base: 'http://127.0.0.1:1'), tokens: TokenStore());
     _feedToolRow(c);
+    _feedAnswer(c);
     await tester.pumpWidget(
       MaterialApp(
         home: ChatScreen(initialTier: FloaterTier.full, controller: c, onLoggedOut: () {}),
       ),
     );
     await tester.pumpAndSettle();
-    // 主要那一档照轴缩到 12（他选了"小一点"，正文就得跟着小）
-    expect(_composerFontSize(tester), 12);
+    // 主要那一档照轴缩到 12（原来量的是输入框里那段字；输入框没了 ⇒ 量时间线里的正文）
+    expect(_mainFontSize(tester), 12);
     // 而非主要**不再往下缩**（11）—— 9 号字在平板上是看不清的
     expect(_rowFontSize(tester), 11, reason: '★ 非主要那一档掉到 11 以下了');
   });
 
   testWidgets('🔴 在设置里按"大一点" ⇒ 聊天**当场**跟着变，而且**不重连**', (tester) async {
-    // ⚠️ 这一条量的是**输入条那个框**（收起档也在树上，而且它就是"聊天里的字"）：
-    //    设置那一屏开着时浮窗是收起的（打开小程序会自动收起），时间线不在树里
-    //    ⇒ 量它才是"屏幕上真的变了"。
-    final (screen, _, made) = await _screen();
+    // ⚠️ 原来量的是**输入条那个框**（收起档也在树上 ⇒ 设置开着时也量得到）。
+    //    🔴 输入框没了（手册 `D3.14`）⇒ 现在守的是**等价的那一件事**：同一棵树里，
+    //    按完退回聊天、量**时间线里的正文**（`look.content`）跟着那条轴走；
+    //    而那条流自始至终**只建过一次**（改字号不是"重新连一次"）。
+    final (screen, _, made) = await _screen(); // 收起档：桌面上那个图标点得到
     await tester.pumpWidget(MaterialApp(home: screen));
     await tester.pumpAndSettle();
     expect(made.length, 1, reason: '起点：那条流只建过一次');
-    expect(_composerFontSize(tester), 14, reason: '起点是默认档（14 = 聊天主要那一档 + Δ0）');
 
-    await _openSettings(tester);
-    await _scrollTo(tester, settingsFontSizeLabel);
-    await tester.tap(find.byTooltip(settingsFontSizeBigger));
+    // 起点那一档（14）—— 展开才量得到时间线里的正文
+    await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
+    expect(_mainFontSize(tester), 14, reason: '起点是默认档（14 = 聊天主要那一档 + Δ0）');
 
-    // ① 屏幕上（同一棵树里）：那个框的字**当场**大了一号（14 ⇒ 15）
-    expect(_composerFontSize(tester), 15, reason: '★ 按了"大一点"而聊天里的字没变');
-    // ② 存住了
+    // 按"大一点" ⇒ 屏幕上的正文**当场**大了一号（14 ⇒ 15）
+    await _tapFontInSettings(tester, bigger: true);
     expect((await AppearanceStore().read()).fontSize, 15);
-    // ③ 🔴 **没有重连**：那条流一个字节都没动（改外观不是"重新连一次"）
     expect(made.length, 1, reason: '★ 改外观/字号重开了连接 —— 那正是这一条要挡的');
+    await _backToChat(tester);
+    expect(_mainFontSize(tester), 15, reason: '★ 按了"大一点"而聊天里的字没变');
 
     // 负向对照：按"小一点"回去（不是单行道）
-    await tester.tap(find.byTooltip(settingsFontSizeSmaller));
-    await tester.pumpAndSettle();
-    expect(_composerFontSize(tester), 14);
+    await _tapFontInSettings(tester, bigger: false);
     expect((await AppearanceStore().read()).fontSize, 14);
+    await _backToChat(tester);
+    expect(_mainFontSize(tester), 14);
+    expect(made.length, 1, reason: '★ 改字号重开了连接');
   });
 
   testWidgets('🔴 数据坏在盘上 ⇒ 窗口照开（回到默认档，不是打不开）', (tester) async {

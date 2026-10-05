@@ -23,7 +23,6 @@ import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/app_desktop.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/widgets/mini_app_host.dart';
-import 'package:hupo_app/widgets/composer.dart';
 
 ChatController _controller() =>
     ChatController(api: Api(base: 'http://127.0.0.1:1'), tokens: TokenStore());
@@ -71,30 +70,47 @@ void main() {
   testWidgets('🔴 展开态的「收起」在（而**收起态不该有它** —— 它已经收起来了）', (tester) async {
     // 主人 2026-09-22：*"展开后要有收回的按钮"*。
     // ⚠️ 第一版把这个按钮放在 if/else **之外** ⇒ 收起态那条上也挂着一个"收起"（错的）。
+    // 🔴 **2026-10-05 起展开档有**两颗**「收起」**（标题行那颗 ＋ 右边那一列那颗，
+    //    后者是"位置不变、翻个方向"的那一颗）⇒ `Tooltip` / 字都可能有同名，
+    //    所以判据改钉**只有标题行那一颗才有的** `chatCollapseKey`（`chat_floater.dart` 里只有一个）。
     await _pump(tester); // 默认收起
-    expect(find.byTooltip(chatCollapse), findsNothing, reason: '收起态不该再挂一个"收起"');
+    expect(find.byKey(chatCollapseKey), findsNothing, reason: '收起态不该再挂一个"收起"');
     expect(find.byKey(chatHandleKey), findsOneWidget);
 
     await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
-    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '★ 展开后必须找得到"收起"');
-    // 而且它**不在那条横滚里**（窄屏 + 大字号下也不会被滚出视野）
-    await tester.tap(find.byTooltip(chatCollapse));
+    expect(find.byKey(chatCollapseKey), findsOneWidget, reason: '★ 展开后必须找得到"收起"');
+    // 而且它是**标题行那一颗**（点了真的能收回去）
+    await tester.tap(find.byKey(chatCollapseKey));
     await tester.pumpAndSettle();
     expect(find.byKey(chatHandleKey), findsOneWidget, reason: '点了收起该回到收起态');
+    expect(find.byKey(chatCollapseKey), findsNothing, reason: '收起态那颗「收起」该跟着没');
   });
 
   testWidgets('🔴 点「设置」⇒ 设置那一屏开了，而且**聊天自动收起**（§6.4 规则 5）', (tester) async {
-    // 从**半开**进场：这时桌面顶上那块看得见、点得到（最大化会把桌面盖住）
-    await _pump(tester, tier: FloaterTier.full);
-    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '半开时是展开着的');
+    // 从**收起档**进场，再像用户那样把聊天**展开** —— 这样"打开小程序会不会
+    // 把它收起来"才量得出来（一上来就收起的话，收着也只是"本来就收着"）。
+    await _pump(tester);
+    await tester.tap(find.byKey(chatHandleKey));
+    await tester.pumpAndSettle();
+    expect(find.byKey(chatCollapseKey), findsOneWidget, reason: '先展开：聊天是开着的');
 
-    await _openSettings(tester);
+    // 🔴 **2026-10-05 起展开档就是"完全展开"**（原来那个"半开"砍了 —— 主人当天定：
+    //    *"就是完全展开或者完全收起"*）⇒ 它整屏盖住桌面，"点桌上那一格"这一下
+    //    **真手势到不了**（点下去落在浮窗上，那正是 Z1"聊天永远最上"）。
+    //    ⇒ 这里按那一格**自己的 `onTap`**：它和用户点它走的是同一段代码
+    //      （`app_desktop.dart` 算完图标矩形就调 `app.onOpen`）。
+    tester
+        .widget<InkWell>(
+          find.ancestor(of: find.text(settingsAppLabel), matching: find.byType(InkWell)).first,
+        )
+        .onTap!();
+    await tester.pumpAndSettle();
 
     expect(find.byType(SettingsScreen), findsOneWidget, reason: '设置那一屏该开在小程序容器里');
-    // ⚠️ 判"收起了没有"要看**只有展开态才有的那个「收起」**，不是看输入条 ——
-    //    收起态**也有**输入条（主人 2026-09-22）。
-    expect(find.byTooltip(chatCollapse), findsNothing, reason: '★ 打开小程序 ⇒ 聊天该自动收起（把屏幕让给它）');
+    // ⚠️ 判"收起了没有"要看**只有展开态才有的那个「收起」**（`chatCollapseKey`），
+    //    不是看输入条 —— 收起态**也有**说话那一格（主人 2026-09-22）。
+    expect(find.byKey(chatCollapseKey), findsNothing, reason: '★ 打开小程序 ⇒ 聊天该自动收起（把屏幕让给它）');
   });
 
   testWidgets('🔴 设置里有「退出登录」，点了真的回调（它原来挂在聊天抓手行上）', (tester) async {
@@ -321,12 +337,33 @@ void main() {
   testWidgets('🔴 收起那条**压不住**小程序里可点的东西：内容底部内缩（§6.4 规则 1）', (tester) async {
     await _pump(tester);
     await _openSettings(tester);
+    final screen = tester.getRect(find.byType(MaterialApp));
     final settings = tester.getRect(find.byType(SettingsScreen));
     final floater = tester.getRect(find.byType(ChatFloater));
-    // ⚠️ 这一条正是上一代栽过的地方：「最后一行永远点不到」
-    expect(settings.bottom <= floater.top, true,
-        reason: '设置内容该在收起条**上面**（内容底 ${settings.bottom} vs 条顶 ${floater.top}）');
-    expect(settings.bottom > 0, true);
+    // ── 原来守的是「小程序内容的底边让开收起条」（`MiniAppHost.bottomInset`）——
+    //    上一代"最后一行永远点不到"就栽在这儿。
+    // 🔴 **2026-10-05 起"内容底部内缩"只在网页上成立**（`chat_screen.dart`：
+    //    `bottomInset: kIsWeb ? (FloaterMetrics.margin + _barH) : 0`）：
+    //    网页上小程序是**真的 DOM 元素**、压在画布**上面** ⇒ 必须把收起条那一格让出来；
+    //    安卓是平台视图、在画布**下面** ⇒ 内容铺满（主人当天定的"网页不铺满、安卓铺满"）。
+    //    VM 上量到的就是**安卓那一档**；"让开聊天条"那条判据在 `safe_area_test.dart`
+    //    里按 `MiniAppHost.bottomInset` 单独钉着（给它一个正的内缩，内容就得让开）。
+    // 🔴 **2026-10-06 修回来的口径**（清判据时抓到的真缺陷）：**内置那几屏不是制品**
+    //    ⇒ 两种平台上都要让（手册 §6.4 规则 1 原话）。原来那一行是
+    //    `kIsWeb ? (margin + _barH) : 0`，把"安卓铺满"那一档也套到了它们身上
+    //    ⇒ 收起条压在它们底部（设置最后一行、`HarnessPane` 那颗按钮**真手势点不到**）。
+    //    "只有制品（平台视图）＋ 不是网页才铺满"这条真值表钉在 `test/unit/mini_native_test.dart`。
+    expect(
+      tester.widget<MiniAppHost>(find.byType(MiniAppHost)).bottomInset,
+      greaterThan(0),
+      reason: '★ 内置那一屏（设置）不是制品 ⇒ 容器必须给它内缩，收起条不许压住它的底部',
+    );
+    expect(settings.bottom, lessThanOrEqualTo(floater.top + 0.5),
+        reason: '★ 设置内容该在收起条**上面**（内容底 ${settings.bottom} vs 条顶 ${floater.top}）'
+            '—— 压住的话最后一行永远点不到（§6.4 规则 1）');
+    expect(settings.width, screen.width, reason: '左右照旧铺满（只有底下那条让出来）');
+    expect(settings.height, greaterThan(0), reason: '内容不许被压成 0（"最后一行点不到"那一族的根）');
+    expect(floater.height, greaterThan(0), reason: '★ 收起条本身还在（"聊天永续"的那一格）');
   });
 
   // ★ **2026-10-01 改了**（主人：*"在小程序里点开聊天，小程序自己也会被压缩一下，
@@ -391,14 +428,17 @@ void main() {
     await _openSettings(tester);
     await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
-    expect(find.byType(Composer), findsOneWidget);
+    // 聊天确实展开了：只有展开档才画那颗「收起」（`chatCollapseKey`）。
+    // ⚠️ 原来是找 `Composer` —— 那个旧输入框组件已经不在生产路径上了
+    //    （现在底下那一格是 `VoiceBar`），所以换一个"展开档才有的东西"来量。
+    expect(find.byKey(chatCollapseKey), findsOneWidget, reason: '展开档才有的那颗「收起」不见 ⇒ 聊天没展开');
 
     // 点小程序可见的那一块（左上角，浮窗盖不到的地方）
     final screen = tester.getRect(find.byType(MaterialApp));
     await tester.tapAt(Offset(screen.left + 8, screen.top + 8));
     await tester.pumpAndSettle();
 
-    expect(find.byTooltip(chatCollapse), findsNothing, reason: '★ 点被盖住的小程序 = "回到小程序" ⇒ 收起聊天');
+    expect(find.byKey(chatCollapseKey), findsNothing, reason: '★ 点被盖住的小程序 = "回到小程序" ⇒ 收起聊天');
     expect(find.byType(SettingsScreen), findsOneWidget, reason: '而且小程序还在（没被那一下点走）');
   });
 

@@ -13,21 +13,84 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hupo_app/models/dsh_design.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:hupo_app/models/landing_words.dart';
 import 'package:hupo_app/models/design.dart' as d;
-import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
+import 'package:hupo_app/services/hearing.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/app_desktop.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
-import 'package:hupo_app/widgets/composer.dart';
+import 'package:hupo_app/widgets/voice_bar.dart';
 
 ChatController _controller() =>
     ChatController(api: Api(base: 'http://127.0.0.1:1'), tokens: TokenStore());
+
+http.Response _json(String body) => http.Response(
+  body,
+  200,
+  headers: {'content-type': 'application/json; charset=utf-8'},
+);
+
+/// **一台"开得了麦"的假设备**（VM 上真设备开不了麦，那一格里画的是「打字」退路 ——
+/// 与 `voice_send_test.dart` 同一个钩子）。判据要量那颗圆圈时自己装一台。
+class _Mic implements NativeHearingApi {
+  int started = 0;
+
+  @override
+  bool get canHear => true;
+
+  @override
+  Future<String?> start({
+    required Uri url,
+    required String token,
+    required void Function(Map<String, dynamic>) onEvent,
+  }) async {
+    started += 1;
+    return null;
+  }
+
+  @override
+  void stop() {}
+}
+
+/// 假服务端：`/api/hear` 说"听清了"，`/api/say` 记下那句（"发就拉满"那两条要用）。
+class _Srv {
+  final said = <String>[];
+  late final ChatController c;
+}
+
+_Srv _voiceController() {
+  final s = _Srv();
+  final api = Api(
+    client: MockClient((req) async {
+      if (req.url.path.contains('/api/hear')) return _json('{"heard":"在吗"}');
+      if (req.url.path.contains('/api/say')) {
+        s.said.add(req.body);
+        return _json('{"ok":true}');
+      }
+      if (req.url.path.contains('/api/apps')) return _json('{"apps":[]}');
+      return _json('{}');
+    }),
+  );
+  s.c = ChatController(api: api, tokens: TokenStore(), token: 'tok');
+  return s;
+}
+
+/// **走那条打字退路**（开不了麦时才有的那一格）：按「打字」→ 往那一格里打字。
+/// ⚠️ 没有它，这一档里 `find.byType(TextField)` 是**一个都找不到**的 ——
+/// 原来的输入框（`Composer`）已经被"语音优先"那一格换掉了（2026-10-05）。
+Future<void> _typeInstead(WidgetTester tester, String text) async {
+  await tester.tap(find.byKey(voiceBarTypeChipKey));
+  await tester.pump();
+  expect(find.byKey(voiceBarTypeKey), findsOneWidget, reason: '★ 那颗「打字」没把输入格摊开');
+  await tester.enterText(find.byKey(voiceBarTypeKey), text);
+  await tester.pump();
+}
 
 Future<void> _pump(WidgetTester tester, {FloaterTier tier = FloaterTier.collapsed}) async {
   await tester.pumpWidget(
@@ -40,7 +103,15 @@ Future<void> _pump(WidgetTester tester, {FloaterTier tier = FloaterTier.collapse
 Rect _floaterRect(WidgetTester tester) => tester.getRect(find.byType(ChatFloater));
 
 void main() {
-  testWidgets('🔴 一进来是**收起**那一档：看得见桌面，**输入框也在**，但时间线不画', (tester) async {
+  // 默认这一台"开不了麦"（VM 上就是真的）；要量那颗圆圈的判据自己装一台假的。
+  setUp(clearNativeHearing);
+  tearDown(clearNativeHearing);
+
+  testWidgets('🔴 一进来是**收起**那一档：看得见桌面，**说话那一格也在**，但时间线不画', (tester) async {
+    // ⚠️ 原来这里断言的是"输入框（`Composer`）也在"。🔴 2026-10-05 主人把那一格换成
+    //    了"语音优先"（`voice_bar.dart`）⇒ 等价的那件事是：收起态也画着**那颗圆圈**
+    //    （点一下就能开麦说话，`D3.14`）。
+    nativeHearingApi = _Mic();
     await _pump(tester);
     // 桌面在（整页底图）
     expect(find.byType(AppDesktop), findsOneWidget);
@@ -54,8 +125,8 @@ void main() {
     //     但**命中区仍然 ≥44**、而且它就在上边框正中央（下面的判据量的就是这两条）。
     expect(find.byKey(chatHandleKey), findsOneWidget, reason: '收起态该有那个抓手');
     expect(find.byTooltip('展开'), findsOneWidget, reason: '收起态抓手要说得出"展开"');
-    // ★ **收起态也有输入框**（主人 2026-09-22：*"助手那个聊天窗口，收缩的时候也有一个输入框。"*）
-    expect(find.byType(Composer), findsOneWidget, reason: '★ 收起时也该能直接说话');
+    // ★ **收起态也有那一格**（主人 2026-09-22：*"助手那个聊天窗口，收缩的时候也有一个输入框。"*）
+    expect(find.byKey(voiceBarCircleKey), findsOneWidget, reason: '★ 收起时也该能直接说话（那颗圆圈）');
     // 但**展开态才有的东西一个都不许在**（判档位要看这些，不是看输入条）
     expect(find.byTooltip(chatCollapse), findsNothing, reason: '收起态不该有「收起」');
     expect(find.byKey(chatBodyKey), findsNothing, reason: '收起态不画状态条 + 时间线那一块');
@@ -92,27 +163,29 @@ void main() {
     find.descendant(of: find.byType(ChatFloater), matching: find.byType(Material)).first,
   );
 
-  testWidgets('🔴 收起那条 bar 是**磨砂玻璃**（Mac 工具栏那种）；展开档**不糊**', (tester) async {
-    // 主人 2026-09-29：*"对话框底部透明度再次增加。模仿mac的工具栏。"*
+  testWidgets('🔴 模糊那一层**两档形状一样**（都不糊）：收起⇄展开不重建那一棵', (tester) async {
+    // ⚠️ 这一条原来量的是"收起那条 bar 是**磨砂玻璃**"（模糊半径 = `barBlurSigma`）。
+    //    🔴 2026-10-04 主人：*"语音按钮下面的平台不需要了……不需要底下那个框了。"*
+    //    ⇒ 收起档那个框（底 / 圆角 / 磨砂）整条撤了，展开档本来就不糊。
+    //    这一条现在守的是**原来那个负向对照要守的事**：`BackdropFilter` 这个**形状
+    //    两档都在**（收起⇄展开时子树类型不变 ⇒ 那一格不会被重建、状态不会丢）。
     await _pump(tester);
-    // ① 收起档：底下糊一层（`BackdropFilter`，半径 ＝ `barBlurSigma`）
     final blur = tester.widget<BackdropFilter>(
       find.descendant(of: find.byType(ChatFloater), matching: find.byType(BackdropFilter)).first,
     );
-    final f = blur.filter;
-    expect(f, isA<ImageFilter>(), reason: '那一层不是模糊 ⇒ 不是磨砂玻璃');
-    // ⚠️ `ImageFilter` 没有公开的 sigma 读法 ⇒ 拿**同一个构造**比一次：
-    //    `ImageFilter.blur(sigma: barBlurSigma)` 与它的 `toString` 一致就说明半径用对了。
     expect(
-      f.toString(),
-      ImageFilter.blur(sigmaX: d.barBlurSigma, sigmaY: d.barBlurSigma).toString(),
-      reason: '★ 模糊半径不是 `barBlurSigma`',
+      blur.filter.toString(),
+      ImageFilter.blur(sigmaX: 0, sigmaY: 0).toString(),
+      reason: '★ 收起档又糊上了 —— 那个框 2026-10-04 已经撤了（白算一层）',
     );
-    // ② 而那个"越来越透"的度数就是色板那层的不透明度（比一明显小）
-    expect(barMaterial(tester).color!.a, d.barVeilAlpha);
-    expect(d.barVeilAlpha, lessThan(0.6), reason: '★ 透明度没加（还是上一版那个数）');
+    // 负向对照：不许把磨砂玻璃（`barBlurSigma`）又加回来
+    expect(
+      blur.filter.toString(),
+      isNot(ImageFilter.blur(sigmaX: d.barBlurSigma, sigmaY: d.barBlurSigma).toString()),
+      reason: '★ 磨砂玻璃又回来了 —— 主人明确说"不需要底下那个框了"',
+    );
 
-    // ③ 负向对照：展开档**不糊**（形状还在 —— 那是"输入条不被重建"的保证）
+    // 展开档：**同一个形状**、同样不糊
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
     await _pump(tester, tier: FloaterTier.full);
@@ -126,11 +199,14 @@ void main() {
     );
   });
 
-  testWidgets('🔴 收起那条 bar 是**半透明**的；展开档**必须不透明**（时间线要读字）', (tester) async {
+  testWidgets('🔴 收起那条 bar **完全透明**（那个框撤了）；展开档**必须不透明**（时间线要读字）', (tester) async {
+    // ⚠️ 原来收起档量的是"半透明（`barVeilAlpha`）"。🔴 2026-10-04 那个框撤了 ⇒
+    //    收起档那一条**一个底都不画**（桌面直接透过来）；"按钮不是透明的"那件事
+    //    改由**每颗按钮自己那层实底**保证（下一条守着）。
     await _pump(tester);
     final collapsed = barMaterial(tester).color!;
-    expect(collapsed.a, lessThan(1.0), reason: '★ 收起那条 bar 还是实底 —— 桌面透不过来');
-    expect(collapsed.a, closeTo(d.barVeilAlpha, 0.001));
+    expect(collapsed.a, 0.0, reason: '★ 收起那条 bar 又自己画上底了（2026-10-04 那个框已经撤了）');
+    expect(collapsed.a, lessThan(1.0), reason: '★ 收起那条 bar 是实底 —— 桌面透不过来');
 
     // ⚠️ **先把上一棵树拆掉**：同类型的 `ChatScreen` 再泵一次会**复用同一个 State**
     //    ⇒ `initialTier` 不再生效（这一条判据第一版就是这么假绿/假红的）。
@@ -141,56 +217,58 @@ void main() {
     expect(full.a, 1.0, reason: '★ 展开档透了 —— 时间线的字会压在壁纸上，读不出来');
   });
 
-  testWidgets('🔴 bar 上那三样**各自是不透明的**：home 圆片 / 输入框 / 话筒', (tester) async {
+  testWidgets('🔴 bar 自己透明，可上面那几颗**各自是不透明的**：录音圆圈 ＋ 右边那一列', (tester) async {
+    // ⚠️ 原来这一条量的是"home 圆片 / 输入框 / 话筒各自实底"。今天：
+    //    · home 2026-10-04 取消了（`D3.15`：出口搬到每个 app 右上角）；
+    //    · 输入框随整个 `Composer` 一起被"语音优先"那一格换掉（2026-10-05）。
+    //    ⇒ 现在这一行上只剩**那颗录音圆圈**与**它右边那一列两颗**（`chat_floater.dart`）。
+    nativeHearingApi = _Mic();
     await _pump(tester);
-    final p = DshPalette.light;
 
-    // ① **消息框**：实底 ＋ 圆角（2026-09-29 起"那一圈 + 实底"归外面那层容器，
-    //    输入框自己 `border: none` —— 理由见 `composer.dart` 的 `_messageBox`：
-    //    网页的输入法 DOM 会盖住**整个 `TextField` 的矩形**，所以按钮必须住在它外面）。
-    final box = tester.widget<Container>(find.byKey(chatMessageBoxKey));
-    final dec = box.decoration! as BoxDecoration;
-    expect(dec.color, p.bgLayer2, reason: '★ 消息框没实底 —— bar 透了它也跟着透');
-    expect(dec.borderRadius, isNotNull);
-    // 输入框自己**不许**再有底（有的话就是"两层底"，而且那个矩形又会把按钮圈进去）
-    final field = tester.widget<TextField>(
-      find.descendant(of: find.byType(Composer), matching: find.byType(TextField)),
+    // ① **录音圆圈**：白底（那张纸）＋ 一圈琥珀色（`voice_bar.dart` 的 `_circle`）
+    final circleFace = tester.widget<Material>(
+      find
+          .descendant(of: find.byKey(voiceBarCircleKey), matching: find.byType(Material))
+          .first,
     );
-    expect(field.decoration!.filled, isNot(true), reason: '★ 输入框又自己上底了');
+    expect(circleFace.color, d.card, reason: '★ 圆圈没实底 —— bar 透了它也跟着透');
+    expect(circleFace.color!.a, 1.0, reason: '★ 圆圈的底是半透明的');
+    expect(circleFace.shape, isA<CircleBorder>(), reason: '★ 录音那颗不是圆的');
+    expect((circleFace.shape! as CircleBorder).side.color, d.accent, reason: '★ 那一圈不是琥珀色');
+    expect(tester.getSize(find.byKey(voiceBarCircleKey)), const Size(d.voiceCircleBox, d.voiceCircleBox));
 
-    // ② 话筒：**正方形圆角框 + 实底**（2026-09-29 主人：*"右边的录音按钮也要改成
-    //    正方形圆角框……做大一些"*）。⚠️ 它现在不是 `IconButton` 了（是 Material + InkWell，
-    //    因为框里要能画那几根 bar）⇒ 判据认**那一框自己的 Material**。
-    final micFace = find
-        .ancestor(of: find.byKey(chatMicButtonKey), matching: find.byType(Material))
-        .first;
-    final mm = tester.widget<Material>(micFace);
-    expect(mm.color, p.bgLayer2, reason: '★ 话筒没有实底');
-    expect(mm.shape, isNot(isA<CircleBorder>()), reason: '★ 录音那颗还是圆的');
-    expect(tester.getSize(find.byKey(chatMicButtonKey)).width, d.barButtonBox);
-    expect(tester.getSize(find.byKey(chatMicButtonKey)).height, d.barButtonBox);
+    // ② **右边那一列**：看得见的那块长方形也是实底 ＋ 一圈轮廓（`_auxFace`）
+    final face = tester.widget<Container>(
+      find.descendant(of: find.byKey(chatHandleKey), matching: find.byType(Container)).first,
+    );
+    final dec = face.decoration! as BoxDecoration;
+    expect(dec.color!.a, 1.0, reason: '★ 那一列的面是半透明的 —— bar 透了它就跟着透');
+    expect(dec.color, d.card, reason: '★ 那一列的面不是那张纸');
+    expect(dec.border, isNotNull, reason: '★ 那一列的面没有轮廓');
 
-    // ③ **那颗 home 2026-10-04 取消了**（`D3.15`：出口搬到每个 app 的右上角，
-    //    见 `test/widget/mini_app_exit_test.dart`）⇒ 这一段量它的判据**随功能一起走**。
-    //    ⚠️ 这一行里现在只剩**一颗**可点的（那颗话筒）。
+    // ③ 负向对照：**bar 自己是透明的** ⇒ "按钮不透明"这件事只能靠每颗自己那层底
+    expect(barMaterial(tester).color!.a, 0.0, reason: '★ bar 自己画上了底 —— 那上面这条就白量了');
   });
 
-  testWidgets('🔴 话筒在**这一行的最右**（不在输入框里面了）', (tester) async {
+  testWidgets('🔴 那颗圆圈在**说话那一格的最右**（不在任何打字框里面）', (tester) async {
+    // ⚠️ 原来这一条是"话筒在输入框右边、不在框里面"（网页的输入法 DOM 会盖住整个
+    //    `TextField` 的矩形 ⇒ 按钮必须住在它外面）。今天那一格里**根本没有输入框**：
+    //    它就是"左边一句字 ＋ 右边那颗圆圈"（`voice_bar.dart`）⇒ 等价的那件事是
+    //    **圆圈贴着那一格的右内沿**（在字那一侧的右边）。
+    nativeHearingApi = _Mic();
     await _pump(tester);
-    final mic = find.byTooltip(hearStart);
-    // 负向对照：它**不是**那个 `TextField` 的孩子（2026-09-24 那一版它在框里）
-    expect(
-      find.descendant(of: find.byType(TextField), matching: mic),
-      findsNothing,
-      reason: '★ 话筒还在框里面 —— 主人要的是"右侧是语音按钮"',
-    );
-    // 而且它在框的**右边**（拿屏幕坐标量，不猜结构）
+    final mic = find.byKey(voiceBarCircleKey);
+    // 负向对照：开得了麦时那一格里一个打字框都不该有（有的话它就又被圈进那块矩形了）
+    expect(find.byType(TextField), findsNothing, reason: '★ 那一格里又长出一个打字框');
+    // 而且它在那一格的**右半边**（拿屏幕坐标量，不猜结构）
     final micRect = tester.getRect(mic);
-    final fieldRect = tester.getRect(
-      find.descendant(of: find.byType(Composer), matching: find.byType(TextField)),
+    final barRect = tester.getRect(find.byType(VoiceBar));
+    expect(
+      micRect.right,
+      closeTo(barRect.right - d.gapM, 1),
+      reason: '★ 圆圈不在那一格的右内沿：mic=$micRect bar=$barRect',
     );
-    expect(micRect.left, greaterThanOrEqualTo(fieldRect.right - 1),
-        reason: '★ 话筒不在输入框右边：mic=$micRect field=$fieldRect');
+    expect(micRect.left, greaterThan(barRect.center.dx), reason: '★ 圆圈不在右半边');
   });
 
   testWidgets('🔴 浮窗有阴影（不是靠描边假装浮着）', (tester) async {
@@ -221,60 +299,76 @@ void main() {
         reason: '★ 又用回"墨色黑影"了 —— 主人明确说不要黑');
   });
 
-  testWidgets('🔴 点收起态那个「说点什么」⇒ **窗口自动打开**（而且字不丢）', (tester) async {
-    // 主人 2026-09-22：*"点击说点什么，聊天窗口会自动打开。"*
-    // （手册 §6.3 那条"点收起态底部条 ⇒ 展开到上次档位"就是这个）
-    await _pump(tester);
+  testWidgets('🔴 收起态按那颗圆圈 ⇒ **真去开麦**（不是"点一下窗口就打开"）', (tester) async {
+    // ⚠️ 原来这一条是"点收起态那个「说点什么」⇒ 窗口自动打开（而且字不丢）"。
+    //    🔴 那个输入框已经被"语音优先"那一格换掉了（2026-10-05）：收起态那一格里
+    //    **没有"点一下就展开"的入口** —— 按那颗圆圈 = **开麦**（`D3.14`）。
+    //    窗口自己打开只发生在**一句话说完、真发出去之后**（判据在 `voice_send_test.dart`）。
+    final mic = _Mic();
+    nativeHearingApi = mic;
+    // ⚠️ 开麦要**手里有令牌**（`hearOnce` 没令牌直接回 `failed`，连设备都不碰）
+    final s = _voiceController();
+    await tester.pumpWidget(
+      MaterialApp(home: ChatScreen(controller: s.c, onLoggedOut: () {})),
+    );
+    await tester.pump();
     expect(find.byTooltip(chatCollapse), findsNothing, reason: '一开始是收起的');
 
-    // 先打两个字，再点框 —— 两件事都要成立：窗口开了，**字还在**
-    await tester.enterText(find.byType(TextField), '在吗');
+    await tester.tap(find.byKey(voiceBarCircleKey));
     await tester.pump();
-    await tester.tap(find.byType(TextField));
-    await tester.pumpAndSettle();
+    await tester.pump();
 
-    // ⚠️ 2026-10-05：展开态里「收起」有**两颗**了（标题行那颗 ＋ 录音旁边那颗翻过来的）
-    expect(find.byTooltip(chatCollapse), findsWidgets, reason: '★ 点输入框 ⇒ 窗口该打开');
-    expect(find.byKey(chatBodyKey), findsOneWidget, reason: '打开之后时间线那一块该在');
-    expect(
-      tester.widget<TextField>(find.byType(TextField)).controller!.text,
-      '在吗',
-      reason: '★ 打开这一下不许把你打的字弄丢（两态是同一个输入条实例）',
-    );
+    expect(mic.started, 1, reason: '★ 按了那颗圆圈却没去开麦');
+    expect(find.byIcon(Icons.stop_rounded), findsOneWidget, reason: '★ 在录的时候该是那颗"停"');
+    // 负向对照：按圆圈**不是**展开的入口（窗口还在收起档）
+    expect(find.byTooltip(chatCollapse), findsNothing, reason: '★ 按圆圈把窗口也打开了 —— 那一颗只负责开麦');
+    expect(find.byKey(chatBodyKey), findsNothing, reason: '收起档不许画状态条 + 时间线那一块');
   });
 
-  testWidgets('🔴 在**收起态**打了一半，点「展开」⇒ 字不丢（输入条是同一个实例）', (tester) async {
-    // ⚠️ 这条钉的是**实现上的一个关键选择**：输入条从 `_sheetBody` 里**拆出来单独传给浮窗**，
+  testWidgets('🔴 那条**打字退路**：打了一半，点「展开」⇒ 字不丢（那一格是同一个实例）', (tester) async {
+    // ⚠️ 这条原来钉的是**实现上的一个关键选择**：输入条从 `_sheetBody` 里**拆出来单独传给浮窗**，
     //    上下两态共用**同一个** `Composer`。要是两处各建一个，"打了一半再展开"会换一个 `State`，
     //    **框里的字就没了**（那是最气人的那种丢字）。
+    //    🔴 那个输入框已经被"语音优先"那一格换掉了（2026-10-05）⇒ 等价的那件事是：
+    //    **开不了麦时那条打字退路**（`voice_bar.dart` 的 `_typedField`）里打了一半的字，
+    //    点「展开」之后**还在框里**（同一格、同一个 State）。
     await _pump(tester);
-    await tester.enterText(find.byType(TextField), '半句话');
-    await tester.pump();
+    await _typeInstead(tester, '半句话');
+    expect(
+      tester.widget<TextField>(find.byKey(voiceBarTypeKey)).controller!.text,
+      '半句话',
+      reason: '前提：字该先打在框里',
+    );
 
     await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
 
+    expect(find.byKey(voiceBarTypeKey), findsOneWidget,
+        reason: '★ 展开之后那条打字退路没了（那一格被重建了）');
     expect(
-      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      tester.widget<TextField>(find.byKey(voiceBarTypeKey)).controller!.text,
       '半句话',
       reason: '★ 展开不该把你打了一半的字弄丢',
     );
   });
 
-  testWidgets('🔴 收起态那个输入框**真能发**：发出去就拉满（§6.2"发就拉满"）', (tester) async {
-    final c = _controller();
+  testWidgets('🔴 收起态那条**打字退路真能发**：发出去就拉满（§6.2"发就拉满"）', (tester) async {
+    // ⚠️ 原来这一条走的是"收起态也有输入框，打完按发送"。🔴 那个输入框已经被
+    //    "语音优先"那一格换掉了（2026-10-05）⇒ 等价的那条路是**开不了麦时那颗「打字」
+    //    的退路**（`voice_bar.dart`）；而"发就拉满"这件事一个字没变（`maximize()`）。
+    final s = _voiceController();
     await tester.pumpWidget(
-      MaterialApp(home: ChatScreen(controller: c, onLoggedOut: () {})),
+      MaterialApp(home: ChatScreen(controller: s.c, onLoggedOut: () {})),
     );
     await tester.pump();
     final before = _floaterRect(tester).height; // 收起态
     expect(find.byTooltip(chatCollapse), findsNothing, reason: '一开始是收起的');
 
-    await tester.enterText(find.byType(TextField), '在吗');
-    await tester.pump();
-    await tester.tap(find.text(sendWords));
-    await tester.pump();
+    await _typeInstead(tester, '在吗');
+    await tester.tap(find.byKey(voiceBarTypedSendKey));
+    await tester.pumpAndSettle();
 
+    expect(s.said.length, 1, reason: '★ 那条退路没把这一句交出去');
     expect(_floaterRect(tester).height > before, true,
         reason: '★ 从收起态发出去 ⇒ 该拉满（$before → ${_floaterRect(tester).height}）');
     expect(find.byTooltip(chatCollapse), findsWidgets, reason: '拉满之后该有「收起」');
@@ -329,14 +423,24 @@ void main() {
     expect(f.left, FloaterMetrics.margin, reason: '浮窗左边必须留出桌面那条带子');
   });
 
-  testWidgets('🔴 用户在输入条上按发送 ⇒ 最大化（"发就拉满"）', (tester) async {
-    await _pump(tester, tier: FloaterTier.full);
-    final half = _floaterRect(tester).height;
-    await tester.enterText(find.byType(TextField), '在吗');
+  testWidgets('🔴 展开档按发送 ⇒ 已经**全开就不动**（两档之间没有中间态）', (tester) async {
+    // ⚠️ 原来这一条是"在输入条上按发送 ⇒ 最大化"。🔴 今天只有**两档**（收起 / 完全展开）：
+    //    "拉满"只发生在**从收起态发出去**那一下（上一条守着）；展开档本来就是全开。
+    //    ⇒ 这一条守反向的那件事：发出去这一下**不许**把窗口改成别的形状（不许又长出第三档）。
+    final s = _voiceController();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(initialTier: FloaterTier.full, controller: s.c, onLoggedOut: () {}),
+      ),
+    );
     await tester.pump();
-    await tester.tap(find.text(sendWords));
-    await tester.pump();
-    expect(_floaterRect(tester).height > half, true, reason: '发送之后该拉满（$half → ${_floaterRect(tester).height}）');
+    final open = _floaterRect(tester).height;
+    await _typeInstead(tester, '在吗');
+    await tester.tap(find.byKey(voiceBarTypedSendKey));
+    await tester.pumpAndSettle();
+    expect(s.said.length, 1, reason: '★ 展开档里那句没发出去');
+    expect(_floaterRect(tester).height, open,
+        reason: '★ 发送把已经全开的窗口又改了（$open → ${_floaterRect(tester).height}）');
   });
 
   testWidgets('🔴 拖**时间线**仍然滚动（手势只绑抓手行，不吃列表滚动）', (tester) async {
@@ -378,32 +482,50 @@ void main() {
     expect(desk.size, screen.size, reason: '桌面该铺满整屏（实测过它只有 ${desk.size}）');
   });
 
-  testWidgets('🔴 抓手的命中区 ≥44，而且它在**录音圆圈右边那一行**（D3.6 + 主人 2026-10-05）', (tester) async {
+  testWidgets('🔴 抓手：命中区 ≥44 ＋ 在**右半边**（录音圆圈右边），而且**两档位置一样**', (tester) async {
+    // ⚠️ 2026-10-05 主人：*"语音按钮的右侧，需要两个按钮。一个是展开聊天，一个是播放语音。……
+    //    他们都要有一个长方形的按钮轮廓。"* ⇒ 那颗抓手的**位置**是产品定死的：
+    //    它在**下面那一行**、在**录音圆圈的右边**（右半边），而且**两档里一个像素都不动**
+    //    （他当场报过"打开聊天历史窗口后语音按键位置改变了"）。
     await _pump(tester);
-    // 图形本身小（26×7 的箭头），但**它那个按钮**要够大
+    // 图形本身小（22×6 的箭头），但**它那个按钮**要够大（D3.6）
     final btn = tester.getRect(find.byKey(chatHandleKey));
     expect(btn.height >= 44, true, reason: '抓手命中区只有 ${btn.height}');
     expect(btn.width >= 44, true, reason: '抓手命中区只有 ${btn.width}');
-    // ★ 位置：主人 2026-10-05 定的是"**语音按钮的右侧**两颗按钮"——
-    //   它不再在浮窗顶上（那一行整条撤掉了）、也不在正中央：
-    //   🔴 它在**下面那一行**，而且在**右半边**（录音圆圈再往右）。
     final f = _floaterRect(tester);
     expect(btn.center.dx > f.center.dx, true,
         reason: '抓手该在右半边（差 ${btn.center.dx - f.center.dx}）—— 主人要的是"语音按钮的右侧"');
-    // ⚠️ 它现在是**右边那一列的上格**（主人 2026-10-05："展开在上，开启关闭在下"）
-    //    ⇒ 它不在浮窗正中，也不再贴着浮窗底：它在**右半边**、而且**不在最上面**。
-    expect(btn.top - f.top > 4, true,
-        reason: '抓手贴着浮窗上沿了（差 ${btn.top - f.top}）—— 顶上那一行早就撤掉了');
+    final inCollapsed = Offset(f.right - btn.right, f.bottom - btn.bottom);
+
+    // 🔴 **两档位置一样**（那一行两个档同一个形状 —— `chat_floater.dart` 的 `_bottomRow`）
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await _pump(tester, tier: FloaterTier.full);
+    final btn2 = tester.getRect(find.byKey(chatHandleKey));
+    final f2 = _floaterRect(tester);
+    expect(btn2.center.dx > f2.center.dx, true, reason: '★ 展开档那颗跑到左半边去了');
+    expect(f2.right - btn2.right, closeTo(inCollapsed.dx, 1),
+        reason: '★ 展开那一下抓手横向跳了（${inCollapsed.dx} → ${f2.right - btn2.right}）');
+    expect(f2.bottom - btn2.bottom, closeTo(inCollapsed.dy, 1),
+        reason: '★ 展开那一下抓手纵向跳了（${inCollapsed.dy} → ${f2.bottom - btn2.bottom}）');
+    // 负向对照：**顶上那一行早就撤掉了**（展开档里它在**底部那一行**，不在标题行）
+    expect(btn2.top > f2.center.dy, true,
+        reason: '★ 抓手贴着浮窗上沿（差 ${btn2.top - f2.top}）—— 顶上那一行撤掉了，它在底部那一行');
   });
 
-  testWidgets('🔴 收起 ⇄ 展开各有一颗看得见的东西负责（2026-09-29 换过形状）', (tester) async {
+  testWidgets('🔴 收起态那颗抓手 ⇒ 展开；展开态标题行那颗「收起」⇒ 收起（各有一颗看得见的东西负责）', (tester) async {
     // ⚠️ 原来是"双击 = 收起 ⇄ 展开"；2026-09-24 改成"单击抓手"。
     //    ★ 2026-09-29 主人：*"展开后右上角有个收起按钮。"* ⇒
     //      **收起态**：点那颗平箭头（抓手）= 展开；
-    //      **展开态**：点标题行右端那颗「收起」= 收起（抓手那一行不再画）。
+    //      **展开态**：点标题行右端那颗「收起」= 收起。
+    //    ⚠️ 原来这里还断言"展开态也有输入框（`Composer`）"。🔴 那个输入框已经被
+    //    "语音优先"那一格换掉了（2026-10-05）⇒ 等价的那件事是"展开态也画着那一格"
+    //    （`VoiceBar`：那颗圆圈 ＋ 它左边那句字）。
     await _pump(tester, tier: FloaterTier.full);
-    expect(find.byType(Composer), findsOneWidget);
-    await tester.tap(find.byTooltip(chatCollapse));
+    expect(find.byType(VoiceBar), findsOneWidget, reason: '★ 展开态也该有说话那一格');
+    // ⚠️ 展开态里 `chatCollapse` 有**两颗**（标题行那颗 ＋ 录音旁边那颗翻过来的）
+    //    ⇒ 点哪一颗都得指名道姓（`tester.tap` 只认唯一一个）。
+    await tester.tap(find.byKey(chatCollapseKey));
     await tester.pumpAndSettle();
     expect(find.byTooltip(chatCollapse), findsNothing, reason: '点「收起」该收起');
     // 收起之后：平箭头回来了（它就是"再展开"的入口）

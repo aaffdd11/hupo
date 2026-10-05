@@ -14,7 +14,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/design.dart' as d;
 import 'package:hupo_app/models/hear_drill.dart';
 import 'package:hupo_app/models/hear_words.dart';
+import 'package:hupo_app/models/dsh_design.dart';
 import 'package:hupo_app/models/motion_switch.dart';
+import 'package:hupo_app/widgets/appearance_scope.dart';
 import 'package:hupo_app/widgets/voice_bar.dart';
 
 /// 一个把状态钉成某一档的夹具（状态住上层 ⇒ 直接给它一份 `HearDrill`）。
@@ -198,5 +200,67 @@ void main() {
         .heardBack(ok: true, heard: '那个东西弄一下', ask: '哪个东西？');
     await _pump(tester, asking);
     expect(decoOf(tester), isNot(TextDecoration.underline));
+  });
+
+  testWidgets('⑦ 🔴 底下那一行字**跟用户那条字号轴**（12/14/17 都跟着变）', (tester) async {
+    // 🔴 2026-10-06 清过期判据时点名的真缺陷：这一行字原来走 `textTheme.bodyLarge`
+    //    （16/24，与用户那条轴无关）⇒ 设置里把字号从 12 调到 17，时间线会变、
+    //    **底下这一行一个像素都不动**。它属于"会话内容"，必须跟轴。
+    Future<double> sizeAt(int setting) async {
+      await tester.pumpWidget(
+        AppearanceScope(
+          variant: DshVariant.light,
+          scale: dshContentScale(setting),
+          child: MaterialApp(
+            home: Scaffold(
+              body: VoiceBar(
+                flow: _wrapping(),
+                canHear: true,
+                onMic: () {},
+                onTyped: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return tester.getSize(find.text('帮我看看天气')).height;
+    }
+
+    final h12 = await sizeAt(12);
+    final h17 = await sizeAt(17);
+    expect(h17, greaterThan(h12),
+        reason: '★ 字号调大 ⇒ 底下这一行也得跟着变大（原来它走 textTheme，一个像素都不动）');
+  });
+
+  testWidgets('⑧ 🔴 打字那条退路：**上回打了一半的那句还在**，发出去才清掉', (tester) async {
+    // 🔴 主人 2026-09-22 就定过"草稿也是要记住的"；而那一格换成语音之后，
+    //    唯一会写草稿的 `composer.dart` **没人实例化了** ⇒ 打了一半刷新就没了
+    //    （2026-10-06 清判据时发现的真缺陷）。这一条钉"接回活的这一格"。
+    final typed = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VoiceBar(
+            flow: const HearDrill(),
+            canHear: false,
+            onMic: () {},
+            onTyped: (_) {},
+            draft: '帮我看一下明天',
+            onDraft: typed.add,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // ① 存着的那一句**填回框里**（而且这一格是摊开的 —— 不摊开就等于字丢了）
+    expect(find.text('帮我看一下明天'), findsOneWidget, reason: '★ 上回打了一半的那句没回来');
+    // ② 再敲一下 ⇒ 每一下都喊一声（存的那一份跟着变）
+    await tester.enterText(find.byKey(voiceBarTypeKey), '帮我看一下明天北京的天气');
+    expect(typed, isNotEmpty, reason: '★ 敲了字却没喊 onDraft ⇒ 那份草稿还是没人写');
+    // ③ 发出去 ⇒ 喊一声空的（那一份清掉）
+    await tester.tap(find.byKey(voiceBarTypedSendKey));
+    await tester.pumpAndSettle();
+    expect(typed.last, '', reason: '★ 发出去了那份草稿还留着 ⇒ 下次回来又冒出一句他已经发过的话');
   });
 }

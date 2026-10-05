@@ -144,7 +144,22 @@ Widget buildMiniAppView({
       f.style.position = 'absolute';
       f.style.top = '0';
       f.style.left = '0';
-      f.style.width = '100%';
+      // 🔴 **2026-10-06：右侧那条"1 物理像素的缝"就修在这一行**。
+      //
+      //   成因（拿真浏览器量出来的，不是猜的）：真机的 CSS 视口宽常常是**分数**
+      //   （物理宽 ÷ 像素比，例如 1619 ÷ 3 ≈ 539.67）⇒ 这一帧最右边那一列物理像素
+      //   **只被盖住一部分**，露出来的就是它后面的那张**纸**（白）⇒ 一条白线。
+      //   实测读数（主人 2026-10-05 那张截图 · 1619×2590）：最右一列 `(244,234,255)`
+      //   = 纸色与小程序底色的**半盖**，左边那一列同样的位置**没有**这条线。
+      //
+      //   ⚠️ **为什么不能挂在那个 wrapper 上**（原来写的是 `right:-2px`）：
+      //   Flutter 会把**那个 wrapper 的尺寸写死成"这一格的矩形"** —— 真读数
+      //   （`--eval` 量 DOM）：wrapper 量出来是 1281×512，与槽**一模一样**，
+      //   那两个 `-2px` **一个像素都没生效**。而 **iframe 的尺寸是我们说了算**
+      //   （它是 wrapper 的孩子）⇒ 多出来的那 2 像素只能挂在它身上。
+      //   `overflow:hidden`（wrapper 上那个）会把超出去的部分裁掉 ⇒
+      //   底下那条聊天条**不会被压到**，只是这一帧实际画得比看得见的地方宽 2 像素。
+      f.style.width = 'calc(100% + 2px)';
       f.style.height = '100%';
       f.style.display = 'block';
       f.style.background = 'transparent';
@@ -160,17 +175,17 @@ Widget buildMiniAppView({
       //   原来那套 DOM 的麦克风/字（`D3.14` 甲）跟着一起删了。
       //   ⚠️ **"退出"必须留在这里**：它在**右上角**，那一角仍然被平台视图盖着。
       _exits[viewId] = onExit;
-      // 🔴 **2026-10-05 主人截图：右侧一条白边** ⇒ 让这一帧**精确等于槽**
-      //    （`inset: 0` ＋ `overflow: hidden`；iframe 也绝对定位、四边贴 0 ——
-      //     不留"行内元素基线"和"块级宽度"那点缝）。
+      // 🔴 **2026-10-06 主人截图（右侧一条白边）那条的真相**：真浏览器量出来的
+      //    读数 —— **这一格（wrapper）的尺寸是 Flutter 写死的**（= 这一格的矩形，
+      //    量到 1281×512，与槽逐像素相同）⇒ 在这里写 `right/bottom:-2px`
+      //    **一个像素都不生效**（那两行是白写的，2026-10-06 已删）。
+      //    ⇒ "多铺 2 像素"这件事改挂在 **iframe** 身上（见上面那一行 `width`）。
       final wrap = html.DivElement()
         ..style.position = 'absolute'
         ..style.top = '0'
         ..style.left = '0'
-        // ⚠️ **往右下多铺 2 像素**（"1 像素白线"那一族的老办法）：宁可盖出去一点，
-        //    也不许在右/下留一条缝（主人两次报的右侧那条白边）。
-        ..style.right = '-2px'
-        ..style.bottom = '-2px'
+        // ⚠️ **裁掉超出去的那一点**：小程序那一帧比这一格宽 2 像素 ⇒
+        //    超出这一格的部分不许露到下面那条聊天条上。
         ..style.overflow = 'hidden';
       final exitBtn = html.ButtonElement()
         ..className = 'hupo-mini-exit'

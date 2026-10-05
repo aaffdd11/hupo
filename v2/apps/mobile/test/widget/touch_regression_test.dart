@@ -29,12 +29,13 @@
 // ⚠️ 这一份是提示档（`AGENTS.md` §5.1：`test/widget` 只有可访问性那份是硬闸），
 //    但它是"这三条到底有没有修好"的唯一自动化证据。
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:hupo_app/models/dsh_design.dart';
-import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
@@ -44,7 +45,7 @@ import 'package:hupo_app/widgets/bubble_menu.dart';
 import 'package:hupo_app/widgets/bubble_select_bar.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:hupo_app/widgets/composer.dart';
+import 'package:hupo_app/widgets/voice_bar.dart';
 
 http.Response _json(String body, [int status = 200]) => http.Response(
   body,
@@ -65,6 +66,13 @@ _Rec _controller() {
       if (req.url.path.contains('/api/say')) {
         r.says.add(req.body);
         return _json('{"ok":true}');
+      }
+      // ★ 底下那一格那条**打字的退路**走的是"听懂那一层"（`/api/hear`）——
+      //   通顺 ⇒ 它自己发出去（`/api/say`）。这台在 VM 里开不了麦 ⇒ 屏幕上就是那一条。
+      if (req.url.path.contains('/api/hear')) {
+        final b = jsonDecode(req.body) as Map<String, dynamic>;
+        final said = (b['text'] as String?) ?? '';
+        return _json(jsonEncode({'heard': said, 'ask': null, 'scene': 'do'}));
       }
       if (req.url.path.contains('/api/apps')) return _json('{"apps":[]}');
       return _json('{}');
@@ -121,12 +129,19 @@ ScrollPosition _transcript(WidgetTester tester) => tester
     )
     .position;
 
-/// 发送钮此刻按不按得动（灰 = `onPressed == null`）。
-bool _sendReady(WidgetTester tester) {
-  // ⚠️ 2026-09-29：发送那颗只在"有话要说"时出现，而且是 `FilledButton`。
-  final f = find.byKey(chatSendKey);
-  if (f.evaluate().isEmpty) return false;
-  return tester.widget<FilledButton>(f).onPressed != null;
+/// **像用户那样**在底下那一格发一句话（真入口）。
+///
+/// ⚠️ 底下那一格 2026-10-04 起成了"语音优先"（手册 `D3.14`：**不再有输入框**）；
+///    而这条判据跑在**开不了麦**的环境里（`services/hearing_stub.dart` 的 `canHear` 恒假）
+///    ⇒ 屏幕上就是那条**打字的退路**：点「打字」摊开那一格、敲一句、按「就这句」——
+///    它走**听懂那一层**（`/api/hear`），通顺就自己发出去（`/api/say`）。
+Future<void> _say(WidgetTester tester, String text) async {
+  await tester.tap(find.byKey(voiceBarTypeChipKey));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.byKey(voiceBarTypeKey), text);
+  await tester.pump();
+  await tester.tap(find.byKey(voiceBarTypedSendKey));
+  await tester.pumpAndSettle();
 }
 
 /// 真手指那一下：**按住 600ms**（> `kLongPressTimeout`）。
@@ -145,7 +160,7 @@ void main() {
 
   // ── ① 🔴 长按那一条：摆出来的必须是**不挡窗口**的那条，而且窗口照样能用 ──
 
-  testWidgets('🔴 按住气泡 600ms ⇒ 摆出的是输入条上面那条（不是弹层）＋ 时间线照样滑、发送照样发', (tester) async {
+  testWidgets('🔴 按住气泡 600ms ⇒ 摆出的是底下那一格上面那条（不是弹层）＋ 时间线照样滑、照样发得出去', (tester) async {
     final r = _controller();
     _feed(r.c, 40);
     await _pump(tester, r.c);
@@ -181,12 +196,10 @@ void main() {
     );
 
     // ② 发送照样发得出去（老那一版：这张单子整个盖住输入条）
-    await tester.enterText(find.byType(TextField), '在吗');
-    await tester.pump();
-    expect(_sendReady(tester), isTrue, reason: '★ 有字了发送钮还是灰的');
-    await tester.tap(find.text(sendWords), warnIfMissed: true);
-    await tester.pumpAndSettle();
-    expect(r.says.length, 1, reason: '★ 那一条摆着的时候点发送没反应（真机上就是"收起才能发送"）');
+    // ⚠️ 输入框没了（`D3.14`）⇒ 现在走底下那一格**打字的退路**（同一件事：
+    //    "那一条摆着的时候，底下那一格照样用得了"）。
+    await _say(tester, '在吗');
+    expect(r.says.length, 1, reason: '★ 那一条摆着的时候发不出话（真机上就是"收起才能发送"）');
     expect(r.says.single, contains('在吗'));
 
     // ③ 它是**非模态**的：发完还在（用户自己收）
@@ -210,11 +223,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(pos.pixels, lessThan(bottom - 100), reason: '★ 对照组：这一屏本来就该滑得动');
 
-    await tester.enterText(find.byType(TextField), '在吗');
-    await tester.pump();
-    await tester.tap(find.text(sendWords), warnIfMissed: true);
-    await tester.pumpAndSettle();
-    expect(r.says.length, 1, reason: '★ 对照组：没摆那条的时候发送本来就是好的');
+    await _say(tester, '在吗');
+    expect(r.says.length, 1, reason: '★ 对照组：没摆那条的时候本来就发得出去');
   });
 
   // ── ② 那一条自己的出口（不是摆设：按了要真收起来）──────────────

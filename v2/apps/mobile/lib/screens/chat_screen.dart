@@ -39,6 +39,7 @@ import '../models/app_spec.dart';
 import '../models/app_words.dart';
 import '../models/harness.dart';
 import '../models/harness_words.dart';
+import '../models/mini_frame.dart';
 import '../models/mini_update.dart';
 import '../models/scope.dart';
 import '../models/space_words.dart';
@@ -944,7 +945,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               //     露在外面**一份实现**。
               //   🔴 **为什么安卓不用留**：那边是平台视图、在画布**下面** ⇒ Flutter 画的聊天
               //     与圆圈天然压在它上面 ⇒ 内容**铺满**（`0`）。
-              bottomInset: kIsWeb ? (FloaterMetrics.margin + _barH) : 0,
+              // ★ **2026-10-06 修一处真缺陷**（清判据时抓到的）：
+              //   这一行原来是 `kIsWeb ? (margin + _barH) : 0` —— 把"安卓铺满"
+              //   那一档**也套在"内置那几屏"身上了**（设置 / 发现 /「我自己那台」）。
+              //   🔴 手册 `08-SPEC.md` §6.4 规则 1 明说：**内置那几屏不是制品 ⇒ 照旧由壳内缩**
+              //      —— 否则收起那条会压在它们底部（设置最后一行、`HarnessPane` 那颗按钮
+              //      **真手势点不到**；判据 `harness_test` 当场红过）。
+              //   ⇒ 只有"**制品那一屏（平台视图）＋ 不是网页**"才铺满：
+              //      网页 ⇒ 平台视图是 DOM、压在画布**上面** ⇒ 底下那一格必须让出来
+              //      （主人 2026-10-05 定的"网页不铺满"）；安卓 ⇒ 平台视图在画布**下面**
+              //      ⇒ 制品铺满（"安卓铺满"）；内置那几屏**两种平台上都让**。
+              bottomInset: miniAppBleedsBottom(
+                isWeb: kIsWeb,
+                platformView: appView?.platform ?? false,
+              )
+                  ? 0
+                  : (FloaterMetrics.margin + _barH),
               child: _appView(c)?.view ?? _lastAppView ?? const SizedBox.shrink(),
             ),
           ),
@@ -1083,7 +1099,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     return _lastAppIcon;
   }
 
-  ({Widget view, String title})? _appView(ChatController c) {
+  ({Widget view, String title, bool platform})? _appView(ChatController c) {
     final mine = _openMine();
     if (mine != null) {
       return (
@@ -1113,12 +1129,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           onAsk: (prompt) => _askFor(mine.id, prompt),
         ),
         title: mine.title,
+        // ★ **制品那一屏 = 平台视图**（网页上是 DOM、安卓上是 WebView）——
+        //   只有它才吃"安卓铺满"那一档（见下面 `bottomInset`）。
+        platform: true,
       );
     }
     if (_openApp == builtInDiscoverId) {
       return (
         view: DiscoverScreen(load: _loadDiscover, refreshToken: _appsRevision),
         title: discoverTitle,
+        platform: false,
       );
     }
     // ★ **「我自己那台」**（契约 `81-HARNESS-ENTRY.md` §5.4）：桌面上的一层**终端**，
@@ -1133,6 +1153,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           devEntry: widget.devHarnessEntry ?? _devHarnessEntry(),
         ),
         title: harnessAppLabel,
+        platform: false,
       );
     }
     if (_openApp == builtInSettingsId) {
@@ -1199,6 +1220,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           onClear: _clearMyApp,
         ),
         title: configTitle,
+        platform: false,
       );
     }
     return null;
@@ -1981,6 +2003,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               speakable: canSpeak,
               onMic: () => unawaited(c.toggleVoiceCompose()),
               onTyped: (text) => unawaited(c.answerVoiceCompose(text)),
+              // ★ 2026-10-06：**他上回打了一半的那一句**接回这一格
+              //   （原来只有那个没人用的 `composer.dart` 会写它 ⇒ 刷新就没了）
+              draft: c.composeDraft ?? '',
+              onDraft: c.saveComposeDraft,
             ),
           ],
         ),

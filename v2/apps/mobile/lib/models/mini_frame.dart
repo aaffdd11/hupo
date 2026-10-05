@@ -143,3 +143,20 @@ bool miniNavigationAllowed({required String entryUrl, required String target}) {
   return u.scheme == base.scheme && u.host == base.host && u.port == base.port;
 }
 
+
+/// ★ **2026-10-06：制品那一屏到底"铺不铺满"底部**（主人 2026-10-05 定的口径）。
+///
+/// * **网页**：小程序是**真的 DOM 元素**、压在画布**上面** ⇒ 铺满就把底下那颗录音圆圈
+///   盖住（看不见也点不到）⇒ **不铺满**（底下那一格让出来，圆圈由 Flutter 画着）；
+/// * **安卓**：平台视图在画布**下面** ⇒ Flutter 画的聊天与圆圈天然压在它上面
+///   ⇒ **铺满**（`0`）。
+///
+/// 🔴 **这条规矩只管"制品那一屏"**（平台视图）：**内置那几屏**（设置 / 发现 /「我自己那台」）
+///    是 Flutter 自己画的，**两种平台上都要让**（手册 `08-SPEC.md` §6.4 规则 1 原话：
+///    *"内置那几屏不是制品 ⇒ 照旧由壳内缩"*）——2026-10-06 修的就是"把安卓铺满那一档
+///    也套到内置那几屏身上"（收起条压住设置最后一行、`HarnessPane` 那颗按钮点不到）。
+///
+/// ⚠️ 它住 `models/` 是因为**它是纯逻辑**（`flutter test` 里量得到真值表）——
+///    而"哪一屏是平台视图"只有界面那一层知道（`_appView` 里那一格）。
+bool miniAppBleedsBottom({required bool isWeb, required bool platformView}) =>
+    !isWeb && platformView;

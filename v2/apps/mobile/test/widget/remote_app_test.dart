@@ -25,6 +25,7 @@ import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/app_desktop.dart';
 import 'package:hupo_app/widgets/app_grants_ask.dart';
+import 'package:hupo_app/widgets/voice_bar.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -144,7 +145,15 @@ void main() {
   testWidgets('清单拉不到（500 / 空）⇒ 只剩内置那几个，聊天照常', (tester) async {
     await _pump(tester, _apiWith(const [], status: 500));
     expect(find.text(settingsAppLabel), findsOneWidget);
-    expect(find.text('说点什么'), findsOneWidget, reason: '聊天不许因为清单拉不到就坏掉');
+    // 原来守的是「聊天那一格还在、还能说话」（旧输入框给的提示字就是"说点什么"）。
+    // 🔴 底下那一格换成**语音优先**（`VoiceBar`）之后，空的时候它**一个像素都不画**，
+    //    也没有输入框 ⇒ 守等价的那一件事：**那一格还在，而且按「打字」还能摊开输入框**
+    //    （照常能说话）。原来防的缺陷 = 清单拉不到把聊天也带坏。
+    expect(find.byType(VoiceBar), findsOneWidget, reason: '聊天那一格不许因为清单拉不到就没了');
+    await tester.tap(find.byKey(voiceBarTypeChipKey));
+    await tester.pumpAndSettle();
+    expect(find.byKey(voiceBarTypeKey), findsOneWidget,
+        reason: '★ 聊天不许因为清单拉不到就坏掉（打字那条退路还能开）');
   });
 
   // ── ★ 2026-10-01：**打开时先问一句**（主人：*"小程序不要声明，应该是打开后

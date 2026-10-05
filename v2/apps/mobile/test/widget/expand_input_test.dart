@@ -51,6 +51,8 @@
 //    它是**回归网**（防以后谁把这条链子碰断），不是"修好了"的证据；如实记在
 //    `docs/dev/121-EXPAND-INPUT-FIX.md` §五。
 
+import 'dart:convert';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -63,9 +65,8 @@ import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/widgets/tool_row_view.dart';
+import 'package:hupo_app/widgets/voice_bar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:hupo_app/widgets/composer.dart';
-import 'package:hupo_app/models/space_words.dart';
 
 http.Response _json(String body, [int status = 200]) => http.Response(
   body,
@@ -73,9 +74,15 @@ http.Response _json(String body, [int status = 200]) => http.Response(
   headers: {'content-type': 'application/json; charset=utf-8'},
 );
 
-/// 假服务端：**只记 `/api/say` 那几笔**（"发了几句"是这一份要钉的事）。
+/// 假服务端：记下 `/api/say` 那几笔，并替 `/api/hear` 说一句"听清了"。
+///
+/// ⚠️ 今天没有"输入框 ＋ 发送"那条路了（那一格已经换成"语音优先"，2026-10-05）：
+///    开不了麦时走的是**那颗「打字」的退路**，它把那一句交给 `/api/hear`
+///    （听懂那一层只改错别字）⇒ 通顺了才由**界面这一侧自己**发出去（`/api/say`）。
+///    ⇒ 这条链子上"交给服务端恰好一句"仍然钉在这里，只是中间多了一层"听懂"。
 class _Rec {
   final says = <String>[];
+  final asked = <String>[];
   late ChatController c;
 }
 
@@ -83,6 +90,12 @@ _Rec _controller() {
   final r = _Rec();
   final api = Api(
     client: MockClient((req) async {
+      if (req.url.path.contains('/api/hear')) {
+        r.asked.add(req.body);
+        // 听懂那一层只改错别字：这里原样回一句（`heard` 非空 ⇒ `ready` ⇒ 自己发出去）
+        final b = jsonDecode(req.body) as Map<String, dynamic>;
+        return _json(jsonEncode({'heard': (b['text'] as String?) ?? ''}));
+      }
       if (req.url.path.contains('/api/say')) {
         r.says.add(req.body);
         return _json('{"ok":true}');
@@ -196,9 +209,22 @@ Future<void> _wheelUp(WidgetTester tester, {double by = 600}) async {
   await tester.pumpAndSettle();
 }
 
-/// 发送钮此刻按不按得动（它在**消息框里面**，一直在；灰 = `onPressed == null`）。
+/// **走那条打字退路**（开不了麦时才有的那一格）：按「打字」→ 往那一格里打字。
+///
+/// ⚠️ 原来的输入框（`Composer` ＋ 那颗「发送」）已经被"语音优先"那一格换掉了
+///    （2026-10-05）⇒ `find.byType(TextField)` 在这一档里**一个都找不到**：
+///    先得按那颗「打字」，那一格才摊开（`voice_bar.dart` 的 `_typedField`）。
+Future<void> _typeInstead(WidgetTester tester, String text) async {
+  await tester.tap(find.byKey(voiceBarTypeChipKey));
+  await tester.pump();
+  expect(find.byKey(voiceBarTypeKey), findsOneWidget, reason: '★ 那颗「打字」没把输入格摊开');
+  await tester.enterText(find.byKey(voiceBarTypeKey), text);
+  await tester.pump();
+}
+
+/// 那条退路里「就这句」此刻按不按得动（灰 = `onPressed == null`）。
 bool _sendReady(WidgetTester tester) =>
-    tester.widget<FilledButton>(find.byKey(chatSendKey)).onPressed != null;
+    tester.widget<FilledButton>(find.byKey(voiceBarTypedSendKey)).onPressed != null;
 
 /// **一条新事件进来**（流式回答里的每一条 `message/text` 都会走这条路）。
 void _newText(ChatController c) => c.ingest({
@@ -216,9 +242,13 @@ void main() {
   //
   // ⚠️ 下面这一组在**修之前就是绿的**（我没能复现"发不出去"，见文件头）。
   //    留着它是回归网：主人点名的四种状态各一条，谁碰断了当场红。
+  // ⚠️ 2026-10-05 起"输入框 ＋ 发送"那条路没了（那一格换成"语音优先"）⇒
+  //    这一组走的是**开不了麦时那颗「打字」的退路**：按它 → 打字 → 「就这句」
+  //    ⇒ 交给 `/api/hear` 听懂那一层 ⇒ 通顺就**自己发出去**（`/api/say`）。
+  //    "恰好一句"这件事一个字没变 —— 只是中间多了一层"听懂"。
 
   for (final state in const ['常档', '有折叠控件', '有工具行']) {
-    testWidgets('展开后发送 · $state ⇒ 恰好交给服务端一句', (tester) async {
+    testWidgets('展开后发送（打字退路）· $state ⇒ 恰好交给服务端一句', (tester) async {
       final r = _controller();
       _feed(r.c, 6, tools: state == '有工具行' || state == '有折叠控件');
       if (state == '有折叠控件') {
@@ -234,12 +264,11 @@ void main() {
       if (state == '有工具行') {
         expect(find.byType(ToolRowView), findsWidgets, reason: '★ 没有工具行 ⇒ 这条没量到那个状态');
       }
-      await tester.enterText(find.byType(TextField), '在吗');
-      await tester.pump();
-      expect(_sendReady(tester), isTrue, reason: '★ 有字了发送钮还是灰的');
+      await _typeInstead(tester, '在吗');
+      expect(_sendReady(tester), isTrue, reason: '★ 有字了那颗「就这句」还是灰的');
 
       // ⚠️ `warnIfMissed`：点歪了（被别的东西盖住 / 落在视口外）会报出来
-      await tester.tap(find.text(sendWords), warnIfMissed: true);
+      await tester.tap(find.byKey(voiceBarTypedSendKey), warnIfMissed: true);
       await tester.pumpAndSettle();
 
       // 负向对照（"恰好一次"）：再等几帧也不许多交一句
@@ -250,17 +279,16 @@ void main() {
     });
   }
 
-  testWidgets('展开后发送 · 暗色 ＋ 用户字号 17 ⇒ 一样发得出去', (tester) async {
+  testWidgets('展开后发送（打字退路）· 暗色 ＋ 用户字号 17 ⇒ 一样发得出去', (tester) async {
     final r = _controller();
     _feed(r.c, 6);
     await _pump(tester, r.c, dark: true, fontSize: dshContentFontSizeMax);
     await _expand(tester);
-    await tester.enterText(find.byType(TextField), '在吗');
-    await tester.pump();
+    await _typeInstead(tester, '在吗');
     expect(_sendReady(tester), isTrue);
-    await tester.tap(find.text(sendWords), warnIfMissed: true);
+    await tester.tap(find.byKey(voiceBarTypedSendKey), warnIfMissed: true);
     await tester.pumpAndSettle();
-    expect(r.says.length, 1, reason: '★ 暗色/大字号下发送钮点不动');
+    expect(r.says.length, 1, reason: '★ 暗色/大字号下那颗「就这句」点不动');
   });
 
   // ── ② 滚轮翻上去之后，谁也不许把它拽回底部 ──────────────────────
@@ -350,15 +378,18 @@ void main() {
     addTearDown(tester.view.reset);
     await _pump(tester, r.c);
     await _expand(tester);
+    // ⚠️ 今天要打字就得先按那颗「打字」（原来的输入框已经被"语音优先"那一格
+    //    换掉，2026-10-05）⇒ 这一格摊开之后，它（连同那颗「就这句」）必须让开键盘。
+    await _typeInstead(tester, '在吗');
     tester.view.viewInsets = const FakeViewPadding(bottom: keyboard);
     await tester.pumpAndSettle();
     await _drainFrames(tester);
 
     final floater = tester.getRect(find.byType(ChatFloater));
     final transcript = tester.getRect(find.byType(ListView).first);
-    // ⚠️ 最右那一格**永远是录音**（主人 2026-09-29 更正）⇒ 量它；
-    //    而「发送」在**消息框里面**（它也在这一行里，量哪个都该没被键盘盖住）。
-    final send = tester.getRect(find.byKey(chatMicButtonKey));
+    // ⚠️ 原来这里量的是最右那颗话筒（"永远在那一行的最右"）。🔴 今天量的是
+    //    **那颗「就这句」**（打字退路的出口 —— 它就在那一行里，键盘一起来必须没被盖住）。
+    final send = tester.getRect(find.byKey(voiceBarTypedSendKey));
 
     expect(
       transcript.height,
@@ -371,14 +402,12 @@ void main() {
       lessThanOrEqualTo(size.height - keyboard),
       reason: '★ 浮窗压在键盘底下',
     );
-    expect(send.bottom, lessThanOrEqualTo(size.height - keyboard), reason: '★ 发送钮被键盘盖住了');
+    expect(send.bottom, lessThanOrEqualTo(size.height - keyboard), reason: '★ 那颗「就这句」被键盘盖住了');
 
     // 顺手核一句：这个状态下还是发得出去
-    await tester.enterText(find.byType(TextField), '在吗');
-    await tester.pump();
-    await tester.tap(find.text(sendWords), warnIfMissed: true);
+    await tester.tap(find.byKey(voiceBarTypedSendKey), warnIfMissed: true);
     await tester.pumpAndSettle();
-    expect(r.says.length, 1, reason: '★ 键盘开着时发送钮点不动');
+    expect(r.says.length, 1, reason: '★ 键盘开着时那颗「就这句」点不动');
   });
 
   // ── ③·补 键盘弹起 ⇒ **最新那条仍然看得见**（主人 2026-09-30 报的）──────

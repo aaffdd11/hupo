@@ -68,6 +68,13 @@ const Color wallpaperScrim = Color(0x73F8F5EE);
 ///    各自是**不透明**的（`bgLayer2` 实底）⇒ 按钮永远清楚。
 /// ★ 2026-09-29 第二版：**0.72 → 0.45**（"透明度再次增加"），并配一层模糊
 ///   （[barBlurSigma]）—— 那才是 Mac 工具栏那种"看得见底、但看不清细节"的观感。
+///
+/// 🔴 **2026-10-06：那两个值现在 `lib/` 里已经没人用了**（2026-10-04 主人把那条 bar 的
+///    框整个撤掉 ⇒ 模糊与那层罩都没了；收起档现在是**完全透明**，按钮各自实底）。
+///    ⇒ 留着它们**只为一件事**：`desktop_floater_test` 那条**负向对照**
+///      （"不许把磨砂玻璃又加回来"）拿它当锚 —— 删了它，那条对照就只能写一个裸数字。
+///    ⚠️ 谁要把它们删干净：连那条负向对照一起改成"收起档没有 `BackdropFilter`"，
+///      别只删常量。
 const double barVeilAlpha = 0.45;
 
 /// ★ 2026-09-29 主人：*"底下聊天窗口下面的虽然是透明的，但是我想用白色透明，
@@ -85,6 +92,8 @@ const Color floaterShadowColor = Color(0x73FFFFFF); // 白 · α .45（与原 α
 /// ⚠️ 这一层（`BackdropFilter`）**只画在收起档**：展开档里面是时间线，
 ///    模糊会一直重算那块大底（性能）而且在白底上也看不出来。
 /// ⚠️ 数值住这里（手册纪律 1：阈值不写文档）。
+/// 🔴 **2026-10-06：`lib/` 里已无使用者**（同 [barVeilAlpha] 那段批注：那个磨砂框撤了，
+///    留着只给"不许加回来"那条负向对照当锚）。
 const double barBlurSigma = 18;
 
 /// ★ 2026-09-29：**底部那条 bar 上那两颗方块按钮**（home / 录音）。
@@ -114,11 +123,11 @@ const double barSendHeight = 44;
 /// ⚠️ 上面写的是**墨色**的字/图形（对比度 ≈ 7:1；白字只有 ≈ 2:1，过不了手册 §8.3 那条）。
 const Color amber = Color(0xFFE0A030);
 
-/// 录音时那颗话筒上那几根 bar：画几根 / 最矮最高 / 一个来回多久。
-const int recPulseBars = 3;
-const double recPulseBarMin = 6;
-const double recPulseBarMax = 22;
-const Duration recPulsePeriod = Duration(milliseconds: 900);
+// 🔴 **2026-10-06 删掉四个没人用的 token**（录音时那几根脉动 bar 的画法：
+//    `recPulseBars` / `recPulseBarMin` / `recPulseBarMax` / `recPulsePeriod`）——
+//    它们服务的是 `widgets/rec_pulse.dart`，而那一份唯一的用户（`widgets/composer.dart`）
+//    2026-10-05 就不再被生产代码实例化了 ⇒ 两个文件一起删。
+//    今天"正在录"的样子是**那颗圆圈一明一暗**（`design.dart` 的 `recBlink*` 那几个）。
 
 /// ★ **2026-10-05：在录时那颗圆圈"一明一暗"地闪**。
 ///

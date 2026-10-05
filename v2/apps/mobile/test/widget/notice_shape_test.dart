@@ -32,6 +32,7 @@ import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/timeline_store.dart';
 import 'package:hupo_app/services/token_store.dart';
 import 'package:hupo_app/widgets/notice.dart';
+import 'package:hupo_app/widgets/voice_bar.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// ⚠️ **服务端给的那几句**（`29-NOTICE.md` §5.1）。住在测试里正是重点：
@@ -123,10 +124,13 @@ void main() {
     final c = _controller();
     await _pump(tester, c);
 
-    // 通知来之前，把**输入框**那一行的矩形记下来。
+    // 通知来之前，把**底下那一格**（语音条）的矩形记下来。
     // ⚠️ 锚**不能用 `chatBodyKey`**：通知一到，时间线上就有东西了、空屏整块消失
     //    ⇒ 那一块的矩形本来就会变（从前那版测试的注释里写过这个坑）。
-    final composerBefore = tester.getRect(find.byType(TextField).first);
+    // ⚠️ 原来锚的是**输入框**（`find.byType(TextField)`）—— 2026-10-04 起底下那一格
+    //    改成"语音优先"（手册 `D3.14`：不再有输入框）⇒ 改锚**那一格本身**（`VoiceBar`），
+    //    守的还是同一件事：通知**不许把它挤动**。
+    final composerBefore = tester.getRect(find.byType(VoiceBar));
 
     await _arrive(tester, c, _notice());
 
@@ -139,9 +143,9 @@ void main() {
     // 而且它**在列表里**（不是一个浮着的条）
     expect(find.ancestor(of: find.byType(NoticeLine), matching: find.byType(ListView)),
         findsOneWidget);
-    // 输入条那一行一个像素都没动（通知**不参与**"浮"这件事）
-    expect(tester.getRect(find.byType(TextField).first), composerBefore,
-        reason: '★ 通知把输入条挤动了 —— 主人最在意的那一处');
+    // 底下那一格一个像素都没动（通知**不参与**"浮"这件事）
+    expect(tester.getRect(find.byType(VoiceBar)), composerBefore,
+        reason: '★ 通知把底下那一格挤动了 —— 主人最在意的那一处');
   });
 
   testWidgets('★ 冷启动那一屏（本机缓存重放）：时间线里有它，什么都不弹', (tester) async {

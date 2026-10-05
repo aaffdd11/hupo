@@ -105,4 +105,20 @@ void main() {
       );
     });
   });
+
+  group('制品那一屏铺不铺满（★ 2026-10-06 修一处真缺陷时立的规矩）', () {
+    test('🔴 真值表：**只有"制品（平台视图）＋ 不是网页"才铺满**', () {
+      // 主人 2026-10-05 定的：*"网页端……不铺满。安卓 app 才铺满。"*
+      expect(miniAppBleedsBottom(isWeb: false, platformView: true), true,
+          reason: '安卓那一档：平台视图在画布下面 ⇒ 制品铺满（底下那颗圆圈天然压在它上面）');
+      expect(miniAppBleedsBottom(isWeb: true, platformView: true), false,
+          reason: '网页那一档：DOM 压在画布上面 ⇒ 铺满就把录音圆圈盖住了，必须留出底下那一格');
+      // 🔴 内置那几屏**不是制品** ⇒ 两种平台上都**不让铺满**
+      //   （手册 `08-SPEC.md` §6.4 规则 1："内置那几屏不是制品 ⇒ 照旧由壳内缩"）
+      expect(miniAppBleedsBottom(isWeb: false, platformView: false), false,
+          reason: '★ 内置那几屏（设置/发现/「我自己那台」）在安卓上也要让 —— '
+              '这里要是 true，收起那条就压在它们底部（设置最后一行、那颗按钮真点不到）');
+      expect(miniAppBleedsBottom(isWeb: true, platformView: false), false);
+    });
+  });
 }

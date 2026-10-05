@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import '../models/design.dart' as d;
 import '../models/hear_drill.dart';
 import '../models/hear_words.dart';
+import 'dsh_look.dart';
 import 'rec_blink.dart';
 
 /// 底下那一格。
@@ -28,6 +29,8 @@ class VoiceBar extends StatefulWidget {
     required this.canHear,
     required this.onMic,
     required this.onTyped,
+    this.draft = '',
+    this.onDraft,
     this.leading,
     this.hintAbove,
     this.speakable = false,
@@ -45,6 +48,19 @@ class VoiceBar extends StatefulWidget {
   /// 打字那条兜底路（他按了「就这句」）。
   final ValueChanged<String> onTyped;
 
+  /// ★ 2026-10-06：**他上回打了一半的那一句**（账号/房间里存着的那份草稿）。
+  ///
+  /// 🔴 为什么要有它（主人 2026-09-22 就定过：*"草稿也是要记住的"*）：
+  ///    这一格换掉输入框那一次，草稿那条路**断在这儿** —— 原来只有
+  ///    `widgets/composer.dart` 会写它，而那个组件**已经没人实例化了**
+  ///    ⇒ 开不了麦时打了一半的字，**刷新一下就没了**（`docs/dev/194`）。
+  ///    ⇒ 这一份把它接回**活的这一格**：进来先把那份字填回框里、
+  ///      每敲一下喊一声 [onDraft]，发出去之后喊一声空的。
+  final String draft;
+
+  /// 打字框里的字变了 / 发出去了（空串 = 清掉那份草稿）。
+  final ValueChanged<String>? onDraft;
+
   /// 那一行最前面那颗（今天还是那颗 home —— 它搬到每个 app 右上角之前，
   /// **出口不能没有**）。
   final Widget? leading;
@@ -61,6 +77,36 @@ class VoiceBar extends StatefulWidget {
 
 class _VoiceBarState extends State<VoiceBar> {
   final _type = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // ★ 上一次打了一半的那一句：**回来就填回去**，而且把那一格摊开
+    //   （不摊开的话字在框里、框看不见 —— 那就是"字丢了"）。
+    _adoptDraft(widget.draft);
+  }
+
+  @override
+  void didUpdateWidget(covariant VoiceBar old) {
+    super.didUpdateWidget(old);
+    // ⚠️ 那份草稿是**异步读回来的**（`ChatController._restoreDrafts`）：这一格
+    //    先建出来时它还是空的，读到之后才送进来 ⇒ 只在"框里还没有字"时认它
+    //    （不然会把用户正打着的那半句顶掉）。
+    if (widget.draft != old.draft && _type.text.isEmpty) _adoptDraft(widget.draft);
+  }
+
+  /// 把 [text] 认成"他打了一半的那一句"（空串 ⇒ 不动）。
+  void _adoptDraft(String text) {
+    if (text.trim().isEmpty) return;
+    _type.text = text;
+    _typing = true;
+  }
+
+  /// 发出去 / 清掉那份草稿（两处**同一个去处**：框与存的那一份一起清）。
+  void _clearTyped() {
+    _type.clear();
+    widget.onDraft?.call('');
+  }
 
   @override
   void dispose() {
@@ -124,6 +170,7 @@ class _VoiceBarState extends State<VoiceBar> {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
+    final look = DshLook.of(context);
     final line = _line;
     // ★ **2026-10-04 主人**：*"如果是空的，小 bubble 自己就消失了。"*
     //   ⇒ 什么都没有的时候**一个像素都不画**（不摆提示、不摆空框）：
@@ -148,7 +195,7 @@ class _VoiceBarState extends State<VoiceBar> {
                     : Align(
                         alignment: Alignment.centerRight,
                         // 空 ⇒ **什么都不画**（气泡自己消失）
-                        child: line.text.trim().isEmpty ? const SizedBox.shrink() : _bubble(t, line),
+                        child: line.text.trim().isEmpty ? const SizedBox.shrink() : _bubble(look, line),
                       ),
               ),
               const SizedBox(width: d.gapS),
@@ -215,7 +262,7 @@ class _VoiceBarState extends State<VoiceBar> {
   ///
   /// ⚠️ 宽度是**跟着字长**的（`Flexible` ＋ 右对齐），最多占那一行的 76%；
   ///    超过就换行（`maxLines: 4` 兜底，真长到 4 行也该发出去了）。
-  Widget _bubble(ThemeData t, ({String text, bool loud, bool raw}) line) => Container(
+  Widget _bubble(DshLook look, ({String text, bool loud, bool raw}) line) => Container(
         constraints: const BoxConstraints(maxWidth: 420),
         padding: const EdgeInsets.symmetric(horizontal: d.gapM, vertical: d.gapS),
         decoration: BoxDecoration(
@@ -228,8 +275,14 @@ class _VoiceBarState extends State<VoiceBar> {
           textAlign: TextAlign.right,
           maxLines: 4,
           overflow: TextOverflow.ellipsis,
-          style: t.textTheme.bodyLarge?.copyWith(
-            color: line.loud ? d.ink : d.muted,
+          // ★ 2026-10-06：这一行字**跟用户那条字号轴**（与时间线正文同一档
+          //   `look.content`）—— 原来走 `textTheme.bodyLarge`（16/24）⇒
+          //   设置里把字号从 12 调到 17，时间线会变、**底下这一行一个像素都不动**
+          //   （子 agent 在改判据时点名的真缺陷，`docs/dev/194`）。
+          style: dshTextStyle(
+            look.content,
+            line.loud ? d.ink : d.muted,
+          ).copyWith(
             // ★ **还没校正的那一份**：带一条下划线（主人 2026-10-05 要的"通用办法"）——
             //   校正回来之后这条线**自己去掉**，一眼看得出"这一步过了"。
             decoration: line.raw ? TextDecoration.underline : TextDecoration.none,
@@ -253,10 +306,15 @@ class _VoiceBarState extends State<VoiceBar> {
             child: TextField(
               key: voiceBarTypeKey,
               controller: _type,
+              // ★ 这一格的字**跟用户那条字号轴**（与时间线正文同一档）——
+              //   它属于"会话内容"，不是工具行那种小字（`docs/dev/194`）。
+              style: dshTextStyle(DshLook.of(context).content, d.ink),
               decoration: const InputDecoration(hintText: hearDrillTypeInstead),
+              // 每敲一下就存一次（存不上也不能让打字卡住 —— 由控制器那边不 await）
+              onChanged: (v) => widget.onDraft?.call(v),
               onSubmitted: (v) {
                 widget.onTyped(v);
-                _type.clear();
+                _clearTyped();
               },
             ),
           ),
@@ -265,7 +323,7 @@ class _VoiceBarState extends State<VoiceBar> {
             key: voiceBarTypedSendKey,
             onPressed: () {
               widget.onTyped(_type.text);
-              _type.clear();
+              _clearTyped();
             },
             child: const Text(hearDrillAnswer),
           ),

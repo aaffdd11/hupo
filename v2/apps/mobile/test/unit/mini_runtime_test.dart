@@ -189,15 +189,20 @@ void main() {
     final lines = src.split('\n');
     final at = lines.indexWhere((l) => l.trimLeft().startsWith('bottomInset:'));
     expect(at >= 0, isTrue, reason: '找不到 `bottomInset:` 那一处（这一条判据要跟着它走）');
-    final line = lines.sublist(at, at + 4).join(' ');
+    // ⚠️ 窗口给够（2026-10-06 起这一段是“纯函数三行 ＋ 三元两行”）
+    final line = lines.sublist(at, at + 6).join(' ');
     expect(line.contains('_floaterH'), false,
         reason: '★ 那一行提到了 `_floaterH` —— 它是**每帧都变**的浮窗高度，'
             '喂给平台视图 = 每帧 resize 一个真 iframe（2026-10-01 那次"动效全没了"就是这么来的）');
     expect(line.contains('_barH'), true, reason: '★ 用的是**收起档那个稳定值**（只往下记）');
-    expect(line.contains('kIsWeb'), true,
-        reason: '★ 网页那一档必须**留出底下那一格**（`D3.16` 补：不铺满 ⇒ 录音圆圈露在外面，一份实现）');
-    expect(line.contains('? (FloaterMetrics.margin + _barH) : 0'), true,
-        reason: '★ 网页＝让出那一格；安卓＝铺满（平台视图在画布下面，聊天天然压得住它）');
+    // 🔴 **2026-10-06 改口径**（清判据时抓到的一处真缺陷：内置那几屏不是制品，
+    //    却在安卓上也铺满 ⇒ 收起条压住它们的底部）。那一条规矩收成了**一个纯函数**：
+    //    `miniAppBleedsBottom({isWeb, platformView})`（真值表在 `mini_native_test.dart`）。
+    expect(line.contains('miniAppBleedsBottom'), true,
+        reason: '★ "谁铺满"这条规矩必须走那个纯函数（一处出处），不许在这里手写三元');
+    expect(line.contains('kIsWeb'), true, reason: '★ 网页那一档必须让出底下那一格');
+    expect(line.contains('(FloaterMetrics.margin + _barH)'), true,
+        reason: '★ 不铺满的那一档就是"让出收起条那一格"（margin + 收起条高）');
   });
 
 

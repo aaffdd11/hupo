@@ -43,6 +43,7 @@
 //     `--eval "<js>"`（可给多次，按顺序跑，结果打出来；`awaitPromise` 已开）；
 //   滚到底：`--eval "(()=>{const g=document.querySelector('flt-glass-pane');for(let i=0;i<8;i++)g.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:600,clientX:640,clientY:300}));return 'ok'})()"`；
 //   截图前等多久：`--shot-after <毫秒>`（默认 6000 —— **中文字体是异步下的，拍早了就是豆腐块**）；
+//   设备模拟（量"分数像素比下那条 1 像素的缝"）：`--device 540x863@2.998`（宽高整数，**分数放进像素比**）；
 //   屏掉 gstatic 验自托管：`--block-gstatic`（**在开页面之前**就屏，见 ②.5）
 //   给浏览器额外参数（可多次）：`--chrome-arg --use-fake-device-for-media-stream`
 //     —— **假麦克风**那一套（`--use-fake-ui-for-media-stream` 自动给权限、
@@ -383,6 +384,51 @@ async function main() {
   await send('Network.enable');
   await send('Page.enable');
   await send('Runtime.enable');
+
+  // ②.4 **设备模拟**（`--device <宽>x<高>@<像素比>`，宽高**可以是小数**）
+  //
+  // ★ 为什么要有它（2026-10-06）：主人报过三次"小程序那一屏右边/上边一条白边"，
+  //   而桌面窗口的宽度是**整数** ⇒ 那一格正好落在整数物理像素上，**量不出来**。
+  //   真机上是分数：CSS 视口宽 = 物理宽 ÷ 像素比（例如 1619 ÷ 3 ≈ 539.67）——
+  //   于是最右边那**一列物理像素**可能只被盖住一部分 ⇒ 露出一条**1 像素的缝**。
+  //   ⇒ 这个开关就是"把那台真机的形状搬过来"：量那条缝在不在、修完还在不在。
+  const DEVICE = valueOf('--device', null);
+  if (DEVICE) {
+    const m = /^([0-9.]+)x([0-9.]+)@([0-9.]+)$/.exec(DEVICE);
+    if (!m) {
+      console.error('✗ --device 要写成 宽x高@像素比（可小数），例如 539.67x863.33@3');
+      process.exit(3);
+    }
+    // ⚠️ **宽高只许整数**（CDP 那里是 int32：给小数它当场回 "int32 value expected"）。
+    //    要造"分数像素"那台机器 ⇒ **把分数放进像素比**：540 × 2.998 = 1618.92 物理像素，
+    //    最右边那一列就只被盖住 0.92 —— 与主人那台（1619 ÷ 3）同一个形状。
+    const devRes = await send('Emulation.setDeviceMetricsOverride', {
+      width: Math.round(Number(m[1])),
+      height: Math.round(Number(m[2])),
+      deviceScaleFactor: Number(m[3]),
+      mobile: true,
+      screenWidth: Math.round(Number(m[1])),
+      screenHeight: Math.round(Number(m[2])),
+    });
+    if (devRes?.error) console.error(`  ⚠️ 设备模拟没设上：${JSON.stringify(devRes.error)}`);
+    console.log(`  设备模拟：${Math.round(Number(m[1]))}×${Math.round(Number(m[2]))} CSS px @ ${m[3]}x `
+      + `⇒ 物理约 ${Math.round(Number(m[1]) * Number(m[3]))}×${Math.round(Number(m[2]) * Number(m[3]))}`);
+  }
+
+  // ②.45 **顶上那条安全区**（`--safe-top <像素>`）：给这台"设备"塞一条刘海。
+  //
+  // ★ 为什么要有它（2026-10-06）：主人报过三次"小程序那一屏**上方**一条白边"，
+  //   而桌面窗口的 `env(safe-area-inset-top)` 是 **0** ⇒ 量不出来。
+  //   这一条能把那台机器的形状搬过来：**顶上那条内缩一出现**，我们那一格是不是
+  //   拿"纸色"去填它、填出来是不是一条白边 —— 一眼就能量到、也能验修好没有。
+  const SAFE_TOP = Number.parseFloat(valueOf('--safe-top', '0'));
+  if (SAFE_TOP > 0) {
+    const insRes = await send('Emulation.setSafeAreaInsetsOverride', {
+      insets: { top: SAFE_TOP, bottom: 0, left: 0, right: 0 },
+    });
+    if (insRes?.error) console.error(`  ⚠️ 安全区没设上：${JSON.stringify(insRes.error)}`);
+    else console.log(`  安全区：顶上 ${SAFE_TOP}px（模拟"有刘海那台"）`);
+  }
 
   // ②.5 🔴 **屏掉 gstatic —— 必须在第一次导航之前**
   //

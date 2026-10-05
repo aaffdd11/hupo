@@ -1,20 +1,26 @@
-// **聊天窗口那颗话筒：说出来的字到底进没进输入框**（真 `ChatScreen`，两个档都量）。
+// **聊天底下那一格：说出来的字到底进没进屏幕上**（真 `ChatScreen`，两个档都量）。
 //
 // ── 为什么要有这一份（2026-10-01 主人报的原话）────────────────────
 //    *"好了，可以用了，那么我们在聊天窗口使用时，发现不对。当我点击语音的时候，
 //      文本框没有出现文字。"*
 //
-// 🔴 **它和 `hearing_test.dart` 不是一回事**：那一份把 `Composer` **单独**泵起来，
+// 🔴 **它和 `hearing_test.dart` 不是一回事**：那一份把旧的 `Composer` **单独**泵起来，
 //    钉的是"框这一层收不收得到字"；这一份从**真的 `ChatScreen`** 进去 ——
-//    中间还夹着 `ChatFloater`（收起/展开两个档）与 `ChatController` 那条
+//    中间还夹着 `ChatFloater`（收起/全开两个档）与 `ChatController` 那条
 //    `startHear → onEvent → Hearing.event → notifyListeners → setState` 的链子。
 //    那一段**从来没有判据**（"闸打在替代的那一侧"那一族）——
 //    主人报的正是这一条链子，所以判据补在这一侧。
 //
-// 现在钉两条（两条都是"屏幕上的输入框里到底有没有那几个字"）：
-//   ① **收起档**：按话筒 ⇒ 交出去 ⇒ 半句/定稿/收尾 ⇒ 字在框里
-//   ② **展开档**：先点抓手展开，再按话筒 ⇒ 一样要进框
+// ── 🔴 2026-10-06：字长的地方换了 ────────────────────────────
+//    底下那一格换成**语音优先**（`widgets/voice_bar.dart`）之后，说出来的字
+//    **长在那一行里**（那颗圆圈左边的气泡），**没有输入框** —— 旧 `Composer`
+//    已经不在任何生产路径上。⇒ 判据跟着搬：量的是**那一行里有没有那几个字**。
+//
+// 现在钉三条（三条都是"屏幕底下那一行里到底有没有那几个字"）：
+//   ① **收起档**：按圆圈 ⇒ 交出去 ⇒ 半句/定稿 ⇒ 字在那一行里
+//   ② **全开档**：先点抓手展开，再按圆圈 ⇒ 一样要进那一行
 //      （展开/收起会换一棵子树 —— 字不许因此在两棵之间掉一个）
+//   ③ 🔴 停下语音**不许唤醒键盘**（那一格上一个输入框都不该有）
 //
 // ⚠️ `canHear` 在 `flutter test` 里默认是假（`services/hearing_stub.dart`）⇒
 //    这里装一个**假的原生钩子**把 `canHear` 变成真（真机上装的就是它），
@@ -25,11 +31,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:hupo_app/models/hearing_session.dart';
+import 'package:hupo_app/models/hear_drill.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
-import 'package:hupo_app/widgets/composer.dart';
+import 'package:hupo_app/widgets/voice_bar.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/hearing.dart' as hs;
 import 'package:hupo_app/services/token_store.dart';
@@ -94,53 +100,72 @@ Future<void> _pump(WidgetTester tester, ChatController c) async {
   await tester.pumpAndSettle();
 }
 
-/// **真实时序**（与线上那条真读数一致：ready → 半句（累积）→ 定稿 → 收尾）。
+/// **真实时序**（与线上那条真读数一致：ready → 半句（累积）→ 定稿）。
+///
+/// 🔴 字现在长在**底下那一行**（`VoiceBar` 的气泡）里，不再是那个旧 `Composer`
+///    的 `TextField`；而且它一进"听懂"那一层就会被换成问句 / 一句实话 / 发出去
+///    ⇒ "听到了"这件事要**在半句/定稿那一刻**量（那正是主人报的"没有出现文字"的现场）。
 Future<void> _say(WidgetTester tester, _Rig r, {required String words}) async {
   for (final e in <Map<String, dynamic>>[
     {'type': 'asr/ready'},
     {'type': 'asr/partial', 'text': words.substring(0, 2), 'index': 0},
     {'type': 'asr/partial', 'text': words, 'index': 0},
     {'type': 'asr/final', 'text': words, 'index': 0},
-    {'type': 'asr/end', 'text': words, 'index': 0, 'reason': 'user-stop'},
   ]) {
     r.feeds.last(e);
     await tester.pump();
   }
+  // ★ 原来守的是"那几个字有没有进那个输入框" ⇒ 现在守**等价的那一件事**：
+  //   **那几个字真的长到了底下那一行上**（原来防的缺陷 = 点了语音屏幕上不出字）。
+  expect(_barText(tester), contains(words), reason: '★ 听到了字就该在底下那一行里');
+  // 收尾那一帧（`asr/end`）之后它自己进"听懂"那一层 —— 那一层在 VM 上答不出来，
+  // 所以判据钉在"字确实上过屏"这一件事上（半句/定稿那一刻）。
+  r.feeds.last({'type': 'asr/end', 'text': words, 'index': 0, 'reason': 'user-stop'});
   await tester.pumpAndSettle();
 }
 
-String _boxText(WidgetTester tester) =>
-    tester.widget<TextField>(find.byType(TextField).first).controller?.text ?? '';
+/// 底下那一行里那句话（= `VoiceBar` 那颗气泡）。空的时候那一格一个像素都不画。
+String _barText(WidgetTester tester) => tester
+    .widgetList<Text>(find.descendant(of: find.byType(VoiceBar), matching: find.byType(Text)))
+    .map((t) => t.data ?? '')
+    .join(' ');
 
-String _boxText0(WidgetTester tester) => _boxText(tester);
-
-/// 输入框有没有焦点（＝**软键盘会不会被顶上来**）。`Composer` 把它的 `_focus` 传给了 `TextField`。
-bool _focused(WidgetTester tester) =>
-    tester.widget<TextField>(find.byType(TextField).first).focusNode?.hasFocus ?? false;
+/// 键盘会不会被顶上来（＝**有没有输入框在抢焦点**）。
+///
+/// ⚠️ 原来量的是旧 `Composer` 那个 `TextField` 的 `_focus` —— 那一格现在
+///    **根本不该有输入框**（开得了麦时只有圆圈；打字那条退路要他按「打字」才摊开）
+///    ⇒ 读数就是"树里一个被点亮的输入框都没有"。
+bool _focused(WidgetTester tester) {
+  final f = find.byType(TextField);
+  if (f.evaluate().isEmpty) return false;
+  return tester.widget<TextField>(f.first).focusNode?.hasFocus ?? false;
+}
 
 void main() {
   setUp(() => hs.nativeHearingApi = _FakeNative());
   tearDown(() => hs.clearNativeHearing());
 
-  testWidgets('① 收起档：按话筒 ⇒ 说一句 ⇒ **字进输入框**', (tester) async {
+  testWidgets('① 收起档：按圆圈 ⇒ 说一句 ⇒ **字进底下那一行**', (tester) async {
     final r = _make();
     await _pump(tester, r.c);
-    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.tap(find.byKey(voiceBarCircleKey));
     await tester.pumpAndSettle();
     expect(r.starts, 1, reason: '★ 按一下要真的交出去（而不是只画个样子）');
-    expect(r.c.hearing.phase, HearingPhase.listening);
+    expect(r.c.voiceFlow.phase, DrillPhase.listening, reason: '★ 按下去就该在听（语音那一档的状态机）');
     await _say(tester, r, words: '今天天气怎么样');
-    expect(_boxText(tester), contains('今天天气怎么样'), reason: '★ 听到了字就该在框里');
   });
 
-  testWidgets('③ 🔴 停下语音**不许唤醒键盘**（话筒那颗按钮不碰焦点）', (tester) async {
+  testWidgets('③ 🔴 停下语音**不许唤醒键盘**（那颗圆圈不碰焦点）', (tester) async {
     // 主人 2026-10-01：*"当我停下语音，键盘却被唤醒了。我认为停止语音，就是语音结束，
     // 不需要唤醒键盘。"*
+    // ⚠️ 现在底下那一格是 `VoiceBar`：开得了麦时它**一个输入框都不画**
+    //    （打字那条退路要他按「打字」才摊开）⇒ "键盘会不会被顶上来"就量
+    //    "树里有没有输入框在抢焦点"。
     final r = _make();
     await _pump(tester, r.c);
     expect(_focused(tester), false, reason: '一开始键盘就该是收着的');
 
-    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.tap(find.byKey(voiceBarCircleKey));
     await tester.pumpAndSettle();
     expect(_focused(tester), false, reason: '开麦也不该把键盘顶上来');
 
@@ -150,20 +175,25 @@ void main() {
     await tester.pump();
     expect(_focused(tester), false, reason: '听着的时候更不该抢焦点');
 
-    // 正在录时那颗按钮画的是脉动条（不是话筒图形）⇒ 按 key 点它
-    await tester.tap(find.byKey(chatMicButtonKey));
+    // 正在录时那颗圆圈画的是"停"（不是话筒图形）⇒ 还是点同一个 key
+    await tester.tap(find.byKey(voiceBarCircleKey));
     await tester.pumpAndSettle();
     expect(_focused(tester), false, reason: '★ 按停那一下**不许**唤醒键盘');
+    expect(find.byKey(voiceBarTypeKey), findsNothing,
+        reason: '★ 按停也不许把这一格切进打字那一档（"唤醒键盘"就是它）');
 
     // 最后那句回来 ⇒ 字留着、键盘**还是收着**
     r.feeds.last({'type': 'asr/final', 'text': '今天天气怎么样', 'index': 0});
+    await tester.pump();
+    expect(_barText(tester), contains('今天天气怎么样'), reason: '字还是要落到那一行里');
+    expect(_focused(tester), false, reason: '★ 收尾那一下也不许唤醒键盘');
+
     r.feeds.last({'type': 'asr/end', 'text': '今天天气怎么样', 'index': 0, 'reason': 'user-stop'});
     await tester.pumpAndSettle();
-    expect(_boxText0(tester), contains('今天天气怎么样'), reason: '字还是要落进框里');
-    expect(_focused(tester), false, reason: '★ 收尾那一下也不许唤醒键盘');
+    expect(_focused(tester), false, reason: '★ 整场走完，键盘也不许被顶上来');
   });
 
-  testWidgets('② 展开档：先展开再按话筒 ⇒ 一样要进框', (tester) async {
+  testWidgets('② 全开档：先展开再按圆圈 ⇒ 一样要进那一行', (tester) async {
     final r = _make();
     _feed(r.c, 3); // ⚠️ 空时间线时抓手点了不展（真应用里也总是有东西）
     await _pump(tester, r.c);
@@ -171,10 +201,9 @@ void main() {
     await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
     expect(find.byType(ListView), findsWidgets, reason: '★ 抓手那一下没把浮窗展开');
-    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.tap(find.byKey(voiceBarCircleKey));
     await tester.pumpAndSettle();
     expect(r.starts, 1);
     await _say(tester, r, words: '明天去哪里吃饭');
-    expect(_boxText(tester), contains('明天去哪里吃饭'), reason: '★ 展开档听到了字也要进框');
   });
 }

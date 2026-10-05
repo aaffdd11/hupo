@@ -86,7 +86,6 @@ void main() {
     'lib/widgets/bubble_menu.dart': 2,
     'lib/widgets/bubbles.dart': 22,
     'lib/widgets/chat_floater.dart': 4,
-    'lib/widgets/composer.dart': 14,
     'lib/widgets/key_form.dart': 4,
     'lib/widgets/mini_app_host.dart': 1,
     'lib/widgets/notice.dart': 6,

@@ -112,16 +112,16 @@ void main() {
     await tester.tap(find.text(diceTitle));
     await tester.pumpAndSettle();
     expect(c.scope, diceId, reason: '★ 打开某个"我的小程序" ⇒ 房间就是**那个 app 的 id**');
-    // 聊天条最前面那个图标/说明跟着走（"看得出来现在在哪个房间"）
-    expect(
-      find.byTooltip(chatScopeInApp(diceTitle)),
-      findsOneWidget,
-      reason: '★ 聊天条上要看得出来现在跟谁在说',
-    );
-
-    // 展开聊天 ⇒ 屏幕上是**它那一间**
+    // 原来守的是：聊天条最前面那颗图标/说明**跟着换到这一间**（"看得出来现在跟谁在说"）。
+    // 🔴 那颗图标 2026-10-04 按主人定的 `D3.15` **取消了**（原话："我不再需要 home 按钮"）
+    //    ⇒ 现在守**等价的那一件事**：把聊天展开，**这一间自己说得出它是谁**
+    //      （空房间那一句点到这一间的名字上）。
     await tester.tap(find.byKey(chatHandleKey));
     await tester.pumpAndSettle();
+    expect(find.text(roomEmptyLine(diceTitle)), findsOneWidget,
+        reason: '★ 这一间要说得清自己是哪一间（原来由聊天条最前面那颗图标说）');
+
+    // 展开聊天 ⇒ 屏幕上是**它那一间**
     expect(
       find.text(roomEmptyTitle),
       findsOneWidget,
@@ -136,9 +136,11 @@ void main() {
     expect(find.text('骰子那一间那句话'), findsOneWidget);
     expect(find.text('主线那句话'), findsNothing);
 
-    // 收起聊天（把屏幕还给小程序），然后按聊天条最前面那颗 home 关掉它
+    // 收起聊天（把屏幕还给小程序），然后按那一屏右上角那颗「退出」关掉它
     // ⚠️ 2026-09-29：展开态**没有抓手那一行**了 ⇒ 收起走右上角那颗「收起」。
-    await tester.tap(find.byTooltip(chatCollapse));
+    // 🔴 2026-10-04（`D3.14` 六补）：展开态里「收起」有**两颗**（标题行那颗 ＋
+    //    录音旁边那颗翻过来的）⇒ 按 **key** 认标题行那一颗，别按 tooltip（会摸到两颗）。
+    await tester.tap(find.byKey(chatCollapseKey));
     await tester.pumpAndSettle();
     expect(find.byType(DiscoverScreen), findsNothing, reason: '（负向对照：这一屏不是发现那一屏）');
     await tester.tap(find.byKey(miniAppExitKey));
@@ -174,8 +176,11 @@ void main() {
       reason: '★ 内置的图标**有自己的房间**（服务端认这个名字；落回主线才是缺陷）',
     );
     expect(c.scope, isNot(mainScope), reason: '🔴 内置那三个**不再**落回主线（B16「要分家」）');
-    // 而"看得出来现在在哪儿"照旧（容器顶上那行字说得出这一间是谁）
-    expect(find.byTooltip(chatScopeInApp(discoverTitle)), findsOneWidget);
+    // 原来守的是：聊天条最前面那颗图标跟着换成**发现自己的图标**（"看得出来现在在哪儿"）。
+    // 🔴 那颗图标 2026-10-04 按 `D3.15` 取消了 ⇒ 现在守**等价的那一件事**：
+    //    **发现那一屏自己压在最上面**，出口在它**右上角** —— 看得出你现在在哪一间里。
+    expect(find.byKey(miniAppExitKey), findsOneWidget,
+        reason: '★ `D3.15`：出口在那一屏自己的右上角（原来那颗 home 已取消）');
     // 退回桌面 ⇒ 回主线那一间（房间是"现在开着哪个图标"的影子）
     await tester.tap(find.byKey(miniAppExitKey));
     await tester.pumpAndSettle();
