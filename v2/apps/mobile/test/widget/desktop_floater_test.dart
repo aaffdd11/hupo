@@ -389,8 +389,10 @@ void main() {
     final f = _floaterRect(tester);
     expect(btn.center.dx > f.center.dx, true,
         reason: '抓手该在右半边（差 ${btn.center.dx - f.center.dx}）—— 主人要的是"语音按钮的右侧"');
-    expect(btn.center.dy >= f.center.dy - 1, true,
-        reason: '抓手该在**下面那一行**（差 ${btn.center.dy - f.center.dy}）—— 顶上那一行撤掉了');
+    // ⚠️ 它现在是**右边那一列的上格**（主人 2026-10-05："展开在上，开启关闭在下"）
+    //    ⇒ 它不在浮窗正中，也不再贴着浮窗底：它在**右半边**、而且**不在最上面**。
+    expect(btn.top - f.top > 4, true,
+        reason: '抓手贴着浮窗上沿了（差 ${btn.top - f.top}）—— 顶上那一行早就撤掉了');
   });
 
   testWidgets('🔴 收起 ⇄ 展开各有一颗看得见的东西负责（2026-09-29 换过形状）', (tester) async {

@@ -64,14 +64,29 @@ void main() {
     expect(find.byKey(chatHandleKey), findsOneWidget, reason: '★ 展开那颗不见了');
     expect(find.byKey(chatSpeakKey), findsOneWidget, reason: '★ 播放那颗不见了');
     expect(find.byTooltip('展开'), findsOneWidget);
-    // 位置：**（他的话 ＋ 圆圈）→ 展开 → 播放**（播放是最右那一颗）
+    // 位置：那两颗在**录音那一格的右边**，而且**竖着叠成一列**（展开在上、播放在下）
+    //   —— 主人 2026-10-05：*"是一列的。就是上下关系。展开在上，开启关闭在下。"*
     final micRow = tester.getRect(find.byKey(_fakeComposerKey));
     final expand = tester.getRect(find.byKey(chatHandleKey));
     final speak = tester.getRect(find.byKey(chatSpeakKey));
-    expect(micRow.center.dx < expand.center.dx, true,
-        reason: '★ 展开那颗跑到录音那一格的左边去了（主人要的是"语音按钮的右侧"）');
-    expect(expand.center.dx < speak.center.dx, true,
-        reason: '★ 两颗的左右顺序不对（展开 ${expand.center.dx} · 播放 ${speak.center.dx}）');
+    expect(micRow.right <= expand.left + 0.5, true,
+        reason: '★ 那一列跑到录音那一格上去了（主人要的是"语音按钮的右侧"）');
+    expect((expand.center.dx - speak.center.dx).abs() < 0.5, true,
+        reason: '★ 两颗不在同一条竖线上（${expand.center.dx} vs ${speak.center.dx}）—— 该是一列');
+    expect(expand.center.dy < speak.center.dy, true,
+        reason: '★ 上下关系反了：展开该在**上**（${expand.center.dy} vs ${speak.center.dy}）');
+    expect(expand.bottom <= speak.top + 0.5, true, reason: '★ 两颗叠在一起了（该是上下两格）');
+
+    // 🔴 **两颗都要有"长方形的按钮轮廓"**（主人 2026-10-05 原话）
+    for (final (name, k) in [('展开', chatHandleKey), ('播放', chatSpeakKey)]) {
+      final b = tester.widget<TextButton>(find.byKey(k));
+      final shape = b.style?.shape?.resolve({});
+      expect(shape, isA<RoundedRectangleBorder>(),
+          reason: '★ $name 那颗不是长方形（圆角矩形）');
+      final side = b.style?.side?.resolve({});
+      expect(side, isNotNull, reason: '★ $name 那颗没有轮廓');
+      expect(side!.width > 0, isTrue, reason: '★ $name 那颗的轮廓宽度是 0（等于没画）');
+    }
 
     // 🔴 命中区 ≥44（D3.6 硬闸）—— 两颗都要
     for (final r in [expand, speak]) {

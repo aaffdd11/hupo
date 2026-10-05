@@ -424,80 +424,79 @@ class ChatFloaterState extends State<ChatFloater> {
               );
   }
 
-  /// **底下那一行**（两个档**同一个形状**）：`（他说的话 ＋ 圆圈）→ 展开 → 播放语音`。
+  /// **底下那一行**（两个档**同一个形状**）：`（他说的话 ＋ 圆圈）＋ 右边那一列两颗`。
   ///
-  /// 🔴 **2026-10-05 主人**：*"打开聊天历史窗口后，我发现按键变了。语音按键位置改变了。"*
-  ///   根子：那两颗原来**只画在收起档**（展开档那一行是光秃秃的一条 composer）
-  ///   ⇒ 打开聊天窗口那一下，外面少了那 ~96 像素 ⇒ 圆圈与它左边那句字**整块往右跳**。
-  ///   ⇒ 现在两档都走这一个函数：**播放那颗一直在**；展开那颗只在收起档**画**，
-  ///     但它的**位置留着**（展开档是一个等宽的空白格）——
-  ///     ⇒ 语音那颗在两个档里**一个像素都不动**（而且没有第二条"收起"的路：
-  ///       收起来的出口仍是标题行右端那颗「收起」，见 `D3.15` 那一族）。
+  /// 🔴 **2026-10-05 晚些时候 · 主人定的最终形状**：*"语音按钮右侧，展开聊天窗口和
+  ///   开启关闭语音，是一列的。就是上下关系。展开在上，开启关闭在下。然后他们都要有
+  ///   一个长方形的按钮轮廓。"*
+  ///   ⇒ 那两颗**竖着叠成一列**（在录音圆圈的右边），**每颗都是长方形 ＋ 一圈轮廓**。
+  ///
+  /// 🔴 **两个档同一个形状**（他当天早些时候报过一次"打开聊天历史窗口后语音按键位置改变了"）：
+  ///   那一列**一直在**，展开那颗只在收起档**画**（展开档留一个等大的空格）
+  ///   ⇒ 语音圆圈与它左边那句字**一个像素都不动**。
+  ///   ⚠️ 收起来的出口**仍然只有**标题行右端那颗「收起」（不新造第二条路）。
   Widget _bottomRow(DshPalette p, {required bool collapsed}) => Row(
         children: [
           Expanded(child: widget.composer),
-          if (collapsed)
-            _handle(p)
-          else
-            // 展开档：**同一个位置空着**（不是把它挪走 —— 位置一动，那一行就跳）
-            const SizedBox(width: d.voiceAuxBox, height: d.voiceAuxBox),
-          // 念不出来的设备**一个按钮都不画**（`onToggleSpeak` 传 null）
-          if (widget.onToggleSpeak != null) _speakButton(p),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (collapsed)
+                _handle(p)
+              else
+                // 展开档：**同一个位置空着**（不是把它挪走 —— 位置一动，那一行就跳）
+                const SizedBox(width: d.voiceAuxW, height: d.voiceAuxH),
+              const SizedBox(height: d.voiceAuxGap),
+              // 念不出来的设备**一个按钮都不画**（`onToggleSpeak` 传 null）
+              if (widget.onToggleSpeak != null) _speakButton(p),
+            ],
+          ),
           const SizedBox(width: d.gapS),
         ],
       );
 
-  /// **抓手**（主人 2026-09-24 那条杠 ＋ 2026-10-04 挪位）：**平的小箭头**。
+  /// 那一列里每颗按钮的**共同样子**：长方形 ＋ 一圈轮廓（主人 2026-10-05 要的"轮廓"）。
   ///
-  /// 🔴 三条约束，缺一条都会退回到"上一版那种看不出来的东西"：
-  ///   ① **位置**：它在**录音圆圈右边那一颗**（主人 2026-10-05 定的最终形状：
-  ///      *"语音按钮的右侧，需要两个按钮。一个是展开聊天，一个是播放语音。"*
-  ///      ⇒ 它不再自己找位置，由**那一行**摆（`Row` 里紧跟输入条那一格）；
-  ///   ② **箭头要平**（浅角 —— 26×7 ≈ 15°，不是那种尖尖的 `keyboard_arrow_up`）；
-  ///   ③ **命中区 ≥44**（D3.6）：那颗按钮给的是 **44×44**，图形只占中间一小块。
+  /// ⚠️ 尺寸住 `design.dart`（`voiceAuxW/H/Radius`）：宽 = 那颗圆圈的宽（一列对齐它），
+  ///    高 ≥44（D3.6 硬闸 —— 它俩是要点的东西）。
+  ButtonStyle _auxStyle(DshPalette p, {bool lit = false}) => TextButton.styleFrom(
+        minimumSize: const Size(d.voiceAuxW, d.voiceAuxH),
+        padding: EdgeInsets.zero,
+        // ⚠️ Material 默认 `padded` 会把点击区撑到 48 ⇒ 与"空位"那一格差 4 像素
+        //    （2026-10-05 判据当场量到 506 vs 510）⇒ shrinkWrap 让它就是那个尺寸
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        foregroundColor: lit ? d.accent : p.labelTertiary,
+        // 🔴 **那一圈轮廓**（"长方形的按钮轮廓"）：亮着的时候用琥珀色，平时用弱线
+        side: BorderSide(color: lit ? d.accent : p.borderL3),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(d.voiceAuxRadius),
+        ),
+      );
+
+  /// **展开**那一颗（**上面那颗**）：那颗"平"的小箭头。
   ///
-  /// ⚠️ **单击 = 收起 ⇄ 展开**（不再有双击：两次单击会互相抵消 ⇒ "点了没反应"）。
-  /// ⚠️ 字挂在 `Tooltip`（web 上悬停看得见）+ 无障碍名上（D3.8 的"带字"由 2026-09-24 改掉）。
-  /// ★ 批次 4：那一笔与那条杠的颜色跟色板走（`label-tertiary` / `border-l3`）。
+  /// ⚠️ **单击 = 一次拉满**（2026-10-05：不再有"半开"、也不再有"拖着改高度"）。
+  /// ⚠️ 字挂在 `Tooltip`（web 上悬停看得见）＋ 无障碍名上。
   Widget _handle(DshPalette p) {
-    // ⚠️ 它**只出现在收起态**（展开态那一行整条不画 —— 见上面那段）。
-    const collapsed = true;
     final button = TextButton(
       key: chatHandleKey,
-      onPressed: expand, // 2026-10-05：展开**只有一档**（拉满）
-      style: TextButton.styleFrom(
-        // 命中区 ≥44（D3.6，硬闸）：图形只有 26×7，外面这一圈是"好点"的保证
-        // （两年前给的是 96 宽；2026-10-05 它并进那一行之后收成 44 —— 仍等于下限）
-        minimumSize: const Size(44, 44),
-        // 🔴 **宽度必须真的等于 44**（2026-10-05 量出来的 4 像素）：
-        //    Material 默认 `padded` 会把点击区撑到 48 ⇒ 收起档那一格 48、展开档那个
-        //    空位 44 ⇒ 录音那一格**差 4 像素**（判据当场量到 506 vs 510）。
-        //    `shrinkWrap` 让它就是 44×44（仍 ≥44，硬闸照过）。
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
-        foregroundColor: p.labelTertiary,
-      ),
-      // 🔴 2026-09-29：**那根杠删掉了**（主人：*"我不要那根杠了。"*）——
-      //   只剩那颗"平"的小箭头。
+      onPressed: expand,
+      style: _auxStyle(p),
       child: CustomPaint(
         size: const Size(26, 7),
-        painter: _FlatChevron(color: p.labelTertiary, up: collapsed),
+        painter: _FlatChevron(color: p.labelTertiary, up: true),
       ),
     );
-    // ⚠️ tooltip 只在**收起态**挂（那会儿它是唯一的展开入口）。
-    //    展开态**不挂** —— 标题行已经有一个「收起」按钮，两个控件挂同一句话
-    //    会让"屏幕上到底有几个收起"这种判据（和读屏）分不清。
-    //    无障碍名两种状态都给（`Semantics` 那句在下面）。
     return Tooltip(
       message: '展开',
       child: Semantics(button: true, label: '展开', child: button),
     );
   }
 
-  /// **播放语音**那一颗（主人 2026-10-05）：*"所谓播放语音，就是开启和关停的状态，
-  ///   如果开启，会将对 agent 的回复进行语音转换和实时播报。如果关闭，则不播报。"*
+  /// **播放语音**那一颗（**下面那颗** · 主人 2026-10-05）：*"所谓播放语音，就是开启和关停
+  ///   的状态，如果开启，会将对 agent 的回复进行语音转换和实时播报。如果关闭，则不播报。"*
   ///
-  /// * 开 = 实心喇叭 + **琥珀色**（状态一眼看得出）；关 = 划掉的喇叭 + 弱色；
+  /// * 开 = 实心喇叭 ＋ **琥珀色轮廓**（状态一眼看得出）；关 = 划掉的喇叭 ＋ 弱色轮廓；
   /// * 命中区 ≥44（D3.6 硬闸）；
   /// * 🔴 **念不出来的设备根本不画它**（调用处 `onToggleSpeak` 传 `null`）；
   /// * 字挂在 `Tooltip` 与无障碍名上（`models/speak_words.dart` 一处出处）。
@@ -509,13 +508,14 @@ class ChatFloaterState extends State<ChatFloater> {
         button: true,
         toggled: on,
         label: speakAutoOnWords,
-        child: IconButton(
+        child: TextButton(
           key: chatSpeakKey,
           onPressed: widget.onToggleSpeak,
-          // 命中区 ≥44（D3.6）：`IconButton` 默认就是 48×48，不另写尺寸
-          iconSize: d.voiceAuxIcon,
-          color: on ? d.accent : p.labelTertiary,
-          icon: Icon(on ? Icons.volume_up_rounded : Icons.volume_off_rounded),
+          style: _auxStyle(p, lit: on),
+          child: Icon(
+            on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+            size: d.voiceAuxIcon,
+          ),
         ),
       ),
     );
