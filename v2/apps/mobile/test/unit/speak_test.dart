@@ -190,16 +190,35 @@ void main() {
     c.dispose();
   });
 
-  // ★ P1-2（2026-09-24）：`canSpeak` **不许再写死**。
-  //   VM 上跑的是 `speech_stub.dart`（本来就 false），所以这条判据扫的是
-  //   **Web 那一份源码**：它必须真的去问浏览器有没有音色。
-  test('P1-2：speech_web 的 canSpeak 必须查音色（不许写死 true）', () {
+  // ★ P1-2（2026-09-24）＋ **2026-10-05 改了口径**。
+  //
+  //   原来是"`canSpeak` 必须查音色"（音色表空 ⇒ 不画那颗按钮）。
+  //   主人 2026-10-05 问：*"网页端为什么没有语音应答功能按钮？"* —— 根子就是这条：
+  //   各浏览器给音色是**异步、而且不一定给** ⇒ 那颗按钮**根本不出现**（静默消失）。
+  //   ⇒ 现在分成两个问题：
+  //     · `canSpeak`（画不画按钮）＝ **这个平台有没有那个能力**（`speechSynthesis` 在不在）；
+  //     · `speechHasVoices`（真念得出来吗）＝ 音色表空不空 ⇒ **按下去的时候用它**，
+  //       空的就**如实说一句**（`speakCannotWords`）。
+  test('🔴 P1-2（2026-10-05 改）：判"画不画按钮"是**能力**，判"念不念得出来"才是音色', () {
     final src = File('lib/services/speech_web.dart').readAsStringSync();
-    expect(src.contains('getVoices'), isTrue, reason: '要真的问浏览器有没有音色');
-    expect(
-      RegExp(r'const bool canSpeak = true').hasMatch(src),
-      isFalse,
-      reason: '写死 true ⇒ 没音色的浏览器上会画出一个按不动的开关（2026-09-23 实测到过）',
-    );
+    // ① 能力那条：问 `speechSynthesis` 在不在
+    final cap = RegExp(r'bool get canSpeak \{([\s\S]*?)\n\}').firstMatch(src);
+    expect(cap, isNotNull, reason: '找不到 `canSpeak` 那一段');
+    expect(cap!.group(1)!.contains('speechSynthesis != null'), isTrue,
+        reason: '★ 判"能不能画"要看平台有没有那个能力');
+    expect(cap.group(1)!.contains('getVoices'), isFalse,
+        reason: '★ 又不许拿音色表判"画不画"了 —— 那正是它静默消失的原因（2026-10-05 主人报的）');
+    // ② 写死 true 照旧不许
+    expect(RegExp(r'const bool canSpeak = true').hasMatch(src), isFalse,
+        reason: '写死 true ⇒ 没这个能力的平台上会画出一个按不动的开关');
+    // ③ 音色那一条**还在**（换了个名字），而且"没音色"时**不许假装交出去**
+    expect(src.contains('bool get speechHasVoices'), isTrue,
+        reason: '★ 少了"真念得出来吗"那一条 ⇒ 没音色时按下去什么都不发生');
+    expect(src.contains('if (!speechHasVoices) return false;'), isTrue,
+        reason: '★ 没有音色却回 true = 假装交出去了（按下去什么都不发生）');
+    // ④ 那句实话必须真的上屏（控制器那一侧）
+    final ctl = File('lib/services/chat_controller.dart').readAsStringSync();
+    expect(ctl.contains('speakCannotWords'), isTrue,
+        reason: '★ 念不出来时那句实话没接上 ⇒ 那颗按钮看着像坏的');
   });
 }

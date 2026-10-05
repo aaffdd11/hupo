@@ -24,12 +24,26 @@ import 'dart:html' as html;
 ///   那种情况下这个开关会**暂时不画**（按 D5.16"念不了就不画"那条走）；
 ///   页面每次重建都会重读一次，音色到位后它自己会出现。
 bool get canSpeak {
+  // 🔴 **2026-10-05 改了那一句门**（主人问：*"网页端为什么没有语音应答功能按钮？"*）：
+  //   原来要求"**音色表非空**"才画那颗按钮 —— 而各浏览器给音色是**异步、而且不一定给**，
+  //   页面上就是**那颗按钮不出现**（他报的就是这个）。
+  //   ⇒ 判据改成"**这个平台有没有那个能力**"（`speechSynthesis` 在不在）。
+  //   ⚠️ 真到念的那一下还得有音色：没有就**如实说一句**（见 `speakAloud` 与
+  //      `chat_controller.speakMessage` 那条 `speakCannotWords`）——
+  //      "按钮在、按下去它告诉你这台念不出来"，比"按钮根本没有"诚实。
+  return html.window.speechSynthesis != null;
+}
+
+/// **这台浏览器现在真的给得出音色吗**（`canSpeak` 与它不是一回事了）。
+///
+/// ⚠️ 只为"念不出来时那句实话"用 —— 不许拿它去决定画不画按钮（那正是 2026-10-05 的坑）。
+bool get speechHasVoices {
   final synth = html.window.speechSynthesis;
   if (synth == null) return false;
   try {
     return synth.getVoices().isNotEmpty;
   } catch (_) {
-    return false; // 问不出来 ⇒ 当作念不了（不画比画一个假的强）
+    return false;
   }
 }
 
@@ -104,6 +118,9 @@ bool speakAloud(String text, {void Function()? onEnd}) {
   if (t.isEmpty) return false;
   final synth = html.window.speechSynthesis;
   if (synth == null) return false;
+  // 🔴 **没有音色就别"假装交出去了"**：回 `false`，调用方据此**说那句实话**
+  //   （`speakCannotWords`）—— 不然那颗按钮看着像坏的（按下去什么都不发生）。
+  if (!speechHasVoices) return false;
 
   // ① **先停掉上一段**（一次只念一段；不 cancel 的话两段会排队叠着念）
   synth.cancel();

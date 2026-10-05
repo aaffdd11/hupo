@@ -31,6 +31,7 @@ import 'speech_store.dart';
 import 'stream.dart';
 import 'stream_uri.dart';
 import '../models/scope.dart';
+import '../models/speak_words.dart' show speakCannotWords;
 import '../models/server_address.dart';
 import '../models/token_sub.dart';
 import '../models/tool_row.dart';
@@ -776,6 +777,12 @@ class ChatController extends ChangeNotifier {
       notifyListeners();
     });
     _speakingId = started ? messageId : null;
+    // 🔴 **2026-10-05：念不出来就说一句**（主人问"网页端为什么没有语音应答功能按钮？"
+    //   之后顺着改的：那颗按钮现在**有能力就画**，真到念的那一下没音色 ⇒
+    //   不许"按下去什么都不发生"）。那句实话住 `models/speak_words.dart`（一处出处）。
+    if (!started && text.trim().isNotEmpty) {
+      _showNotice(const Notice(kind: NoticeKind.unknown, text: speakCannotWords));
+    }
     notifyListeners();
   }
 

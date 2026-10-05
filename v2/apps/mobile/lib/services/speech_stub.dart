@@ -35,6 +35,12 @@ void installNativeSpeech(NativeSpeechApi api) {
 ///    （`NativeTts` 的 `onInit`）⇒ 这个值会从假变成真 ⇒ 界面靠 [watchSpeakReady] 重建。
 bool get canSpeak => nativeSpeech?.canSpeak ?? false;
 
+/// **这台设备现在真的念得出来吗**（与 [canSpeak] 不是一回事：那个是"有没有那个能力"）。
+///
+/// ⚠️ 网页那一侧它是"浏览器给没给音色"；这一侧与 [canSpeak] 同值
+///    （原生那一份的引擎起来了就是真念得出来）。
+bool get speechHasVoices => nativeSpeech?.canSpeak ?? false;
+
 /// 念不出来 ⇒ `false`（调用方据此**不画按钮**）。
 bool speakAloud(String text, {void Function()? onEnd}) =>
     nativeSpeech?.speak(text, onEnd: onEnd) ?? false;
