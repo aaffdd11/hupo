@@ -1056,6 +1056,27 @@ deepseek harness 才行。"* —— **他是对的**：在那之前我验的只�
 
 ---
 
+<a id="b74"></a>
+
+### 九·补74 · 2026-10-05（`#291` 这一轮 · **已重建 · 已核对 · 已重启**）
+
+| 改哪 | 改什么 | 为什么 |
+|---|---|---|
+| 🔴 `docs/handbook/05-DECISIONS.md` | `D3.14` 三补（只有两档 ＋ 安卓那颗「播放语音」） | 它是 **`strict`**（手册就是判据）⇒ 不重建 ⇒ 下次重启拒绝启动 |
+| 🔴 `docs/handbook/CHANGELOG.md` | 升 **v2.58** | 同上 |
+| （只报不拦） | ——（服务端这一批**一个字没动**） | —— |
+| （不在覆盖里） | 客户端与安卓那几份（`chat_floater` / `speech_*` / `main.dart` / `NativeTts.kt` / `MainActivity.kt` / `AndroidManifest.xml`） | `apps/` 不在开机清单里 |
+
+**重建留痕**（`AGENTS.md` §8.1）：**时间** 2026-10-05 08:4x UTC＋8 · **命令** 与 §九·补50 同一条
+（绝对路径 `node` ＋ 口令走 stdin）· **动了哪几个文件**：只有 `/etc/hupo/integrity.json`
+（**222 个文件** · 只读 444 · `root:root`）· **重建后**：`verify-integrity` **✅ 对上了**。
+**重启**：`scripts/restart-core.sh`（由 `deploy-web-v2.sh` 带起）—— 预检过了 ·
+网页入口指纹 **`366b84e2f32e`**（源码 `3bc96ed22015`）· 公网 **200** · 浏览器那条路通。
+**新包**：`/hupo-chat.apk`（55,275,382 字节 · sha256 `cd6df11d8d8f…`）——
+**从包里核过** `versionName=2.0.0+659` 与 TTS 那条 `<queries>`。
+
+---
+
 <a id="b73"></a>
 
 ### 九·补73 · 2026-10-05（`#290` 这一轮 · **已重建 · 已核对 · 已重启**）

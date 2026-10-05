@@ -132,6 +132,19 @@ void main() {
           reason: '★ `namespace` 是代码的包名，不是装上去的身份 —— 不许跟着 `applicationId` 一起改');
     });
 
+    test('🔴 念出来那件事：清单里必须有 TTS 那一条 `<queries>`（不然那颗按钮永远不出现）', () {
+      // 主人 2026-10-05：*"播放语音……如果开启，会将对 agent 的回复进行语音转换和实时播报。"*
+      //   Android 11 起 app **看不见**没声明的包 —— 系统那个 TTS 引擎也是包 ⇒
+      //   不声明它，`TextToSpeech` 起不来 ⇒ `canSpeak` 假 ⇒ 那颗按钮**按规矩不画**
+      //   （一个静默消失的功能，最难查）。
+      final m = _read().replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
+      expect(m.contains('android.intent.action.TTS_SERVICE'), isTrue,
+          reason: '★ 少了 TTS 那条 `<queries>` ⇒ 安卓 11 上引擎起不来（那颗按钮不会出现）');
+      // 负向对照：**不许**用 QUERY_ALL_PACKAGES 那种大锤（商店会拒）
+      expect(m.contains('QUERY_ALL_PACKAGES'), isFalse,
+          reason: '★ 只要那一条 intent，不许把整张包清单都要过来');
+    });
+
     test('🔴 后台录音一票否决；而 `RECORD_AUDIO` 现在**必须在**（V10）', () {
       // ⚠️ **先剥掉 XML 注释**：上面那段注释里正写着"`RECORD_BACKGROUND_AUDIO` 一个都不许有"
       //    （注释里出现这个词是**说明**，不是申请）⇒ 不剥的话这条判据会自己把自己判红。

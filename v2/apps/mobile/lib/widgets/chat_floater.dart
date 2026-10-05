@@ -48,15 +48,15 @@ import '../models/space_words.dart';
 import 'appearance_scope.dart';
 import 'dsh_look.dart';
 
-/// 三档（手册 §6.2）。
+/// **两档**（手册 §6.2）。
+///
+/// 🔴 **2026-10-05 主人**：*"展开聊天我希望不要有移动聊天窗口高度的选项，
+///   就是完全展开或者完全收起。"* ⇒ 原来的「半开」那一档与"拖着改高度"**一起砍了**。
 enum FloaterTier {
-  /// 收起：只剩一条（**必须带字**，D3.8）。
+  /// 收起：只剩底下那一格（圆圈 ＋ 两颗按钮）。
   collapsed,
 
-  /// 半开。
-  half,
-
-  /// 最大化（"发就拉满"）。
+  /// 完全展开（时间线 ＋ 输入条）。
   full,
 }
 
@@ -81,9 +81,6 @@ class FloaterMetrics {
   /// ⚠️ 它是**四边共用**的一个数：手机上左右也跟着窄了（390 宽下原来左右各吃 30，
   ///    现在各吃 10）—— 网页桌面那一版也一起变（同一个常量，没有按平台分叉）。
   static const double margin = 10;
-
-  /// 半开占**可用高度**的比例（§6.2：高度用系数表达）。
-  static const double halfRatio = 0.55;
 
   /// 松手吸附的判定带宽（拖到离某一档多近就吸过去）。
   static const double snapSlack = 40;
@@ -169,19 +166,6 @@ class ChatFloater extends StatefulWidget {
 class ChatFloaterState extends State<ChatFloater> {
   late FloaterTier _tier;
 
-  /// 上次**非收起**的那一档（双击抓手 / 点"展开"时回到它）。
-  late FloaterTier _lastOpen;
-
-  /// 拖拽中：`null` = 没在拖；有值 = 当前跟手的高度。
-  double? _dragging;
-
-  double _dragStartH = 0;
-  int _dragStartMs = 0;
-  double _dragVelocity = 0;
-  int _lastMoveMs = 0;
-
-  bool _movedInGesture = false;
-
   /// 上一次**自动**换档的时间（防抖：400ms 内合并成一次）。
   int _lastAutoMs = 0;
 
@@ -189,9 +173,6 @@ class ChatFloaterState extends State<ChatFloater> {
   void initState() {
     super.initState();
     _tier = widget.initialTier;
-    _lastOpen = widget.initialTier == FloaterTier.collapsed
-        ? FloaterTier.full
-        : widget.initialTier;
     // 初始档位也报一次（不然上层以为"还没展开"而屏幕上已经展开了）
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) widget.onTier?.call(_tier);
@@ -206,10 +187,7 @@ class ChatFloaterState extends State<ChatFloater> {
     final now = _nowMs();
     if (auto && now - _lastAutoMs < FloaterMetrics.debounceMs) return;
     if (auto) _lastAutoMs = now;
-    setState(() {
-      _tier = t;
-      if (t != FloaterTier.collapsed) _lastOpen = t;
-    });
+    setState(() => _tier = t);
     widget.onTier?.call(t);
   }
 
@@ -217,116 +195,28 @@ class ChatFloaterState extends State<ChatFloater> {
   /// ⚠️ **不受防抖限制**：用户主动的动作不该被合并掉。
   void maximize() {
     _lastAutoMs = _nowMs(); // 顺手把防抖窗推后，免得紧接着的状态变化又来动窗口
-    setState(() {
-      _tier = FloaterTier.full;
-      _lastOpen = FloaterTier.full;
-      _dragging = null;
-    });
+    setState(() => _tier = FloaterTier.full);
     widget.onTier?.call(FloaterTier.full);
   }
 
   /// 外面叫它收起（点桌面空白时用）。
   void collapse() => _setTier(FloaterTier.collapsed, auto: false);
 
-  /// **展开到上次那一档**（§6.3："点收起态底部条 ⇒ 展开到上次档位"）。
-  /// ⚠️ 「展开」按钮和**点输入框**走的是**同一条路** —— 两处各写一套迟早会分叉。
-  void expand() => _setTier(_lastOpen, auto: false);
+  /// **展开**（点那颗箭头、或点输入框走同一条路 —— 两处各写一套迟早会分叉）。
+  ///
+  /// 🔴 **2026-10-05 主人**：*"展开聊天我希望不要有移动聊天窗口高度的选项，
+  ///   就是完全展开或者完全收起。"* ⇒ 展开**只有一档**（拉满），
+  ///   没有"半开"、也没有"拖着改高度"。
+  void expand() => _setTier(FloaterTier.full, auto: false);
 
   /// 现在哪一档（闸用）。
   FloaterTier get tier => _tier;
 
-  bool get _collapsed => _tier == FloaterTier.collapsed && _dragging == null;
+  bool get _collapsed => _tier == FloaterTier.collapsed;
 
   /// 某一档的高度。**收起档返回 `null`** ⇒ 交给内容自己算（D3.5）。
-  double? _heightFor(double max) {
-    if (_dragging != null) {
-      return _dragging!.clamp(FloaterMetrics.dragFloor, max);
-    }
-    return switch (_tier) {
-      FloaterTier.collapsed => null,
-      FloaterTier.half => (max * FloaterMetrics.halfRatio).clamp(
-        FloaterMetrics.dragFloor,
-        max,
-      ),
-      FloaterTier.full => max,
-    };
-  }
-
-  /// 松手之后吸附到哪一档（甩优先，其次看离哪一档近）。
-  FloaterTier _snapTo(
-    double h,
-    double max, {
-    required bool flungDown,
-    required bool flungUp,
-  }) {
-    if (flungDown) return FloaterTier.collapsed;
-    if (flungUp) return FloaterTier.full;
-    final candidates = <(FloaterTier, double)>[
-      (FloaterTier.collapsed, FloaterMetrics.dragFloor),
-      (FloaterTier.half, max * FloaterMetrics.halfRatio),
-      (FloaterTier.full, max),
-    ];
-    candidates.sort((a, b) => (a.$2 - h).abs().compareTo((b.$2 - h).abs()));
-    return candidates.first.$1;
-  }
-
-  void _onDown(PointerDownEvent e) {
-    _dragging = null; // 还没动：先别改高度（点一下不该跳）
-    _dragStartH = _heightFor(widget.maxHeight) ?? FloaterMetrics.dragFloor;
-    _dragStartMs = _nowMs();
-    _lastMoveMs = _dragStartMs;
-    _dragVelocity = 0;
-    _movedInGesture = false;
-  }
-
-  void _onMove(PointerMoveEvent e) {
-    if (e.delta.dy.abs() > 1) _movedInGesture = true;
-    if (!_movedInGesture) return;
-    final now = _nowMs();
-    final dy = e.delta.dy;
-    _dragging = ((_dragging ?? _dragStartH) - dy).clamp(
-      FloaterMetrics.dragFloor,
-      widget.maxHeight,
-    );
-    if (now > _lastMoveMs) {
-      _dragVelocity = -dy / ((now - _lastMoveMs) / 1000); // 往上拖 = 变高 = 正速度
-    }
-    _lastMoveMs = now;
-    setState(() {}); // ⚠️ 跟手：拖拽期间**动画 0ms**（§6.7 约束 2）
-  }
-
-  void _onUp(PointerUpEvent e) {
-    final now = _nowMs();
-    final h = _dragging;
-    if (h == null) {
-      // 没拖动 ⇒ 这一下是"点"。⚠️ **点由抓手那颗按钮处理**（见 `_handle`），
-      // 这里**不再自己判双击**：2026-09-24 起抓手是"单击 = 收起 ⇄ 展开"，
-      // 而双击 = 两次单击 = 自己把自己抵消掉（真机上就是"点了没反应"）。
-      return;
-    }
-    final durMs = now - _dragStartMs;
-    final moved = (h - _dragStartH).abs();
-    // ⚠️ D3.7：**速度 + 位移 + 时长三个都要满足**才算"甩"
-    final flung =
-        durMs <= FloaterMetrics.flingMaxMs &&
-        moved >= FloaterMetrics.flingDistance;
-    final flungUp =
-        flung &&
-        _dragVelocity > FloaterMetrics.flingVelocity &&
-        h > _dragStartH;
-    final flungDown =
-        flung &&
-        _dragVelocity < -FloaterMetrics.flingVelocity &&
-        h < _dragStartH;
-    final to = _snapTo(
-      h,
-      widget.maxHeight,
-      flungDown: flungDown,
-      flungUp: flungUp,
-    );
-    _dragging = null;
-    _setTier(to, auto: false); // 用户刚松手 ⇒ 不听防抖
-  }
+  double? _heightFor(double max) =>
+      _tier == FloaterTier.collapsed ? null : max;
 
   @override
   Widget build(BuildContext context) {
@@ -458,32 +348,22 @@ class ChatFloaterState extends State<ChatFloater> {
                       //   ⇒ 收起档那一行 = **（他说的话 ＋ 那颗圆圈）＋ 展开 ＋ 播放语音**。
                       //     ⚠️ 展开那颗**不再是"圆圈上方那一行"**（那一行整条撤掉：省下的正是
                       //        主人一直在嫌的那点占地），它只是**挪到了右边**（同一个 key/形状）。
-                      //     ⚠️ 拖动（§6.3：竖向拖 = 改高度）改绑在**整条 bar** 上：
-                      //        `Listener` 不吃子节点的事件 ⇒ 圆圈与那两颗照样点得动。
+                      //     🔴 **2026-10-05：不再有"拖着改高度"**（主人：*"我希望不要有
+                      //        移动聊天窗口高度的选项，就是完全展开或者完全收起。"*）
+                      //        ⇒ 那两层 `Listener`（以及跟手那一套）整段删了。
                       if (collapsed)
-                        Listener(
-                          behavior: HitTestBehavior.opaque,
-                          onPointerDown: _onDown,
-                          onPointerMove: _onMove,
-                          onPointerUp: _onUp,
-                          child: Row(
-                            children: [
-                              Expanded(child: widget.composer),
-                              _handle(p),
-                              // 念不出来的设备**一个按钮都不画**（`onToggleSpeak` 传 null）
-                              if (widget.onToggleSpeak != null) _speakButton(p),
-                              const SizedBox(width: d.gapS),
-                            ],
-                          ),
+                        Row(
+                          children: [
+                            Expanded(child: widget.composer),
+                            _handle(p),
+                            // 念不出来的设备**一个按钮都不画**（`onToggleSpeak` 传 null）
+                            if (widget.onToggleSpeak != null) _speakButton(p),
+                            const SizedBox(width: d.gapS),
+                          ],
                         ),
-                      // ── 展开态：标题行（**收起态不画它** —— 那一档就是"一行"）──
+                      // ── 展开态：标题行（**收起态不画它** —— 那一档就是"一格"）──
                       if (!collapsed)
-                        Listener(
-                          behavior: HitTestBehavior.opaque,
-                          onPointerDown: _onDown,
-                          onPointerMove: _onMove,
-                          onPointerUp: _onUp,
-                          child: Padding(
+                        Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: d.gapS,
                             vertical: 2,
@@ -531,7 +411,6 @@ class ChatFloaterState extends State<ChatFloater> {
                             ],
                           ),
                         ),
-                        ),
                       // 收起态那一行**上面已经画过了**（`Row` 里那一个 `Expanded`）——
                       // 这一支只剩"展开态"要补的东西。
                       if (!collapsed) ...[
@@ -567,7 +446,7 @@ class ChatFloaterState extends State<ChatFloater> {
     const collapsed = true;
     final button = TextButton(
       key: chatHandleKey,
-      onPressed: () => _setTier(_lastOpen, auto: false),
+      onPressed: expand, // 2026-10-05：展开**只有一档**（拉满）
       style: TextButton.styleFrom(
         // 命中区 ≥44（D3.6，硬闸）：图形只有 26×7，外面这一圈是"好点"的保证
         // （两年前给的是 96 宽；2026-10-05 它并进那一行之后收成 44 —— 仍等于下限）

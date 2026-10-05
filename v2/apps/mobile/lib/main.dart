@@ -26,6 +26,7 @@ import 'screens/not_logged_in.dart';
 import 'screens/waiting_screen.dart';
 import 'services/chat_controller.dart';
 import 'services/hearing_native.dart';
+import 'services/speech_native.dart';
 import 'services/recorder_native.dart';
 import 'widgets/mini_native_boot.dart';
 import 'services/token_store.dart';
@@ -79,6 +80,10 @@ void main() {
     // ★ **原生开麦**（2026-09-28 · 主人：*"是的，安卓也要支持转文字。开工吧。"*）：
     //   采 16k PCM → 送我们自己的 `/api/asr`（签名只在服务端算）。
     installNativeHearing();
+    // ★ **原生念出来**（2026-10-05 · 主人：*"播放语音……如果开启，会将对 agent 的回复
+    //   进行语音转换和实时播报。"*）：系统自带的合成器（**不联网**）。
+    //   ⚠️ 装完之后那颗「播放语音」才会出现（引擎就绪是异步的，见 `speech_native.dart`）。
+    installNativeTts();
   }
   runApp(const HupoApp());
 }

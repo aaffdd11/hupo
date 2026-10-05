@@ -76,3 +76,51 @@
   听起来像说错话再吞回去 —— 所以按"说完才念"办。要他改成"边写边念"说一声。
 * **设置里那一颗「读出来」还留着**（同一个开关的第二个人口）：它带着"这台念不出来"那句解释。
   两颗并存是不是多余，等他一句话（要撤就撤设置里那条）。
+
+---
+
+## 六、2026-10-05 下半场：两档 ＋ 安卓也能念（主人的两条回话）
+
+> **主人原话**：*「播放语音按钮没看到。展开聊天我希望不要有移动聊天窗口高度的选项，
+>   就是完全展开或者完全收起。」*
+
+### 6.1 只有两档
+
+* `FloaterTier` 由三档收成**两档**（`collapsed` / `full`）—— **"半开"那一档删了**；
+* **"拖着改高度"整条砍掉**（那两层 `Listener`、跟手高度、甩动吸附、`halfRatio`、
+  `dragFloor` 的那套算法全删）⇒ 展开那颗箭头**点一下就是拉满**，拖它什么都不发生；
+* 判据跟着改（`desktop_floater_test`）：**拖它不改高度**（负向对照）＋ 点它**一次到全开**
+  （量的是"上边距＝那一个常量"，不是"可用高度的百分之多少"）。
+
+### 6.2 安卓上那颗「播放语音」
+
+**为什么"没看到"**：那一侧原来走的是 `speech_stub.dart`（`canSpeak` 恒假）⇒
+按"念不出来就不画"那条规矩，那颗按钮**根本不画**。
+
+**改法**：安卓那一份改用**系统自带**的合成器（`android.speech.tts`）——
+
+| 在哪 | 干什么 |
+|---|---|
+| `android/.../NativeTts.kt`（新） | `TextToSpeech` ＋ 中文音色判定 ＋ 念完回调；channel `hupo/tts`（`canSpeak` / `speak` / `stop` ＋ 主动回一条 `ready`） |
+| `MainActivity.kt` | 挂第三条 channel（与录音/开麦同一个地方） |
+| `AndroidManifest.xml` | 🔴 **必须**有 `<queries><intent><action android:name="android.intent.action.TTS_SERVICE"/></intent></queries>` —— Android 11 起 app **看不见**没声明的包，不写这一条引擎起不来（按钮就永远不出现） |
+| `lib/services/speech_native.dart`（新） | 钩子那一份（`installNativeTts()`，只在 Android 装）；`ready` / `speakEnded` 两条回调 |
+| `lib/services/speech_stub.dart` | `canSpeak` 由 `const bool` 改成**取值**（钩子说了算）＋ `watchSpeakReady` / `notifySpeechReady` |
+| `lib/main.dart` | `installNativeTts()`（与 `installNativeHearing()` 并排） |
+
+⚠️ **它不联网**：念的是系统那一层（与网页用 `window.speechSynthesis` 是同一件事）。
+⚠️ **引擎起不来 / 没有中文音色** ⇒ 照旧**一颗都不画**（不假装）。
+
+### 6.3 判据
+
+| # | 钉什么 | 在哪 |
+|---|---|---|
+| D1 | 没装钩子（VM/iOS/桌面）⇒ 念不出来、`speakAloud` 回假（不假装） | `test/unit/speech_hook_test.dart`（新） |
+| D2 | 装了钩子 ⇒ 值跟着钩子走；文本**逐字**交出去 | 同上 |
+| D3 | `watchSpeakReady`：没就绪先记着、就绪时**只举手一次**；已就绪则**晚一步**叫（不许在 `initState` 里同步 setState） | 同上 |
+| D4 | `hupo/tts` 那个名字 Kotlin 与 Dart **逐字一致**；装钩子那一句**只在 Android 分支** | 同上 |
+| D5 | 清单里有 TTS 那条 `<queries>`，而且**不许**用 `QUERY_ALL_PACKAGES` | `test/unit/android_manifest_test.dart` |
+| D6 | 拖箭头/标题行**都不改高度**；点箭头**一次到全开** | `test/widget/desktop_floater_test.dart` |
+
+⚠️ **还没验的**：安卓真机上那颗按钮出不出现、念得好不好听 —— **要主人装新包试**
+（这一条我这儿没有设备；包里能核的只有"清单/代码在不在"）。

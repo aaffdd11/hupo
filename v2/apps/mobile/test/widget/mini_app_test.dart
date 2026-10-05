@@ -86,7 +86,7 @@ void main() {
 
   testWidgets('🔴 点「设置」⇒ 设置那一屏开了，而且**聊天自动收起**（§6.4 规则 5）', (tester) async {
     // 从**半开**进场：这时桌面顶上那块看得见、点得到（最大化会把桌面盖住）
-    await _pump(tester, tier: FloaterTier.half);
+    await _pump(tester, tier: FloaterTier.full);
     expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '半开时是展开着的');
 
     await _openSettings(tester);

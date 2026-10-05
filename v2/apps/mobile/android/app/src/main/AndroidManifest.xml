@@ -38,6 +38,19 @@
          与 `mipmap-anydpi-v26/ic_launcher_round.xml`（自适应那一套）都在；
          不指的话，会要圆图标的那几个启动器只能拿方的去裁。
          ⚠️ 属性写进标签里、**注释留在标签外** —— 写进标签中间就不是合法 XML 了（上面那条注释说的就是这件事）。 -->
+    <!-- 🔴 **念出来要用到的那条"看得见"声明**（2026-10-05 · 主人：*"播放语音……如果开启，
+         会将对 agent 的回复进行语音转换和实时播报。"*）。
+
+         Android 11（API 30）起，app **看不见**没声明的包 —— 系统那个"文字转语音"引擎
+         也是一个包 ⇒ 不声明 `<queries>` 的话 `TextToSpeech` 起不来（表现就是
+         "这台念不出来"，而那颗按钮按规矩就不画了 —— 一个静默的功能消失）。
+         ⇒ 这一条是**那颗按钮能不能出现**的前提（判据：`test/unit/android_manifest_test.dart`）。
+         ⚠️ 只声明"我要找 TTS 服务"这一条 intent，**不是** QUERY_ALL_PACKAGES（那一条会被商店拒）。 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
+    </queries>
     <application
         android:label="琥珀聊天"
         android:name="${applicationName}"

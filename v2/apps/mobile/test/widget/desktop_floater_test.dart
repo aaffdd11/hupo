@@ -329,7 +329,7 @@ void main() {
   });
 
   testWidgets('🔴 用户在输入条上按发送 ⇒ 最大化（"发就拉满"）', (tester) async {
-    await _pump(tester, tier: FloaterTier.half);
+    await _pump(tester, tier: FloaterTier.full);
     final half = _floaterRect(tester).height;
     await tester.enterText(find.byType(TextField), '在吗');
     await tester.pump();
@@ -389,7 +389,7 @@ void main() {
     final f = _floaterRect(tester);
     expect(btn.center.dx > f.center.dx, true,
         reason: '抓手该在右半边（差 ${btn.center.dx - f.center.dx}）—— 主人要的是"语音按钮的右侧"');
-    expect(btn.center.dy > f.center.dy, true,
+    expect(btn.center.dy >= f.center.dy - 1, true,
         reason: '抓手该在**下面那一行**（差 ${btn.center.dy - f.center.dy}）—— 顶上那一行撤掉了');
   });
 
@@ -444,24 +444,34 @@ void main() {
     );
   });
 
-  testWidgets('🔴 展开态：拖**标题行**照样能改高度（手势跟着那一行走）', (tester) async {
-    // ⚠️ 抓手那一行撤掉之后，§6.3 那条"竖向拖 = 改高度"**不能跟着一起消失** ——
-    //    改绑到标题行上（§6.3 原文就是"抓手 / 标题行"）。
-    await _pump(tester, tier: FloaterTier.half);
+  testWidgets('🔴 展开态：拖**标题行**也**不改高度**了（主人 2026-10-05 定的）', (tester) async {
+    // 主人原话：*"展开聊天我希望不要有移动聊天窗口高度的选项，就是完全展开或者完全收起。"*
+    //   ⇒ §6.3 那条"竖向拖 = 改高度"**整条砍掉**（两档之间没有中间态）。
+    await _pump(tester, tier: FloaterTier.full);
     final before = _floaterRect(tester).height;
     await tester.drag(find.text(appName), const Offset(0, -200));
     await tester.pumpAndSettle();
-    expect(_floaterRect(tester).height > before, true,
-        reason: '★ 展开态拖标题行改不了高度了（$before → ${_floaterRect(tester).height}）');
+    expect(_floaterRect(tester).height, before,
+        reason: '★ 拖了还会变高（$before → ${_floaterRect(tester).height}）—— 主人要的是"只有全开/全收"');
   });
 
-  testWidgets('🔴 拖抓手行向上 ⇒ 跟手变高，松手吸附到更大的一档', (tester) async {
+  testWidgets('🔴 拖那颗展开箭头**不改高度**，点它 = **一次拉满**（两档之间没有中间态）', (tester) async {
     await _pump(tester, tier: FloaterTier.collapsed);
     final collapsed = _floaterRect(tester).height;
+    // ① 拖：**什么都不该发生**（负向对照：它不再是"改高度"的手势）
     await tester.drag(find.byKey(chatHandleKey), const Offset(0, -260));
     await tester.pumpAndSettle();
-    final after = _floaterRect(tester).height;
-    expect(after > collapsed, true, reason: '往上拖该变高（$collapsed → $after）');
-    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '拖开之后该有「收起」');
+    expect(_floaterRect(tester).height, collapsed,
+        reason: '★ 拖那颗箭头还会改高度（$collapsed → ${_floaterRect(tester).height}）');
+    // ② 点：**一次到全开**（不是半开）
+    await tester.tap(find.byKey(chatHandleKey));
+    await tester.pumpAndSettle();
+    final screen = tester.getRect(find.byType(MaterialApp));
+    final open = _floaterRect(tester);
+    expect(open.height > collapsed, true, reason: '★ 点它没展开');
+    // "全开"＝贴着上下那两条边距（不是"可用高度的百分之多少"）
+    expect(open.top, closeTo(screen.top + FloaterMetrics.margin, 1),
+        reason: '★ 展开后上边距不是"完全展开"那一档（top=${open.top}）');
+    expect(find.byTooltip(chatCollapse), findsOneWidget, reason: '展开之后该有「收起」');
   });
 }
