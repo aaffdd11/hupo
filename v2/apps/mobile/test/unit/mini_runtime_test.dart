@@ -182,7 +182,9 @@ void main() {
     //   而"开一个小程序"那一下浮窗自己也在收（两个动画叠着）⇒ 整段动画直接卡没。
     //   ⇒ 钉死：它只许用**只往下记**的 `_barH`，一个字节都不许提到 `_floaterH`。
     final src = File('lib/screens/chat_screen.dart').readAsStringSync();
-    // ⚠️ 2026-10-04：那一处现在是**一个三元**（页面画了外壳 ⇒ 0；否则照旧那条稳定值）
+    // ⚠️ **2026-10-05**：那一处现在是**按平台分的三元**（主人定的"网页不铺满、安卓铺满"）——
+    //    **网页**留出底下那一格（录音圆圈由 Flutter 画着露在外面）；
+    //    **安卓**是平台视图、在画布**下面** ⇒ 铺满（`0`）。
     //    ⇒ 判据要看**整段表达式**，不是第一行（改口径时别把这条保护丢了）。
     final lines = src.split('\n');
     final at = lines.indexWhere((l) => l.trimLeft().startsWith('bottomInset:'));
@@ -192,8 +194,10 @@ void main() {
         reason: '★ 那一行提到了 `_floaterH` —— 它是**每帧都变**的浮窗高度，'
             '喂给平台视图 = 每帧 resize 一个真 iframe（2026-10-01 那次"动效全没了"就是这么来的）');
     expect(line.contains('_barH'), true, reason: '★ 用的是**收起档那个稳定值**（只往下记）');
-    expect(line.contains('_domChromeFor'), true,
-        reason: '★ 页面那一层画了外壳的那一档必须**一点都不留**（`D3.14` 甲：内容真全屏）');
+    expect(line.contains('kIsWeb'), true,
+        reason: '★ 网页那一档必须**留出底下那一格**（`D3.16` 补：不铺满 ⇒ 录音圆圈露在外面，一份实现）');
+    expect(line.contains('? (FloaterMetrics.margin + _barH) : 0'), true,
+        reason: '★ 网页＝让出那一格；安卓＝铺满（平台视图在画布下面，聊天天然压得住它）');
   });
 
 
@@ -214,5 +218,12 @@ test('🔴 Web 那一颗「退出」是**画在 iframe 上面**的（DOM ＋ z-i
   expect(src.contains('miniAppExitLabel'), isTrue, reason: '★ 那个词只有一处出处（models）');
   expect(src.contains('wrap.children.addAll'), isTrue,
       reason: '★ iframe 与那颗圆圈要在**同一个容器**里（不然定位对不上）');
+  // 🔴 **负向对照**（2026-10-05 主人定的"网页不铺满"）：那一层**只许有"退出"一样东西** ——
+  //   麦克风圆圈与那行字**搬回 Flutter** 了（底下那一格已经让出来 ⇒ 一份实现）。
+  //   它们要是偷偷回来，屏幕上就会**又是两颗**（两颗✕/两颗话筒那一族的老病）。
+  for (final gone in ['hupo-mini-mic', 'hupo-mini-words', 'updateMiniAppMic', 'updateMiniAppWords']) {
+    expect(src.contains(gone), isFalse,
+        reason: '★ 这一层里不该再有 `$gone` —— 网页那颗圆圈由 Flutter 画（`D3.16` 补）');
+  }
 });
 }

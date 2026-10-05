@@ -34,9 +34,6 @@ import '../models/desktop_words.dart';
 import '../models/landing_words.dart';
 import '../models/dsh_design.dart';
 import '../models/scroll_follow.dart';
-import '../models/hear_drill.dart';
-import '../models/hear_words.dart';
-import '../models/mini_frame.dart';
 import '../models/space.dart';
 import '../models/app_spec.dart';
 import '../models/app_words.dart';
@@ -75,7 +72,6 @@ import '../widgets/bubble_menu.dart';
 import '../widgets/bubbles.dart';
 import '../widgets/chat_floater.dart';
 import '../widgets/mini_app_host.dart';
-import '../widgets/mini_runtime.dart';
 import '../widgets/voice_bar.dart';
 import '../widgets/mini_app_frame.dart';
 import '../widgets/notice.dart';
@@ -575,20 +571,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     //    ⚠️ 必须在下面那次 setState **之前**：不然屏幕上会先闪一帧"没折"的样子。
     _applyAutoFold(widget.controller);
     setState(() {});
-    // ★ **页面那一层画了外壳的那种屏**（真小程序 ＋ 网页）：把"现在该显示什么"推过去
-    //   （字 ＋ 那颗圆圈在不在录）—— 不然屏幕上那句字是空的（`D3.14` 甲）。
-    if (_domChromeFor(widget.controller)) {
-      final mine = _openMine();
-      if (mine != null) {
-        final id = miniViewIdOf(mine.entryUrl);
-        updateMiniAppWords(id, _voiceLine(widget.controller));
-        updateMiniAppMic(
-          id,
-          listening: widget.controller.voiceFlow.hearing.listening,
-          label: widget.controller.voiceFlow.hearing.listening ? hearDrillStopLabel : hearDrillTalkLabel,
-        );
-      }
-    }
     // ★ **乙期：语音那一档自己发出去了** ⇒ 把那扇**聊天记录窗口**打开（`D3.14`）
     //   （他说完 → 听懂 → 通顺就发；发的那一下不用他点任何东西，但**要让他看见**）
     final sent = widget.controller.voiceSent;
@@ -947,13 +929,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               //    而规矩是反过来的（**Z1：聊天永远最上** —— 桌面之上、小程序之上）。
               //    ⇒ **平台视图的矩形不许盖到聊天浮窗的矩形**，制品也一样：
               //      底下那一条照旧让出来（判据 `test/widget/safe_area_test.dart`）。
-              // ★ **2026-10-04（`D3.14` 甲）：真小程序 ＋ 网页 ⇒ 内容**真全屏**，
-              //   麦克风圆圈与那行字由**页面那一层**画（`mini_runtime_web.dart`）——
-              //   所以底下**一点边都不留**（留了就是"内容不是全屏"）。
-              //   ⚠️ 别的场合（内置那几屏 / 手机上）照旧留出聊天条那一条。
-              bottomInset: _domChromeFor(c)
-                  ? 0
-                  : FloaterMetrics.margin + _barH,
+              // ★ **2026-10-05（主人定的）：网页不铺满、安卓铺满。**
+              //   原话：*「网页端最简单的方法就是小程序底部留空间给录音按钮。也就是不铺满。
+              //   安卓app才铺满。」*
+              //   🔴 **为什么网页必须留**：网页上小程序是**真的 DOM 元素**、压在画布**上面**
+              //     ⇒ 铺满了那颗录音圆圈就被它盖住（看不见也点不到，只能再用网页画一遍 ——
+              //     那一份实现刚在 `#285` 砍掉）。**留出底下那一格**，圆圈就由 Flutter 画着
+              //     露在外面**一份实现**。
+              //   🔴 **为什么安卓不用留**：那边是平台视图、在画布**下面** ⇒ Flutter 画的聊天
+              //     与圆圈天然压在它上面 ⇒ 内容**铺满**（`0`）。
+              bottomInset: kIsWeb ? (FloaterMetrics.margin + _barH) : 0,
               child: _appView(c)?.view ?? _lastAppView ?? const SizedBox.shrink(),
             ),
           ),
@@ -1094,8 +1079,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         //   版本换了 ⇒ 服务端现签一条新的 ⇒ 这里换一帧 ⇒ Web 那一侧换 iframe。
         //   旧那一帧的收尾（退订 + 销号）在 `MiniAppFrame` 里（判据 U5）。
         view: MiniAppFrame(
-          // ★ 页面那一层画的那颗麦克风圆圈（`D3.14` 甲）—— 与"退出"同一个做法
-          onMic: () => unawaited(c.toggleVoiceCompose()),
           onExit: () => _backToDesktop(c),
           // 🔴 **2026-10-01 更正**：这条 URL 原来还带 `pt`/`pb`（让**页面自己**留出
           //   状态栏与聊天条那两条边距，为的是"页面铺满整屏还能不被压住"）。
@@ -1322,36 +1305,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   /// **上一次看到的"我的小程序"版本号**（乙-3：服务端说"装上了"就重拉）。
   int _appsRevision = 0;
-
-  /// **这一屏的外壳（退出 ＋ 麦克风圆圈 ＋ 那行字）是不是页面那一层画的**
-  /// （`D3.14` 甲）—— 是的话 Flutter 这一侧**一件都不许再画**，而且内容**不许留边**。
-  bool _domChromeFor(ChatController c) {
-    if (!kIsWeb || _openApp == null || !_openApp!.startsWith(_minePrefix)) return false;
-    // 🔴 **2026-10-04 主人：*"说过了，语音按钮在最上层。小程序里面怎么也有语音按钮？不应该有这个按钮。"***
-    //   ⇒ 这是**又出现了两颗**（跟当初那两个 ✕ 同一个病）：原来这里还问了一句
-    //     `miniAppDomChrome(...)`（= "页面那一层建出来了吗"），而它**建得比这一帧晚**
-    //     ⇒ 头几帧判 false ⇒ Flutter 这一颗画了，随后页面那一颗也建出来 ⇒ **两颗**。
-    //   ⇒ 判据只按**这一屏是不是他自己的小程序 ＋ 网页**（与页面那一层建不建是同一件事，
-    //     只是**不再看它建好了没有**）—— 一个竞态都不留。
-    return true;
-  }
-
-  /// **页面那一层那句字**现在该显示什么（`D3.14` 甲）。
-  ///
-  /// ⚠️ 与 `widgets/voice_bar.dart` 的 `_line` **同一套意思**（那边给内置那几屏用）；
-  ///    这里只挑"最该让他看见的一句"——问句优先，其次他刚说的那半句，再次是如实说的那句。
-  String _voiceLine(ChatController c) {
-    final f = c.voiceFlow;
-    if (f.phase == DrillPhase.asking) {
-      return (f.question.isEmpty ? hearDrillAskingLead : f.question) + hearDrillAnswerHint;
-    }
-    final said = f.said.trim();
-    if (said.isNotEmpty) return said;
-    if (f.phase == DrillPhase.failed) return f.note.isEmpty ? hearDrillFailedLead : f.note;
-    if (f.phase == DrillPhase.thinking) return hearDrillThinkingLead;
-    if (f.phase == DrillPhase.listening) return hearDrillListeningLead;
-    return '';
-  }
 
   /// 语音那一档**发出去几次**（`D3.14`：发一次就把记录窗口打开一次）。
   int _voiceSent = 0;
@@ -2001,7 +1954,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               // 🔴 2026-10-03：「拿回来」那条路砍了 ⇒ 这一条不再挂撤销按钮。
               NoticeStrip(notice: c.notice!, onDismiss: c.dismissNotice),
             QueueStrip(queue: c.queue, onCancel: c.unsay),
-            if (!_domChromeFor(c))
+            // ★ **2026-10-05：这一颗网页上也由 Flutter 画**（主人定的"网页不铺满"）——
+            //   底下那一格已经让出来了，它露在外面 ⇒ **两端同一份实现**，
+            //   不再需要"页面那一层再画一遍"（那一份已经在 `#285` 砍掉）。
             VoiceBar(
               flow: c.voiceFlow,
               canHear: canHear,

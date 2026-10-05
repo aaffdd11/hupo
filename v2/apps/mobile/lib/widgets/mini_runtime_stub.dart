@@ -24,7 +24,6 @@ Widget buildMiniAppView({
   // ★ `D3.15`：那颗「退出」在 Web 那一侧由 DOM 画（这里收下、不用它）——
   //   入参两边必须一样，不然条件导入会编不过。
   void Function()? onExit,
-  void Function()? onMic,
 }) {
   final native = nativeMiniAppView;
   if (native != null) {
@@ -61,10 +60,3 @@ void releaseMiniAppView(String viewId) {
 ///    本来就没有那一层 ⇒ **空操作**。⚠️ Android 那一侧这次**没复现**（量在 Web 上），
 ///    真要管再单说 —— 不许在这里假装做了。
 void setMiniAppsInteractive(bool on) {}
-
-/// **页面那一层的小程序外壳**（麦克风圆圈 / 那一行字）—— 非 Web 都是空操作。
-/// ⚠️ 签名必须与 Web 那一份一致（判据"三份实现的签名必须一致"钉着）。
-void setMiniAppMic(String viewId, void Function()? onMic) {}
-void updateMiniAppMic(String viewId, {required bool listening, required String label}) {}
-void updateMiniAppWords(String viewId, String text) {}
-bool miniAppDomChrome(String entryUrl) => false;
