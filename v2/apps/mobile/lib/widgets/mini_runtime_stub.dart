@@ -24,6 +24,8 @@ Widget buildMiniAppView({
   // ★ `D3.15`：那颗「退出」在 Web 那一侧由 DOM 画（这里收下、不用它）——
   //   入参两边必须一样，不然条件导入会编不过。
   void Function()? onExit,
+  // ★ 2026-10-05 拍照：Web 那一侧用它决定 iframe 的 `allow`（这里收下、不用它）
+  bool allowCamera = false,
 }) {
   final native = nativeMiniAppView;
   if (native != null) {

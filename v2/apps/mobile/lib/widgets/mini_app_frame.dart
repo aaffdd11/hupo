@@ -29,6 +29,7 @@ class MiniAppFrame extends StatefulWidget {
     required this.title,
     this.onAsk,
     this.onExit,
+    this.allowCamera = false,
   });
 
   /// 服务端**现签**的入口 URL（绑人 + 绑版本 + 短时效）。
@@ -39,6 +40,12 @@ class MiniAppFrame extends StatefulWidget {
 
   /// 那条唯一的回话通道（乙-4b）。
   final Future<String> Function(String prompt)? onAsk;
+
+  /// ★ **2026-10-05 拍照**：这一帧能不能要镜头（＝那份清单里 `camera` **授予了**）。
+  ///
+  /// ⚠️ 网页那一侧它决定 iframe 的 `allow="camera"`；安卓那一侧它决定 WebView 那条
+  ///    `onPermissionRequest` 放不放行（见 `mini_runtime_*.dart`）。
+  final bool allowCamera;
 
   /// ★ **那颗「退出」**（`D3.15`）：Web 那一侧它由**DOM** 画在页面右上角
   /// （平台视图压着画布 ⇒ Flutter 那颗收不到点击，见 `mini_runtime_web.dart`）。
@@ -87,6 +94,7 @@ class _MiniAppFrameState extends State<MiniAppFrame> {
   @override
   Widget build(BuildContext context) => buildMiniAppView(
     onExit: widget.onExit,
+    allowCamera: widget.allowCamera,
     entryUrl: widget.entryUrl,
     title: widget.title,
     onAsk: widget.onAsk,

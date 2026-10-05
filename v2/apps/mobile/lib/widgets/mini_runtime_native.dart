@@ -33,6 +33,7 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../models/mini_frame.dart';
 
@@ -54,6 +55,9 @@ Widget buildNativeMiniAppView({
   required String entryUrl,
   required String title,
   Future<String> Function(String prompt)? onAsk,
+  // ★ **2026-10-05 拍照**（主人：*"给小程序增加拍照功能。"*）：
+  //   授予了才让这一帧要镜头（下面那条 `onPermissionRequest`）。
+  bool allowCamera = false,
 }) {
   final viewId = miniViewIdOf(entryUrl);
   final controller = _controllers.putIfAbsent(viewId, () {
@@ -70,6 +74,26 @@ Widget buildNativeMiniAppView({
               : NavigationDecision.prevent,
         ),
       );
+    // ★ **镜头那一道门**（2026-10-05）：网页那一侧是 iframe 的 `allow="camera"`，
+    //   这一侧就是 WebView 的 `onPermissionRequest` —— **一个道理，两处实现**。
+    //   🔴 **只认摄像头**：麦克风（`RESOURCE_AUDIO_CAPTURE`）**照样拒**——
+    //      这一版只给他要的"拍照"，别的一概不开（少一样就少一份风险）。
+    //   ⚠️ 没授予（`allowCamera` 假）⇒ **当场拒**（`deny()`），与网页那一侧"门是关的"同形。
+    if (c.platform is AndroidWebViewController) {
+      unawaited(
+        (c.platform as AndroidWebViewController).setOnPlatformPermissionRequest(
+          (req) {
+            final wantsCamera =
+                req.types.contains(WebViewPermissionResourceType.camera);
+            if (allowCamera && wantsCamera) {
+              req.grant();
+            } else {
+              req.deny();
+            }
+          },
+        ),
+      );
+    }
     // ⚠️ 不 await：`loadRequest` 是一趟网络往返，等它就把这一帧卡住了
     //    （页面自己转圈是它的事，我们这一层不该跟着转）。
     unawaited(c.loadRequest(Uri.parse(entryUrl)));

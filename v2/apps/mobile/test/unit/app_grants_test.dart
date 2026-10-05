@@ -48,6 +48,20 @@ Map<String, Object?> _raw({
 };
 
 void main() {
+  test('★ 2026-10-05 拍照：那一样的人话是「想拍一张照片」（不许出现"摄像头/权限/Camera"）', () {
+    // 主人：*"给小程序增加拍照功能。"*
+    //   🔴 屏幕上的话要他自己听得懂 —— 与禁用词那道闸同一个道理。
+    expect(grantWantWords('camera'), '想拍一张照片');
+    for (final bad in ['摄像头', '权限', 'Camera', 'camera']) {
+      expect(grantWantWords('camera').contains(bad), isFalse, reason: '★ 人话里出现了「$bad」');
+    }
+    // 负向对照：认不出来的那一档照旧有兜底那句（不是抛）
+    expect(grantWantWords('whatever'), isNotEmpty);
+    // 而且它进得了"认得的那几样"（不然那张卡上摆不出来）
+    expect(knownWant('camera'), isTrue);
+  });
+
+
   group('清单一侧：它想要什么 / 你给了没有（两件事）', () {
     test('★ 每一行都要有"它想要什么"；**存储（`db`）不算一行**', () {
       final plain = MiniApp.parse(_raw(id: 'dice', permissions: const []))!;
@@ -106,15 +120,17 @@ void main() {
       expect(nextGranted(const ['ask'], 'ask', true), ['ask']);
     });
 
-    test('★ 认得的**四样**与**顺序**：问一句 → 上网 → 跟助手说话 → 按点跑', () {
+    test('★ 认得的**五样**与**顺序**：问一句 → 上网 → 拍照 → 跟助手说话 → 按点跑', () {
       // ⚠️ 顺序就是那张卡上摆出来的顺序（`148` §二/§三）。
       // 🔴 **存储（`db`）不在里面**（2026-10-02：默认就有、不问他，见 `wantStore` 那段）。
-      expect(knownWants, ['ask', 'net', 'agent', 'tasks']);
-      expect(knownWants, [wantAsk, wantNet, wantAgent, wantTasks]);
+      // ★ **2026-10-05 加第五样 `camera`**（主人：*"给小程序增加拍照功能。"*）——
+      //   它排在"上网"后面（两样都是"它自己去拿外面的东西"那一族）。
+      expect(knownWants, ['ask', 'net', 'camera', 'agent', 'tasks']);
+      expect(knownWants, [wantAsk, wantNet, wantCamera, wantAgent, wantTasks]);
       expect(knownWants.contains(wantStore), false,
           reason: '★ 存储不再是要他点头的一样');
-      // 负向对照：四样都得认得（少一样 ⇒ 那一样就没有开关，而它本来是服务端认的）
-      for (final p in ['ask', 'net', 'agent', 'tasks']) {
+      // 负向对照：五样都得认得（少一样 ⇒ 那一样就没有开关，而它本来是服务端认的）
+      for (final p in ['ask', 'net', 'camera', 'agent', 'tasks']) {
         expect(knownWant(p), true, reason: '★ $p 是服务端白名单里的，界面上必须认得');
       }
       expect(knownWant('something-new'), false);

@@ -132,6 +132,19 @@ void main() {
           reason: '★ `namespace` 是代码的包名，不是装上去的身份 —— 不许跟着 `applicationId` 一起改');
     });
 
+    test('🔴 拍照：清单里必须有 `CAMERA`（不然小程序里那条路根本起不来）', () {
+      // 主人 2026-10-05：*"给小程序增加拍照功能。"*
+      //   Android 上页面调 `getUserMedia` 时，系统先看**这个 app 有没有 CAMERA**，
+      //   再看我们那条 `onPermissionRequest` 放不放行 ⇒ 少了它，门怎么开都没用
+      //   （而且**不会报错**：页面只会拿到一句冷冷的拒）。
+      final m = _read().replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
+      expect(m.contains('android.permission.CAMERA'), isTrue,
+          reason: '★ 少了 CAMERA ⇒ 小程序里那条拍照的路起不来');
+      // ⚠️ 不许顺手把"没摄像头就不给装"写死（有些平板/车机没有镜头）
+      expect(m.contains('android:required="true"'), isFalse,
+          reason: '★ 别把"必须有摄像头"写成 required=true（那会让没镜头的设备装不上）');
+    });
+
     test('🔴 念出来那件事：清单里必须有 TTS 那一条 `<queries>`（不然那颗按钮永远不出现）', () {
       // 主人 2026-10-05：*"播放语音……如果开启，会将对 agent 的回复进行语音转换和实时播报。"*
       //   Android 11 起 app **看不见**没声明的包 —— 系统那个 TTS 引擎也是包 ⇒

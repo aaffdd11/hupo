@@ -194,7 +194,7 @@ const TOOLS = [
          */
         permissions: {
           type: 'array',
-          items: { type: 'string', enum: ['db', 'ask', 'net', 'agent', 'tasks'] },
+          items: { type: 'string', enum: ['db', 'ask', 'net', 'camera', 'agent', 'tasks'] },
           description:
             '这个小程序**另外还要用到的东西**（一次给齐；他要收紧，随时能在设置里改）。\n'
             + '· `db` —— ⚠️ **老的写法，今天不用加**：**存储是天生就有的**'
@@ -210,6 +210,10 @@ const TOOLS = [
             + '加了这一样还要在 `tasks` 里把每一件写清（名字 · 每隔几分钟 · 让它干什么）。'
             + '⚠️ 跑在**他自己的机器上**、**一次只跑一件**、**每天有上限**，而且**结果会回到那一间对话**'
             + '（他看得见）。真要"自己会动"才加。\n'
+            + '· `camera` —— **它要拍一张照片**（扫码、拍一张贴上去、认一认手里的东西）：'
+            + '⚠️ 加了这一样，他第一次打开时会单独问一次"能不能用镜头"；🔴 **他不点头，镜头就是关的**'
+            + '（页面里那句话当场被浏览器/系统拒掉，你要**如实告诉用户"要先允许用镜头"**，'
+            + '不许转圈假装在拍）。真要拍照/扫码才加。\n'
             + '· `net` —— **它要访问几个网站取数据**（比如查天气、查价）：光加这一样还不够，'
             + '**同时要在 `net` 里把域名一个一个写出来**（只写域名本身，不许通配、端口、路径）。'
             + '⚠️ 域名**你自己先去访问确认过**再写进去 —— 他要的是"能拿到数据"，不是"看起来配了"。\n'
@@ -389,7 +393,7 @@ async function callTool(name, args) {
     //   （`apps-socket.js` 的 `ctx.turnInputFor`；2026-09-26 修）。
     // ★ 2026-09-30：**声明的能力要真的带下去**（内部口那两个分支都认 `permissions`）
     const permissions = Array.isArray(args?.permissions)
-      ? args.permissions.filter((p) => p === 'db' || p === 'ask' || p === 'net' || p === 'agent' || p === 'tasks')
+      ? args.permissions.filter((p) => p === 'db' || p === 'ask' || p === 'net' || p === 'camera' || p === 'agent' || p === 'tasks')
       : [];
     // ★ `148` §二：**要访问的站**（白名单）。形状由 `Apps` 那一层严查（这里只搬过去）
     const net = Array.isArray(args?.net) ? args.net.filter((h) => typeof h === 'string') : [];

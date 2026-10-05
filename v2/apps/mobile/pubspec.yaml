@@ -38,6 +38,11 @@ dependencies:
   web_socket_channel: ^3.0.3
   shared_preferences: ^2.5.5
   webview_flutter: ^4.13.1
+  # ★ 2026-10-05：**安卓那一侧**要它（`setOnPlatformPermissionRequest` —— 拍照那道门）。
+  #   ⚠️ 它本来就是 `webview_flutter` 的传递依赖；写成显式的，是为了"用了就摆在明面上"
+  #      （分析器那条 `depend_on_referenced_packages` 也是这个意思）。
+  #   🔴 楼层闸那条"`webview_flutter` 只许从原生那两份进来"照旧成立（只多这一个显式声明）。
+  webview_flutter_android: ^4.12.0
 
 dev_dependencies:
   flutter_test:

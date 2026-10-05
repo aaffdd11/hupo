@@ -115,6 +115,9 @@ Widget buildMiniAppView({
   required String title,
   Future<String> Function(String prompt)? onAsk,
   void Function()? onExit,
+  // ★ **2026-10-05：拍照**（主人：*"给小程序增加拍照功能。"*）——
+  //   授予了才把 iframe 那道门放开（`allow="camera"`），没授予就是一个字都不给。
+  bool allowCamera = false,
 }) {
   // 🔴 **viewId 的算法只有一处**（`models/mini_frame.dart`）——
   //    `MiniAppFrame` 记账用的是同一个函数。
@@ -131,8 +134,11 @@ Widget buildMiniAppView({
         // 🔴 **只给 allow-scripts**：给了 allow-same-origin 就等于把壳的存储和它共享
         ..setAttribute('sandbox', 'allow-scripts')
         ..setAttribute('referrerpolicy', 'no-referrer')
-        // ⚠️ `allow` 一个都不给：摄像头/麦克风/定位这些它一个都用不上
-        ..setAttribute('allow', '');
+        // ★ **2026-10-05：`allow` 那一栏只放"他点头了的那一样"** ——
+        //   授予了 `camera` 才写 `allow="camera"`（页面里 `getUserMedia` 才起得来）；
+        //   没授予就是空串（浏览器自己把镜头挡在门外，与 `net`"关掉⇒名单不进 CSP"同形）。
+        //   ⚠️ 麦克风/定位这些**仍然一个都不给**（小程序用不上）。
+        ..setAttribute('allow', allowCamera ? 'camera' : '');
       f.style.border = 'none';
       // ⚠️ 绝对定位、四边贴 0（比 `width/height:100%` 更硬：不受行内基线/盒模型影响）
       f.style.position = 'absolute';

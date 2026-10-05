@@ -159,7 +159,30 @@ export const NET_PERMISSION = 'net';
  * ⚠️ **钥匙永远不进制品**：制品只拿得到"问一句"这个动作，拿不到钥匙本身，也拿不到别人的钥匙。
  * ⚠️ **`db` 也拿不到文件**：它拿到的只是"替我执行这一条"这个动作（跨库那条路是堵死的）。
  */
-export const PERMISSIONS = Object.freeze(['ask', DB_PERMISSION, NET_PERMISSION, AGENT_PERMISSION, TASKS_PERMISSION]);
+/**
+ * ★ **`camera`：它要拍一张照片**（主人 2026-10-05：*"给小程序增加拍照功能。"*）。
+ *
+ * ── 这一样与别的几样不同：**没有服务端那条口** ──────────────
+ *   前几样都得从制品页**发一个请求**回来（`/ask`、`/db`、`/agent`）；拍照不要 ——
+ *   镜头是**浏览器/WebView 自己**给页面的（`getUserMedia` 或 `<input capture>`）。
+ *   我们这一侧只做两件事：
+ *     ① **声明 ＋ 授予**（跟 `net` 一样：声明了不算，要他点头）；
+ *     ② **照授予放开那一层门**：网页上是 iframe 的 `allow="camera"`，
+ *        安卓上是 WebView 那条 `onPermissionRequest`（见 `mini_runtime_*.dart`）。
+ *   ⚠️ **没授予 ⇒ 门是关的**：页面里 `getUserMedia` 当场被浏览器/WebView 拒掉
+ *     （不是我们替它拦，是那一层自己拦）—— 与 `net` 那条"关掉 ⇒ 名单不进 CSP"同一个形状。
+ *   ⚠️ **我们不许替它拍**：镜头**不经我们的手**，也不落盘、不进聊天记录。
+ */
+export const CAMERA_PERMISSION = 'camera';
+
+export const PERMISSIONS = Object.freeze([
+  'ask',
+  DB_PERMISSION,
+  NET_PERMISSION,
+  AGENT_PERMISSION,
+  TASKS_PERMISSION,
+  CAMERA_PERMISSION,
+]);
 
 /**
  * **跟助手说一句的配额**（数只住这里）。

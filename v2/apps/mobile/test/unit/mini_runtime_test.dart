@@ -207,6 +207,27 @@ void main() {
 //   ⇒ 那一颗必须**也用 DOM 画在 iframe 上面**（`mini_runtime_web.dart`）。
 //   ⚠️ 这里只钉**接线在不在**（DOM 的事在 VM 上跑不起来）——
 //      真机那一下要靠人在浏览器里点。
+test('🔴 拍照那一层门：iframe 的 `allow` 跟着"他授予了"走（没授予就是空串）', () {
+  // 主人 2026-10-05：*"给小程序增加拍照功能。"*
+  //   网页那一侧就是 iframe 的 `allow` 属性：**授予了才写 `camera`**，没授予是空串
+  //   （浏览器自己把镜头挡在门外）—— 与 `net`"关掉 ⇒ 名单不进 CSP"同一个形状。
+  final web = File('lib/widgets/mini_runtime_web.dart').readAsStringSync();
+  expect(web.contains('allowCamera'), isTrue, reason: '★ Web 那一份没有收下"能不能要镜头"这个入参');
+  expect(web.contains("allowCamera ? 'camera' : ''"), isTrue,
+      reason: '★ `allow` 那一栏不是"按授予给"的（写死一个 camera 就等于谁都拿得到）');
+  // 出参那一侧：那一句话只有一处出处（`chat_screen`），而且是拿 **granted** 判的
+  final screen = File('lib/screens/chat_screen.dart').readAsStringSync();
+  final line = screen.split('\n').firstWhere((l) => l.contains('allowCamera:'), orElse: () => '');
+  expect(line.isNotEmpty, isTrue, reason: '找不到 `allowCamera:` 那一处（判据要跟着它走）');
+  expect(line.contains('granted'), isTrue,
+      reason: '★ 那句门不是拿"他授予了没有"判的（拿 `permissions` 判 = 声明了就给，那不是这一套规矩）');
+  // 安卓那一侧也得在：WebView 那条 `onPermissionRequest`
+  final native = File('lib/widgets/mini_runtime_native.dart').readAsStringSync();
+  expect(native.contains('setOnPlatformPermissionRequest'), isTrue,
+      reason: '★ 安卓那一侧没有那道门（网页与安卓是**同一个道理、两处实现**）');
+  expect(native.contains('WebViewPermissionResourceType.camera'), isTrue);
+});
+
 test('🔴 Web 那一颗「退出」是**画在 iframe 上面**的（DOM ＋ z-index），不是 Flutter 画的', () {
   final src = File('lib/widgets/mini_runtime_web.dart').readAsStringSync();
   // ⚠️ **2026-10-05：丙（壳）砍掉了**（主人定：安卓走"聊天在最上"、网页走"再画一遍浮层"）

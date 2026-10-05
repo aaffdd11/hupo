@@ -74,7 +74,16 @@ const String wantAgent = 'agent';
 ///    所以人话要说清"**它会自己动**"，而且设置里关得掉。
 const String wantTasks = 'tasks';
 
-const List<String> knownWants = [wantAsk, wantNet, wantAgent, wantTasks];
+/// ★ **"想拍一张照片"**在协议里那个名字（`permissions: ["camera"]` ·
+/// 主人 2026-10-05：*"给小程序增加拍照功能。"*）。
+///
+/// 🔴 与别的几样不同：**它不要服务端那条口** —— 镜头是浏览器/WebView 自己给页面的
+///    （`getUserMedia` / `<input capture>`）。我们只做两件事：**要他点头**
+///    ＋ **按授予放开那一层门**（网页上 iframe 的 `allow="camera"`、安卓上 WebView 那条
+///    `onPermissionRequest`）。⚠️ 没授予 ⇒ 门是关的，页面里当场被拒。
+const String wantCamera = 'camera';
+
+const List<String> knownWants = [wantAsk, wantNet, wantCamera, wantAgent, wantTasks];
 
 /// 界面上认得这个名字吗。
 bool knownWant(String permission) => knownWants.contains(permission);

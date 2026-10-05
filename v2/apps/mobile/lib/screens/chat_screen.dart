@@ -1092,6 +1092,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         //   旧那一帧的收尾（退订 + 销号）在 `MiniAppFrame` 里（判据 U5）。
         view: MiniAppFrame(
           onExit: () => _backToDesktop(c),
+          // ★ **2026-10-05 拍照**（主人：*"给小程序增加拍照功能。"*）：
+          //   🔴 **他点头了**（这份清单里 `camera` 在"授予了的那几样"里）才放开那一层门
+          //   —— 网页上 iframe 的 `allow="camera"`、安卓上 WebView 那条 `onPermissionRequest`。
+          //   ⚠️ 没授予 ⇒ 门是关的：页面里 `getUserMedia` 当场被浏览器/WebView 拒掉
+          //      （不是我们替它拦）—— 与 `net` 那条"关掉 ⇒ 名单不进 CSP"同一个形状。
+          allowCamera: (mine.granted ?? const <String>[]).contains('camera'),
           // 🔴 **2026-10-01 更正**：这条 URL 原来还带 `pt`/`pb`（让**页面自己**留出
           //   状态栏与聊天条那两条边距，为的是"页面铺满整屏还能不被压住"）。
           //   可**只要平台视图铺满，聊天浮窗就被它盖住** —— 见上面 `bottomInset` 那一段。

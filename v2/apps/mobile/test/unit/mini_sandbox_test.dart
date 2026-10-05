@@ -31,8 +31,13 @@ List<String> sandboxProblems(String src) {
   if (!RegExp(r"setAttribute\('referrerpolicy',\s*'no-referrer'\)").hasMatch(code)) {
     bad.add('没设 referrerpolicy=no-referrer');
   }
-  if (!RegExp(r"setAttribute\('allow',\s*''\)").hasMatch(code)) {
-    bad.add('没把 allow 清空（摄像头/麦克风/定位一个都不该给）');
+  // ★ **2026-10-05 改了这条口径**（主人：*"给小程序增加拍照功能。"*）：
+  //   原来要求 `allow` 是**空串**（一个都不给）；现在**只许按"他授予了"给** ——
+  //   允许的写法**只有一种**：`allowCamera ? 'camera' : ''`。
+  //   🔴 麦克风/定位那些**仍然一个都不许给**（写死一个 camera / 写一长串都算违规）。
+  if (!RegExp(r"setAttribute\('allow',\s*allowCamera\s*\?\s*'camera'\s*:\s*''\)")
+          .hasMatch(code)) {
+    bad.add("没按'授予了才给'设 allow（只许 allowCamera ? 'camera' : ''；麦克风/定位一个都不该给）");
   }
   return bad;
 }
@@ -41,7 +46,7 @@ void main() {
   final path = 'lib/widgets/mini_runtime_web.dart';
   final src = File(path).readAsStringSync();
 
-  test('★ P1-7：沙箱三属性（只给 allow-scripts · 不给 allow-same-origin · 不留 referrer · 一个权限都不给）', () {
+  test('★ P1-7：沙箱三属性（只给 allow-scripts · 不给 allow-same-origin · 不留 referrer · **只按授予给 camera**）', () {
     expect(sandboxProblems(src), isEmpty, reason: '出问题的点：${sandboxProblems(src).join('；')}');
   });
 
@@ -52,8 +57,17 @@ void main() {
     // ② 干脆不设 sandbox ⇒ 必须抓
     final bad2 = src.replaceFirst("setAttribute('sandbox', 'allow-scripts')", '');
     expect(sandboxProblems(bad2).any((m) => m.contains('sandbox')), isTrue);
-    // ③ 把 allow 放开 ⇒ 必须抓
-    final bad3 = src.replaceFirst("setAttribute('allow', '')", "setAttribute('allow', 'camera')");
+    // ③ 把 allow 写死（不看他授予了没有）⇒ 必须抓
+    final bad3 = src.replaceFirst(
+      "setAttribute('allow', allowCamera ? 'camera' : '')",
+      "setAttribute('allow', 'camera')",
+    );
     expect(sandboxProblems(bad3).any((m) => m.contains('allow')), isTrue);
+    // ④ 顺手把麦克风也放进去 ⇒ 必须抓（这一版只给他要的"拍照"）
+    final bad4 = src.replaceFirst(
+      "allowCamera ? 'camera' : ''",
+      "allowCamera ? 'camera; microphone' : ''",
+    );
+    expect(sandboxProblems(bad4).any((m) => m.contains('allow')), isTrue);
   });
 }

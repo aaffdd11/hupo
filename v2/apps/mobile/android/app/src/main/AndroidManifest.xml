@@ -23,6 +23,16 @@
             `test/unit/android_manifest_test.dart`。 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
 
+    <!-- ★ **拍照**（2026-10-05 · 主人：*"给小程序增加拍照功能。"*）。
+         🔴 **它只给"小程序要镜头"那一条路**：WebView 里页面调 `getUserMedia` 时，
+           系统先看这个 app 有没有 CANERA，再看我们那条 `onPermissionRequest` 放不放行
+           （`mini_runtime_native.dart`：**只认摄像头、只认授予过的那个小程序**）。
+         ⚠️ 名字是 `CAMERA`（不是 `RECORD_AUDIO`）—— 两样各管各的：
+           这一样**不碰麦克风**；麦克风那一样是小程序**拿不到**的。
+         ⚠️ `uses-feature` 故意**不写 required="true"**：没摄像头的设备照旧能装。 -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+
     <!-- 🔴 **桌面上显示的就是那个名字**（2026-09-28 改：原来是 Flutter 模板默认的
          `hupo_app` —— 装到手机上，桌面那一格就会写着 "hupo_app"，那是模板的残留、
          不是我们的名字）。判据：`test/unit/android_manifest_test.dart` 钉着它。

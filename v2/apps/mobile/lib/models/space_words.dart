@@ -258,6 +258,10 @@ String grantWantWords(String permission) {
     //   ⚠️ 不许写成"联网 / 网络 / API"那类词：说"连网取数据"是他在生活里能懂的话。
     case 'net':
       return '想连网取数据';
+    // ★ 2026-10-05：**拍照**那一样（协议名 `camera`）。
+    //   ⚠️ 人话就说"拍一张照片" —— 不许写"摄像头 / 相机权限 / Camera"那类词。
+    case 'camera':
+      return '想拍一张照片';
     case 'agent':
       return '想跟它的助手说话';
     // ★ 2026-10-01：**定时任务**那一样（协议名 `tasks`，`08-SPEC.md` §14.1·戊）。

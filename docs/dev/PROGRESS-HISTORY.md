@@ -1056,6 +1056,26 @@ deepseek harness 才行。"* —— **他是对的**：在那之前我验的只�
 
 ---
 
+<a id="b81"></a>
+
+### 九·补81 · 2026-10-05（`#298` 这一轮 · **已重建 · 已核对 · 已重启**）
+
+| 改哪 | 改什么 | 为什么 |
+|---|---|---|
+| 🔴 `docs/handbook/05-DECISIONS.md` | 新增 **`D4.30`**（小程序可以拍一张照片） | 它是 **`strict`**（手册就是判据）⇒ 不重建 ⇒ 下次重启拒绝启动 |
+| 🔴 `docs/handbook/CHANGELOG.md` | 升 **v2.65** | 同上 |
+| （只报不拦） | `src/apps.js` · `src/mcp-apps-server.mjs` | `src/` 是只报不拦 |
+| （不在覆盖里） | 客户端与安卓那几份（`app_grants` / `space_words` / `mini_runtime_*` / `mini_app_frame` / `chat_screen` / `AndroidManifest` / `pubspec`） | `apps/` 不在开机清单里 |
+
+**重建留痕**（`AGENTS.md` §8.1）：**时间** 2026-10-05 13:1x UTC＋8 · **命令** 与 §九·补50 同一条
+（绝对路径 `node` ＋ 口令走 stdin）· **动了哪几个文件**：只有 `/etc/hupo/integrity.json`
+（**222 个文件** · 只读 444 · `root:root`）· **重建后**：`verify-integrity` **✅ 对上了**。
+**重启**：`scripts/restart-core.sh` —— 横幅「完整性 **对上了**」· 产品层
+**`1e584270e5ad → c5f51ebeed73`**（`--verify` 过）· 网页入口指纹 **`6930d1230e07`**
+（源码 `7b11e36878a6`）· 公网 **200** · **新包** `/hupo-chat.apk`（`2.0.0+668` · sha256 `93b51b222538…`）。
+
+---
+
 <a id="b80"></a>
 
 ### 九·补80 · 2026-10-05（`#297` 这一轮 · **已重建 · 已核对 · 已重启**）

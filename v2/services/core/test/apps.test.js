@@ -18,7 +18,7 @@ import nodeOs from 'node:os';
 import nodePath from 'node:path';
 
 import {
-  Apps, AppsError, ICONS, MAX_FILES, MAX_FILE_BYTES, checkRelPath, rootHashOf,
+  Apps, AppsError, ICONS, MAX_FILES, MAX_FILE_BYTES, PERMISSIONS, checkRelPath, rootHashOf,
 } from '../src/apps.js';
 import {
   SIGNED_TTL_MS, appsBaseOf, createAppServer, entryUrl, parseArtifactPath, signEntry, verifyEntry,
@@ -51,6 +51,18 @@ const OK = Object.freeze({
 });
 
 // ── ① 制品库本身 ────────────────────────────────────────────
+
+test('🔴 2026-10-05 拍照：`camera` 进了权限白名单（而没声明过的名字照样拒）', () => {
+  // 主人：*"给小程序增加拍照功能。"*
+  //   这一样与别几样不同：**它没有服务端那条口** —— 镜头是浏览器/WebView 自己给页面的
+  //   （`getUserMedia` / `<input capture>`）。我们这一侧只管两件：**声明 ＋ 授予**，
+  //   以及"按授予放开那一层门"（网页上 iframe 的 `allow`、安卓上 WebView 的权限回调）。
+  assert.ok(PERMISSIONS.includes('camera'), '★ `camera` 没进白名单 ⇒ 助手声明了会被当场拒');
+  // 负向对照：白名单**不是**"来者不拒"
+  assert.ok(!PERMISSIONS.includes('camera2'), '★ 认不出来的名字不许放进来');
+  // 而且它仍然是"声明 ≠ 能用"那一族：白名单只管"认得这个名字"
+  assert.ok(PERMISSIONS.includes('net') && PERMISSIONS.includes('tasks'));
+});
 
 test('建一版：清单字段齐、rootHash 与文件一致', () => {
   const apps = new Apps({ dir: tmp(), sub: 'u1' });
