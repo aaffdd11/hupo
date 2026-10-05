@@ -33,6 +33,7 @@ import '../models/app_tint.dart';
 import '../models/app_words.dart';
 import '../models/desktop_grid.dart';
 import '../models/design.dart' as d;
+import 'system_bar.dart';
 import '../models/space_words.dart';
 import '../models/wallpaper.dart';
 import 'desktop_icon_menu.dart';
@@ -190,7 +191,13 @@ class AppDesktop extends StatelessWidget {
     // ★ 2026-09-29：**壁纸在下面那一层**（`Stack` 底），图标墙与点击照旧在上面。
     //   🔴 `IgnorePointer`：底图**不接任何输入**（Z5 第一条）—— 点空白仍然是
     //      `InkWell` 那一条路，壁纸就算铺满了也抢不走一下点击。
-    return Stack(
+    // 🔴 **顶上那一条（状态栏）由这一层说了算**（2026-10-05 · 主人选"归我们"）：
+    //    桌面是 edge-to-edge 的，那一条露的就是**壁纸** ⇒ 图标深浅跟着**这张壁纸的顶部**走
+    //    （28 张离线量好的，见 `models/wallpaper.dart` 的 `wallpaperDarkTop`）。
+    //    ⚠️ 小程序开着的时候，它那一层盖在这上面 ⇒ **它说了算**（见 `mini_app_host.dart`）。
+    return SystemBarTint(
+      darkBackground: wallpaperTopIsDark(wallpaper),
+      child: Stack(
       children: [
         Positioned.fill(
           child: IgnorePointer(child: _WallpaperBackdrop(wallpaper)),
@@ -298,6 +305,7 @@ class AppDesktop extends StatelessWidget {
       ),
     ),
       ],
+      ),
     );
   }
 }

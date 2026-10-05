@@ -27,6 +27,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
+import 'system_bar.dart';
 import '../models/space_words.dart';
 import 'mini_runtime.dart';
 import 'motion.dart';
@@ -315,37 +316,46 @@ class _MiniAppHostState extends State<MiniAppHost>
               children: [
                 // ★ **右上角那颗「退出」**（`D3.15`）：浮在这一屏内容之上。
                 //   ⚠️ 被聊天盖住时**不画**（他看不见它，画了也点不到）。
-                ClipRRect(
-                key: miniAppSurfaceKey,
-                // 小的时候有点圆角（像一张卡），长到全屏就是直角
-                borderRadius: BorderRadius.circular(face.radius),
-                child: IgnorePointer(
-                  // ★ 前半程画的是"长大中的图标"，页面还没出来 ⇒ 也先别收点击
-                  ignoring: covered || miniAppContentShare(v) < 0.5,
-                  child: Opacity(
-                    // ★ "到一半左右换成页面内容"（按位置进度 ⇒ 打开/收回对称）
-                    opacity: miniAppContentShare(v),
-                    // 🔴 **被盖住只有"压暗"这一件事**（2026-10-01 主人定的）：
-                    //    原来还叠了 `AnimatedScale(0.98)` —— 那 2% 会让四边（尤其左右）
-                    //    露出**桌面**，看起来就是"小程序被压了一下"。**去掉**。
-                    //    （"看得出来被盖住"由这一层压暗 ＋ 聊天浮窗自己负责。）
-                    child: AnimatedOpacity(
-                      opacity: covered ? 0.55 : 1,
-                      duration: d.motionAppOpen,
-                      // ⚠️ 内容**按全屏排版**，只是被上面那块矩形"露出来"
-                      //    ⇒ 看起来就是"从那个图标扩开的"（而不是一个小窗被放大）
-                      child: OverflowBox(
-                        alignment: Alignment.topLeft,
-                        minWidth: screen.width,
-                        maxWidth: screen.width,
-                        minHeight: screen.height,
-                        maxHeight: screen.height,
-                        child: content(),
+                // 🔴 **顶上那一条（状态栏）归壳**（2026-10-05 · 主人选的"归我们"）：
+                //    这一层（那个会长到全屏的面）**盖到 y=0**，而它里面第一层就是
+                //    `content()` 那张**壳的纸**（`Material(color: d.paper)`）——
+                //    所以顶上那一条是**我们自己的纸色**，不是桌面的壁纸。
+                //    ⇒ 图标固定走**深色**（浅底）。小程序页面是第三方 HTML，
+                //      我们读不到它的颜色（也不许注入脚本），所以**不让它铺上去**。
+                SystemBarTint(
+                  darkBackground: false,
+                  child: ClipRRect(
+                  key: miniAppSurfaceKey,
+                  // 小的时候有点圆角（像一张卡），长到全屏就是直角
+                  borderRadius: BorderRadius.circular(face.radius),
+                  child: IgnorePointer(
+                    // ★ 前半程画的是"长大中的图标"，页面还没出来 ⇒ 也先别收点击
+                    ignoring: covered || miniAppContentShare(v) < 0.5,
+                    child: Opacity(
+                      // ★ "到一半左右换成页面内容"（按位置进度 ⇒ 打开/收回对称）
+                      opacity: miniAppContentShare(v),
+                      // 🔴 **被盖住只有"压暗"这一件事**（2026-10-01 主人定的）：
+                      //    原来还叠了 `AnimatedScale(0.98)` —— 那 2% 会让四边（尤其左右）
+                      //    露出**桌面**，看起来就是"小程序被压了一下"。**去掉**。
+                      //    （"看得出来被盖住"由这一层压暗 ＋ 聊天浮窗自己负责。）
+                      child: AnimatedOpacity(
+                        opacity: covered ? 0.55 : 1,
+                        duration: d.motionAppOpen,
+                        // ⚠️ 内容**按全屏排版**，只是被上面那块矩形"露出来"
+                        //    ⇒ 看起来就是"从那个图标扩开的"（而不是一个小窗被放大）
+                        child: OverflowBox(
+                          alignment: Alignment.topLeft,
+                          minWidth: screen.width,
+                          maxWidth: screen.width,
+                          minHeight: screen.height,
+                          maxHeight: screen.height,
+                          child: content(),
+                        ),
                       ),
-                    ),
+                  ),
+                  ),
                 ),
                 ),
-              ),
                 // ★ 上层：**那个图标本身**（按格子比例放大 ⇒ p=0 时和桌面那一格逐像素一致，
                         //   所以"从图标长出来"那一下不会跳）
                 if (widget.icon != null)

@@ -41,6 +41,31 @@ List<String> get wallpaperIds => <String>[
 /// 这一串是不是一个**认得出来**的 id（认不出来 ⇒ 当"不设"，见纪律 ③）。
 bool wallpaperKnown(String id) => wallpaperIds.contains(id);
 
+/// 🔴 **每一张壁纸的"顶上那一条"是深是浅**（2026-10-05 · 主人报的安卓状态栏那件事）。
+///
+/// ── 为什么要它 ────────────────────────────────────────────
+/// 桌面是 **edge-to-edge** 的：顶上那一条**露的就是壁纸**。而系统的时钟 / 信号 /
+/// 电量那几颗图标**不会自己跟着底走** —— 只能由我们告诉系统"这一条是深是浅"
+/// （`SystemUiOverlayStyle.statusBarIconBrightness`）。
+/// ⇒ 不量的话，**深色壁纸上就是深色图标**（看不清）。
+///
+/// ── 怎么量出来的（这一步不许换成"猜"）────────────────────
+/// 把每张图的**顶部 6%**（状态栏那一条）缩成 32×4，按 WCAG 的相对亮度公式取平均，
+/// 亮度过半算浅底、不过半算深底。实测：**28 张里 19 张是深底** ⇒ 不是小概率。
+/// ⚠️ 桌面上壁纸是 `cover`：现有这 28 张**都比屏幕更宽**（竖图）⇒ 只会左右裁，
+///    顶上看到的就是图片顶部那一行 —— 所以"量图片顶部"是对的。
+///
+/// ⚠️ 以后往库里加图，**这一格要跟着量一次**（判据 `test/unit/wallpaper_top_test.dart`
+///    会数：认得出来的 id 一个都不许漏）。
+const Set<String> wallpaperDarkTop = <String>{
+  'wp-03', 'wp-05', 'wp-07', 'wp-08', 'wp-10', 'wp-11', 'wp-12', 'wp-14',
+  'wp-16', 'wp-17', 'wp-18', 'wp-19', 'wp-21', 'wp-22', 'wp-23', 'wp-24',
+  'wp-25', 'wp-26', 'wp-28',
+};
+
+/// 这一张的顶上那一条是不是深色（认不出来的 id、以及"不设" ⇒ **浅** —— 默认那张暖纸是浅的）。
+bool wallpaperTopIsDark(String id) => wallpaperDarkTop.contains(id);
+
 /// 读盘那个字符串 ⇒ 一个认得的 id（认不出来就是 [wallpaperNone]）。
 String wallpaperOf(String? raw) {
   final s = (raw ?? '').trim();

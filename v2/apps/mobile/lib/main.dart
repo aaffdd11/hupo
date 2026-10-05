@@ -29,6 +29,7 @@ import 'services/hearing_native.dart';
 import 'services/speech_native.dart';
 import 'services/recorder_native.dart';
 import 'widgets/mini_native_boot.dart';
+import 'widgets/system_bar.dart';
 import 'services/token_store.dart';
 
 void main() {
@@ -245,6 +246,16 @@ class _HupoAppState extends State<HupoApp> {
     return MaterialApp(
       title: appName,
       debugShowCheckedModeBanner: false,
+      // 🔴 **顶上那一条（状态栏）的默认值 = 壳那张纸（浅）⇒ 深色图标**（2026-10-05）。
+      //    默认给出来是必要的：以前**没有任何一行代码设它** ⇒ 图标颜色一直由系统主题决定，
+      //    深色壁纸上就会出现深色图标（看不清）。
+      //    ⚠️ 这一个在**最底下**：桌面那一层与小程序那一层都盖在它上面，
+      //      由它们各自说了算（`AppDesktop` / `MiniAppHost`）——
+      //      留在这儿管的是登录页 / 首页 / 等待屏这些"没有别的东西盖顶"的屏。
+      builder: (context, child) => SystemBarTint(
+        darkBackground: false,
+        child: child ?? const SizedBox.shrink(),
+      ),
       // ★ **全站一套外观**（契约 `docs/dev/49-STYLE.md`）：数值只有 `models/design.dart`
       //   一处出处，这里只是把它拼成 `ThemeData`。改那六个颜色/三档圆角，
       //   **首页 · 登录页 · 配置页 · 聊天页一起跟着变**。
