@@ -1056,6 +1056,27 @@ deepseek harness 才行。"* —— **他是对的**：在那之前我验的只�
 
 ---
 
+<a id="b75"></a>
+
+### 九·补75 · 2026-10-05（`#292` 这一轮 · **已重建 · 已核对 · 已重启**）
+
+| 改哪 | 改什么 | 为什么 |
+|---|---|---|
+| 🔴 `docs/handbook/05-DECISIONS.md` | E 组新增 **`D2.5`**（它自己怎么说话） | 它是 **`strict`**（手册就是判据）⇒ 不重建 ⇒ 下次重启拒绝启动 |
+| 🔴 `docs/handbook/CHANGELOG.md` | 升 **v2.59** | 同上 |
+| 🔴 `hupo-persona.yml` | 「说话」第 4 条 ＋ 两张清单 | 它**也是 strict**（每开一个新 agent 就喂一遍）—— 这一批真正改的就是它 |
+| （只报不拦） | `test/persona.test.js`（+1 条判据） | `test/` 不在清单覆盖里 |
+
+**重建留痕**（`AGENTS.md` §8.1）：**时间** 2026-10-05 08:4x UTC＋8 · **命令** 与 §九·补50 同一条
+（绝对路径 `node` ＋ 口令走 stdin）· **动了哪几个文件**：只有 `/etc/hupo/integrity.json`
+（**222 个文件** · 只读 444 · `root:root`）· **重建后**：`verify-integrity` **✅ 对上了**。
+**重启**：`scripts/restart-core.sh` —— 横幅「完整性 **对上了**」· 产品层
+**`8a055f4b8c91 → 1e584270e5ad`**（`--verify` 过）· 三台盒子 `check-tenant-code-drift` **✅**。
+🔴 **人格真的进了模型上下文**：`scripts/check-persona.sh`（起真 dsh、抓 `system/message` 那一帧）**✅ 通过**
+—— 这一条比"文件改了"重要：patch 写错层 / 键名写错一个字都会**静默丢掉**，而 agent 照样起、照样答。
+
+---
+
 <a id="b74"></a>
 
 ### 九·补74 · 2026-10-05（`#291` 这一轮 · **已重建 · 已核对 · 已重启**）
