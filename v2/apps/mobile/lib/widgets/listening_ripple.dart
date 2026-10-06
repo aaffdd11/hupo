@@ -105,13 +105,20 @@ class ListeningRipplePainter extends CustomPainter {
   final double? t;
 
   /// 一圈的粗细。
-  static const double ringWidth = 2;
+  ///
+  /// ★ **2026-10-07 主人**：*"我希望这个一圈圈波纹变得更明显一点，它可以扩散的更大一点。"*
+  static const double ringWidth = 2.6;
 
-  /// 最多荡出半径的多少（1.0 = 正好贴到圆圈边上）。
-  static const double spread = 0.42;
+  /// 最多荡出半径的多少（0 = 贴着圆圈边，1 = 再往外一个半径）。
+  ///
+  /// ★ 改前是 0.42（几乎看不出在荡）；现在 **0.95**（荡到将近两倍大）。
+  static const double spread = 0.95;
 
-  /// 最亮那一刻的不透明度（淡 —— 它只是"在动"，不该抢戏）。
-  static const double peak = 0.30;
+  /// 最亮那一刻的不透明度（淡 —— 它只说"在动"，不该抢戏；但也不该看不见）。
+  static const double peak = 0.46;
+
+  /// **同时荡几条**（错开均分一轮）—— 三条比两条更像"一圈一圈接着出去"。
+  static const int rings = 3;
 
   /// **这一帧该画哪两个圈**（**纯的** —— 判据直接量它，不用去 mock 一块画布）。
   ///
@@ -119,9 +126,9 @@ class ListeningRipplePainter extends CustomPainter {
   /// @param base 圆圈那一半的半径
   static List<({double r, double opacity})> ringsFor(double t, double base) {
     final out = <({double r, double opacity})>[];
-    // 两条错开半轮，看起来是"一圈一圈接着荡出去"。
-    for (final phase in const <double>[0, 0.5]) {
-      final p = (t + phase) % 1.0;
+    // 几条错开均分一轮，看起来是"一圈一圈接着荡出去"。
+    for (var i = 0; i < rings; i += 1) {
+      final p = (t + i / rings) % 1.0;
       out.add((
         r: base * (1 + spread * p),
         opacity: peak * (1 - p) * (1 - p),

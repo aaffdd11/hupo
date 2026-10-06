@@ -131,6 +131,14 @@ Future<void> _say(WidgetTester tester, _Rig r, {required String words}) async {
 /// 🔴 2026-10-07：字不再画在气泡上，而是**长在输入框里** ⇒ 读的是那个框的 controller
 ///    （`EditableText` 才是真正拿字的那一层）。空的时候那一格一个像素都不画。
 String _barText(WidgetTester tester) {
+  // 🔴 2026-10-07：说话时那一格是一张**不会滚的卡片**（从头显示），不是输入框 ——
+  //    判据先读它。
+  final card = find.byKey(voiceBarLiveKey);
+  if (card.evaluate().isNotEmpty) {
+    return tester
+        .widget<Text>(find.descendant(of: card, matching: find.byType(Text)).first)
+        .data ?? '';
+  }
   final f = find.descendant(of: find.byType(VoiceBar), matching: find.byType(EditableText));
   if (f.evaluate().isNotEmpty) return tester.widget<EditableText>(f.first).controller.text;
   return tester

@@ -149,7 +149,7 @@ const Duration recBlinkPeriod = Duration(milliseconds: 800);
 ///
 /// ⚠️ 它**只说"在听"** —— 聊天这一条没量电平（装成"跟着他声音起伏"就是骗人）。
 /// ⚠️ 同样是**颜色/画在圈外**，圆圈的大小 / 位置 / 命中区一个像素都不动。
-const Duration listeningRipplePeriod = Duration(milliseconds: 1600);
+const Duration listeningRipplePeriod = Duration(milliseconds: 1500);
 
 /// ★ **2026-10-05：录音圆圈右边那两颗**（展开聊天 / 播放语音）。
 ///

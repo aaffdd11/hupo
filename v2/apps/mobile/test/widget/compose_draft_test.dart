@@ -126,8 +126,10 @@ void main() {
     expect(s.said.length, 1, reason: '★ 那句话没发出去');
     expect(s.c.composeDraft, isNull,
         reason: '★ 发出去了那份草稿还留着 ⇒ 下次回来又冒出一句他已经发过的话');
-    expect(tester.widget<TextField>(find.byKey(voiceBarTypeKey)).controller!.text, isEmpty,
-        reason: '★ 发出去之后那一格还留着那句话（它已经是"说过的话"了）');
+    // 🔴 2026-10-07：发出去之后那一格**整个收起来**（不是留一个空框）——
+    //    "空的时候一个像素都不画"那条规矩在这一格上也成立。
+    expect(find.byKey(voiceBarTypeKey), findsNothing,
+        reason: '★ 发出去之后那一格还留着（它已经是"说过的话"了）');
     expect(find.text('帮我把这周的工时记一下'), findsWidgets,
         reason: '★ 那句话该进了时间线（屏幕上看得见）');
   });

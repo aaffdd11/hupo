@@ -69,6 +69,14 @@ String _fieldText(WidgetTester tester) {
   return tester.widget<EditableText>(f.first).controller.text;
 }
 
+/// **这一格现在给他看的那份字**：说话时是那张**卡片**（`voiceBarLiveKey`），
+/// 编辑时才是真输入框。
+String _shownText(WidgetTester tester) {
+  final card = find.byKey(voiceBarLiveKey);
+  if (card.evaluate().isNotEmpty) return tester.widget<Text>(find.descendant(of: card, matching: find.byType(Text)).first).data ?? '';
+  return _fieldText(tester);
+}
+
 /// 那颗圆圈这一帧的底色（拿的是**它自己**那个 `Material`，不是外面那层）。
 Color _circleColor(WidgetTester tester) {
   final m = tester.widget<Material>(
@@ -123,9 +131,26 @@ void main() {
     expect(_circleColor(tester), d.card, reason: '★ 那颗圆圈没有白底（主人 2026-10-06 要的）');
     expect(_circleGlyph(tester).color, d.ink, reason: '★ 圆圈里的图形不是墨色（白底之上该用墨色）');
 
+    // 🔴 **那一颗看得见的圈必须撑满它那一格**（2026-10-07 主人报"那个圈变小了、很丑"）：
+    //    我当时把它包进一层 `Stack`，而 `Stack` 默认 `loose` ⇒ 里面那层 `Material`
+    //    缩到**图标那么大**（30）⇒ 圈小了。判据直接量"看得见那一层"的尺寸。
+    final slot = tester.getSize(find.byKey(voiceBarCircleKey));
+    final face = tester.getSize(
+      find.descendant(of: find.byKey(voiceBarCircleKey), matching: find.byType(Material)).first,
+    );
+    expect(face, slot, reason: '★ 看得见那一颗圈没有撑满那一格（$face ≠ $slot）—— 圈变小了');
+    expect(slot.width, d.voiceCircleBox, reason: '★ 那一格本身也该是设计里那个尺寸');
+
     // 负向对照：在录的时候**整颗变琥珀**（那一圈还在）
     await _pump(tester, recording: true, settle: false);
     expect(_circleRing(tester).color, d.accent);
+    expect(
+      tester.getSize(
+        find.descendant(of: find.byKey(voiceBarCircleKey), matching: find.byType(Material)).first,
+      ),
+      slot,
+      reason: '★ 在录那一档也不许变小',
+    );
   });
 
   testWidgets('③ 🔴 按停（收尾中）⇒ **当场**还是他那份字，而且不闪了', (tester) async {
@@ -133,7 +158,7 @@ void main() {
     //   ⇒ 这一档是"按下去那一刻"的样子：字还在、底色不再是"在录"那个色。
     final w = _wrapping();
     await _pump(tester, text: w.text, recording: w.recording, wrapping: w.wrapping);
-    expect(_fieldText(tester), '帮我看看天气',
+    expect(_shownText(tester), '帮我看看天气',
         reason: '★ 收尾中该看见**他刚说的那份字**（不是把它换成一句提示）');
     expect(_circleColor(tester), d.card,
         reason: '★ 已经不在录了 ⇒ 不许还画着"在录"那个底（该回到白底）');
@@ -198,30 +223,45 @@ void main() {
     expect(_circleColor(tester), before, reason: '★ 关着开关它还在动');
   });
 
-  testWidgets('⑥ 🔴 那份字**原样在框里**（能改；没有"还没校正"那条线）', (tester) async {
-    // 🔴 **2026-10-07 推倒重来**：主人要的是"stream 回来的文字输入到文本框" ⇒
-    //   那一格是一个**真输入框**：字长在里面，他也能点进去改。
+  testWidgets('⑥ 🔴 说话时那一格**从头显示**（一张不滚的卡片），点一下才变成能改的输入框', (tester) async {
+    // 🔴 2026-10-07 主人：*"所谓断句就是说着说着，转文字的早期的那部分内容在输入框里没了。"*
+    //   量出来的读数：那个真输入框只有 **4 行高**、光标又在末尾 ⇒ 字一多就把
+    //   **前面那几行卷出框外**（字一个没丢，但他看不见了）。
+    //   ⇒ 说话时给一张**不会滚**的卡片（从头显示、末尾省略号）；**点一下**才换成真输入框。
     TextDecoration? decoOf(WidgetTester t) {
       final f = find.byType(EditableText);
       if (f.evaluate().isEmpty) return null;
       return tester.widget<EditableText>(f.first).style.decoration;
     }
 
-    // ① 在听（字还在长）
-    await _pump(tester, text: '帮我看一下明天北京的天气予报', recording: true);
-    expect(_fieldText(tester), '帮我看一下明天北京的天气予报',
-        reason: '★ 他说的那份字要真的长在框里');
-    expect(decoOf(tester), anyOf(isNull, TextDecoration.none),
-        reason: '★ 没有"还没校正"那条线了（第二步已经删掉）');
+    // ① 在听（字还在长）⇒ **卡片**，而且里面那份字从头开始
+    await _pump(tester, text: '第一句在这里。第二句在这里。', recording: true);
+    expect(find.byKey(voiceBarLiveKey), findsOneWidget, reason: '★ 说话时该是那张卡片');
+    expect(find.byType(EditableText), findsNothing,
+        reason: '★ 说话时不许摆那个会滚的输入框（它就是"早期那部分看不见"的来源）');
+    expect(_shownText(tester), '第一句在这里。第二句在这里。',
+        reason: '★ 他说的那份字要真的长在那一格里');
 
-    // ② 收尾中（他按了停）⇒ 字**一个都不少**
-    await _pump(tester, text: '帮我看一下明天北京的天气予报', recording: true, wrapping: true);
-    expect(_fieldText(tester), '帮我看一下明天北京的天气予报',
-        reason: '★ 收尾中那份字不许消失');
+    // ② 卡片**不会滚**（没有可滚的东西）+ 长了就**末尾**省略（开头永远在）
+    // 🔴 它是个**真按钮**（可访问性那道硬闸：自己写的点击区必须被"命中区 ≥44"扫到）
+    expect(find.byType(TextButton), findsWidgets, reason: '★ 那一格该是真按钮，不是裸的点击区');
+    final cardBox = tester.getRect(find.byType(TextButton).first);
+    expect(cardBox.height, greaterThanOrEqualTo(44), reason: '★ 那张卡片太矮 ⇒ 不好点');
+    final p = tester.widget<Text>(find.descendant(of: find.byKey(voiceBarLiveKey), matching: find.byType(Text)).first);
+    expect(p.maxLines, isNotNull, reason: '★ 卡片要有限行数（不然会顶掉半屏）');
+    expect(p.overflow, TextOverflow.ellipsis, reason: '★ 必须是**末尾**省略：开头那几句不许被切掉');
 
-    // ③ **空的时候一个像素都不画**（不摆空框、不摆提示）
+    // ③ **点一下** ⇒ 换成真输入框（能改），而且**一个字都不丢**
+    await tester.tap(find.byKey(voiceBarLiveKey));
+    await tester.pumpAndSettle();
+    expect(find.byType(EditableText), findsOneWidget, reason: '★ 点它就该能改');
+    expect(_fieldText(tester), '第一句在这里。第二句在这里。', reason: '★ 换过去时一个字都不许丢');
+    expect(decoOf(tester), anyOf(isNull, TextDecoration.none));
+
+    // ④ **空的时候一个像素都不画**（不摆空框、不摆提示）
     await _pump(tester);
     expect(find.byType(EditableText), findsNothing, reason: '★ 空的时候不该摆一个空框在那儿');
+    expect(find.byKey(voiceBarLiveKey), findsNothing);
   });
 
   testWidgets('⑦ 🔴 框里那份字**跟用户那条字号轴**（12/17 都跟着变）', (tester) async {
@@ -249,6 +289,14 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      // 说话时是那张卡片 ⇒ 量卡片里那份字的字号（它也要跟那条轴）
+      final card = find.byKey(voiceBarLiveKey);
+      if (card.evaluate().isNotEmpty) {
+        return tester
+            .widget<Text>(find.descendant(of: card, matching: find.byType(Text)).first)
+            .style!
+            .fontSize!;
+      }
       return tester.widget<EditableText>(find.byType(EditableText)).style.fontSize!;
     }
 
@@ -300,9 +348,9 @@ void main() {
   testWidgets('⑨·补2 🔴 那一圈涟漪的**算法**（纯函数：喂 t 就有东西、越荡越大越淡、一轮接上）', (tester) async {
     const base = 32.0;
     // ① t = null（不画）那一档在 painter 里（上面那条量的）
-    // ② 每一帧两条圈：一条在外面、一条在里面（错开半轮）
+    // ② 每一帧那几条圈：一条贴着边、其余在外面（错开均分一轮）
     final a = ListeningRipplePainter.ringsFor(0, base);
-    expect(a.length, 2, reason: '★ 该是"一圈一圈接着荡"（两条错开）');
+    expect(a.length, ListeningRipplePainter.rings, reason: '★ 该是"一圈一圈接着荡"（错开几条）');
     expect(a[0].r, closeTo(base, 0.001), reason: '★ t=0 时里圈正好贴着圆圈边');
     expect(a[1].r, greaterThan(a[0].r), reason: '★ 第二条在外圈（错开半轮）');
     // ③ 同一个圈：t 越大 ⇒ 越往外、越淡
@@ -313,13 +361,17 @@ void main() {
     final c = ListeningRipplePainter.ringsFor(1, base);
     expect(c[0].r, closeTo(a[0].r, 0.001), reason: '★ 一轮荡完要接回起点（不然每轮跳一下）');
     expect(c[0].opacity, closeTo(a[0].opacity, 0.001));
-    // ⑤ 永远不许荡到看不见的地方去（幅度有上限）
+    // ⑤ **荡得够大**（主人要的"扩散的更大一点"）而且不许荡到看不见的地方去
+    var maxR = 0.0;
     for (var i = 0; i <= 10; i++) {
       for (final r in ListeningRipplePainter.ringsFor(i / 10, base)) {
-        expect(r.r, lessThan(base * 1.6), reason: '★ 荡得太远就该看不见了（但它还在画）');
+        maxR = r.r > maxR ? r.r : maxR;
+        expect(r.r, lessThan(base * 2.1), reason: '★ 荡得太远就该看不见了（但它还在画）');
         expect(r.opacity, greaterThanOrEqualTo(0));
       }
     }
+    expect(maxR, greaterThan(base * 1.7),
+        reason: '★ 最大那一圈要能荡到将近两倍大（改前只到 1.42 倍，几乎看不出在荡）');
   });
 
   testWidgets('⑩ 🔴 那句"没听清"**在按钮左边、白底**（不许挂在上方）', (tester) async {

@@ -81,6 +81,15 @@ class _VoiceBarState extends State<VoiceBar> {
   /// **打字那条退路**要不要摊开（默认不摊 —— 空白时屏幕上一个字都不许有）。
   bool _typing = false;
 
+  /// 🔴 **现在这一格是"看"还是"改"**（2026-10-07 主人：*"所谓断句就是说着说着，
+  ///   转文字的早期的那部分内容在输入框里没了。"*）。
+  ///
+  /// 量的读数：那个框只有 **4 行高**（`maxLines: 4`），字一多、光标又在末尾
+  /// ⇒ 它会**把前面那几行卷出框外**（他看见的就是"早期那部分没了"；字其实一个没丢）。
+  /// ⇒ 说话的时候**固定给他看开头**（一张**不会滚**的卡片，末尾省略号）；
+  ///   **点一下**它才变成真输入框（跟着光标走 —— 那是他要改字的时候）。
+  bool _editing = false;
+
   @override
   void initState() {
     super.initState();
@@ -90,6 +99,14 @@ class _VoiceBarState extends State<VoiceBar> {
   @override
   void didUpdateWidget(covariant VoiceBar old) {
     super.didUpdateWidget(old);
+    // 每一场**从"看"那一档开始**（说的时候不用他先点一下）
+    if (widget.recording && !old.recording) _editing = false;
+    // 那一份字发出去（清空）之后 ⇒ **回到"什么都没画"**（不许留一个空框在那儿）；
+    // ⚠️ 只在"原来有字"的时候收：他按「打字」摊开的那一格（本来就没字）不许被收掉。
+    if (!widget.recording && widget.text.isEmpty && old.text.isNotEmpty) {
+      _editing = false;
+      _typing = false;
+    }
     // 🔴 外面那份字变了（语音在长字 / 那份草稿异步读回来了）⇒ 写进框里。
     //    ⚠️ **只在与框里真的不一样时才写**：他每敲一下，控制器都会把同一个字
     //       再送回来一次 —— 无脑写会把光标每一下都推到末尾（打字就没法打了）。
@@ -145,7 +162,12 @@ class _VoiceBarState extends State<VoiceBar> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    if (_showField) Flexible(child: _field(look, hint)),
+                    if (_showField)
+                      Flexible(
+                        child: (widget.recording && !_editing)
+                            ? _liveCard(look, hint)
+                            : _field(look, hint),
+                      ),
                     if (widget.note.trim().isNotEmpty) ...[
                       if (_showField) const SizedBox(width: d.gapS),
                       Flexible(child: _noteCard(look)),
@@ -164,6 +186,49 @@ class _VoiceBarState extends State<VoiceBar> {
           if (widget.hintAbove != null)
             Positioned(left: 0, right: 0, bottom: d.barButtonBox, child: widget.hintAbove!),
         ],
+      ),
+    );
+  }
+
+  /// **说话时那一份字**：一张**不会滚**的卡片 —— **从头显示**，长了就末尾省略。
+  ///
+  /// 🔴 为什么不用那个真输入框显示：它 4 行高、又跟着光标走 ⇒ 字一多就把**前面那几行
+  ///    卷出框外**（主人报的"早期那部分内容在输入框里没了"就是这个）。
+  ///    ⇒ 这一档**只负责看**；**点一下**才换成 [TextEditingController] 那个真输入框。
+  Widget _liveCard(DshLook look, String hint) {
+    final said = widget.text.trim();
+    // ⚠️ **用真按钮，不用裸的 `GestureDetector`**（可访问性那道硬闸钉着这件事：
+    //    自己写的点击区必须**被"命中区 ≥44"那条扫描覆盖**）⇒ `TextButton` ＋ 最小 44 高。
+    return TextButton(
+      // 点它 = "我要改" ⇒ 换成真输入框（光标放到末尾，好接着打）
+      onPressed: () => setState(() {
+        _editing = true;
+        _typing = true;
+        _put(widget.text);
+      }),
+      style: TextButton.styleFrom(
+        padding: EdgeInsets.zero,
+        minimumSize: const Size(0, 44),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(d.radiusField)),
+      ),
+      child: Container(
+        key: voiceBarLiveKey,
+        constraints: const BoxConstraints(maxWidth: 420),
+        padding: const EdgeInsets.symmetric(horizontal: d.gapM, vertical: d.gapS),
+        decoration: BoxDecoration(
+          color: d.card,
+          borderRadius: BorderRadius.circular(d.radiusField),
+          border: Border.all(color: d.line),
+        ),
+        child: Text(
+          said.isEmpty ? hint : said,
+          textAlign: TextAlign.right,
+          maxLines: 6,
+          // 🔴 **末尾**省略（不是开头）：他要在这一格里看到"我说的前几句都在"
+          overflow: TextOverflow.ellipsis,
+          style: dshTextStyle(look.content, said.isEmpty ? d.muted : d.ink),
+        ),
       ),
     );
   }
@@ -240,6 +305,11 @@ class _VoiceBarState extends State<VoiceBar> {
           // ★ **2026-10-07**：在听的时候，圆圈外面**一圈一圈荡开**（只说"在听"；
           //   尺寸/位置/命中区一个像素都不动 —— 它是画在圈外的一层，`Clip.none`）。
           child: Stack(
+            // 🔴 **`fit: expand` 不能少**（2026-10-07 主人：*"语音按钮的那个圈也变小了，
+            //   这个变得非常的丑"*）：`Stack` 默认是 `loose` ⇒ 里面那层 `Material`
+            //   会**缩到图标那么大**（30），那颗圈就不再是 64 —— 这是我上一刀改坏的地方。
+            //   ⇒ 撑满这一格（64×64），与改之前一个像素都不差。
+            fit: StackFit.expand,
             clipBehavior: Clip.none,
             alignment: Alignment.center,
             children: [
@@ -288,6 +358,9 @@ const Key voiceBarCircleKey = ValueKey<String>('voice-bar-circle');
 
 /// 那格输入框（打字那条退路，也是语音的字落下来的地方）。
 const Key voiceBarTypeKey = ValueKey<String>('voice-bar-type');
+
+/// **说话时那一份字**那张卡片（判据量它：从头显示、不会滚）。
+const Key voiceBarLiveKey = ValueKey<String>('voice-bar-live');
 
 /// **如实说的那一句**（没听清 / 麦没打开…）那张白底卡片（判据量它的位置与底色）。
 const Key voiceBarNoteKey = ValueKey<String>('voice-bar-note');
