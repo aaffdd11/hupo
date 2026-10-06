@@ -484,24 +484,15 @@ class ChatFloaterState extends State<ChatFloater> {
         width: d.voiceAuxFaceW,
         height: d.voiceAuxFaceH,
         decoration: BoxDecoration(
-          // ★ 底色（主人 2026-10-05 要的"要底色"；2026-10-06 定"边框色 + 80% 透明"）：
-          //   两层 —— **纸色 @80%**（下层，理由见 `design.dart` 的 `accentFace` 那段：
-          //   没有它，深色壁纸下墨色图形会看不见）＋ **琥珀 @20%**（上层，见下面那个孩子）。
-          //   开着时整块变琥珀 —— 状态一眼看得出。
-          color: lit ? d.accent : d.faceBase,
+          // ★ **内部透明**（主人 2026-10-06：*"不是边框透明，是按钮内部底色透明"*）：
+          //   平时**不铺任何底**，只剩那一圈实色的琥珀；开着时整块才变琥珀（状态一眼看得出）。
+          color: lit ? d.accent : const Color(0x00000000),
           borderRadius: BorderRadius.circular(d.voiceAuxRadius),
           // 🔴 **风格统一**（主人 2026-10-05）：与录音那颗圆圈**同一圈琥珀色、同一个粗细**
           //   —— 三颗长得是同一套东西，只是形状（圆 / 长方）不同。
           border: Border.all(color: d.accent, width: d.voiceCircleRing),
         ),
-        child: DecoratedBox(
-          // 上层那 20% 的琥珀（开着时整块已经是琥珀了 ⇒ 不再叠）
-          decoration: BoxDecoration(
-            color: lit ? const Color(0x00000000) : d.accentFace,
-            borderRadius: BorderRadius.circular(d.voiceAuxRadius),
-          ),
-          child: Center(child: child),
-        ),
+        child: Center(child: child),
       );
 
   /// **上面那一颗**：收起档是「展开」（箭头朝上），展开档是「收起」（箭头朝下）。
@@ -530,11 +521,10 @@ class ChatFloaterState extends State<ChatFloater> {
           lit: false,
           child: CustomPaint(
             size: const Size(22, 6),
-            // ★ 2026-10-06 主人：*「颜色风格要统一一下」* ⇒ 三颗的图形**同一个墨色**。
-            //   ⚠️ 原来这里与下面那颗喇叭都是 `labelTertiary`（#81858C）—— 压在新的
-            //     **那个浅色底**（`accentFace`）上只有 **2.85:1**（灰得发虚，放大看就是"洗过"）。
-            //     换 `d.ink` ⇒ **11.8:1**，与录音那颗图形一个色。
-            painter: _FlatChevron(color: d.ink, up: collapsed),
+            // ★ 2026-10-06 主人：*「颜色风格要统一一下」* ⇒ 三颗的图形**同一个色**：
+            //   就是**那一圈琥珀**（内部是透明的 ⇒ 底下可能是任何壁纸；这个色压在黑到白
+            //   之间任何底上都有 ≥4.3:1，而墨色压在深色壁纸上会看不见）。
+            painter: _FlatChevron(color: d.accent, up: collapsed),
           ),
         ),
         ),
@@ -580,9 +570,8 @@ class ChatFloaterState extends State<ChatFloater> {
               child: Icon(
                 on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
                 size: d.voiceAuxIcon,
-                // ★ 同上：关着的时候也是**墨色**（"关"这件事已经由底色与那条斜杠说清了，
-                //   而 `labelTertiary` 压在这个底上只有 2.85:1 —— 发虚）
-                color: on ? d.card : d.ink,
+                // ★ 同上：关着的时候与那一圈**同一个琥珀色**（理由同上面那颗箭头）
+                color: on ? d.card : d.accent,
               ),
             ),
             ),

@@ -199,25 +199,14 @@ void main() {
       ).decoration! as BoxDecoration;
       expect(box.border!.top.color, d.accent, reason: '★ 那一圈的顔色与录音那颗不一致');
       expect(box.border!.top.width, d.voiceCircleRing, reason: '★ 那一圈的粗细与录音那颗不一致');
-      // ★ **2026-10-06**（主人：*"颜色风格要统一一下"* ⇒ 三颗**同一个底**，
-      //   后来又定成 *"我们就用边框颜色加80%透明度"* ⇒ 底是**两层**：
-      //   下层 `faceBase`（纸 @80%，保证深色壁纸下图形看得见）＋ 上层 `accentFace`（琥珀 @20%）。
-      expect(box.color, d.faceBase, reason: '★ 那层纸不在（深色壁纸下图形会看不见）');
-      final wash = tester
-          .widgetList<DecoratedBox>(
-            find.descendant(of: find.byKey(k), matching: find.byType(DecoratedBox)),
-          )
-          .map((b) => b.decoration)
-          .whereType<BoxDecoration>()
-          .map((dec) => dec.color)
-          .toList();
-      expect(wash.contains(d.accentFace), true,
-          reason: '★ 与录音那颗不一致（三颗该是"边框色 + 80% 透明"那一层）');
-      expect(box.color, isNot(d.card), reason: '★ 又变回白底了（主人 2026-10-06 定的是边框色的透明版）');
+      // ★ **2026-10-06 定案**（主人：*"不是边框透明，是按钮内部底色透明"*）：
+      //   三颗**内部透明**（一个像素的底都不铺）＋ **同一圈实色琥珀**；图形与那一圈同色。
+      expect(box.color!.a, 0.0, reason: '★ 那一列的面还有底色 —— 主人要的是"内部透明"');
+      expect(box.border!.top.color, d.accent, reason: '★ 那一圈的顔色与录音那颗不一致');
+      expect(box.border!.top.color.a, 1.0, reason: '★ 那一圈是半透明的 ⇒ 界线会跟着壁纸糊掉');
     }
-    // ⑤ **图形也是同一个墨色**（"颜色风格统一"的另一半）：
-    //   ⚠️ 那两颗原来走 `labelTertiary`（#81858C）—— 压在这个底上只有 **2.85:1**
-    //     （发虚）；录音那颗的图形一直是 `d.ink`（11.8:1）。
+    // ⑤ **图形也是同一个色**（"颜色风格统一"的另一半）：就是那一圈**琥珀**
+    //   （内部透明 ⇒ 底下可能是任何壁纸；墨色压在深色壁纸上会看不见）。
     // ⚠️ 那一格里有好几层 `CustomPaint`（边框也画在一层上）⇒ 点名我们自己那个 painter
     final chevron = tester
         .widgetList<CustomPaint>(
@@ -225,10 +214,10 @@ void main() {
         )
         .firstWhere((w) => '${w.painter.runtimeType}'.contains('FlatChevron'))
         .painter;
-    expect((chevron as dynamic).color, d.ink, reason: '★ 那颗箭头的图形色与录音那颗不一致（该是墨色）');
+    expect((chevron as dynamic).color, d.accent, reason: '★ 那颗箭头的图形色与那一圈不一致（该是同色）');
     final speaker = tester.widget<Icon>(
       find.descendant(of: find.byKey(chatSpeakKey), matching: find.byType(Icon)).first,
     );
-    expect(speaker.color, d.ink, reason: '★ 那颗喇叭的图形色与录音那颗不一致（关着也是墨色）');
+    expect(speaker.color, d.accent, reason: '★ 那颗喇叭的图形色与那一圈不一致（关着也是同色）');
   });
 }

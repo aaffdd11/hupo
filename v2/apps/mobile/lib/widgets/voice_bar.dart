@@ -234,33 +234,25 @@ class _VoiceBarState extends State<VoiceBar> {
               final busy = widget.flow.phase == DrillPhase.wrapping;
               final on = _listening;
               return Material(
-                // ★ **那一圈琥珀 ＋ 80% 透明**的底（主人 2026-10-06：*"我们就用边框颜色加80%透明度"*）
-                //   ⇒ 两层：**纸色 @80%**（下层，`faceBase`）＋ **琥珀 @20%**（上层，`accentFace`）；
-                //     在录时整颗变琥珀（一明一暗地闪）。
-                //   ⚠️ 那层纸**不是装饰**：收起档那条 bar 是透明的、底下是壁纸，只铺 20% 的琥珀
-                //     的话深色壁纸下这一格就是近黑，墨色图形会看不见（28 张壁纸里 9 张掉到 ~1.1:1）。
+                // ★ **内部透明**（主人 2026-10-06：*"不是边框透明，是按钮内部底色透明"*）——
+                //   就是**一个透明的内部 ＋ 一圈实色的琥珀**；在录时整颗才变琥珀（一明一暗地闪）。
                 //   ⚠️ 这三颗（圆圈 ＋ 右边那一列两颗）**同一个底**（主人要的"颜色风格统一"）。
-                color: on ? recBlinkColor(glow) : d.faceBase,
+                color: on ? recBlinkColor(glow) : const Color(0x00000000),
                 // ★ **外面那一圈琥珀色**（主人 2026-10-05：*"外面要加一个边框啊，
                 //   这个边框就是有那个琥珀色，就是按下去录音时候的那个颜色"*）——
-                //   平时也带着它：一眼看得出"这颗是录音那颗"。
+                //   平时也带着它：一眼看得出"这是录音那颗"。
                 shape: CircleBorder(side: BorderSide(color: d.accent, width: d.voiceCircleRing)),
                 child: InkWell(
                   customBorder: const CircleBorder(),
                   onTap: busy ? null : widget.onMic,
-                  // 上层那 20% 的琥珀（在录时整颗已经是琥珀了 ⇒ 不再叠）
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: on ? const Color(0x00000000) : d.accentFace,
-                    ),
-                    child: Icon(
-                      on ? Icons.stop_rounded : Icons.mic_none_rounded,
-                      size: d.voiceCircleIcon,
-                      color: on
-                          ? d.card
-                          : (busy ? d.muted : d.ink),
-                    ),
+                  child: Icon(
+                    on ? Icons.stop_rounded : Icons.mic_none_rounded,
+                    size: d.voiceCircleIcon,
+                    // ★ 图形与那一圈**同一个琥珀色**（内部透明 ⇒ 底下可能是任何壁纸：
+                    //   这个色压在黑到白之间的任何底上都有 ≥4.3:1，墨色压在深色壁纸上会看不见）
+                    color: on
+                        ? d.card
+                        : (busy ? d.muted : d.accent),
                   ),
                 ),
               );
