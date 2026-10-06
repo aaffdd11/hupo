@@ -209,6 +209,15 @@
 | `/api/dev-harness` | GET | 需令牌 | **要一条开发者入口的签名链接**（契约 `docs/dev/82-DEV-MODE.md` §六 D6）：回 `{ok, dev, url, expiresAt}`，`url` 是短时效的 `https://dsh<手机号>.<base>/__enter?…`。只给**自己**，`owner` 可带 `?phone=` 点名别人（别人 403）；**没被标成开发者 ⇒ 如实回"还没有入口"**（不是 403）。⚠️ 可信口（容器里）404 |
 | `/api/dev-mode` | POST | 需令牌 | **翻"开发者"那个标记**（契约 `docs/dev/82-DEV-MODE.md` §三）：`{phone, on}` ⇒ `{ok, id, on, changed}`。🔴 **只有 `owner` 能翻**（别人 403）；翻一次**记一笔**审计（手机号是掩码形态）。⚠️ 可信口（容器里）404 |
 
+> 🔴 **`/api/asr`（语音那条 WS）也在他容器里跑**（**2026-10-07 更正**）：它**不在**下面那张
+> `TENANT_ROUTES` 名单里（那张名单只管 HTTP），但**升级那一步**是转进去的 ——
+> `server.js` 的握手：`const tenant = tenantOf(claim.sub); if (tenant) return proxyUpgrade(req, socket, head, sock)`
+> （转不进去回 **503 `tenant-not-ready`**）。⇒ **改语音那条链（`src/asr*.js`）光在中心改没用，
+> 必须发产品层**（`scripts/build-tenant-code.sh --publish`），否则租户跑的还是容器里旧的那一份。
+> ⚠️ 这一条是**拿真金白银换来的**：2026-10-07 我连着四刀都改在中心，主人那边一个字都没变
+> （现象：*"还在，更夸张了。"*）—— 查证的办法：**看容器自己的日志**
+> （`sudo journalctl _SYSTEMD_USER_UNIT=hupo-tenant.service`）。
+
 > ⚠️ **只有七组会转发进租户容器**（`server.js` 的 `TENANT_ROUTES`：`/api/say` · `/api/health` · `/api/export` · `/api/trash` · `/api/app-ask` · **`/api/timeline`** · **`/api/hear`**（2026-10-04 加：听懂那一层在盒子里算，因为钥匙在那儿） —— ⚠️ 最后这一条**2026-09-23 收尾时才发现漏了**：少了它，宿主会替租户那台盒子答 `GET /api/timeline`，客户端于是说"没有更早的了"，而盒子里明明有；判据 `test/tenant-routes.test.js`）；账号 / 续期 / 审计 / 填 key / 注销 / 空间状态都是**中心**的事 —— 别把"属于他自己那一份"和"中心的事"混进同一张转发名单。
 
 #### ⏳ 下面这几条**今天不存在**（留着是为了让下一个人知道"它们被删过"）
