@@ -268,6 +268,33 @@ void main() {
     expect(h3.text, contains('第三句。'));
   });
 
+  test('🔴 同一个段号又送来"另一句" ⇒ **不许覆盖**（段号被复用也要留住前面那句）', () {
+    // 🔴 2026-10-07 主人：*"前面的句子还是会被清理。"*
+    //   覆盖是不可逆的：上游一旦把两句话并进同一个段号，覆盖就等于把他刚说的那句抹掉。
+    expect(sameWords('今天天气不错。', '今天天气不错。'), isTrue);
+    expect(sameWords('今天天气不错。', '我想出去走走。'), isFalse);
+
+    final h = const Hearing()
+        .tapped()
+        .event({'type': 'asr/partial', 'text': '今天天气不错。', 'index': 0})
+        .event({'type': 'asr/partial', 'text': '我想出去走走。', 'index': 0}); // ← 段号被复用
+    expect(h.text, '今天天气不错。我想出去走走。', reason: '★ 覆盖 = 把他刚说的那句抹掉');
+
+    // 负向对照：**同一句又准了一点** ⇒ 照旧替换（不许接成两遍）
+    final h2 = const Hearing()
+        .tapped()
+        .event({'type': 'asr/partial', 'text': '今天天汽', 'index': 0})
+        .event({'type': 'asr/partial', 'text': '今天天气不错', 'index': 0});
+    expect(h2.text, '今天天气不错', reason: '★ 同一句的修订照旧替换');
+
+    // 负向对照 2：**真的两句**（段号各自往前走）⇒ 顺序接上
+    final h3 = const Hearing()
+        .tapped()
+        .event({'type': 'asr/partial', 'text': '第一句。', 'index': 0})
+        .event({'type': 'asr/partial', 'text': '第二句。', 'index': 1});
+    expect(h3.text, '第一句。第二句。');
+  });
+
   test('★ P1-3：断了但**一个字都没有** ⇒ 还是"什么都没听到"那句（不冒充"断了"）', () {
     final h = const Hearing().tapped().event({'type': 'asr/end', 'index': 0, 'reason': 'upstream'});
     expect(h.why, hearNothing);

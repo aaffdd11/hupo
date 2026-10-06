@@ -275,6 +275,23 @@ export function createSegmentTracker() {
   const overlaps = (a, b) => (a && b ? a.start < b.end && b.start < a.end : false);
   const sameStart = (a, b) => (a && b ? a.start === b.start : false);
 
+  /**
+   * **两句话是不是"同一句"**（＝ 同一句在往下长 / 又准了一点）—— **只看字**。
+   *
+   * 🔴 2026-10-07：**它现在是"换句没换句"的主判据**（原来时间那一对是主判据，
+   *    结果上游重新划句时报出叠着的区间，就会把上一句整句覆盖掉 —— 见下面 `fresh` 那段）。
+   * ⚠️ 它比 [looksLikeSame] 宽一点点：**一句包含另一句**也算同一句
+   *    （"我们出去" → "我们出去走走吧"、"今天天气不错今天天气不错" 那种截短/补全）。
+   */
+  const sameSentence = (a, b) => {
+    if (a === '' || b === '') return true;
+    if (a.includes(b) || b.includes(a)) return true;
+    // ⚠️ **一小截被换掉**：那是"说错了重来"（真帧里就有 `嗯` → `今天`）——
+    //    那一截短到不成句（≤3 个字）而且新的更长 ⇒ 算同一句在改。
+    if (a.length <= 3 && b.length > a.length) return true;
+    return looksLikeSame(a, b);
+  };
+
   /** 两句话像不像"同一句"（一个字都不许改的前缀关系太严：补个句号、改个标点都算同一句）。 */
   const looksLikeSame = (a, b) => {
     if (a === '' || b === '') return true;
@@ -312,15 +329,23 @@ export function createSegmentTracker() {
       //    ⇒ 现在**两样都要**：时间像 **而且** 字像。
       if (cur === '' && done.length > 0 && span && doneSpan
         && (sameStart(doneSpan, span) || overlaps(doneSpan, span))
-        && looksLikeSame(done[done.length - 1], text)) {
+        && sameSentence(done[done.length - 1], text)) {
         // 一模一样 ⇒ 纯回声，丢掉；**又准了一点 ⇒ 换掉那一段**（不许接成两遍）
         if (text === done[done.length - 1]) return {};
         done[done.length - 1] = text;
         doneSpan = span;
         return { final: { text, index: done.length - 1 } };
       }
-      // 换句了？（有时间那一对就认它：**叠着 = 同一句的修订**；没有才看共同前缀）
-      const fresh = cur !== '' && (curSpan && span ? !overlaps(curSpan, span) : !looksLikeSame(cur, text));
+      // ── 换句了没有？ ────────────────────────────────────────────
+      // 🔴 **2026-10-07 改口径**（主人：*"前面的句子还是会被清理。"*）——
+      //    原来这里**先看时间**：区间叠着就一律当"同一句的修订"，`cur = text` 直接覆盖。
+      //    而上游**重新划句**的时候，**新的一句完全可能报出与上一句叠着的区间**
+      //    ⇒ 上一句**从来没进过 `done`**、当场被覆盖掉 ⇒ 客户端收到"段号没变"的
+      //      `partial` ⇒ **把那段换掉** ⇒ 框里前半句当场没了（收尾拼出来的整段也少了它）。
+      //    ⇒ 现在**字说了算**：字明显不像同一句 ⇒ 就算换句（时间只能"补充说它换了"，
+      //      不能反过来把"换句"否掉）。⚠️ 判据 `test/asr-doubao.test.js` D14。
+      const same = sameSentence(cur, text);
+      const fresh = cur !== '' && (!same || (curSpan && span ? !overlaps(curSpan, span) : false));
       if (fresh) {
         done.push(cur);
         curSpan = null;

@@ -9,6 +9,28 @@
 
 import 'hearing_words.dart';
 
+/// **同一个段号又送来一份字：能不能覆盖那一份**（**纯函数** —— 判据直接喂它）。
+///
+/// * **能覆盖** ＝ "同一句又准了一点"：一句是另一句的开头（在往下长 / 被截短），
+///   或者共同前缀够长（改个错字、补个标点）；
+/// * **不能覆盖** ＝ 这压根是**另一句**（段号被复用了）⇒ 调用方另起一段接在后面。
+///
+/// 🔴 为什么要有它：覆盖是不可逆的 —— 上游把两句话并进同一个段号时，
+///   覆盖就是**把用户刚说的那句抹掉**（主人 2026-10-07：*"前面的句子还是会被清理。"*）。
+bool sameWords(String a, String b) {
+  if (a.isEmpty || b.isEmpty) return true;
+  if (a.startsWith(b) || b.startsWith(a)) return true;
+  // ⚠️ **一小截被换掉**：真帧里就是"说错了重来"（腾讯那串原样：`嗯` → `今天`）——
+  //    那一截短到根本不成句（≤3 个字）而且新的更长 ⇒ 当同一句在改。
+  if (a.length <= 3 && b.length > a.length) return true;
+  final m = a.length < b.length ? a.length : b.length;
+  var n = 0;
+  while (n < m && a[n] == b[n]) {
+    n += 1;
+  }
+  return n / m >= 0.5;
+}
+
 /// 语音这一步现在处在哪儿。
 enum HearingPhase {
   /// 没在听（可能刚才听过，字还留着）。
@@ -110,6 +132,15 @@ class Hearing {
   ///    （2026-09-23 判据当场抓到的就是这个）。
   Hearing _put(int index, String text) {
     if (text.isEmpty) return this;
+    final prev = segments[index];
+    // 🔴 **2026-10-07：同一个段号又送来一份"压根不是同一句"的字 ⇒ 不许覆盖。**
+    //   覆盖只对"同一句又准了一点"成立；段号被复用（上游把两句话并进同一段）时，
+    //   覆盖就等于**把他刚说的那句抹掉** —— 主人报的*"前面的句子还是会被清理"*。
+    //   ⇒ 那一份另起一段接在后面（顺序不乱、一个字都不丢）。
+    if (prev != null && !sameWords(prev, text)) {
+      final next = segments.keys.fold<int>(-1, (m, k) => k > m ? k : m) + 1;
+      return _copy(segments: {...segments, next: text});
+    }
     return _copy(segments: {...segments, index: text});
   }
 

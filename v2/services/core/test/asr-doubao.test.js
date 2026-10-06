@@ -246,6 +246,34 @@ test('★ D13 🔴 "起点一样"**不等于**"同一句"：新的一句报出�
   assert.equal(t3.whole(), '第一句。第二句。');
 });
 
+test('★ D14 🔴 区间**叠着**但字完全不是同一句 ⇒ 必须算换句（不许把上一句覆盖掉）', () => {
+  // 🔴 2026-10-07 主人：*"前面的句子还是会被清理。"*
+  //   上游**重新划句**的时候，新的一句**会报出与上一句叠着的区间**（真读数那一族：
+  //   「我们」4382-5322 → 「我们出去」4522-4602 是同一句的修订；但**新的一句**同样
+  //   可能落在上一句的区间里）。原来"区间叠着就算同一句在改" ⇒ `cur = text` 把上一句
+  //   **覆盖**掉，而上一句**从来没进过 `done`** ⇒ 客户端收到的段号没变 ⇒ 框里前半句
+  //   当场没了，收尾拼出来的整段也少了它。
+  //   ⇒ 现在**字说了算**：字明显不像同一句就算换句（时间只能"补充说它换了"）。
+  const t = createSegmentTracker();
+  assert.equal(t.push(said('今天天气不错。', { start: 0, end: 1500 })).partial.index, 0);
+  const out = t.push(said('我想出去走走。', { start: 400, end: 1800 }));
+  assert.equal(out.partial.index, 1, '★ 必须另起一段（不许覆盖 0 号段）');
+  assert.equal(t.whole(), '今天天气不错。我想出去走走。', '★ 前半句一个字都不许丢');
+
+  // 负向对照：**同一句又准了一点**（区间叠着、字也像）⇒ 照旧替换（不许接成两遍）
+  const t2 = createSegmentTracker();
+  t2.push(said('我们出去', { start: 4382, end: 5322 }));
+  assert.deepEqual(t2.push(said('我们出去走走吧。', { start: 4522, end: 6000 })),
+      { partial: { text: '我们出去走走吧。', index: 0 } });
+  assert.equal(t2.whole(), '我们出去走走吧。', '★ 同一句的修订照旧替换，不许变两遍');
+
+  // 负向对照 2：**改个错字**（共同前缀够长）⇒ 也算同一句（不许接成两遍）
+  const t3 = createSegmentTracker();
+  t3.push(said('今天天汽不错', { start: 0, end: 900 }));
+  assert.equal(t3.push(said('今天天气不错', { start: 100, end: 950 })).partial.index, 0);
+  assert.equal(t3.whole(), '今天天气不错');
+});
+
 test('★ D11 空字不许把已经听到的擦掉（收尾帧不带 result 那一族）', () => {
   const t = createSegmentTracker();
   t.push(said('今天天气'));
