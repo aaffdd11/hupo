@@ -199,13 +199,24 @@ void main() {
       ).decoration! as BoxDecoration;
       expect(box.border!.top.color, d.accent, reason: '★ 那一圈的顔色与录音那颗不一致');
       expect(box.border!.top.width, d.voiceCircleRing, reason: '★ 那一圈的粗细与录音那颗不一致');
-      // ★ **2026-10-06**（主人：*"颜色风格要统一一下，然后白色底变成浅橙色底，
-      //   跟边框一个色系但是要浅色"*）⇒ 三颗**同一个底**：`accentFace`。
-      expect(box.color, d.accentFace, reason: '★ 底色与录音那颗不一致（三颗该是同一个"浅橙"底）');
-      expect(box.color, isNot(d.card), reason: '★ 又变回白底了（主人 2026-10-06 要的是浅橙）');
+      // ★ **2026-10-06**（主人：*"颜色风格要统一一下"* ⇒ 三颗**同一个底**，
+      //   后来又定成 *"我们就用边框颜色加80%透明度"* ⇒ 底是**两层**：
+      //   下层 `faceBase`（纸 @80%，保证深色壁纸下图形看得见）＋ 上层 `accentFace`（琥珀 @20%）。
+      expect(box.color, d.faceBase, reason: '★ 那层纸不在（深色壁纸下图形会看不见）');
+      final wash = tester
+          .widgetList<DecoratedBox>(
+            find.descendant(of: find.byKey(k), matching: find.byType(DecoratedBox)),
+          )
+          .map((b) => b.decoration)
+          .whereType<BoxDecoration>()
+          .map((dec) => dec.color)
+          .toList();
+      expect(wash.contains(d.accentFace), true,
+          reason: '★ 与录音那颗不一致（三颗该是"边框色 + 80% 透明"那一层）');
+      expect(box.color, isNot(d.card), reason: '★ 又变回白底了（主人 2026-10-06 定的是边框色的透明版）');
     }
     // ⑤ **图形也是同一个墨色**（"颜色风格统一"的另一半）：
-    //   ⚠️ 那两颗原来走 `labelTertiary`（#81858C）—— 压在这个浅橙底上只有 **2.85:1**
+    //   ⚠️ 那两颗原来走 `labelTertiary`（#81858C）—— 压在这个底上只有 **2.85:1**
     //     （发虚）；录音那颗的图形一直是 `d.ink`（11.8:1）。
     // ⚠️ 那一格里有好几层 `CustomPaint`（边框也画在一层上）⇒ 点名我们自己那个 painter
     final chevron = tester

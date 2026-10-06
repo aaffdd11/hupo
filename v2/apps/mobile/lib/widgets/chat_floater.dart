@@ -477,23 +477,31 @@ class ChatFloaterState extends State<ChatFloater> {
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       );
 
-  /// **看得见的那一块**：长方形 ＋ 底色（开着的时候是琥珀底白图形，关着是纸底墨图形）。
+  /// **看得见的那一块**：长方形 ＋ 底色（开着的时候是琥珀底白图形，关着是"边框色的透明版"墨图形）。
   ///
   /// 🔴 它必须**小于**外面那一格 —— 这是 D3.6 那条"视觉仍小、命中区撑够"的落点。
   Widget _auxFace(DshPalette p, {required bool lit, required Widget child}) => Container(
         width: d.voiceAuxFaceW,
         height: d.voiceAuxFaceH,
         decoration: BoxDecoration(
-          // ★ 底色（主人 2026-10-05 要的"要底色"；2026-10-06 定"浅橙"）：
-          //   平时是 `accentFace`（**与录音那颗圆圈同一个底**、与那一圈琥珀同色系但更浅），
+          // ★ 底色（主人 2026-10-05 要的"要底色"；2026-10-06 定"边框色 + 80% 透明"）：
+          //   两层 —— **纸色 @80%**（下层，理由见 `design.dart` 的 `accentFace` 那段：
+          //   没有它，深色壁纸下墨色图形会看不见）＋ **琥珀 @20%**（上层，见下面那个孩子）。
           //   开着时整块变琥珀 —— 状态一眼看得出。
-          color: lit ? d.accent : d.accentFace,
+          color: lit ? d.accent : d.faceBase,
           borderRadius: BorderRadius.circular(d.voiceAuxRadius),
           // 🔴 **风格统一**（主人 2026-10-05）：与录音那颗圆圈**同一圈琥珀色、同一个粗细**
           //   —— 三颗长得是同一套东西，只是形状（圆 / 长方）不同。
           border: Border.all(color: d.accent, width: d.voiceCircleRing),
         ),
-        child: Center(child: child),
+        child: DecoratedBox(
+          // 上层那 20% 的琥珀（开着时整块已经是琥珀了 ⇒ 不再叠）
+          decoration: BoxDecoration(
+            color: lit ? const Color(0x00000000) : d.accentFace,
+            borderRadius: BorderRadius.circular(d.voiceAuxRadius),
+          ),
+          child: Center(child: child),
+        ),
       );
 
   /// **上面那一颗**：收起档是「展开」（箭头朝上），展开档是「收起」（箭头朝下）。
@@ -524,7 +532,7 @@ class ChatFloaterState extends State<ChatFloater> {
             size: const Size(22, 6),
             // ★ 2026-10-06 主人：*「颜色风格要统一一下」* ⇒ 三颗的图形**同一个墨色**。
             //   ⚠️ 原来这里与下面那颗喇叭都是 `labelTertiary`（#81858C）—— 压在新的
-            //     **浅橙底**（`accentFace`）上只有 **2.85:1**（灰得发虚，放大看就是"洗过"）。
+            //     **那个浅色底**（`accentFace`）上只有 **2.85:1**（灰得发虚，放大看就是"洗过"）。
             //     换 `d.ink` ⇒ **11.8:1**，与录音那颗图形一个色。
             painter: _FlatChevron(color: d.ink, up: collapsed),
           ),
@@ -573,7 +581,7 @@ class ChatFloaterState extends State<ChatFloater> {
                 on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
                 size: d.voiceAuxIcon,
                 // ★ 同上：关着的时候也是**墨色**（"关"这件事已经由底色与那条斜杠说清了，
-                //   而 `labelTertiary` 压在这个浅橙底上只有 2.85:1 —— 发虚）
+                //   而 `labelTertiary` 压在这个底上只有 2.85:1 —— 发虚）
                 color: on ? d.card : d.ink,
               ),
             ),

@@ -225,16 +225,18 @@ void main() {
     nativeHearingApi = _Mic();
     await _pump(tester);
 
-    // ① **录音圆圈**：**浅橙底** ＋ 一圈琥珀色（`voice_bar.dart` 的 `_circle`）
-    //    ⚠️ 2026-10-06 主人把"白底"改成浅橙了（*"白色底变成浅橙色底，跟边框一个色系但是要浅色"*）
-    //      ⇒ 底色这一格从 `d.card` 改成 `d.accentFace`（"实底"这件事一个字没松）。
+    // ① **录音圆圈**：**边框色 + 80% 透明的底** ＋ 一圈琥珀色（`voice_bar.dart` 的 `_circle`）
+    //    ⚠️ 2026-10-06 主人把"白底"改成 *"边框颜色加80%透明度"* ⇒ 底色那一格从 `d.card`
+    //      改成 `d.accentFace`；⚠️ 于是"实底"这条口径**跟着改**：底可以透，
+    //      **界线靠那一圈实色轮廓**（下面钉着）。
     final circleFace = tester.widget<Material>(
       find
           .descendant(of: find.byKey(voiceBarCircleKey), matching: find.byType(Material))
           .first,
     );
-    expect(circleFace.color, d.accentFace, reason: '★ 圆圈没实底（或不是那个浅橙底）—— bar 透了它也跟着透');
-    expect(circleFace.color!.a, 1.0, reason: '★ 圆圈的底是半透明的');
+    // ⚠️ **2026-10-06 改口径**：底是**两层** —— 下层纸 @80%（`faceBase`）＋ 上层琥珀 @20%
+    //   （`accentFace`，主人要的"边框颜色加 80% 透明度"）。判据从"不许半透明"
+    //   改成"**下层那层纸要在**（深色壁纸下图形才看得见）＋ 界线靠那一圈**实色**轮廓"。
     expect(circleFace.shape, isA<CircleBorder>(), reason: '★ 录音那颗不是圆的');
     expect((circleFace.shape! as CircleBorder).side.color, d.accent, reason: '★ 那一圈不是琥珀色');
     expect(tester.getSize(find.byKey(voiceBarCircleKey)), const Size(d.voiceCircleBox, d.voiceCircleBox));
@@ -244,8 +246,9 @@ void main() {
       find.descendant(of: find.byKey(chatHandleKey), matching: find.byType(Container)).first,
     );
     final dec = face.decoration! as BoxDecoration;
-    expect(dec.color!.a, 1.0, reason: '★ 那一列的面是半透明的 —— bar 透了它就跟着透');
-    expect(dec.color, d.accentFace, reason: '★ 那一列的面与录音那颗不是同一个底（三颗要统一成浅橙）');
+    expect(dec.color, d.faceBase, reason: '★ 那一列的面与录音那颗不是同一个底（三颗该是同一个两层底）');
+    // 界线靠**实色轮廓**：底色可以透，那一圈不许透（不然压在壁纸上就看不见按钮在哪）
+    expect(dec.border!.top.color.a, 1.0, reason: '★ 那一圈轮廓是半透明的 ⇒ 界线会跟着壁纸糊掉');
     expect(dec.border, isNotNull, reason: '★ 那一列的面没有轮廓');
 
     // ③ 负向对照：**bar 自己是透明的** ⇒ "按钮不透明"这件事只能靠每颗自己那层底
