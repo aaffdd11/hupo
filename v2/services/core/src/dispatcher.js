@@ -245,6 +245,17 @@ class Session {
   /** ★ **派活**：这一间刚把总结交回去了（`Dispatcher.finishJob` 记的）。 */
   #jobReported = false;
 
+  /**
+   * ★ **派活那一格的结局**（2026-10-06 · 主人：*「好的，帮我收尾收掉。」*）。
+   *
+   * 由 `Worlds` 给（`args.resolveJobTile`）：那一间里**什么都没做出来**（入口还是占位页）
+   * ⇒ 把桌面那一格收掉；有东西 ⇒ 留着（名字还是占位名时用交回来的那个顶上）。
+   * ⚠️ **不接 ⇒ 什么都不做**（老部署 / 判据没接那种：行为与从前一样，绝不假装收过了）。
+   *
+   * @type {null | ((o:{where:string, name?:string|null}) => string)}
+   */
+  #resolveJobTile = null;
+
   /** ★ **B39：这件活我替它接过几次**（`where` → 次数）。**有上限**（`JOB_NUDGE_MAX`）。 */
   #jobNudges = new Map();
 
@@ -421,6 +432,13 @@ class Session {
     timeline,
     runtime,
     /**
+     * ★ **2026-10-06：派活那一格的结局**（主人：*「好的，帮我收尾收掉。」*）。
+     *
+     * 由 `Worlds` 给（`args.resolveJobTile`）；`Dispatcher` 每一间都传下来。
+     * 不接 ⇒ `null` ⇒ 什么都不做（老行为，绝不假装收过了）。
+     */
+    resolveJobTile = null,
+    /**
      * 🔴 **上游说"钥匙不对"时叫一声**（可选）。
      *
      * ⚠️ 为什么需要它：钥匙**填错了**的用户，得**能重新填** ——
@@ -504,6 +522,8 @@ class Session {
     this.#recapOptions = { ...RECAP_DEFAULTS, ...recap };
     this.#turnDeadlineMs = turnDeadlineMs;
     this.#notice = notice;
+    // ★ 2026-10-06：派活那一格的结局（`Worlds.resolveJobTile`；不接 ⇒ 什么都不做）
+    this.#resolveJobTile = typeof resolveJobTile === 'function' ? resolveJobTile : null;
     this.#mainLeak = mainLeak;
     this.#work = work;
     this.#promises = promises;
@@ -613,7 +633,16 @@ class Session {
         //   而总结**没交回来** ⇒ 它多半停在那儿等一个永远不会来的回答
         //   （真机实测那句话是"你回一句「接着说」"）⇒ **替它接一句**（有上限）。
         //   ⚠️ 顺序：先按老规矩把"这一轮完了"那几件事做完，再兜这一层。
-        if (!this.#jobReported) this.#nudgeStalledJob({ where: isJobWhere, kind });
+        if (!this.#jobReported) {
+          // ★ **2026-10-06**：能接的（它自己收的口）走兜底；**接不了的**
+          //   （超时 / 进程没了 —— 那边没有"接着说"可言）⇒ 这件活**就此没了下文**
+          //   ⇒ 桌面那一格也要收场（不然它会一直灰着，点开还说"还在做"）。
+          if (kind === 'completed' || kind === 'max-tokens') {
+            this.#nudgeStalledJob({ where: isJobWhere, kind });
+          } else {
+            this.closeJobTile({ where: isJobWhere });
+          }
+        }
         this.#jobReported = false;
       }
       // ★ A1·「发现就报」：**正常结束**这条路也要比（三条路缺一不可）
@@ -1537,6 +1566,30 @@ class Session {
     return this.deliver(typeof text === 'string' ? text : JOB_NUDGE_LINE, { job: true });
   }
 
+  /**
+   * ★ **那件活没成 ⇒ 把桌面那一格也收场**（2026-10-06）。
+   *
+   * 三件事、顺序不许反：① 先收拾那一格（`Worlds` 那一刀）；② **真收掉了**（`'dropped'`）
+   * 才说一句人话（那一格是**我们**放的 ⇒ 它消失也得说一声）；③ 记账失败 / 没接那一刀
+   * **都不许把叫它的那条路带走**。
+   *
+   * ⚠️ 只在**活真的没了下文**的三条路上叫：派发那一刀失败 · 兜底接满了 · 那一轮以
+   *    "接不了"的方式收的（超时 / 进程没了）。**活着还在跑的时候一次都不许叫**。
+   */
+  closeJobTile({ where = '', name = null, say = true } = {}) {
+    const w = String(where ?? '');
+    if (w === '') return 'none'; // 不知道是哪一间 ⇒ 什么都不做（不猜）
+    let verdict = 'none';
+    try {
+      verdict = this.#resolveJobTile?.({ where: w, name }) ?? 'none';
+    } catch (err) {
+      this.#lastError = `派活那一格没收干净：${err?.message ?? err}`;
+      return 'none';
+    }
+    if (say && verdict === 'dropped') this.#sayProactive(JOB_LINES.tileDropped, { kind: 'work-nudge' });
+    return verdict; // 给判据/诊断一个明确的读数（'dropped'|'renamed'|'kept'|'none'）
+  }
+
   /** ★ **B39 兜底：它停在那儿等回话 ⇒ 替它接一句**（`77-BLOCKERS.md` 的 B39）。 */
   #nudgeStalledJob({ where = '', kind = null } = {}) {
     // ⚠️ 只兜"它自己收的口"（说完了 / 说不下了）。
@@ -1550,6 +1603,9 @@ class Session {
       if (this.#jobNudges.get(`${key}:told`) === true) return; // 只如实说一次
       this.#jobNudges.set(`${key}:told`, true);
       this.#sayProactive(JOB_LINES.nudgeGaveUp, { kind: 'work-nudge' });
+      // ★ **2026-10-06**：接满了 = 这件活没下文 ⇒ **桌面那一格也要收场**
+      //   （那一间里什么都没做出来 ⇒ 收掉 ＋ 说一句；有东西 ⇒ 留着）
+      this.closeJobTile({ where: key });
       return;
     }
     const n = given + 1;
@@ -1905,6 +1961,14 @@ export class Dispatcher {
   #startScope = null;
 
   /**
+   * ★ **派活那一格的结局**（2026-10-06）：由 `Worlds` 给（`args.resolveJobTile`），
+   *   每一间都传给 `Session`（真正那一刀住在 `Session.closeJobTile`）。
+   *   不接 ⇒ `null`（老行为：那一格摆在那儿，绝不假装收过了）。
+   */
+  #resolveJobTile = null;
+
+
+  /**
    * ★ **待确认的那一笔派活**（契约 `docs/dev/108-JOB-ASK-FLOW.md` §一 第①步）。
    *
    * 🔴 **只在内存里**：谁在哪一间发起的 · `where` · `why` · 号 · 计时器。
@@ -1987,6 +2051,9 @@ export class Dispatcher {
     // ★ **派活**（契约 102）：那本简登记 ＋ "建一间"那一刀（都由 `Worlds` 给）。
     this.#jobs = args.jobs ?? null;
     this.#startScope = typeof args.startScope === 'function' ? args.startScope : null;
+    // ★ 2026-10-06：派活那一格的结局（`Worlds.resolveJobTile`；每一间都传下去）
+    this.#resolveJobTile =
+      typeof args.resolveJobTile === 'function' ? args.resolveJobTile : null;
     // ★ **契约 108**：那帧问话等他多久（判据要能把它调小）。
     this.#jobAskTimeoutMs =
       Number.isFinite(args.jobAskTimeoutMs) && args.jobAskTimeoutMs > 0
@@ -2152,6 +2219,8 @@ export class Dispatcher {
       // ★ B46 ①：**每一间**说话之前都要先让开发者入口让开那一间
       //   （⚠️ 这一段特别容易漏 —— `worlds.js` 顶上就记着"接线的一段断了而闸全绿"的教训）。
       yieldRoom: this.#yieldRoom,
+      // ★ 2026-10-06：派活那一格的结局（每一间都要有 —— 派活建的那一间正是房间）
+      resolveJobTile: this.#resolveJobTile,
     });
     this.#sessions.set(id, s);
     return s;
@@ -2707,6 +2776,8 @@ export class Dispatcher {
     const to = this.sessionFor(where) ?? created ?? null;
     if (!to) {
       from?.noteError(`派活那一间没挂上来（${where}）`);
+      // ★ 2026-10-06：那一格是`startScope` 刚放上去的 ⇒ **这里就收掉**（不留孤儿格）
+      from?.closeJobTile?.({ where });
       return { ok: false, error: 'create-failed', reason: 'create-failed', text: JOB_LINES.failed };
     }
     // ② 由来落账 ＋ 那一帧落在**主进程那一间**（登记由它重建 · P5）
@@ -2717,6 +2788,8 @@ export class Dispatcher {
     } catch (err) {
       from?.noteError(`派活那件没记上账：${err?.message ?? err}`);
       // ⚠️ 登记写不下去 ⇒ **不派**（派了却查不到 = 那本账在说假话）。
+      // ★ 2026-10-06：同理 —— 这一刀没派出去 ⇒ 那一格也收掉（不然桌上留个永远灰的格）
+      from?.closeJobTile?.({ where });
       return { ok: false, error: 'record-failed', reason: 'record-failed', text: JOB_LINES.failed };
     }
     try {
@@ -2814,6 +2887,8 @@ export class Dispatcher {
     // ② 登记（索引）：写不下去也不影响①那条事实（重扫时会补上）
     try {
       this.#jobs.recordReport({ id: open.id, where: s.scopeId, name: n, summary: m, at });
+    // ★ 2026-10-06：那一格还在用占位名 ⇒ 用**它交回来的名字**顶上
+    s.closeJobTile({ where: s.scopeId, name: n });
     } catch (err) {
       s.noteError(`派活那本登记没写上：${err?.message ?? err}`);
     }

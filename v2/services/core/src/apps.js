@@ -1683,9 +1683,15 @@ export class Apps {
    *   🔴 **失败不许留"删了一半"**：回收没做完 ⇒ 连制品那一格也**搬回原位**再抛。
    *      ⇒ 调用方只有"全成"与"如实失败"两种结局，**没有第二种成功形状**。
    *
+   * ★ **2026-10-06：`{reclaim:false}` = 只收桌面那一格，不动那一间。**
+   *   谁用它：派活那件活**没做成**时（`worlds.js` 的 `resolveJobTile`）—— 那一间里
+   *   只有我们写的占位页，收掉桌面那一格就够；而那一间的对话与目录**留着**
+   *   （那会儿子进程可能还在跑 ⇒ 不许去动它的会话目录；也免得"没做成"变成"连痕迹都没了"）。
+   *   ⚠️ 默认 `true`（= 老行为）⇒ **"从桌面上删掉"那条路一个字没变**。
+   *
    * @returns {string} 回收处那个目录（`.removed/<id>-<ts>`）
    */
-  remove(id) {
+  remove(id, { reclaim = true } = {}) {
     checkAppId(id);
     if (!this.has(id)) throw new AppsError('这个小程序不在你这儿');
     const at = this.now();
@@ -1695,7 +1701,7 @@ export class Apps {
 
     // ★ 惰性取"真回收"的上下文（`worlds.js` 里那几本账在 `new Apps()` 之后才建）
     let ctx = null;
-    if (this.reclaim) {
+    if (reclaim && this.reclaim) {
       ctx = typeof this.reclaim === 'function' ? this.reclaim() : this.reclaim;
     }
     if (ctx) {

@@ -1035,6 +1035,63 @@ export class Worlds {
       //      （`workspaces.ensure`：目录＋清单），再把它挂成这个人的一条会话
       //      （`roomFor`：cwd＝那个工作区、自己的 agent 键）。两条路互不干扰。
       jobs,
+      // ★ **2026-10-06：派活那一格的结局**（主人：*「好的，帮我收尾收掉。」*）
+      //
+      //   🔴 要收的是什么：那一格是**我们**在他点【另开一处做】时放上去的（灰的「正在做的小程序」）
+      //      ⇒ 活要是没做成，它就**一直灰着**（点开还说"还在做"），而那是假话。
+      //
+      //   规则（一条，只看"那一间里到底有没有东西"）：
+      //     · 还是我们写的占位页（`isBuilding`）⇒ **什么都没做出来** ⇒ 把那一格从桌面上**收掉**
+      //       （`remove(id, {reclaim:false})`：只收桌面那一格，**不动那一间** ——
+      //        那会儿子进程可能还在跑，不许去动它的会话目录；也免得"没做成"变成"连痕迹都没了"）；
+      //     · 有真内容 ⇒ **留住那一格**；名字还是占位名时，用它**交回来的那个名字**顶上。
+      //   ⚠️ 收不掉 / 改不了 ⇒ **如实记一句**，绝不许把叫它的那条路（收口那一串）带走。
+      //
+      //   @returns 'dropped' | 'renamed' | 'kept' | 'none'
+      resolveJobTile: ({ where = null, name = null } = {}) => {
+        const id = safeScope(String(where ?? ''));
+        if (!id || id === 'main') return 'none';
+        let has = false;
+        try {
+          has = apps.has(id) === true;
+        } catch {
+          return 'none';
+        }
+        if (!has) return 'none';
+        let building = false;
+        try {
+          building = typeof workspaces.isBuilding === 'function' && workspaces.isBuilding(id) === true;
+        } catch {
+          building = false; // 认不出 ⇒ 当作"有东西"（**宁可留着，也不许把做了的东西收掉**）
+        }
+        try {
+          if (building) {
+            apps.remove(id, { reclaim: false });
+            // 桌面自己重拉清单（瞬态信号：与"装上了/做完了"同一条路）
+            timeline.emitTransient({ type: 'app/installed', appId: id, title: null });
+            return 'dropped';
+          }
+          const cur = titleOfApp(apps, id);
+          const want = typeof name === 'string' ? name.trim() : '';
+          if (want !== '' && cur === JOB_PLACEHOLDER_TITLE) {
+            const stat = workspaceStat(workspaces, id);
+            apps.register({
+              id,
+              title: want,
+              entry: stat.entry ?? 'index.html',
+              rootHash: stat.rootHash,
+              bytes: stat.bytes,
+              createdBy: 'agent',
+            });
+            timeline.emitTransient({ type: 'app/installed', appId: id, title: want });
+            return 'renamed';
+          }
+          return 'kept';
+        } catch (err) {
+          this.#warn(`  ⚠️ ${t.userId} 派活那一格没收拾干净（${id}）：${err?.message ?? err}`);
+          return 'none';
+        }
+      },
       // ★ **契约 108**：那帧问话等他多久（阈值住 `job.js`；这里只是"判据能把它调小"）。
       jobAskTimeoutMs: cfg.jobAskTimeoutMs,
       startScope: (where) => {

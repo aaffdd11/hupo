@@ -44,6 +44,7 @@ import { Auth } from '../src/auth.js';
 import { createServer } from '../src/server.js';
 import { ScopeView } from '../src/timeline.js';
 import { Worlds, scopeTimelineId } from '../src/worlds.js';
+import { workspaceStat } from '../src/workspace.js';
 import { handleLedgerOp } from '../src/ledger-socket.js';
 import { APP_OPEN, JOB_ASK, JOB_ASK_EXPIRED, JOB_LINES, JOB_PLACEHOLDER_TITLE, JOB_NUDGE_LINE, JOB_NUDGE_MAX, JobBook, SCOPE_OPEN, decideJobStart, jobAskEvent, jobAskText, jobPacketText, jobSummaryText, jobRowsFromEvents, scopeOpenEvent } from '../src/job.js';
 
@@ -599,6 +600,117 @@ test('🔴 P5：登记列得出（哪些小程序／工作区 ＋ 各自最后�
 });
 
 // ════════════════════════════════════════════════════════════════
+// ★ 2026-10-06 · **那一格的结局**（主人：*「好的，帮我收尾收掉。」*）
+//
+// 收的是什么：那一格是**我们**在他点【另开一处做】时放上去的（灰的「正在做的小程序」）
+// ⇒ 活没做成时它**不许一直灰着**（点开还说"还在做"，那是假话）。
+// 规则只有一条：**看那一间里到底有没有东西**。
+// ════════════════════════════════════════════════════════════════
+
+test('🔴 那一格的结局：占位 ⇒ 收掉 · 有真内容 ⇒ 留着 · 有内容又有名字 ⇒ 改名', async () => {
+  const h = await boot({ scenario: 'job' });
+  const w = h.worlds.worldFor('u1');
+  try {
+    // ① **占位**（派活那一刻的样子：入口还是我们写的占位页）⇒ 收掉
+    await waitFor(() => w.workspaces.has('math-drill') || true, '');
+    w.workspaces.ensure('math-drill');
+    const stat = workspaceStat(w.workspaces, 'math-drill');
+    w.apps.register({
+      id: 'math-drill', title: JOB_PLACEHOLDER_TITLE, entry: stat.entry ?? 'index.html',
+      rootHash: stat.rootHash, bytes: stat.bytes,
+    });
+    assert.equal(w.apps.has('math-drill'), true, '起点：那一格在');
+    assert.equal(w.apps.list().find((a) => a.id === 'math-drill').building, true, '起点：它是在建');
+    assert.equal(
+      w.dispatcher.closeJobTileForTest?.({ where: 'math-drill' }) ??
+        w.dispatcher.sessionFor('main').closeJobTile({ where: 'math-drill' }),
+      'dropped',
+      '★ 占位页 ⇒ 该收掉那一格',
+    );
+    assert.equal(w.apps.has('math-drill'), false, '★ 收掉了但桌上还在');
+    // 收掉是**软的**：回收处里有它（不是真删）
+    assert.equal(
+      nodeFs.existsSync(nodePath.join(w.apps.root, '.removed')), true,
+      '★ 收掉要走"软删进回收处"那条路（不许真删）',
+    );
+    // 🔴 **不动那一间**：工作区还在盘上（`reclaim:false` 那一刀）
+    assert.equal(
+      nodeFs.existsSync(nodePath.join(w.workspaces.root, 'math-drill')), true,
+      '★ 把那一间也搬走了 —— 那一格收掉不该动那一间（那时子进程可能还在跑）',
+    );
+
+    // ② **有真内容**（入口被真页面顶掉了）⇒ **留住**（不许把做了的东西收掉）
+    w.apps.register({
+      id: 'math-drill', title: '算数小练', entry: 'index.html',
+      rootHash: workspaceStat(w.workspaces, 'math-drill').rootHash, bytes: 10,
+    });
+    w.workspaces.write('math-drill', { 'index.html': '<p>真的内容</p>' });
+    assert.equal(
+      w.dispatcher.sessionFor('main').closeJobTile({ where: 'math-drill' }),
+      'kept',
+      '★ 有真内容 ⇒ 留着',
+    );
+    assert.equal(w.apps.has('math-drill'), true, '★ 把做了的东西收掉了');
+    assert.equal(w.apps.list().find((a) => a.id === 'math-drill').title, '算数小练');
+
+    // ③ **有内容、但名字还是占位名** ＋ 子进程交回了名字 ⇒ **改名**（不新造、不重装）
+    w.workspaces.write('math-drill', { 'index.html': '<p>还是真的内容</p>' });
+    w.apps.register({
+      id: 'math-drill', title: JOB_PLACEHOLDER_TITLE, entry: 'index.html',
+      rootHash: workspaceStat(w.workspaces, 'math-drill').rootHash, bytes: 20,
+    });
+    assert.equal(
+      w.dispatcher.sessionFor('main').closeJobTile({ where: 'math-drill', name: '算数小练' }),
+      'renamed',
+      '★ 该用交回来的名字顶上',
+    );
+    assert.equal(
+      w.apps.list().find((a) => a.id === 'math-drill').title,
+      '算数小练',
+      '★ 名字没顶上（那一格会一直叫"正在做的小程序"）',
+    );
+
+    // ④ 反例：不认识的那一间 / main ⇒ 什么都不做（不抛、不误伤）
+    assert.equal(w.dispatcher.sessionFor('main').closeJobTile({ where: '' }), 'none');
+    assert.equal(w.dispatcher.sessionFor('main').closeJobTile({ where: 'main' }), 'none');
+    assert.equal(w.dispatcher.sessionFor('main').closeJobTile({ where: 'never-existed' }), 'none');
+  } finally {
+    await h.close();
+  }
+});
+
+test('🔴 活没了下文（兜底接满）⇒ 那一格**从桌上收掉** ＋ 主进程一句人话；还在跑时**一次都不收**', async () => {
+  const h = await boot({ scenario: 'job-stall' });
+  const w = h.worlds.worldFor('u1');
+  try {
+    assert.equal((await post(h, '/api/say', { messageId: 'u_job', text: '帮我做一个练算数的小程序' })).status, 200);
+    const ask = await waitAsk(w);
+    assert.equal((await answerJob(h, { id: ask.id, yes: true })).ok, true);
+
+    // ① **还在跑的那一段**：那一格在（灰的）—— 这是"不许提前收"的反例正身
+    await waitFor(() => w.apps.has('math-drill'), '派活那一刻那一格没出现');
+    assert.equal(
+      w.apps.list().find((a) => a.id === 'math-drill').building,
+      true,
+      '★ 派活那一刻该是在建（灰的）',
+    );
+
+    // ② 接满上限 ⇒ 收手（就是 B39 那条路）⇒ **那一格收掉** ＋ 一句人话
+    await waitFor(
+      () => noticesOfKind(w.dir, 'work-nudge').some((e) => /没做完/.test(String(e.text ?? ''))),
+      '接满上限也没如实报"没做完"',
+      20000,
+    );
+    assert.equal(w.apps.has('math-drill'), false, '★ 活没了下文，那一格还留在桌上（一直灰着）');
+    const said = noticesOfKind(w.dir, 'work-nudge').filter((e) => /收掉了/.test(String(e.text ?? '')));
+    assert.equal(said.length, 1, `★ 那一格是**我们**放的 ⇒ 它消失要说一声：${JSON.stringify(said.map((x) => x.text))}`);
+    assert.doesNotMatch(String(said[0].text ?? ''), /math-drill|工作区|客户端/, '★ 内部词/短名上了屏');
+  } finally {
+    await h.close();
+  }
+});
+
+// ════════════════════════════════════════════════════════════════
 // P6 · 反例的正身：没派活的一轮**一个字都不动**；派活失败**如实说**
 // ════════════════════════════════════════════════════════════════
 
@@ -1019,7 +1131,11 @@ test('🔴 B39-b/c：它停下不交回 ⇒ **自动替它接**（有上限）�
     // ① **接的次数正好是上限**（留痕那几句人话各一句）
     const nudges = noticesOfKind(w.dir, 'work-nudge');
     const givenUp = nudges.filter((e) => /没做完/.test(String(e.text ?? '')));
-    const handed = nudges.filter((e) => !/没做完/.test(String(e.text ?? '')));
+    // ⚠️ 2026-10-06：同族里多了**一句新留痕**（活没了下文 ⇒ 那一格收掉了，见下面那条判据）
+    //    ⇒ 数"替它接了几次"时把它排除掉（它说的不是"接"）。
+    const handed = nudges.filter(
+      (e) => !/没做完/.test(String(e.text ?? '')) && !/收掉了/.test(String(e.text ?? '')),
+    );
     assert.equal(handed.length, JOB_NUDGE_MAX, `🔴 替它接的次数不是上限那个数：${handed.length}`);
     assert.equal(givenUp.length, 1, `🔴 "没做完"那句说漏了 / 说重了：${JSON.stringify(givenUp.map((g) => g.text))}`);
     // ② 🔴 **不许无限接**：接满之后**它就不再接了**（停在那儿不动）
