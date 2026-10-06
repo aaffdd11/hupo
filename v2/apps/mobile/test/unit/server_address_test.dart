@@ -92,4 +92,62 @@ void main() {
     // 负向对照：脚本自己也得说清**为什么**（改它的人要看得见那段）。
     expect(src.contains('HUPO_API'), true);
   });
+
+  // ════════════════════════════════════════════════════════════
+  // ★ 2026-10-06：**下载链接带版本号**（主人：*「apk命名方式，我们也要用版本号来。
+  //    就是下载链接也要增加版本号。」* · 契约 `docs/dev/207-APK-VERSIONED.md`）
+  // ════════════════════════════════════════════════════════════
+  test('④ 默认就是那个稳定名（老链接、VM 判据那一档**一个字都没变**）', () {
+    // ⚠️ 判据里**没有**传 define ⇒ 这一条同时是"没喂 define 的构建落回稳定名"的证据。
+    expect(hupoApkName, 'hupo-chat.apk', reason: '★ 默认不许变成一个带版本的名字（老客户端那条链接指着它）');
+    expect(hupoApkPath, '/hupo-chat.apk');
+    // 带版本那一档：同一条纯函数，换一个路径就得出一条**带版本**的绝对地址。
+    final v = apkDownloadUri(
+      base: 'https://w.stalkerai.cn',
+      page: Uri.base,
+      path: '/hupo-chat-2.0.0-702.apk',
+    );
+    expect(v.toString(), 'https://w.stalkerai.cn/hupo-chat-2.0.0-702.apk',
+        reason: '★ 下载链接里必须看得见版本号（那一份留档，永远指向那一版）');
+  });
+
+  test('④ 三条脚本的分工：**算名字只在一处**，发与部署都从账里读', () {
+    String read(String rel) {
+      final f = File('../../../scripts/$rel');
+      expect(f.existsSync(), true, reason: '★ 找不到 `scripts/$rel`（cwd 不对？）');
+      return f.readAsStringSync();
+    }
+
+    final build = read('build-apk.sh');
+    final publish = read('publish-apk.sh');
+    final deploy = read('deploy-web-v2.sh');
+
+    // ① **只有 build-apk.sh 算那个名字**（`+` → `-`），而且它把名字写进那笔账、喂给编译期。
+    expect(build.contains(r'${BUILD_NAME//+/-}'), true,
+        reason: '★ `build-apk.sh` 里要看得见 `+`→`-` 那一处换算（包名带版本号；`+` 在下载器手里不稳）');
+    expect(build.contains(r'''"file":"%s"'''), true, reason: '★ 名字要写进 `data/apk-build.json` 的 `file`（发与部署都从账里读）');
+    expect(build.contains('--dart-define=HUPO_APK_NAME='), true,
+        reason: '★ 打包那条命令要把它喂进编译期（不然包里的常量还是稳定名）');
+
+    // ② 发：从账里读 `file`，而且**同时**刷稳定名（老客户端那条链接不许断）。
+    expect(publish.contains('"file":"[^"]*"'), true, reason: '★ 发之前要从账里读出"这一版叫什么"');
+    // 🔴 **读账要读在"打完包"之后**：`--owner-asked` 会先让 build-apk.sh 写新的版本与文件名，
+    //    读早了就会拿着**上一版**的名字去发这一版的字节。
+    expect(publish.indexOf('build-apk.sh') < publish.indexOf('"file":"[^"]*"'), true,
+        reason: '★ `publish-apk.sh` 在读账**之前**就打了包（名字会差一版）—— 先把名字读晚一点');
+    expect(publish.contains('APK_ALIAS="hupo-chat.apk"'), true,
+        reason: '★ 稳定名那一份要照旧存在（已装的老客户端指着它 —— 冻结契约）');
+    expect(publish.contains(r'$PUBLIC/$APK_ALIAS'), true,
+        reason: '★ 稳定名也要在线核一遍（哪条断了都是"页面在说假话"）');
+
+    // ③ 部署网页：把**现在发的是哪一份**喂进编译期（首页那颗按钮指的就是它）。
+    expect(deploy.contains('--dart-define=HUPO_APK_NAME='), true,
+        reason: '★ 网页那次构建也要喂（不然首页那颗按钮还指向稳定名，链接里看不到版本号）');
+
+    // 🔴 负向对照：**别的脚本里不许再出现那一处换算**（两处换算 = 一定漂）。
+    for (final (name, src) in [('publish-apk.sh', publish), ('deploy-web-v2.sh', deploy)]) {
+      expect(src.contains(r'${BUILD_NAME//+/-}'), false,
+          reason: '★ `$name` 里又算了一遍包名 —— 名字只许 `build-apk.sh` 算一次，其余从账里读');
+    }
+  });
 }

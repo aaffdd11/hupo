@@ -35,9 +35,18 @@ WEB="$ROOT/v2/services/core/web"
 APK_SRC="$ROOT/v2/apps/mobile/build/app/outputs/flutter-apk/app-release.apk"
 # 🔴 **2026-10-05：发出去那个文件名换了**（主人：*「这次是2.0版本了……不要覆盖1.0」*）——
 #    2.0 是**另一个 app**（`chat.hupo.hupo_chat`、桌面上叫「琥珀聊天」）⇒ 发在
-#    `hupo-chat.apk`；1.0 那一份（`hupo.apk`）**原样留着**（老链接不许 404、也不许被顶掉）。
-#    要发成别的名字：`HUPO_APK_NAME=xxx.apk scripts/publish-apk.sh …`。
-APK_NAME="${HUPO_APK_NAME:-hupo-chat.apk}"
+#    `hupo-chat*.apk`；1.0 那一份（`hupo.apk`）**原样留着**（老链接不许 404、也不许被顶掉）。
+#
+# ★ **2026-10-06：文件名带版本号**（主人：*「apk命名方式，我们也要用版本号来。就是下载链接
+#    也要增加版本号。」*）⇒ 发成 `hupo-chat-<版本>.apk`（如 `hupo-chat-2.0.0-702.apk`），
+#    **同时**把稳定名 `hupo-chat.apk` 刷成同一份字节：
+#      · 稳定名是**已经装在他手机上的那些老客户端的链接**（冻结契约，不许 404）；
+#      · 带版本那份是**留档**（那一条链接永远指向那一版，谁都能回头下）。
+#    🔴 **那一版叫什么不住在这里**：`build-apk.sh` 算一次写进 `data/apk-build.json` 的 `file`
+#       （`+`→`-` 的换算只在那一处），这里与 `deploy-web-v2.sh` 都**从账里读**。
+#    显式覆盖：`HUPO_APK_NAME=xxx.apk scripts/publish-apk.sh …`。
+# 稳定名（老客户端那条链接）——除非有人显式指名要发它。
+APK_ALIAS="hupo-chat.apk"
 PUBLIC="${HUPO_PUBLIC:-https://w.stalkerai.cn}"
 
 # 🔴 **没有主人的话，不许打包**（2026-10-01 定的规矩）——
@@ -62,10 +71,21 @@ if [ ! -f "$APK_SRC" ]; then
   exit 2
 fi
 
+# 🔴 **名字在这里才读**（`--owner-asked` 那一步刚把新的版本与文件名写进账里）——
+#    读早了就会拿着**上一版**的名字去发这一版的字节（判据钉着这个先后）。
+STATE_JSON="$ROOT/v2/services/core/data/apk-build.json"
+VER_FILE="$( grep -o '"file":"[^"]*"' "$STATE_JSON" 2>/dev/null | cut -d'"' -f4 )"
+APK_NAME="${HUPO_APK_NAME:-${VER_FILE:-hupo-chat.apk}}"
+
 echo
 echo "▶ 拷进静态根（$WEB/$APK_NAME）"
 mkdir -p "$WEB"
 cp -f "$APK_SRC" "$WEB/$APK_NAME"
+# ★ 稳定名也刷一份（**已装的老客户端**那条链接指着它；冻结契约，不许断）
+if [ "$APK_NAME" != "$APK_ALIAS" ]; then
+  cp -f "$APK_SRC" "$WEB/$APK_ALIAS"
+  echo "  另存稳定名 $APK_ALIAS（老客户端那条链接照旧能用）"
+fi
 
 LOCAL_BYTES="$(wc -c < "$APK_SRC")"
 LOCAL_SHA="$(sha256sum "$APK_SRC" | cut -d' ' -f1)"
@@ -109,42 +129,53 @@ fi
 echo "  装法       直接覆盖安装（同一把签名）；⚠️ 换签名那一版要**先卸载**再装"
 
 echo
-echo "▶ 在线核一遍：$PUBLIC/$APK_NAME"
-HDR="$(curl -sS -D - -o /tmp/hupo-apk-dl.bin "$PUBLIC/$APK_NAME" 2>&1)"
-CODE="$(printf '%s' "$HDR" | head -1 | awk '{print $2}')"
-CT="$(printf '%s' "$HDR" | grep -i '^content-type:' | head -1 | cut -d' ' -f2- | tr -d '\r')"
-CD="$(printf '%s' "$HDR" | grep -i '^content-disposition:' | head -1 | cut -d' ' -f2- | tr -d '\r')"
-CL="$(printf '%s' "$HDR" | grep -i '^content-length:' | head -1 | awk '{print $2}' | tr -d '\r')"
-DL_BYTES="$(wc -c < /tmp/hupo-apk-dl.bin)"
-DL_SHA="$(sha256sum /tmp/hupo-apk-dl.bin | cut -d' ' -f1)"
-
-echo "  HTTP       $CODE"
-echo "  类型       ${CT:-（没有）}"
-echo "  附件       ${CD:-（没有）}"
-echo "  长度       ${CL:-（没有）}"
-echo "  下到       $DL_BYTES 字节 · sha256 ${DL_SHA:0:12}…"
+# 🔴 **两个名字都核**（2026-10-06）：带版本那份是"留档链接"，稳定那份是"老客户端链接" ——
+#    哪一条断了都是"页面在说假话"，所以要各拉一遍、各比一次字节。
+check_one() {
+  local url="$1" label="$2" out="$3"
+  local HDR CODE CT CD CL DL_BYTES DL_SHA
+  HDR="$(curl -sS -D - -o "$out" "$url" 2>&1)"
+  CODE="$(printf '%s' "$HDR" | head -1 | awk '{print $2}')"
+  CT="$(printf '%s' "$HDR" | grep -i '^content-type:' | head -1 | cut -d' ' -f2- | tr -d '\r')"
+  CD="$(printf '%s' "$HDR" | grep -i '^content-disposition:' | head -1 | cut -d' ' -f2- | tr -d '\r')"
+  CL="$(printf '%s' "$HDR" | grep -i '^content-length:' | head -1 | awk '{print $2}' | tr -d '\r')"
+  DL_BYTES="$(wc -c < "$out")"
+  DL_SHA="$(sha256sum "$out" | cut -d' ' -f1)"
+  echo "▶ 在线核一遍（$label）：$url"
+  echo "  HTTP       $CODE"
+  echo "  类型       ${CT:-（没有）}"
+  echo "  附件       ${CD:-（没有）}"
+  echo "  长度       ${CL:-（没有）}"
+  echo "  下到       $DL_BYTES 字节 · sha256 ${DL_SHA:0:12}…"
+  [ "$CODE" = "200" ] || { echo "  ✗ 不是 200 —— 访客点那颗按钮拿不到包"; bad=1; }
+  case "$CT" in
+    *vnd.android.package-archive*) echo "  ✓ 类型是安卓包" ;;
+    *) echo "  ✗ 类型不对（$CT）—— 有的浏览器会把它当文本打开"; bad=1 ;;
+  esac
+  case "$CD" in
+    *attachment*) echo "  ✓ 当附件发（点了是下载，不是就地打开）" ;;
+    *) echo "  ✗ 少了 content-disposition: attachment"; bad=1 ;;
+  esac
+  if [ "$DL_BYTES" = "$LOCAL_BYTES" ] && [ "$DL_SHA" = "$LOCAL_SHA" ]; then
+    echo "  ✓ 公网下到的与本地那个**逐字节一样**"
+  else
+    echo "  ✗ 公网那份与本地不一样（$DL_BYTES vs $LOCAL_BYTES）—— 别发"
+    bad=1
+  fi
+  echo
+}
 
 bad=0
-[ "$CODE" = "200" ] || { echo "  ✗ 不是 200 —— 访客点那颗按钮拿不到包"; bad=1; }
-case "$CT" in
-  *vnd.android.package-archive*) echo "  ✓ 类型是安卓包" ;;
-  *) echo "  ✗ 类型不对（$CT）—— 有的浏览器会把它当文本打开"; bad=1 ;;
-esac
-case "$CD" in
-  *attachment*) echo "  ✓ 当附件发（点了是下载，不是就地打开）" ;;
-  *) echo "  ✗ 少了 content-disposition: attachment"; bad=1 ;;
-esac
-if [ "$DL_BYTES" = "$LOCAL_BYTES" ] && [ "$DL_SHA" = "$LOCAL_SHA" ]; then
-  echo "  ✓ 公网下到的与本地那个**逐字节一样**"
-else
-  echo "  ✗ 公网那份与本地不一样（$DL_BYTES vs $LOCAL_BYTES）—— 别发"
-  bad=1
+check_one "$PUBLIC/$APK_NAME" "带版本那一份" /tmp/hupo-apk-dl.bin
+if [ "$APK_NAME" != "$APK_ALIAS" ]; then
+  check_one "$PUBLIC/$APK_ALIAS" "稳定名（老客户端那条）" /tmp/hupo-apk-dl-alias.bin
 fi
 
-echo
 if [ "$bad" = "0" ]; then
   echo "✅ 发出去了：$PUBLIC/$APK_NAME"
-  echo "   首页那颗「下载安卓版」指的就是它（客户端常量在 models/server_address.dart 的 hupoApkPath）"
+  [ "$APK_NAME" != "$APK_ALIAS" ] && echo "   稳定名也刷新了：$PUBLIC/$APK_ALIAS"
+  echo "   首页那颗「下载安卓版」指的是构建期那个 --dart-define=HUPO_APK_NAME 文件"
+  echo "   （客户端常量在 models/server_address.dart 的 hupoApkPath；名字住 data/apk-build.json 的 file）"
   echo "   ⚠️ 下次跑 deploy-web-v2.sh 之后确认一眼：它会 rm -rf web/（脚本里那一步会再拷回来）"
 else
   echo "❌ 没发成（上面那几条红的先修）"

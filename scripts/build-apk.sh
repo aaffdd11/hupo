@@ -89,16 +89,24 @@ PREV="${PREV:-0}"
 HIGH=$(( COMMITS > PREV ? COMMITS : PREV ))
 BUILD_NUMBER=$(( HIGH + 1 ))
 BUILD_NAME="${BASE_NAME}+${BUILD_NUMBER}"
+# ★ **2026-10-06：包名带版本号**（主人：*「apk命名方式，我们也要用版本号来。就是下载链接也要增加版本号。」*）。
+#   🔴 **这一条规则只住在这里**（算一次，写进那笔账；发与部署都从账里读 `file`）——
+#      绝不在别的脚本里再写一遍 `+`→`-` 的换算（两处就一定漂）。
+#   ⚠️ `+` 换成 `-`：`+` 在 URL 路径里虽然合法，但各类下载器/代理对它的处理不一致
+#      ⇒ 文件名用 `-`（版本号本身一位不少：`2.0.0-702`）。
+APK_FILE="hupo-chat-${BUILD_NAME//+/-}.apk"
 echo "▶ 版本号（每次打包都变）"
 echo "    pubspec 里写着 $PKG_VER · git 提交数 $COMMITS · 本机高水位 $PREV"
 echo "    ⇒ **versionCode=$BUILD_NUMBER · versionName=$BUILD_NAME**"
-printf '{"buildNumber":%s,"versionName":"%s","at":"%s"}\n' "$BUILD_NUMBER" "$BUILD_NAME" "$(date -Is)" > "$STATE"
+echo "    ⇒ 发出去的文件名 **$APK_FILE**（另一份稳定名 hupo-chat.apk 照旧刷新，老客户端那条链接不断）"
+printf '{"buildNumber":%s,"versionName":"%s","file":"%s","at":"%s"}\n' "$BUILD_NUMBER" "$BUILD_NAME" "$APK_FILE" "$(date -Is)" > "$STATE"
 
 start=$(date +%s)
 # 🔴 下面这一行**必须**带着 `--dart-define=HUPO_API=`（判据钉着它，见脚本抬头那段）。
 "${FLUTTER_BIN:-$HOME/sdk/flutter/bin/flutter}" build apk --release \
   --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" \
-  --dart-define=HUPO_API="$HUPO_API"
+  --dart-define=HUPO_API="$HUPO_API" \
+  --dart-define=HUPO_APK_NAME="$APK_FILE"
 rc=$?
 end=$(date +%s)
 if [ "$rc" != "0" ]; then

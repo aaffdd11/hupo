@@ -72,13 +72,24 @@ else
   echo "  ✓ 服务端闸绿（$(grep -E '^ℹ (tests|pass|fail)' /tmp/hupo-gate-server.log | tr '\n' ' '）)"
 fi
 
+# ★ **2026-10-06：首页那颗「下载安卓版」要指到"带版本号"那一份**（主人：*「apk命名方式，
+#    我们也要用版本号来。就是下载链接也要增加版本号。」*）⇒ 构建时把文件名喂进去：
+#      `--dart-define=HUPO_APK_NAME=hupo-chat-<版本>.apk`。
+#    🔴 **名字从账里读**（`data/apk-build.json` 的 `file`，由 `build-apk.sh` 算一次写下的）——
+#      这一份脚本**不自己拼** `+`→`-`（两处换算就一定会漂）。
+#    ⚠️ 读不到（没打过包 / 老账没有 `file`）⇒ 退回稳定名 `hupo-chat.apk`（那条链接一直在）。
+APK_STATE="$ROOT/v2/services/core/data/apk-build.json"
+APK_FILE="$( grep -o '"file":"[^"]*"' "$APK_STATE" 2>/dev/null | cut -d'"' -f4 )"
+APK_FILE="${APK_FILE:-hupo-chat.apk}"
+echo "▶ 首页那颗「下载安卓版」指向：$APK_FILE"
 if [ "$DO_BUILD" = "1" ]; then
   echo "▶ 构建 Web（release，不带 Service Worker）"
   # ⚠️ `--no-web-resources-cdn`（2026-09-23 加）：默认构建会把 CanvasKit 指向
   #    `https://www.gstatic.com/flutter-canvaskit/<hash>/` —— 国内经常取不到，
   #    页面就卡在那儿等（而**我们自己的 `canvaskit/` 明明已经打进产物了**）。
   #    ⇒ 自托管：从**我们自己的域名**取（配合预压缩，实测 br 后 2.1MB）。
-  ( cd "$APP" && "$FLUTTER" build web --release --pwa-strategy=none --no-web-resources-cdn ) || {
+  ( cd "$APP" && "$FLUTTER" build web --release --pwa-strategy=none --no-web-resources-cdn \
+      --dart-define=HUPO_APK_NAME="$APK_FILE" ) || {
     echo "✗ 构建失败，没有部署（线上仍是上一版：**宁可不变，也不要变坏**）"; exit 1; }
 else
   echo "▶ --no-build：直接用现有的 $APP/build/web"
@@ -151,7 +162,12 @@ rm -rf "$PREV_ENTRIES"
 APK_BUILT="$APP/build/app/outputs/flutter-apk/app-release.apk"
 if [ -f "$APK_BUILT" ]; then
   cp -f "$APK_BUILT" "$WEB/hupo-chat.apk"
-  echo "  ✓ 安卓包（2.0）放回来了：web/hupo-chat.apk（$(du -h "$WEB/hupo-chat.apk" | cut -f1)）"
+  echo "  ✓ 安卓包（2.0 · 稳定名）放回来了：web/hupo-chat.apk（$(du -h "$WEB/hupo-chat.apk" | cut -f1)）"
+  # ★ 带版本那一份也放回来（它是首页那颗按钮真正指的那条链接）
+  if [ "$APK_FILE" != "hupo-chat.apk" ]; then
+    cp -f "$APK_BUILT" "$WEB/$APK_FILE"
+    echo "  ✓ 带版本那一份也放回来了：web/$APK_FILE（$(du -h "$WEB/$APK_FILE" | cut -f1)）"
+  fi
 else
   echo "  ⚠️ 没有现成的安卓包（$APK_BUILT）⇒ 这次那条下载会 404。"
   echo "     要发就补一句：scripts/publish-apk.sh --no-build（或 build-apk.sh 重新打一个）"

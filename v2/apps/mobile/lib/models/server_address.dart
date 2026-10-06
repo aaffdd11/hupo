@@ -47,7 +47,25 @@ Uri apiUriFor(String base, String path) => Uri.parse('$base$path');
 ///    · [hupoApkPath]   = 2.0（装上身份 `chat.hupo.hupo_chat`，桌面上叫「琥珀聊天」）；
 ///    · [hupoApkPathV1] = 1.0（`chat.hupo.hupo_app`，桌面上叫「琥珀」；**原样留着**）。
 ///    ⚠️ 两个包**身份不同** ⇒ 同一台手机上并排装着，谁也覆盖不了谁。
-const String hupoApkPath = '/hupo-chat.apk';
+/// ★ **2026-10-06：下载链接带版本号**（主人：*「apk命名方式，我们也要用版本号来。
+/// 就是下载链接也要增加版本号。」*）。
+///
+/// 发出去的文件名是 `hupo-chat-<版本>.apk`（如 `hupo-chat-2.0.0-702.apk`）；
+/// **构建期**由脚本喂进来：
+///   · `scripts/build-apk.sh` —— 用**它这一次刚算出来的**那个版本名；
+///   · `scripts/deploy-web-v2.sh` —— 读 `data/apk-build.json` 的 `file`（**现在发的是哪一份**）。
+/// ⚠️ **默认值就是那个稳定名**（`hupo-chat.apk`）：VM 判据、以及任何没喂 define 的构建
+/// 都落回它 —— 而稳定名**永远指向最新那一份**（服务端每次发布都刷新它）。
+const String hupoApkName = String.fromEnvironment(
+  'HUPO_APK_NAME',
+  defaultValue: 'hupo-chat.apk',
+);
+
+/// 2.0 那个包（「琥珀聊天」）在这个站点上的路径 —— 首页那颗「下载安卓版」指向它。
+///
+/// ⚠️ 名字里那个版本号**不是"这一版才有的"**：它是"构建时线上是哪一版"。
+///    点它的访客拿到的一定是那一份（带版本的文件**留档、不覆盖**）。
+const String hupoApkPath = '/$hupoApkName';
 
 /// 1.0 那个包**在老地址上原样留着**（老链接不许 404，也不许被 2.0 顶掉）。
 const String hupoApkPathV1 = '/hupo.apk';
