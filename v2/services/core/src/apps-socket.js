@@ -139,9 +139,23 @@ async function runAppsOp(apps, req, ctx = {}) {
         const recent = hasTurnInput && typeof ctx.recentInputsFor === 'function'
           ? ctx.recentInputsFor(typeof req.scope === 'string' && req.scope.trim() !== '' ? req.scope.trim() : null)
           : [];
+        const scopeNow = typeof req.scope === 'string' && req.scope.trim() !== '' ? req.scope.trim() : null;
+        const a = req.app ?? {};
+        // ★ **2026-10-06：同一间的"再登记"不需要"他明说"**（真机读数换来的这一条）。
+        //
+        //   现场（他盒子里那一间的时间线）：他问「我做好了吗？冷吗」，助手把**这一间已经有的那个
+        //   app 再登记一次**（同一个 id）⇒ 被下面那道"他明说才许写"拒了 ⇒ 它掉头去读
+        //   `/app/code/src/*` 找那句拒绝，**两分半钟**才回一句"做完了"。
+        //
+        //   为什么该放行：那一格**已经在他桌面上**（同一个 id）⇒ 再登记一次**不是**
+        //   "往他桌面上放一个他没要的东西"（那道闸的全部理由）；而且模型本来就能**直接写**
+        //   那一间工作区的文件（那条路一个字都没闸）⇒ 卡这一刀既不一致、也没有保护作用。
+        //   ⚠️ **只放这一种**：主线里造新东西、在别的小程序里造东西 —— 照旧要明说。
+        const selfReRegister =
+          scopeNow !== null && scopeNow !== 'main' && a.id === scopeNow && isAnAppRoom(apps, scopeNow);
         // 🔴 **两道都在**：① 当轮那句认不认；② 不认的话，看**他最近说过的那几句**
         //    （只有"这一轮他确实说了话"时才看 —— 助手自己发起的那一轮仍然一律拒）。
-        if (!asksToMakeApp(turnInput) && !askedRecently(recent)) {
+        if (!selfReRegister && !asksToMakeApp(turnInput) && !askedRecently(recent)) {
           return { ok: false, error: NEEDS_ASK, refused: 'needs-ask' };
         }
         // ★ **已经在一个小程序里了 ⇒ 不许再开一个**（主人 2026-09-27）：
@@ -150,8 +164,6 @@ async function runAppsOp(apps, req, ctx = {}) {
         //   ⚠️ 判据是"**现在这一间是不是已有的一个小程序 / 内置那一格**"，
         //      **不是** `scope !== main`：派活那间（长活"另开一处做"）本来就要在那里
         //      把新 app 造出来（`job.js` 抬头上那句注释），那条路照旧放行。
-        const scopeNow = typeof req.scope === 'string' && req.scope.trim() !== '' ? req.scope.trim() : null;
-        const a = req.app ?? {};
         // 🔴 **2026-10-06：派活那一间 —— 这一间就是那个小程序的家**（主人：
         //    *"选择另一处时……原则上应该创建小程序工作区，启动那个工作区的 agent，
         //    在这个 agent 里面完成任务。"*）

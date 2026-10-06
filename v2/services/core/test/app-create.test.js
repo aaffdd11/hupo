@@ -395,6 +395,34 @@ test('S5 助手在**某个小程序那一间**里调 create ⇒ 人话拒；main
   // ③ 负向对照 ②：**派活那间**（长活"另开一处做"）⇒ 照旧能造（那条产品行为靠它）
   const fromJob = await handleAppsOp(apps, { ...make('wrongbook2'), scope: 'job-x7' }, ctx('job-x7'));
   assert.equal(fromJob.ok, true, JSON.stringify(fromJob));
+  // ③·补 🔴 **2026-10-06：同一间的"再登记"不需要他明说**（真机读数换来的那一条）
+  //  现场：他问「我做好了吗？冷吗」，助手把**这一间已经有的那个 app 再登记一次**（同一个 id）
+  //  ⇒ 被"他明说才许写"拒 ⇒ 它掉头去读 `/app/code/src/*` 找那句拒绝，两分半钟才回一句"做完了"。
+  //  为什么该放行：那一格**已经在他桌面上** ⇒ 再登记不是"往他桌面上放一个他没要的东西"。
+  const selfCtx = { ...ctx('aoshu'), turnInputFor: () => '我做好了吗？冷吗', recentInputsFor: () => [] };
+  const again = await handleAppsOp(
+    apps,
+    { op: 'create', app: { id: 'aoshu', title: '奥数练一练', entry: 'index.html', files: {} }, scope: 'aoshu' },
+    selfCtx,
+  );
+  assert.equal(again.ok, true, `★ 同一间的再登记被拒了（真机上它导致两分半的自查）：${JSON.stringify(again)}`);
+  // 🔴 反例一：**别的小程序那一间里**要造**另一个** id ⇒ 照旧拒（"里面不能再开一个"）
+  //   ⚠️ 这一条要用"他确实明说了"的那个上下文 —— 不然先撞上"要明说"那道闸，
+  //      量的就不是"里面不能再开一个"了（第一版就是这么写错的，判据当场纠了）
+  const other = await handleAppsOp(
+    apps,
+    { op: 'create', app: { id: 'wrongbook9', title: '错题本', entry: 'index.html', files: {} }, scope: 'aoshu' },
+    ctx('aoshu'),
+  );
+  assert.equal(other.refused, 'inside-app', `★ 在别的小程序里开新东西该拒：${JSON.stringify(other)}`);
+  // 🔴 反例二：**主线里**造新东西 ⇒ 照旧要"他明说"（那句没要 ⇒ 拒）
+  const fromMainNoAsk = await handleAppsOp(
+    apps,
+    { op: 'create', app: { id: 'wrongbook8', title: '错题本', entry: 'index.html', files: {} }, scope: 'main' },
+    { ...ctx('main'), turnInputFor: () => '我做好了吗？冷吗' },
+  );
+  assert.equal(fromMainNoAsk.refused, 'needs-ask', `★ 主线里造新东西该照旧要明说：${JSON.stringify(fromMainNoAsk)}`);
+
   // ④ 负向对照 ③：他没明说（那道闸照旧在，与这一条不冲突）
   const notAsked = await handleAppsOp(
     apps,
