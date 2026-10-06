@@ -19,6 +19,7 @@
 | **我要改的是个小东西 —— 碰哪几个文件、跑哪条闸**（改动中跑窄闸，收尾跑全闸） | [`CHANGE-MAP.md`](CHANGE-MAP.md) | **动手之前**（走它就不必读手册全篇） |
 | **这台机器是什么样 · 硬闸怎么跑 · 不许做什么** | [`../AGENTS.md`](../AGENTS.md) | **每轮**（开机自动读的就是它） |
 | **现在到哪了 · 下一步做什么 · 欠着什么** | [`dev/00-PROGRESS.md`](dev/00-PROGRESS.md) | **接手第一件** |
+| **报了徐汇区「雏鹰杯」（人工智能那一类）：要交哪几样、谁做什么** | [`contest/xuhui-2026/README.md`](contest/xuhui-2026/README.md)（材料清单 ＋ 分工 ＋ 查新检索词 ＋ 打包注意事项）→ 作品设计说明（模板四段）· 演示视频脚本 | 准备材料 / 交稿之前 |
 | **要参加比赛：交上去的那一份文稿 / 怎么重新生成 / 每个数字的出处** | [`contest/README.md`](contest/README.md) → **要交的就是 [`contest/琥珀-作品设计说明.pdf`](contest/琥珀-作品设计说明.pdf)**（源文件 `submission.html`）· 内部家底见 [`contest/design-note.md`](contest/design-note.md) | 交稿 / 改稿 / 准备现场演示之前 |
 | **为什么当时那么做 · 读数是多少**（要"凭什么"） | [`dev/PROGRESS-HISTORY.md`](dev/PROGRESS-HISTORY.md) | **只在有人问"这条结论凭什么"时** |
 | **某一批具体怎么实现、怎么验的** | `dev/NN-*.md`（按编号找那一篇） | 动那一块之前 |
