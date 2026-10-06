@@ -1385,6 +1385,16 @@ test('★ 反例的正身：裁决／总结／重建这三处的形状（改回�
   const packet = jobPacketText({ where: 'math-drill', why: '帮我做一个练算数的小程序' });
   assert.match(packet, /帮我做一个练算数的小程序/, '🔴 原话丢了');
   assert.match(packet, /别把过程抄一遍/, '★ 要交代"只交总结"（P3 那半）');
+  // ★ **2026-10-06 加的那一句**（契约 `204`）：派活这条路做出来的东西最容易停在"功能能跑"
+  //   ⇒ 任务书里必须写着"要有玩头"（判据带反例的正身：那一段真的能被拿掉）
+  assert.match(packet, /别只交"功能能跑"/, `★ 任务书里没写"别只交功能能跑"：${packet}`);
+  assert.match(packet, /每局都不一样/, '★ 要写清"对手/关卡得有变化"');
+  assert.match(packet, /分层/, '★ 工具那半也要写清"内容分层"');
+  assert.equal(
+    /别只交"功能能跑"/.test(packet.split('\n').filter((l) => !l.includes('别只交')).join('\n')),
+    false,
+    '★ 反例的正身：拿掉那一句之后，这条判据就该假（不是恒真）',
+  );
 
   // ── ⑤"现在该看哪一间"那一帧 ────────────────────────────────
   const open = scopeOpenEvent({ scope: 'math-drill', at: 7 });

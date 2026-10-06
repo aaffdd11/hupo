@@ -167,6 +167,44 @@ test('⑨ ★ 宽屏与"太薄"（`docs/dev/203`）：宽屏没交代 / 通篇�
   );
 });
 
+test('⑩ ★ "玩头"（`docs/dev/204`）：看着像游戏却每局一样 / 一点动静都没有 ⇒ 各报一条', () => {
+  const vp = '<meta name="viewport" content="width=device-width, initial-scale=1"><title>x</title>';
+  const wide = '<style>main{display:grid;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))}</style>';
+  const game = (body) => ({ files: { 'index.html': `${vp}${wide}<button>落子</button>${body}` } });
+  const codes = (r) => r.warnings.map((w) => w.code);
+
+  // ① **套路不变**：有"棋/得分"这类词，可页面里没有任何变化来源（随机、难度）⇒ 要报
+  const flat = lintApp(game('<h1>五子棋</h1><p>得分 0</p><script>function move(){} move();</script>'));
+  assert.equal(codes(flat).includes('flat-play'), true, '★ 每局一模一样 ⇒ 要报（主人点名的就是这一条）');
+  // 负向对照：随机 / 难度档 各算一个"变化来源"
+  for (const v of [
+    '<script>const i=Math.floor(Math.random()*15);</script>',
+    '<label>难度 <select><option>简单</option><option>难</option></select></label>',
+  ]) {
+    const r = lintApp(game(`<h1>五子棋</h1>${v}<style>.p{transition:transform .2s}</style>`));
+    assert.equal(codes(r).includes('flat-play'), false, `★ 这一种算有变化：${v}`);
+  }
+
+  // ② **一点动静都没有**：没有动效、也没有 canvas 重画 ⇒ 要报
+  const dead = lintApp(game('<h1>五子棋</h1><p>得分 0</p><script>const i=Math.random();</script>'));
+  assert.equal(codes(dead).includes('no-feedback'), true, '★ 没有动静 ⇒ 要报');
+  for (const m of [
+    '<style>.p{transition:transform .2s}</style>',
+    '<style>@keyframes f{from{opacity:0}}</style>',
+    '<canvas id="b"></canvas>',
+    '<script>requestAnimationFrame(f)</script>',
+  ]) {
+    const r = lintApp(game(`<h1>五子棋</h1><script>Math.random()</script>${m}`));
+    assert.equal(codes(r).includes('no-feedback'), false, `★ 这一种算有动静：${m}`);
+  }
+
+  // ③ 不像游戏的页面 ⇒ 两条都不许开口（认"像不像游戏"是字符串粗判：**宁可漏报，不许乱报**）
+  const tool = lintApp({ files: { 'index.html': bare('<h1>买菜清单</h1><ul><li>鸡蛋</li></ul>') } });
+  assert.equal(codes(tool).includes('flat-play') || codes(tool).includes('no-feedback'), false, '★ 不是游戏就别开口');
+  // ④ 起步页照旧**一条都不响**（含新的 ⑩）
+  assert.deepEqual(lintApp({ files: { 'index.html': placeholderIndex({ id: 'x', title: '记账本' }) } }).warnings, []);
+});
+
 test('★ 内联 SVG 的 `xmlns` 不算"连了一个站"（2026-10-06：基线点名让图标用内联 SVG）', () => {
   const withSvg = lintApp(page('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3"/></svg>'));
   assert.deepEqual(withSvg.errors, [], '★ `xmlns` 是个标识符、浏览器永远不去请求它 ⇒ 不许报 host-not-declared / net-not-declared');
