@@ -127,44 +127,69 @@ class _VoiceBarState extends State<VoiceBar> {
         : voiceTypeInstead;
     return Padding(
       padding: const EdgeInsets.fromLTRB(d.gapM, d.gapS, d.gapM, d.gapS),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          // 如实说的那一句（没听清 / 麦没打开…）—— **不占字符位、就一行**
-          if (widget.note.trim().isNotEmpty) ...[
-            Align(
-              alignment: Alignment.centerRight,
-              child: Text(widget.note, style: dshTextStyle(look.content, d.ink)),
-            ),
-            const SizedBox(height: d.gapXs),
-          ],
-          Stack(
-            clipBehavior: Clip.none,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  if (widget.leading != null) ...[widget.leading!, const SizedBox(width: d.gapS)],
-                  // ── 字那一侧（在圆圈的**左边**）──
-                  Expanded(
-                    child: _showField ? _field(look, hint) : const SizedBox.shrink(),
-                  ),
-                  const SizedBox(width: d.gapS),
-                  // ── 那个圆圈（右下角）──
-                  if (widget.canHear)
-                    _circle(t)
-                  else if (!_typing)
-                    _typeChip(t),
-                ],
+              if (widget.leading != null) ...[widget.leading!, const SizedBox(width: d.gapS)],
+              // ── 字那一侧（在圆圈的**左边**）──
+              //
+              // 🔴 **2026-10-07 主人**：*"这句没听清楚，再说一遍不要放在上方。也要放在
+              //   按钮左侧。同时也是有白色底的。"* ⇒ 那句如实说的话（没听清 / 麦没打开…）
+              //   **跟字一个位置**：按钮左边、**白底那张小卡片**（原来它是挂在上面的一行字）。
+              //   ⚠️ 它与那个框**同时在**的时候（比如说到一半对面断了）就并排：
+              //      **框在左、那句在右**（都在按钮左边）。
+              Expanded(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (_showField) Flexible(child: _field(look, hint)),
+                    if (widget.note.trim().isNotEmpty) ...[
+                      if (_showField) const SizedBox(width: d.gapS),
+                      Flexible(child: _noteCard(look)),
+                    ],
+                  ],
+                ),
               ),
-              if (widget.hintAbove != null)
-                Positioned(left: 0, right: 0, bottom: d.barButtonBox, child: widget.hintAbove!),
+              const SizedBox(width: d.gapS),
+              // ── 那个圆圈（右下角）──
+              if (widget.canHear)
+                _circle(t)
+              else if (!_typing)
+                _typeChip(t),
             ],
           ),
+          if (widget.hintAbove != null)
+            Positioned(left: 0, right: 0, bottom: d.barButtonBox, child: widget.hintAbove!),
         ],
       ),
     );
   }
+
+  /// **如实说的那一句**（没听清 / 麦没打开…）：按钮左边那张**白底卡片**。
+  ///
+  /// ⚠️ 底用**这张纸的白**（`d.card`）＋ 一圈细线 —— 与时间线上别的卡片、以及
+  ///    底下那一行原来那颗气泡**同一个样子**（他要的"白色底"）。
+  Widget _noteCard(DshLook look) => Container(
+        key: voiceBarNoteKey,
+        constraints: const BoxConstraints(maxWidth: 420),
+        padding: const EdgeInsets.symmetric(horizontal: d.gapM, vertical: d.gapS),
+        decoration: BoxDecoration(
+          color: d.card,
+          borderRadius: BorderRadius.circular(d.radiusField),
+          border: Border.all(color: d.line),
+        ),
+        child: Text(
+          widget.note,
+          textAlign: TextAlign.right,
+          maxLines: 4,
+          overflow: TextOverflow.ellipsis,
+          // ★ 这一行字**跟用户那条字号轴**（与时间线正文同一档）—— 与那个框里那份字同一个道理。
+          style: dshTextStyle(look.content, d.ink),
+        ),
+      );
 
   /// **那个真输入框**：识别回来的字长在里面，他也可以动手改。
   ///
@@ -263,6 +288,9 @@ const Key voiceBarCircleKey = ValueKey<String>('voice-bar-circle');
 
 /// 那格输入框（打字那条退路，也是语音的字落下来的地方）。
 const Key voiceBarTypeKey = ValueKey<String>('voice-bar-type');
+
+/// **如实说的那一句**（没听清 / 麦没打开…）那张白底卡片（判据量它的位置与底色）。
+const Key voiceBarNoteKey = ValueKey<String>('voice-bar-note');
 
 /// 打字那条退路那颗「发送」。
 const Key voiceBarTypedSendKey = ValueKey<String>('voice-bar-typed-send');

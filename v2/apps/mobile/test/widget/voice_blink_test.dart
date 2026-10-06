@@ -322,6 +322,47 @@ void main() {
     }
   });
 
+  testWidgets('⑩ 🔴 那句"没听清"**在按钮左边、白底**（不许挂在上方）', (tester) async {
+    // 🔴 2026-10-07 主人：*"这句没听清楚，再说一遍不要放在上方。也要放在按钮左侧。
+    //   同时也是有白色底的。"*
+    const note = '这句我没听清，再说一遍。';
+    await _pump(tester, note: note);
+    expect(find.text(note), findsOneWidget, reason: '★ 那句要真的画出来');
+
+    final noteBox = tester.getRect(find.byKey(voiceBarNoteKey));
+    final circle = tester.getRect(find.byKey(voiceBarCircleKey));
+
+    // ① **左边**：整张卡片都在那颗圆圈的左边缘之外
+    expect(noteBox.right, lessThanOrEqualTo(circle.left + 0.5),
+        reason: '★ 那句跑到按钮右边/底下去了（它要在**按钮左侧**）');
+    // ② **同一行**（这就是"不许放在上方"）：它的中线落在圆圈上下跨度里
+    expect(noteBox.center.dy, greaterThan(circle.top));
+    expect(noteBox.center.dy, lessThan(circle.bottom));
+    // ③ **白底**：那张卡片的底色就是这张纸的白（与时间线上别的卡片同一个色）
+    final deco = tester.widget<Container>(find.byKey(voiceBarNoteKey)).decoration! as BoxDecoration;
+    expect(deco.color, d.card, reason: '★ 那句没有白色底（主人要的"白色底"）');
+    expect(deco.border, isNotNull, reason: '★ 白底之上要有一圈细线，不然压在壁纸上会糊成一片');
+
+    // ④ 负向对照：那句**不在**这一格的上方 —— 整格的高度就是那一行的高度
+    final bar = tester.getRect(find.byType(VoiceBar));
+    expect(noteBox.top, greaterThanOrEqualTo(bar.top));
+    expect(noteBox.bottom, lessThanOrEqualTo(bar.bottom));
+    expect(bar.height, lessThan(circle.height + d.gapS * 2 + 2),
+        reason: '★ 这一格比"一行"还高 ⇒ 上面又挂了一行东西');
+  });
+
+  testWidgets('⑩·补 说到一半断了（框里有字 ＋ 有那句）⇒ **并排**，都在按钮左边', (tester) async {
+    await _pump(tester, text: '帮我看看天气', note: '识别那一头出错了，再按一次试试。');
+    final field = tester.getRect(find.byKey(voiceBarTypeKey));
+    final noteBox = tester.getRect(find.byKey(voiceBarNoteKey));
+    final circle = tester.getRect(find.byKey(voiceBarCircleKey));
+    expect(noteBox.right, lessThanOrEqualTo(circle.left + 0.5), reason: '★ 那句也要在按钮左边');
+    expect(field.right, lessThanOrEqualTo(noteBox.left + 0.5),
+        reason: '★ 两个都在时：框在左、那句在右（都在按钮左边）');
+    // 两边都在同一行里
+    expect((field.center.dy - noteBox.center.dy).abs(), lessThan(2));
+  });
+
   testWidgets('⑧ 🔴 打字那条退路：**上回打了一半的那句填回框里**，发送交出的是框里那份', (tester) async {
     // 🔴 主人 2026-09-22 就定过"草稿也是要记住的"；那一格换成语音之后，
     //    唯一会写草稿的 `composer.dart` 没人实例化了 ⇒ 打了一半刷新就没了
