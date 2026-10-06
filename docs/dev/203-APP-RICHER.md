@@ -27,7 +27,7 @@
 | # | 落在哪 | 改了什么 |
 |---|---|---|
 | ① | **`app_create` 的工具描述**（`src/mcp-apps-server.mjs`） | 第 ① 条"手机优先"→ **"手机和平板都要好"**（宽屏要自己铺开，别锁在一条窄栏里居中）；第 ③ 条"一屏一个重心"→ **"一页有主有次"**（主角是一件事，但那件事**别只有一层**）；新增 **⑨ 别交"最小能跑"**。基线从**八条变九条** |
-| ② | **起步页**（`src/workspace.js` 的 `placeholderIndex`） | 从"一列居中"改成**窄屏一列、宽屏并排**（`grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr))`）—— 它是 agent 接着改的**骨架**，骨架里就写着"宽屏要交代"，比只在工具描述里说一句更容易被照着做 |
+| ② | **起步页**（`src/workspace.js` 的 `placeholderIndex`） | 从"一列居中"改成**窄屏一列、宽屏并排**（`grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr))`）—— 它是 agent 接着改的**骨架**，骨架里就写着"宽屏要交代"，比只在工具描述里说一句更容易被照着做。🔴 真图看出一处必须补的：`body` 原来是 `display:grid + place-items:center`（隐含那一列被内容的 max-content 撑开）⇒ **窄屏上会横向溢出**（`main` 的 `width:100%` 跟着被撑到 594px）。**补上 `grid-template-columns: minmax(0, 1fr)`** 之后才对（见下面那两张真图）|
 | ③ | **自查**（`src/app-lint.js` 新增 ⑨） | 两档机械自查：`no-wide-layout`（宽屏上一个字都没交代）· `thin-page`（通篇只能看）。**只报不拦**，同 ⑧ 那一档的纪律 |
 | ④ | **人格**（`hupo-persona.yml` 小程序那一节） | 补一条"**做出来别只有一层，而且要在平板上铺得开**"——**顺手还了 `186` §四 欠的那条**（"人格里那一条还没加"） |
 | ⑤ | **接线**（`src/apps-socket.js` 的 `pageFilesForLint`） | 🔴 **`files` 没给就从工作区把页面读回来**（屏幕上是什么就查什么）⇒ 把 §一 那条静默的路接上 |
@@ -65,6 +65,22 @@
 **判不了** —— 那是 §二·① 那句"别交最小能跑" ＋ 骨架 ＋ 主人眼睛的事。**明说，不当成做了。**
 
 ---
+
+### 真图（真浏览器 · 真起步页 · 不是推测）
+
+把 `placeholderIndex()` 生成的那一页写成 `/tmp/starter.html`，用本机那个一次性 Chrome
+（`~/.cache/hupo-chrome`）各截一张：
+
+| 宽度 | 图 | 看到什么 |
+|---|---|---|
+| **1100×760**（平板） | `/tmp/starter-pad2.png` | **两张卡并排**（"记账本 ＋ 这里还空着" ｜ "跟你的助手说一句…"）—— 平板上不再是一条窄栏挂中间 |
+| **390×760**（手机） | `/tmp/starter-phone2.png` | **一列**、没有横向滚动条 |
+
+🔴 **第一版（`starter-phone.png`）在窄屏上是坏的**：出现了横向滚动条、第二张卡被切掉一半 ——
+根因是 `body` 用 `display:grid + place-items:center` 而**没有给列**，那一列就被内容的
+max-content（两列 594px）撑开，`main` 的 `width:100%` 也跟着撑 ⇒ 补
+`grid-template-columns: minmax(0, 1fr)` 才对。**这一条是"看一眼"看出来的**，
+不是判据抓到的（自查判不了真实排版）—— 也正是 §五 那条"判不了的那一半"的现场。
 
 ## 四、判据（各带负向对照 · 各做过变异验证）
 
