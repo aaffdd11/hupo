@@ -83,7 +83,7 @@ BorderSide _circleRing(WidgetTester tester) {
 }
 
 void main() {
-  testWidgets('🔴 那颗圆圈：**内部透明 ＋ 一圈实色琥珀**（主人 2026-10-06 定的）', (tester) async {
+  testWidgets('🔴 那颗圆圈：**白底 ＋ 一圈琥珀色**（图形墨色）', (tester) async {
     // 主人原话（2026-10-05）：*"那个语音按钮呢上外面要加一个边框啊，这个边框就是有那个琥珀色，
     //   就是按下去录音时候的那个颜色，然后……录音按钮和展开按钮他们也都有一个白色的底色"*
     // ★ **2026-10-06 改口径**（主人当天先说*"我们就用边框颜色加80%透明度"*、
@@ -93,14 +93,10 @@ void main() {
     final ring = _circleRing(tester);
     expect(ring.color, d.accent, reason: '★ 外面那一圈不是琥珀色（按下去录音时的那个颜色）');
     expect(ring.width > 0, isTrue, reason: '★ 那圈边框宽度是 0（等于没画）');
-    // ★ **2026-10-06 定案**（主人：*"不是边框透明，是按钮内部底色透明"*）：
-    //   **内部就是透明的**（一个像素的底都不铺），只有那一圈实色的琥珀；
-    //   图形与那一圈**同色**（内部透明 ⇒ 底下可能是任何壁纸；这个色压在黑到白之间
-    //   任何底上都有 ≥4.3:1，而墨色压在深色壁纸上会看不见）。
-    expect(_circleColor(tester).a, 0.0,
-        reason: '★ 那颗圆圈内部还有底色 —— 主人要的是"内部透明"');
-    expect(_circleGlyph(tester).color, d.accent,
-        reason: '★ 圆圈里的图形没跟那一圈同色（内部透明时，墨色压在深色壁纸上会看不见）');
+    // ★ **2026-10-06 定案**（主人当天最后一句：*"现在把白色底加上"*）：
+    //   **那张纸的白**（`card`）＋ 一圈实色的琥珀；图形**墨色**（白底之上它最清楚）。
+    expect(_circleColor(tester), d.card, reason: '★ 那颗圆圈没有白底（主人 2026-10-06 要的）');
+    expect(_circleGlyph(tester).color, d.ink, reason: '★ 圆圈里的图形不是墨色（白底之上该用墨色）');
 
     // 负向对照：在录的时候**整颗变琥珀**（那一圈还在，只是与底同色了）
     await _pump(tester, _listening());
@@ -116,8 +112,8 @@ void main() {
     await _pump(tester, _wrapping());
     expect(find.text('帮我看看天气'), findsOneWidget,
         reason: '★ 收尾中该看见**他刚说的那份字**（不是把它换成一句提示）');
-    expect(_circleColor(tester).a, 0.0,
-        reason: '★ 已经不在录了 ⇒ 不许还画着"在录"那个底（该回到"内部透明"）');
+    expect(_circleColor(tester), d.card,
+        reason: '★ 已经不在录了 ⇒ 不许还画着"在录"那个底（该回到白底）');
     expect(find.byIcon(Icons.mic_none_rounded), findsOneWidget);
     expect(find.byIcon(Icons.stop_rounded), findsNothing, reason: '★ 收尾中不许还摆着"停"那个方块');
 

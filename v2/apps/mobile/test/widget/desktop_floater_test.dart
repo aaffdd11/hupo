@@ -234,9 +234,9 @@ void main() {
           .descendant(of: find.byKey(voiceBarCircleKey), matching: find.byType(Material))
           .first,
     );
-    // ⚠️ **2026-10-06 定案**（主人：*"不是边框透明，是按钮内部底色透明"*）：
-    //   **内部透明**（`color!.a == 0`）＋ **一圈实色的琥珀**（界线全靠它）
-    //   ＋ 图形与那一圈同色（墨色压在深色壁纸上会看不见）。
+    // ⚠️ **2026-10-06 定案**（主人当天最后一句：*"现在把白色底加上"*）：
+    //   **白底**（那张纸的白）＋ **一圈实色的琥珀** ＋ **墨色图形** —— 也就是回到
+    //   "白底那颗"这一版（当天中间那两版浅橙 / 透明都作废了）。
     expect(circleFace.shape, isA<CircleBorder>(), reason: '★ 录音那颗不是圆的');
     expect((circleFace.shape! as CircleBorder).side.color, d.accent, reason: '★ 那一圈不是琥珀色');
     expect(tester.getSize(find.byKey(voiceBarCircleKey)), const Size(d.voiceCircleBox, d.voiceCircleBox));
@@ -246,7 +246,7 @@ void main() {
       find.descendant(of: find.byKey(chatHandleKey), matching: find.byType(Container)).first,
     );
     final dec = face.decoration! as BoxDecoration;
-    expect(dec.color!.a, 0.0, reason: '★ 那一列的面还有底色 —— 主人要的是"内部透明"');
+    expect(dec.color, d.card, reason: '★ 那一列的面不是那张纸的白（三颗该是同一个白底）');
     // 界线靠**实色轮廓**：底色可以透，那一圈不许透（不然压在壁纸上就看不见按钮在哪）
     expect(dec.border!.top.color.a, 1.0, reason: '★ 那一圈轮廓是半透明的 ⇒ 界线会跟着壁纸糊掉');
     expect(dec.border, isNotNull, reason: '★ 那一列的面没有轮廓');

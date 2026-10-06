@@ -234,10 +234,10 @@ class _VoiceBarState extends State<VoiceBar> {
               final busy = widget.flow.phase == DrillPhase.wrapping;
               final on = _listening;
               return Material(
-                // ★ **内部透明**（主人 2026-10-06：*"不是边框透明，是按钮内部底色透明"*）——
-                //   就是**一个透明的内部 ＋ 一圈实色的琥珀**；在录时整颗才变琥珀（一明一暗地闪）。
+                // ★ **白底**（主人 2026-10-06 当天最后定的：*"现在把白色底加上"*）——
+                //   那张纸的白（`card`）＋ 一圈实色的琥珀；在录时整颗才变琥珀（一明一暗地闪）。
                 //   ⚠️ 这三颗（圆圈 ＋ 右边那一列两颗）**同一个底**（主人要的"颜色风格统一"）。
-                color: on ? recBlinkColor(glow) : const Color(0x00000000),
+                color: on ? recBlinkColor(glow) : d.card,
                 // ★ **外面那一圈琥珀色**（主人 2026-10-05：*"外面要加一个边框啊，
                 //   这个边框就是有那个琥珀色，就是按下去录音时候的那个颜色"*）——
                 //   平时也带着它：一眼看得出"这是录音那颗"。
@@ -248,11 +248,10 @@ class _VoiceBarState extends State<VoiceBar> {
                   child: Icon(
                     on ? Icons.stop_rounded : Icons.mic_none_rounded,
                     size: d.voiceCircleIcon,
-                    // ★ 图形与那一圈**同一个琥珀色**（内部透明 ⇒ 底下可能是任何壁纸：
-                    //   这个色压在黑到白之间的任何底上都有 ≥4.3:1，墨色压在深色壁纸上会看不见）
+                    // ★ **墨色**（白底回来之后它就是最清楚的：11.8:1；与别的图标同一个色）
                     color: on
                         ? d.card
-                        : (busy ? d.muted : d.accent),
+                        : (busy ? d.muted : d.ink),
                   ),
                 ),
               );

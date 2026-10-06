@@ -484,9 +484,9 @@ class ChatFloaterState extends State<ChatFloater> {
         width: d.voiceAuxFaceW,
         height: d.voiceAuxFaceH,
         decoration: BoxDecoration(
-          // ★ **内部透明**（主人 2026-10-06：*"不是边框透明，是按钮内部底色透明"*）：
-          //   平时**不铺任何底**，只剩那一圈实色的琥珀；开着时整块才变琥珀（状态一眼看得出）。
-          color: lit ? d.accent : const Color(0x00000000),
+          // ★ **白底**（主人 2026-10-06 当天最后定的：*"现在把白色底加上"*）：
+          //   平时就是那张纸的白（与录音那颗圆圈同一个底）；开着时整块变琥珀（状态一眼看得出）。
+          color: lit ? d.accent : d.card,
           borderRadius: BorderRadius.circular(d.voiceAuxRadius),
           // 🔴 **风格统一**（主人 2026-10-05）：与录音那颗圆圈**同一圈琥珀色、同一个粗细**
           //   —— 三颗长得是同一套东西，只是形状（圆 / 长方）不同。
@@ -522,9 +522,8 @@ class ChatFloaterState extends State<ChatFloater> {
           child: CustomPaint(
             size: const Size(22, 6),
             // ★ 2026-10-06 主人：*「颜色风格要统一一下」* ⇒ 三颗的图形**同一个色**：
-            //   就是**那一圈琥珀**（内部是透明的 ⇒ 底下可能是任何壁纸；这个色压在黑到白
-            //   之间任何底上都有 ≥4.3:1，而墨色压在深色壁纸上会看不见）。
-            painter: _FlatChevron(color: d.accent, up: collapsed),
+            //   **墨色**（白底之上它最清楚 11.8:1，也与界面上别的图标同一个色）。
+            painter: _FlatChevron(color: d.ink, up: collapsed),
           ),
         ),
         ),
@@ -570,8 +569,8 @@ class ChatFloaterState extends State<ChatFloater> {
               child: Icon(
                 on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
                 size: d.voiceAuxIcon,
-                // ★ 同上：关着的时候与那一圈**同一个琥珀色**（理由同上面那颗箭头）
-                color: on ? d.card : d.accent,
+                // ★ 同上：关着的时候也是**墨色**（理由同上面那颗箭头）
+                color: on ? d.card : d.ink,
               ),
             ),
             ),
