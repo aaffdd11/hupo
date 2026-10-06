@@ -114,9 +114,15 @@ function writeAtomic(fs, file, data, mode = 0o644) {
  * ★ 2026-10-04（主人：*"也要用这个经验来完善小程序的开发美感"*）：
  *   它原来是三行（`<p>这里还空着。</p>`）—— 现在它是**一份像样的起步页**：
  *   手机视口、读得清的字号、舒服的行距、一个正经的"空状态"，而且**一个外部资源都不引**。
- *   🔴 两条不许破：① **它仍然是"占位页"** —— "在建"那个判断靠它逐字节的 hash
+ * ★ 2026-10-06（主人：*"小程序的实现复杂度就没那么高……我觉得应该让小程序复杂度略微提高一些。
+ *   因为我们使用 pad 使用的。"* · 契约 `docs/dev/203-APP-RICHER.md`）：
+ *   它从"一列居中"改成**窄屏一列、宽屏并排**（`auto-fit` ＋ `minmax`）—— 它是 agent 接着改的
+ *   **骨架**：骨架里就写着"宽屏要交代"，比只在工具描述里说一句更容易被照着做。
+ *   🔴 三条不许破：① **它仍然是"占位页"** —— "在建"那个判断靠它逐字节的 hash
  *   （`AppWorkspaces.isBuilding()`），内容换了没关系，但**必须由 `placeholderIndex` 统一生成**
- *   （谁也别手写第二份）；② **「这里还空着」这句话要留着** —— 判据与用户都靠它认。
+ *   （谁也别手写第二份）；② **「这里还空着」这句话要留着** —— 判据与用户都靠它认
+ *   （⚠️ 自查那一档也认它：「太薄」那条**不对占位页报**，见 `app-lint.js` 的 ⑨）；
+ *   ③ **它自己一条自查都不许响**（判据：`test/app-lint.test.js`）。
  */
 export function placeholderIndex({ id, title = null } = {}) {
   const name = String(title ?? id ?? '');
@@ -129,18 +135,19 @@ export function placeholderIndex({ id, title = null } = {}) {
     '  <meta name="viewport" content="width=device-width, initial-scale=1">',
     `  <title>${safe}</title>`,
     '  <style>',
-    '    /* 起步页的样式就是"外观基线"的样子（docs/dev/186）：',
-    '       系统字体 · 正文 16px/1.7 · 小字 13px · 一屏里只有一个重心。 */',
+    '    /* 起步页的样式就是"外观基线"的样子（docs/dev/186 · 203）：',
+    '       系统字体 · 正文 16px/1.7 · 小字 13px · 窄屏一列、宽屏并排（别把平板的宽度空着）。 */',
     '    :root { --ink: #221f1b; --muted: #6b6257; --card: #fffdf9; --line: #e6ded0; --paper: #f8f5ee; }',
     '    * { box-sizing: border-box; }',
     '    body { margin: 0; min-height: 100dvh; display: grid; place-items: center; padding: 24px;',
     '           background: var(--paper); color: var(--ink);',
     '           font: 16px/1.7 system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif; }',
-    '    main { width: 100%; max-width: 22rem; background: var(--card); border: 1px solid var(--line);',
-    '           border-radius: 14px; padding: 28px 24px; }',
+    '    main { width: 100%; max-width: 56rem; display: grid; gap: 18px;',
+    '           grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); }',
+    '    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 28px 24px; }',
     '    h1 { margin: 0 0 8px; font-size: 20px; line-height: 1.4; }',
     '    p { margin: 0; color: var(--muted); font-size: 14px; }',
-    '    .hint { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }',
+    '    .hint p { font-size: 13px; }',
     '    @media (prefers-color-scheme: dark) {',
     '      :root { --ink: #f2eee8; --muted: #a89f92; --card: #1f1c18; --line: #38322b; --paper: #14120f; }',
     '    }',
@@ -148,9 +155,13 @@ export function placeholderIndex({ id, title = null } = {}) {
     '</head>',
     '<body>',
     '  <main>',
-    `    <h1>${safe || '这里'}</h1>`,
-    '    <p>这里还空着。</p>',
-    '    <p class="hint">跟你的助手说一句想让它做什么，它就把它做出来；做好之后这一页自己就变了。</p>',
+    '    <section class="card">',
+    `      <h1>${safe || '这里'}</h1>`,
+    '      <p>这里还空着。</p>',
+    '    </section>',
+    '    <section class="card hint">',
+    '      <p>跟你的助手说一句想让它做什么，它就把它做出来；做好之后这一页自己就变了。</p>',
+    '    </section>',
     '  </main>',
     '</body>',
     '</html>',

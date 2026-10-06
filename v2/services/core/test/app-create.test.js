@@ -432,3 +432,57 @@ test('S5 助手在**某个小程序那一间**里调 create ⇒ 人话拒；main
   assert.equal(notAsked.refused, 'needs-ask');
   assert.equal(notAsked.error, NEEDS_ASK);
 });
+
+// ════════════════════════════════════════════════════════════
+// S6 —— **"文件已经写在它那一间里"那条路也要过自查**（2026-10-06 · `docs/dev/203`）
+// ════════════════════════════════════════════════════════════
+test('S6 `files` 不给（内容写在它自己目录里）⇒ 自查照旧看得见那几页；给了就照给的', async () => {
+  const root = tmp();
+  const apps = new Apps({ dir: nodePath.join(root, 'apps'), sub: 'u1' });
+  const workspaces = new AppWorkspaces({ dir: nodePath.join(root, 'workspaces'), now: () => NOW });
+  const page = (body) => `<!doctype html><meta charset="utf-8"><title>x</title>${body}`;
+  // 他明说了（只量自查这一条）
+  const ctx = () => ({
+    turnInputFor: () => '帮我做一个小程序',
+    workspace: workspaces,
+    onInstalled: () => {},
+    onAppBuilt: () => {},
+  });
+  const make = (id) => ({ op: 'create', app: { id, title: '记账本', entry: 'index.html' }, scope: 'main' });
+
+  // ① 最常见的写法：文件**已经写在那一间里**了 ⇒ `files` 不给
+  //    这里故意写一份"没视口、没宽屏交代、通篇只能看"的页面 ⇒ 三档基线自查**都要响**
+  workspaces.ensure('zhangben', { title: '记账本', entry: 'index.html' });
+  workspaces.write('zhangben', { 'index.html': page('<h1>记账本</h1><p>今天花了 30</p>') });
+  const blind = await handleAppsOp(apps, make('zhangben'), ctx());
+  assert.equal(blind.ok, true, JSON.stringify(blind));
+  const codes = (blind.lint?.warnings ?? []).map((w) => w.code);
+  assert.ok(codes.includes('no-viewport'), `★ 没给 files 的那条路必须照样过自查（现在收到的是空的）：${JSON.stringify(blind.lint)}`);
+  assert.ok(codes.includes('no-wide-layout'), `★ 宽屏那条也要看得见：${JSON.stringify(codes)}`);
+  assert.ok(codes.includes('thin-page'), `★ "太薄"那条也要看得见：${JSON.stringify(codes)}`);
+
+  // ② 负向对照：把同一页改对（视口 ＋ 宽屏交代 ＋ 一处能点）⇒ 那两档不再响
+  workspaces.write('zhangben', {
+    'index.html': page(
+      '<meta name="viewport" content="width=device-width, initial-scale=1">'
+      + '<style>main{display:grid;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))}</style>'
+      + '<main><button id="add">记一笔</button><ul id="list"></ul></main>'
+      + '<script>document.getElementById("add").addEventListener("click", () => {})</script>',
+    ),
+  });
+  const fixed = await handleAppsOp(apps, make('zhangben'), ctx());
+  assert.equal(fixed.ok, true, JSON.stringify(fixed));
+  const fixedCodes = (fixed.lint?.warnings ?? []).map((w) => w.code);
+  assert.equal(fixedCodes.includes('no-wide-layout'), false, `★ 改对了就不该再响：${JSON.stringify(fixedCodes)}`);
+  assert.equal(fixedCodes.includes('thin-page'), false, `★ 同上：${JSON.stringify(fixedCodes)}`);
+  assert.equal(fixedCodes.includes('no-viewport'), false, `★ 同上：${JSON.stringify(fixedCodes)}`);
+
+  // ③ 给了 `files` 就照给的（那一份是它刚交的"最后确认"）—— 工作区里那份对不上也算它给的
+  const given = await handleAppsOp(
+    apps,
+    { op: 'create', app: { id: 'zhangben2', title: '记账本二', entry: 'index.html', files: { 'index.html': page('<h1>空</h1>') } }, scope: 'main' },
+    ctx(),
+  );
+  assert.equal(given.ok, true, JSON.stringify(given));
+  assert.ok((given.lint?.warnings ?? []).some((w) => w.code === 'no-viewport'), '★ 给的这一份才该被查');
+});

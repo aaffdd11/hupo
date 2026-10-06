@@ -46,6 +46,47 @@ export function appsSocketPath(dir) {
  */
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
 
+/** 自查要看的**页面那几种文本文件**（`pageFilesForLint` 用）。 */
+const LINT_TEXT_RE = /\.(?:html?|css|js|mjs|json|svg|txt|xml)$/i;
+
+/**
+ * ★ **自查要看的那几份文件**（2026-10-06 · 契约 `docs/dev/203-APP-RICHER.md`）。
+ *
+ * 🔴 为什么非要有它（主人报的"小程序内容不够丰富"就在这条静默的路上）：
+ *    `app_create` 有**两条**给内容的写法（见工具描述）：① 文件已经写在**它自己那个目录**里了
+ *    ⇒ `files` 不用给；② 页面不长 ⇒ 整段塞进 `files`。而**第 ① 条是最常走的那条**
+ *    （派活那条路 = `cwd` 就是那一间），那时 `lintApp` 收到的是**空的**
+ *    —— 它内部 `text === ''` 就直接跳过整档基线自查 ⇒ **⑧/⑨ 一条都不跑**。
+ *    ⇒ 现在：**没给 `files` 就从工作区把页面读回来**（屏幕上是什么，就查什么）。
+ *
+ * ⚠️ **给了 `files` 就用给的**（那份就是它刚交的"最后确认"）；读不回来 ⇒ 也不抛
+ *    （**不许**因为一次自查把"东西已经造出来了"这件事搞失败）。
+ * ⚠️ 只取页面那几种文本：工作区里可能有大图片，`read()` 是整间读进内存的。
+ *
+ * @param {Record<string,string|Buffer>|null|undefined} given  `app_create` 里给的 `files`
+ * @param {{read?:Function}|null} [workspace]                   那一间的工作区（`AppWorkspaces`）
+ * @param {string} [id]                                          短名
+ * @param {(m:string)=>void} [log]
+ * @returns {Record<string,string|Buffer>}
+ */
+export function pageFilesForLint(given, workspace, id, log = () => {}) {
+  const out = {};
+  if (given && typeof given === 'object' && !Array.isArray(given)) {
+    for (const [p, v] of Object.entries(given)) out[p] = v;
+  }
+  if (Object.keys(out).length > 0) return out;
+  if (!workspace || typeof workspace.read !== 'function' || typeof id !== 'string' || id === '') return out;
+  try {
+    const ws = workspace.read(id);
+    for (const [p, v] of Object.entries(ws?.files ?? {})) {
+      if (LINT_TEXT_RE.test(p)) out[p] = v;
+    }
+  } catch (err) {
+    log(`制品自查读不回那一间（${id}）：${err?.message ?? err}`);
+  }
+  return out;
+}
+
 /**
  * 把一条请求变成一条回答。**纯同步**（制品那套操作全是同步的）。
  *
@@ -275,7 +316,9 @@ async function runAppsOp(apps, req, ctx = {}) {
          */
         let lint = { errors: [], warnings: [] };
         try {
-          const filesForLint = a.files && typeof a.files === 'object' ? a.files : {};
+          // ⚠️ **`files` 没给就去工作区读回来**：那是**最常走**的那条写法（见 `pageFilesForLint`）——
+          //    不读的话这一档自查在最常见的那条路上**一条都不跑**。
+          const filesForLint = pageFilesForLint(a.files, ctx.workspace, appId, (m) => ctx.log?.(m));
           lint = lintApp({
             files: filesForLint,
             permissions: Array.isArray(a.permissions) ? a.permissions : [],

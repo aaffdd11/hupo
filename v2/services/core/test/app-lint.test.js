@@ -15,14 +15,15 @@ import { placeholderIndex } from '../src/workspace.js';
 
 // ⚠️ 2026-10-04：夹具补上 `viewport` —— ⑧ 那档新规则会**如实**报「没写视口」（见 `186`），
 //    而这一份判据量的是别的几档，夹具就该是一份**正常的页面**。
-const page = (body) => ({
-  files: {
-    'index.html':
-      '<!doctype html><meta charset=utf-8>'
-      + '<meta name="viewport" content="width=device-width, initial-scale=1">'
-      + `<title>x</title>${body}`,
-  },
-});
+// ⚠️ 2026-10-06：夹具再补上 ⑨ 那两档要的东西（**宽屏交代 ＋ 一处能点的地方**，见 `203`）——
+//    同一个道理：量别的规则时，夹具不该被新规则喊。
+const bare = (body) =>
+  '<!doctype html><meta charset=utf-8>'
+  + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+  + '<title>x</title>'
+  + '<style>main{display:grid;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))}</style>'
+  + body;
+const page = (body) => ({ files: { 'index.html': bare(`<button>按一下</button>${body}`) } });
 
 test('① 自包含：引外部资源 ⇒ **报错**（脚本/样式/图片/CSS import/WebSocket/Google 字体）', () => {
   for (const bad of [
@@ -116,6 +117,67 @@ test('⑧ ★ 外观基线（`docs/dev/186`）：每条都**抓得住**，改对
   const starter = lintApp({ files: { 'index.html': placeholderIndex({ id: 'x', title: '记账本' }) } });
   assert.deepEqual(starter.warnings, [], '★ 起步页自己响了 ⇒ 说明基线与脚手架不是一套话');
   assert.deepEqual(starter.errors, []);
+});
+
+test('⑨ ★ 宽屏与"太薄"（`docs/dev/203`）：宽屏没交代 / 通篇只能看 ⇒ 各报一条；改对了就不报', () => {
+  const vp = '<meta name="viewport" content="width=device-width, initial-scale=1"><title>x</title>';
+  // ① 宽屏：一列、一个字的交代都没有 ⇒ 报（平板上一整屏只有一条窄栏）
+  const narrow = lintApp({ files: { 'index.html': `${vp}<button>按</button><p>一列到底</p>` } });
+  assert.equal(narrow.warnings.some((w) => w.code === 'no-wide-layout'), true, '★ 宽屏没交代 ⇒ 要报');
+  // 负向对照：三种写法各算"交代过了"
+  for (const css of [
+    '@media (min-width:48rem){main{grid-template-columns:1fr 1fr}}',
+    'main{grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))}',
+    'ul{display:flex;flex-wrap:wrap}',
+  ]) {
+    const r = lintApp({ files: { 'index.html': `${vp}<button>按</button><style>${css}</style>` } });
+    assert.equal(r.warnings.some((w) => w.code === 'no-wide-layout'), false, `★ 这一种算交代过了：${css}`);
+  }
+  // ⚠️ 只写了深色那一条 `@media` **不算**（它跟宽度无关 —— 假报会把"照抄骨架"的人坑了）
+  const darkOnly = lintApp({ files: { 'index.html': `${vp}<button>按</button><style>@media (prefers-color-scheme:dark){body{background:#000}}</style>` } });
+  assert.equal(darkOnly.warnings.some((w) => w.code === 'no-wide-layout'), true, '★ 深色模式的 @media 不算宽屏交代');
+
+  // ② 太薄：通篇只能看 ⇒ 报（那不是"能用的小程序"，是一张图）
+  const dead = lintApp({ files: { 'index.html': `${vp}<style>@media (min-width:48rem){}</style><h1>天气</h1><p>今天晴</p>` } });
+  assert.equal(dead.warnings.some((w) => w.code === 'thin-page'), true, '★ 只有看的页面 ⇒ 要报');
+  // 负向对照：能点 / 能填 / 能选 / 能听 / 挂了监听 —— 各算一处"能动的"（用没有按钮的底，才量得准）
+  for (const body of [
+    '<button>按</button>',
+    '<input type="text">',
+    '<select><option>a</option></select>',
+    '<a href="#x">看</a>',
+    '<script>el.addEventListener("click", f)</script>',
+    '<div contenteditable="true"></div>',
+  ]) {
+    const r = lintApp({ files: { 'index.html': bare(body) } });
+    assert.equal(r.warnings.some((w) => w.code === 'thin-page'), false, `★ 这一处算"能动的"：${body}`);
+  }
+  // ⚪ **占位页豁免**：壳自己那份空状态本来就该是空的（认「这里还空着」那句话）
+  assert.equal(
+    lintApp({ files: { 'index.html': placeholderIndex({ id: 'x', title: '记账本' }) } }).warnings.some((w) => w.code === 'thin-page'),
+    false,
+    '★ 占位页不该被报"太薄"',
+  );
+  // 🔴 变异对照：把那句话换掉 ⇒ 当场报（豁免认的是那句话，不是"凡空页面都不报"）
+  const stripped = placeholderIndex({ id: 'x', title: '记账本' }).replace('这里还空着。', '今天晴。');
+  assert.equal(
+    lintApp({ files: { 'index.html': stripped } }).warnings.some((w) => w.code === 'thin-page'),
+    true,
+    '★ 把「这里还空着」换成别的话 ⇒ 该报了（变异验证）',
+  );
+});
+
+test('★ 内联 SVG 的 `xmlns` 不算"连了一个站"（2026-10-06：基线点名让图标用内联 SVG）', () => {
+  const withSvg = lintApp(page('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3"/></svg>'));
+  assert.deepEqual(withSvg.errors, [], '★ `xmlns` 是个标识符、浏览器永远不去请求它 ⇒ 不许报 host-not-declared / net-not-declared');
+  assert.deepEqual(withSvg.warnings, []);
+  // 负向对照：**真去连一个站**照旧要报（豁免只对命名空间那一格）
+  assert.equal(
+    lintApp(page('<script>fetch("https://www.example.com/a")</script>')).errors.some((e) => e.code === 'host-not-declared'),
+    true,
+    '★ 豁免不许把真外站也放过',
+  );
+  assert.deepEqual(httpsHostsIn('<svg xmlns="http://www.w3.org/2000/svg"></svg> https://api.x.com/a'), ['api.x.com']);
 });
 
 test('⑤ 网络：连了没声明的站 ⇒ **报错**；声明了没连 ⇒ 提示；没声明 net 却连外站 ⇒ 报错', () => {

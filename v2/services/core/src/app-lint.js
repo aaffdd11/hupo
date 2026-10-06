@@ -52,6 +52,16 @@ function joinText(files) {
   return '';
 }
 
+/**
+ * ⚠️ **不算"外站"的那几个**：**XML 命名空间**（内联 SVG / MathML 的 `xmlns`）。
+ *
+ * 🔴 为什么非要有这一条（2026-10-06）：基线**点名让图标用内联 SVG**（`149` §三·2），
+ *    而 `<svg xmlns="http://www.w3.org/2000/svg">` 是个**标识符**，浏览器**永远不会去请求它** ——
+ *    可在字符串层面它长得和"连一个站"一模一样 ⇒ 不排掉，就会把"画了一个图标"
+ *    报成"连了一个没声明的站"（那是最打击人的一种假报）。
+ */
+const NAMESPACE_HOSTS = new Set(['www.w3.org']);
+
 /** 页面里出现的**绝对 https 站**（用来对"声明的白名单"）。 */
 export function httpsHostsIn(text) {
   const out = [];
@@ -59,6 +69,7 @@ export function httpsHostsIn(text) {
   let m;
   while ((m = re.exec(String(text ?? ''))) !== null) {
     const h = m[1].toLowerCase();
+    if (NAMESPACE_HOSTS.has(h)) continue; // 命名空间不是网络
     if (!out.includes(h)) out.push(h);
   }
   return out;
@@ -194,6 +205,41 @@ export function lintApp({ files = {}, permissions = [], net = [], tasks = [], ti
     }
     if (/background-clip\s*:\s*text/i.test(text) || /-webkit-background-clip\s*:\s*text/i.test(text)) {
       W('gradient-text', '用了渐变字（`background-clip: text`）—— 它的对比度跟着底色变，常常读不清，而且是一眼认得出的"模板感"。改法：要点靠**字重或字号**。');
+    }
+  }
+
+  /**
+   * ⑨ ★ **别只交一个"手机上看着还行"的最小页**（2026-10-06 · 契约 `docs/dev/203-APP-RICHER.md`）。
+   *
+   * 🔴 主人原话：*「小程序的实现复杂度就没那么高，页面内容也不是很丰富。我觉得应该让小程序
+   *    复杂度略微提高一些。因为我们使用 pad 使用的。」* ⇒ 两个**机械可判、判出来就是真毛病**：
+   *      · **宽屏上一个字都没交代** ⇒ 他是在**平板**上点开它的（整屏都给它）：
+   *        于是内容缩成一条窄栏挂在中间，两边空着；
+   *      · **通篇只能看**（没有一处能点/能填/能选）⇒ 那不是"能用的小程序"，那是一张图。
+   * ⚠️ **只报不拦**（同 ⑧ 那一档的纪律）：报了不改照样上桌，只是"看着像没做完"。
+   * ⚪ **占位页豁免**：壳自己给"还没做"的那一格写的空状态（`workspace.js` 的
+   *    `placeholderIndex`）**本来就该是空的** —— 认它那句「这里还空着」，不认文件名
+   *    （谁都能叫 `index.html`）。
+   */
+  if (text !== '') {
+    const wideEnough =
+      /@media[^{]*\(\s*(?:min|max)-width\s*:/i.test(text)
+      || /@media[^{]*orientation\s*:/i.test(text)
+      || /grid-template-columns\s*:[^;{}]*\b(?:auto-fit|auto-fill|minmax\s*\()/i.test(text)
+      || /flex-wrap\s*:\s*wrap/i.test(text)
+      || /(?:column-count|columns)\s*:\s*(?!1\b)/i.test(text);
+    if (!wideEnough) {
+      W('no-wide-layout', '页面里**没有一处说"宽屏上怎么排"**（既没有按宽度分的 `@media`，也没有会自己铺开的 `grid`／`flex-wrap`）—— 他是在**平板**上点开它的，整屏都给它：这一版在那边就是**一条窄栏挂在中间、两边空着**。改法：给内容一个上限宽度，再让主要那几块**宽屏并排**（`grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr))`，或 `@media (min-width: 48rem) { … }`）。');
+    }
+    const interactive =
+      /<(?:button|input|select|textarea|details|summary|form|audio|video)\b/i.test(text)
+      || /\bonclick\s*=/i.test(text)
+      || /addEventListener\s*\(/i.test(text)
+      || /contenteditable\b/i.test(text)
+      || /\brole\s*=\s*["']?(?:button|tab|switch|checkbox)/i.test(text)
+      || /<a\b[^>]*\bhref\s*=/i.test(text);
+    if (!interactive && !/这里还空着/.test(text)) {
+      W('thin-page', '这一页**通篇只能看**：没有一处能点、能填、能选 —— 他打开它是要**用它**的（不是看一张图）。至少给一处**能动**的地方（点一下出结果／填一行存下来／选一个切过去），该记下来的走 `/db`，并把**空/忙/错**三种说法补齐。');
     }
   }
 
