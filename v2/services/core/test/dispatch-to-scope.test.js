@@ -121,6 +121,8 @@ async function boot({ scenario = 'job', job = {}, cfg: over = {} } = {}) {
           FAKE_JOB_WHY: job.why ?? '帮我做一个练算数的小程序',
           FAKE_JOB_NAME: job.name ?? '算数小练',
           FAKE_JOB_TITLE: job.title ?? '',
+          // ★ 2026-10-06：让假子进程**故意给一个别的 id**（演『模型没照任务书写』）
+          FAKE_JOB_APP_ID: job.appId ?? '',
           FAKE_JOB_SUMMARY: job.summary ?? '做成了一个能出题的算数小程序，打开就能练加减法',
           FAKE_JOB_DELAY: String(job.delay ?? 0),
         },
@@ -354,6 +356,50 @@ test('🔴 P2：`app_create` 那一段在**那一间**；主进程里**没有**�
     // ★ 主进程里只有**派活那两帧**（`job/start` / `job/report`）——不是那段过程
     const jobFrames = mainSeen.filter((e) => String(e.type).startsWith('job/'));
     assert.equal(jobFrames.length >= 2, true, `★ 派活那两帧要在主进程那条日志上：${JSON.stringify(jobFrames)}`);
+  } finally {
+    await h.close();
+  }
+});
+
+// ════════════════════════════════════════════════════════════════
+// ★ 2026-10-06 · **那一间就是那个小程序**（主人当天问的那一件）
+//
+// 主人原话：*「我们选择另一处时，是创建了这个小程序的 placeholder 以后的工作区的聊天，
+// 还是一个孤独的聊天窗口？原则上应该创建小程序工作区，启动那个工作区的 agent，
+// 在这个 agent 里面完成任务。」*
+//
+// 钉什么：**子进程给别的 id 也不许跑偏** —— 在派活那一间里登记的就是**那一间的短名**，
+// 否则 `workspaces.ensure` 会另建一个空目录 ⇒ 桌面上那个图标点开是**另一个房间**，
+// 而真正干活的那一间**没有图标**（一个孤独的聊天窗口）。
+// ════════════════════════════════════════════════════════════════
+
+test('🔴 那一间就是那个小程序：子进程给别的 id ⇒ 登记的仍是**那一间**（不许多出一个空房间）', async () => {
+  // ⚠️ 假子进程这一次**故意**拿 `dice` 去登记（真模型完全可能这么干）
+  const h = await boot({ scenario: 'job', job: { appId: 'dice' } });
+  try {
+    const w = await runOneJob(h);
+    // ① **登记的是那一间**（不是它随口给的那个名字）
+    assert.equal(w.apps.has('math-drill'), true,
+      '★ 那一间没被登记成小程序 —— 图标点开就找不到干活那段了');
+    assert.equal(w.apps.has('dice'), false,
+      '★ 它另起的那个名字也被登记了（桌上会多一个空房间）');
+    // ② **没有多出来的空工作区**（`ensure(dice)` 不许发生）
+    assert.equal(
+      nodeFs.existsSync(nodePath.join(w.workspaces.root, 'dice')), false,
+      '★ 另建了一个空工作区 —— 那正是孤独的聊天窗口',
+    );
+    // ③ 🔴 **图标点开的那一间 == 干活那一间**：干活那段过程**就在**被登记的那一间里
+    const view = new ScopeView({ timeline: w.timeline.base, scope: 'math-drill' });
+    assert.equal(
+      view.readAll().some((e) => e.type === 'message/text' && String(e.text ?? '').includes('我先把页面写出来')),
+      true,
+      '★ 被登记的那一间里没有干活那段过程 —— 那它就只是个空壳',
+    );
+    // ④ 产物也在那一间里（不是在新造的空目录里）
+    assert.equal(
+      nodeFs.existsSync(nodePath.join(w.workspaces.root, 'math-drill', 'index.html')), true,
+      '★ 产物不在被登记的那一间里',
+    );
   } finally {
     await h.close();
   }

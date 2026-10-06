@@ -166,7 +166,14 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        id: { type: 'string', description: '短名，**只许小写字母/数字/短横**（如 dice、shui-guo），也是它的地址' },
+        id: {
+          type: 'string',
+          description:
+            '短名，**只许小写字母/数字/短横**（如 dice、shui-guo），也是它的地址。'
+            + '🔴 **你被派到「另开一处做」的那一间里干活时，这个 id 就用那一间的短名**'
+            + '（任务书里写着那个短名）—— 那一间就是这件东西的家；服务端也按这条钉着：'
+            + '你在那一间里给别的名字，登记的仍然是那一间的短名。',
+        },
         title: { type: 'string', description: '它的名字，给人看的（如"掷骰子"），别超过十来个字' },
         icon: {
           type: 'string',
@@ -422,8 +429,10 @@ async function callTool(name, args) {
         const rep = lintReport(r.lint ?? { errors: [], warnings: [] });
         return rep === '' ? '' : `\n\n${rep}`;
       })();
+      // ★ 2026-10-06：钉死那一刀的回话（在派活那一间里给的别的名字不作数）
+      const idNote = typeof r.idNote === 'string' && r.idNote ? `\n\n${r.idNote}` : '';
       return textResult(
-        `做好了：**${r.title}**（短名 ${r.id}，第 ${r.version} 版）。它现在在他的桌面上，点开就能用。${iconNote}${lintNote}`,
+        `做好了：**${r.title}**（短名 ${r.id}，第 ${r.version} 版）。它现在在他的桌面上，点开就能用。${iconNote}${idNote}${lintNote}`,
       );
     }
     return textResult(`这次没做成：${r.error}`, true);

@@ -155,6 +155,21 @@ async function runAppsOp(apps, req, ctx = {}) {
           return { ok: false, error: INSIDE_APP_NO_CREATE, refused: 'inside-app' };
         }
         const a = req.app ?? {};
+        // 🔴 **2026-10-06：派活那一间 —— 这一间就是那个小程序的家**（主人：
+        //    *"选择另一处时……原则上应该创建小程序工作区，启动那个工作区的 agent，
+        //    在这个 agent 里面完成任务。"*）
+        //
+        //    判据：**这一间不是主线、又不是已有小程序 / 内置那格** ⇒ 它就是
+        //    "专门做这件事"的那一间（派活建的）⇒ **它登记的 id 就用它自己**，
+        //    模型给别的名字**一律不作数**。
+        //
+        //    🔴 **为什么非钉不可**：原来 id 完全由模型给 ⇒ 它只要随手写一个别的名字，
+        //    `workspaces.ensure` 就会**另建一个空目录** ⇒ 桌面上那个图标点开的是
+        //    **另一个房间**，而真正干活的那一间**没有图标** —— 那就是"一个孤独的聊天窗口"
+        //    （而干活那段对话谁也找不到）。钉死之后"图标 = 那一间的门"是**结构**，不是约定。
+        //    ⚠️ 已经登记过的那一间进不来这里：上面"里面不能再开一个"那道闸先把它拦了。
+        const jobRoom = scopeNow !== null && scopeNow !== 'main' && !isAnAppRoom(apps, scopeNow);
+        const appId = jobRoom ? scopeNow : a.id;
         // ★★ **服务端那一刀**（契约 `83-APP-WORKSPACE.md` §三·4）：**服务端**把这一间
         //   建出来 ＋（给了内容就）落进去 —— 不靠模型记得建目录。
         //
@@ -168,13 +183,13 @@ async function runAppsOp(apps, req, ctx = {}) {
           const given = a.files && typeof a.files === 'object' && !Array.isArray(a.files)
             ? Object.keys(a.files).length
             : 0;
-          ctx.workspace.ensure(a.id, { title: a.title, entry: a.entry });
+          ctx.workspace.ensure(appId, { title: a.title, entry: a.entry });
           // ⚠️ **内容可以不在这儿给**：他（或者助手）在那一间目录里直接写文件就是**部署**
           //    （cwd 就是那一间）⇒ `files` 缺省 = "已经在里面了"。
-          if (given > 0) ctx.workspace.write(a.id, a.files);
-          const stat = workspaceStat(ctx.workspace, a.id);
+          if (given > 0) ctx.workspace.write(appId, a.files);
+          const stat = workspaceStat(ctx.workspace, appId);
           created = apps.register({
-            id: a.id,
+            id: appId,
             title: a.title,
             icon: a.icon,
             // ⚠️ 入口以**工作区里真实存在的那个**为准（工作区可能不是模型刚交的那份）
@@ -199,7 +214,7 @@ async function runAppsOp(apps, req, ctx = {}) {
         } else {
           // ⚠️ **老路照旧**：没接工作区那一刀时（单测/旧部署）行为一个字不变。
           created = apps.create({
-            id: a.id,
+            id: appId,
             title: a.title,
             icon: a.icon,
             entry: a.entry,
@@ -251,6 +266,11 @@ async function runAppsOp(apps, req, ctx = {}) {
           icon: m.icon,
           rootHash: m.rootHash,
           lint: { errors: lint.errors, warnings: lint.warnings },
+          // ★ 钉死那一刀要说出来：它给了别的名字时，让**它自己**知道登记的是哪一间
+          //   （不然它后面还会拿那个不存在的名字去引用）
+          ...(jobRoom && a.id !== appId
+            ? { idNote: `这一间就是它的家：登记的短名就是 **${appId}**（你给的那个名字不作数）。` }
+            : {}),
         };
       }
       // ── **画一张图**（P1-27 后半 · 主人 2026-09-24："图片需要打通"）──────────

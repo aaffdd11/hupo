@@ -508,6 +508,9 @@ function runScenario(t) {
       //    在**他盒子里**，宿主查不到 ⇒ P3 那句"叫什么"**只许**用 `name`。
       //    把它俩设成不同的值，就能把"拿宿主侧标题顶替"那种错形状当场照出来。
       const appTitle = process.env.FAKE_JOB_TITLE || name;
+      // ★ 2026-10-06：**故意给一个别的 id**（演『模型没照任务书写』那一档）——
+      //   默认还是那一间的短名（老形状一个字不变）。
+      const appId = process.env.FAKE_JOB_APP_ID || where;
       const summary = process.env.FAKE_JOB_SUMMARY ?? '做成了。';
       const delay = Number.parseInt(process.env.FAKE_JOB_DELAY ?? '0', 10);
 
@@ -566,7 +569,7 @@ function runScenario(t) {
       assistantMessage(t, 1, '我先把页面写出来。', null);
       askApps({
         op: 'create',
-        app: { id: where, title: appTitle, icon: '', entry: 'index.html', files: { 'index.html': `<p>${appTitle}</p>` } },
+        app: { id: appId, title: appTitle, icon: '', entry: 'index.html', files: { 'index.html': `<p>${appTitle}</p>` } },
         // ⚠️ 与真那条工具口同形：带上"我这一轮在哪一间"（`HUPO_APPS_SCOPE`）
         ...(SCOPE_OF_FAKE ? { scope: SCOPE_OF_FAKE } : {}),
       })
