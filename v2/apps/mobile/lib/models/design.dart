@@ -145,6 +145,12 @@ const Color amber = Color(0xFFE0A030);
 const Color accentLit = Color(0xFFE2684F);
 const Duration recBlinkPeriod = Duration(milliseconds: 800);
 
+/// ★ **2026-10-07：在听时那一圈涟漪的周期**（主人：*"我们增加动效，表达正在听的意思。"*）。
+///
+/// ⚠️ 它**只说"在听"** —— 聊天这一条没量电平（装成"跟着他声音起伏"就是骗人）。
+/// ⚠️ 同样是**颜色/画在圈外**，圆圈的大小 / 位置 / 命中区一个像素都不动。
+const Duration listeningRipplePeriod = Duration(milliseconds: 1600);
+
 /// ★ **2026-10-05：录音圆圈右边那两颗**（展开聊天 / 播放语音）。
 ///
 /// 主人：*"语音按钮的右侧，需要两个按钮。"* ⇒ 两颗都是**图形按钮**，

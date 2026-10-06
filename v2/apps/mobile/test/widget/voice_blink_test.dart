@@ -23,6 +23,7 @@ import 'package:hupo_app/models/dsh_design.dart';
 import 'package:hupo_app/models/motion_switch.dart';
 import 'package:hupo_app/models/voice_words.dart';
 import 'package:hupo_app/widgets/appearance_scope.dart';
+import 'package:hupo_app/widgets/listening_ripple.dart';
 import 'package:hupo_app/widgets/voice_bar.dart';
 
 /// 一个把状态钉成某一档的夹具（状态住上层 ⇒ 直接告诉它"在录 / 收尾中 / 框里那份字"）。
@@ -255,6 +256,70 @@ void main() {
     final s17 = await sizeAt(17);
     expect(s17, greaterThan(s12),
         reason: '★ 字号调大 ⇒ 底下这一格也得跟着变大（原来它走 textTheme，一个像素都不动）');
+  });
+
+  testWidgets('⑨ 🔴 在听的时候，那一圈涟漪**真的在荡**（主人：增加动效，表达正在听）', (tester) async {
+    setHupoAnimationsEnabled(on: true);
+    addTearDown(() => setHupoAnimationsEnabled(on: false));
+    double? tOf(WidgetTester t) => (t.widget<CustomPaint>(find.byKey(listeningRippleKey)).painter
+            as ListeningRipplePainter)
+        .t;
+
+    await _pump(tester, recording: true, settle: false);
+    final seen = <double?>{};
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 130));
+      seen.add(tOf(tester));
+    }
+    expect(seen.length, greaterThan(1),
+        reason: '★ 开着开关推了 6 帧，涟漪一个数都没变 —— 它根本没动（$seen）');
+    expect(seen.any((v) => v != null), isTrue, reason: '★ 在听的时候该真的画出来');
+
+    // 🔴 负向对照：尺寸/位置一个像素都不许动（动的只是圈外那两条线）
+    final box = tester.getSize(find.byKey(voiceBarCircleKey));
+    final at = tester.getTopLeft(find.byKey(voiceBarCircleKey));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(tester.getSize(find.byKey(voiceBarCircleKey)), box, reason: '★ 圆圈自己在变大小 = 更难按');
+    expect(tester.getTopLeft(find.byKey(voiceBarCircleKey)), at, reason: '★ 圆圈自己在挪');
+  });
+
+  testWidgets('⑨·补 不在听 / 关着总开关 ⇒ **一圈都不画**（但那一层照旧在树上）', (tester) async {
+    ListeningRipplePainter p(WidgetTester t) =>
+        t.widget<CustomPaint>(find.byKey(listeningRippleKey)).painter as ListeningRipplePainter;
+    // ① 关着总开关（测试里的默认就是关的）：能 `pumpAndSettle` 出来 ⇒ 没超时
+    await _pump(tester, recording: true);
+    expect(find.byKey(listeningRippleKey), findsOneWidget, reason: 'M3：不动 ≠ 没有');
+    expect(p(tester).t, isNull, reason: '★ 关着开关还在画 = 屏幕上多出两圈假的线');
+    // ② 不在听（开着开关也一样）
+    setHupoAnimationsEnabled(on: true);
+    addTearDown(() => setHupoAnimationsEnabled(on: false));
+    await _pump(tester);
+    expect(p(tester).t, isNull, reason: '★ 没在听就该一个像素都不画');
+  });
+
+  testWidgets('⑨·补2 🔴 那一圈涟漪的**算法**（纯函数：喂 t 就有东西、越荡越大越淡、一轮接上）', (tester) async {
+    const base = 32.0;
+    // ① t = null（不画）那一档在 painter 里（上面那条量的）
+    // ② 每一帧两条圈：一条在外面、一条在里面（错开半轮）
+    final a = ListeningRipplePainter.ringsFor(0, base);
+    expect(a.length, 2, reason: '★ 该是"一圈一圈接着荡"（两条错开）');
+    expect(a[0].r, closeTo(base, 0.001), reason: '★ t=0 时里圈正好贴着圆圈边');
+    expect(a[1].r, greaterThan(a[0].r), reason: '★ 第二条在外圈（错开半轮）');
+    // ③ 同一个圈：t 越大 ⇒ 越往外、越淡
+    final b = ListeningRipplePainter.ringsFor(0.5, base);
+    expect(b[0].r, greaterThan(a[0].r), reason: '★ 荡出去要越荡越大');
+    expect(b[0].opacity, lessThan(a[0].opacity), reason: '★ 越荡越淡');
+    // ④ 一轮接上（t=1 就是 t=0）—— 不接上会看到"跳一下"
+    final c = ListeningRipplePainter.ringsFor(1, base);
+    expect(c[0].r, closeTo(a[0].r, 0.001), reason: '★ 一轮荡完要接回起点（不然每轮跳一下）');
+    expect(c[0].opacity, closeTo(a[0].opacity, 0.001));
+    // ⑤ 永远不许荡到看不见的地方去（幅度有上限）
+    for (var i = 0; i <= 10; i++) {
+      for (final r in ListeningRipplePainter.ringsFor(i / 10, base)) {
+        expect(r.r, lessThan(base * 1.6), reason: '★ 荡得太远就该看不见了（但它还在画）');
+        expect(r.opacity, greaterThanOrEqualTo(0));
+      }
+    }
   });
 
   testWidgets('⑧ 🔴 打字那条退路：**上回打了一半的那句填回框里**，发送交出的是框里那份', (tester) async {

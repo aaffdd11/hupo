@@ -893,7 +893,18 @@ class ChatController extends ChangeNotifier {
     _hearing = const Hearing().tapped();
     notifyListeners();
     final why = await hearOnce(_onVoiceFrame);
-    if (why != null) _voiceBroke(voiceMicReason(why));
+    if (why == null) return;
+    // 🔴 **当场自动再试一次**（主人 2026-10-07：*"初次点击会出现 failed。第二次
+    //   再点击就好了。"*）—— 只对"连接那一层"的失败（见 [voiceWhyRetryable]）：
+    //   换一条**新的**连接再走一遍，他不用再按第二下。
+    //   ⚠️ 他在这期间按了停（`_voiceOn == false`）⇒ **不许**再去开麦克风。
+    if (_voiceOn && voiceWhyRetryable(why)) {
+      final again = await hearOnce(_onVoiceFrame);
+      if (again == null) return;
+      _voiceBroke(voiceMicReason(again));
+      return;
+    }
+    _voiceBroke(voiceMicReason(why));
   }
 
   /// **他按了停**：麦收手 ＋ **当场有反应**（圆圈不闪了、框里那句换成"收下了…"），

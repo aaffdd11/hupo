@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 import '../models/design.dart' as d;
 import '../models/voice_words.dart';
 import 'dsh_look.dart';
+import 'listening_ripple.dart';
 import 'rec_blink.dart';
 
 /// 底下那一格。
@@ -211,31 +212,40 @@ class _VoiceBarState extends State<VoiceBar> {
           key: voiceBarCircleKey,
           width: d.voiceCircleBox,
           height: d.voiceCircleBox,
-          child: RecBlink(
-            on: _listening,
-            builder: (context, glow) {
-              // 收尾中：**这颗圆圈这一小会儿没有可做的事**
-              //   ⇒ 画成"淡淡的、按不动"的样子（诚实：按了也没用），
-              //     而**不是**继续闪着"我在录"（那正是他报的那个"慢"）。
-              final busy = widget.wrapping;
-              final on = _listening;
-              return Material(
-                // ★ **白底**（主人 2026-10-06 当天最后定的：*"现在把白色底加上"*）
-                color: on ? recBlinkColor(glow) : d.card,
-                shape: CircleBorder(side: BorderSide(color: d.accent, width: d.voiceCircleRing)),
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: busy ? null : widget.onMic,
-                  child: Icon(
-                    on ? Icons.stop_rounded : Icons.mic_none_rounded,
-                    size: d.voiceCircleIcon,
-                    color: on
-                        ? d.card
-                        : (busy ? d.muted : d.ink),
-                  ),
-                ),
-              );
-            },
+          // ★ **2026-10-07**：在听的时候，圆圈外面**一圈一圈荡开**（只说"在听"；
+          //   尺寸/位置/命中区一个像素都不动 —— 它是画在圈外的一层，`Clip.none`）。
+          child: Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: [
+              Positioned.fill(child: ListeningRipple(on: _listening)),
+              RecBlink(
+                on: _listening,
+                builder: (context, glow) {
+                  // 收尾中：**这颗圆圈这一小会儿没有可做的事**
+                  //   ⇒ 画成"淡淡的、按不动"的样子（诚实：按了也没用），
+                  //     而**不是**继续闪着"我在录"（那正是他报的那个"慢"）。
+                  final busy = widget.wrapping;
+                  final on = _listening;
+                  return Material(
+                    // ★ **白底**（主人 2026-10-06 当天最后定的：*"现在把白色底加上"*）
+                    color: on ? recBlinkColor(glow) : d.card,
+                    shape: CircleBorder(side: BorderSide(color: d.accent, width: d.voiceCircleRing)),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: busy ? null : widget.onMic,
+                      child: Icon(
+                        on ? Icons.stop_rounded : Icons.mic_none_rounded,
+                        size: d.voiceCircleIcon,
+                        color: on
+                            ? d.card
+                            : (busy ? d.muted : d.ink),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
           ),
         ),
       );

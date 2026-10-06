@@ -14,7 +14,9 @@
 //   V4 **按停当场有反应**（收尾中那颗圆圈按不动），收尾中再点不算
 //   V5 一个字都没听到 ⇒ **如实说一句**、不发
 //   V6 开麦失败 ⇒ 如实说、**不发**；打字那条兜底照样走得通
-//   V7 🔴 这一侧**一处都不调 `/api/hear`**，而且那一套东西的文件**都不在了**
+//   V7 🔴 **第一次撞上死连接 ⇒ 自动再试一次**（主人报的「初次点击 failed，第二次就好」）
+//   V8 真答案不重试（没权限 / 没配钥匙 / 开不了麦）· V9 最多试两次
+//   V10 🔴 这一侧**一处都不调 `/api/hear`**，而且那一套东西的文件**都不在了**
 //
 // ⚠️ 这一层没有界面：判据量的是**控制器那一侧**（真 `ChatController` ＋ 假 api ＋ 假麦）。
 
@@ -60,7 +62,15 @@ class _Server {
 /// 一条假的麦（装了它，`canHear` 才是真）。
 class _FakeHearing {
   void Function(Map<String, dynamic>)? on;
+
+  /// 老用法：**一直**失败。
   String? failWith;
+
+  /// 按次序失败（先用队列；用完了就成功）—— 量"自动重试"要它。
+  final List<String?> failQueue = <String?>[];
+
+  /// 开过几次麦（＝ `startHear` 被调了几次）。
+  int starts = 0;
 }
 
 ({ChatController c, _Server s, _FakeHearing mic}) _boot() {
@@ -71,7 +81,13 @@ class _FakeHearing {
     tokens: TokenStore(),
     token: '测试令牌',
     startHear: ({required Uri url, required String token, required void Function(Map<String, dynamic>) onEvent}) async {
-      if (mic.failWith != null) return mic.failWith;
+      mic.starts += 1;
+      if (mic.failQueue.isNotEmpty) {
+        final w = mic.failQueue.removeAt(0);
+        if (w != null) return w;
+      } else if (mic.failWith != null) {
+        return mic.failWith;
+      }
       mic.on = onEvent;
       return null;
     },
@@ -201,7 +217,59 @@ void main() {
     expect(b.s.hearCalls, 0);
   });
 
-  test('V7 🔴 这一侧**一处都不调那条抽离层**，而且它的文件都不在了', () {
+  test('V7 🔴 第一次撞上死连接 ⇒ **同一个按键里自动再试一次**（不用他再按第二下）', () async {
+    // 🔴 主人 2026-10-07：*"初次点击会出现 failed。第二次再点击就好了。"*
+    //   第一次多半死在**那条预先热着的连接**上（它可能已经被对面收掉/没握上手：
+    //   真读数 —— 拿租户的令牌去握，对面回的是 503）⇒ 那一条**既不响也不报错**。
+    final b = _boot();
+    b.mic.failQueue.add('no-entry'); // 第一次：那条热的已经死了
+    await b.c.toggleVoiceCompose();
+    await _tick();
+    await _tick();
+    expect(b.mic.starts, 2, reason: '★ 必须**自己**再试一次（这就是"第二次就好了"那一下）');
+    expect(b.c.voiceRecording, true, reason: '★ 第二次开起来了 ⇒ 还在听');
+    expect(b.c.voiceNote, '', reason: '★ 中间那一次失败**不许**报给他（他什么都没做错）');
+
+    // 第二次真的能收字、能发
+    b.mic.on?.call({'type': 'asr/ready'});
+    b.mic.on?.call({'type': 'asr/final', 'text': '今天天气怎么样'});
+    await _tick();
+    expect(b.c.composeText, '今天天气怎么样');
+    await b.c.toggleVoiceCompose();
+    b.mic.on?.call({'type': 'asr/end', 'text': '今天天气怎么样', 'reason': 'user-stop'});
+    await _tick();
+    await _tick();
+    expect(b.s.said, ['今天天气怎么样']);
+  });
+
+  test('V8 **真答案不重试**：没给权限 / 没配钥匙 / 开不了麦 ⇒ 只试一次、如实说', () async {
+    expect(voiceWhyRetryable('no-entry'), isTrue);
+    expect(voiceWhyRetryable('failed'), isTrue);
+    for (final why in ['denied', 'not-configured', 'unsupported']) {
+      expect(voiceWhyRetryable(why), isFalse, reason: '★ $why 是真答案，重试一万次也一样');
+      final b = _boot();
+      b.mic.failQueue.add(why);
+      await b.c.toggleVoiceCompose();
+      await _tick();
+      await _tick();
+      expect(b.mic.starts, 1, reason: '★ $why 不该重试');
+      expect(b.c.voiceNote.isNotEmpty, isTrue, reason: '★ 要如实说一句');
+      expect(b.c.voiceRecording, false);
+    }
+  });
+
+  test('V9 重试也失败 ⇒ 如实说一次（**最多试两次**，不许一直试）', () async {
+    final b = _boot();
+    b.mic.failQueue..add('no-entry')..add('failed');
+    await b.c.toggleVoiceCompose();
+    await _tick();
+    await _tick();
+    expect(b.mic.starts, 2, reason: '★ 一次重试，不许更多');
+    expect(b.c.voiceNote, '麦没打开，等下再试。');
+    expect(b.c.voiceRecording, false);
+  });
+
+  test('V10 🔴 这一侧**一处都不调那条抽离层**，而且它的文件都不在了', () {
     // ⚠️ 量的是"代码里还在不在"，不是"开关关没关"：主人要的是**推倒重来**。
     final files = Directory('lib')
         .listSync(recursive: true)

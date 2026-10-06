@@ -88,7 +88,21 @@ Uri? _warmUrl;
 String? _warmToken;
 
 /// 热着的那条**最多挂多久**（到点自己收掉，别把一条连接永远挂在那儿）。
-const Duration _warmKeep = Duration(minutes: 3);
+///
+/// 🔴 **2026-10-07 收紧：3 分钟 → 60 秒**（主人报 *"初次点击会出现 failed，
+///    第二次再点击就好了"*）：中间那一层（隧道 / 网关）会**悄悄收掉**一条长时间
+///    没动静的连接，而本地**既不响也不报错** ⇒ 那一条看着还活着、其实已经死了
+///    （`_takeWarm()` 那个 `alive` 判不出来）。挂得越久、撞上一条死的概率越高
+///    ⇒ 宁可偶尔多付一次握手，也不许按下那一下撞上一条死的。
+const Duration _warmKeep = Duration(seconds: 60);
+
+/// **那条热着的连接最多等它多久算"死的"**。
+///
+/// ⚠️ 只用在**热着的那条**上：热的那条握上手只要 10~25 ms，它背后上游那一跳
+///    最坏 ~2.7 秒 ⇒ 4 秒足够它开口，又不至于让他干等。不开口 ⇒ 当成死的，
+///    当场换一条新的再试一次（控制器的 `voiceWhyRetryable` 那一跳）。
+///    **新连的那条**照旧用 `_verdictLimit`（10 秒：冷启那一跳本来就慢）。
+const Duration _warmAliveLimit = Duration(seconds: 4);
 /// 一场说完之后隔多久自己热回来（留一点空当，别在收尾那一拍上抢）。
 const Duration _warmAgainAfter = Duration(seconds: 3);
 
@@ -411,7 +425,7 @@ Future<String?> startHearing({
   //      而冷启那一下真量到 4.4 秒 ⇒ 给得比原来宽一点：攒着的音频不会丢，
   //      所以多等一会儿是**白赚**，不是风险）。
   final verdict = await gate.future.timeout(
-    _verdictLimit,
+    warm == null ? _verdictLimit : _warmAliveLimit,
     onTimeout: () => 'no-entry',
   );
   if (verdict != null) {
