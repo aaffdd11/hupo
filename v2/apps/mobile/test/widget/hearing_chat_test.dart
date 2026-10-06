@@ -31,7 +31,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:hupo_app/models/hear_drill.dart';
 import 'package:hupo_app/widgets/chat_floater.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
 import 'package:hupo_app/services/api.dart';
@@ -127,11 +126,18 @@ Future<void> _say(WidgetTester tester, _Rig r, {required String words}) async {
   await tester.pumpAndSettle();
 }
 
-/// 底下那一行里那句话（= `VoiceBar` 那颗气泡）。空的时候那一格一个像素都不画。
-String _barText(WidgetTester tester) => tester
-    .widgetList<Text>(find.descendant(of: find.byType(VoiceBar), matching: find.byType(Text)))
-    .map((t) => t.data ?? '')
-    .join(' ');
+/// 底下那一格里的字（= `VoiceBar` 那个**真输入框**里那份字）。
+///
+/// 🔴 2026-10-07：字不再画在气泡上，而是**长在输入框里** ⇒ 读的是那个框的 controller
+///    （`EditableText` 才是真正拿字的那一层）。空的时候那一格一个像素都不画。
+String _barText(WidgetTester tester) {
+  final f = find.descendant(of: find.byType(VoiceBar), matching: find.byType(EditableText));
+  if (f.evaluate().isNotEmpty) return tester.widget<EditableText>(f.first).controller.text;
+  return tester
+      .widgetList<Text>(find.descendant(of: find.byType(VoiceBar), matching: find.byType(Text)))
+      .map((t) => t.data ?? '')
+      .join(' ');
+}
 
 /// 键盘会不会被顶上来（＝**有没有输入框在抢焦点**）。
 ///
@@ -139,9 +145,11 @@ String _barText(WidgetTester tester) => tester
 ///    **根本不该有输入框**（开得了麦时只有圆圈；打字那条退路要他按「打字」才摊开）
 ///    ⇒ 读数就是"树里一个被点亮的输入框都没有"。
 bool _focused(WidgetTester tester) {
-  final f = find.byType(TextField);
+  // ⚠️ 读 `EditableText` 那一层：`TextField.focusNode` 只在**外面给了**才非空，
+  //    没给的时候它是 null ⇒ 拿它当判据永远读到 `false`（那就是一条假判据）。
+  final f = find.byType(EditableText);
   if (f.evaluate().isEmpty) return false;
-  return tester.widget<TextField>(f.first).focusNode?.hasFocus ?? false;
+  return tester.widget<EditableText>(f.first).focusNode.hasFocus;
 }
 
 void main() {
@@ -154,16 +162,16 @@ void main() {
     await tester.tap(find.byKey(voiceBarCircleKey));
     await tester.pumpAndSettle();
     expect(r.starts, 1, reason: '★ 按一下要真的交出去（而不是只画个样子）');
-    expect(r.c.voiceFlow.phase, DrillPhase.listening, reason: '★ 按下去就该在听（语音那一档的状态机）');
+    expect(r.c.voiceRecording, true, reason: '★ 按下去就该在听');
     await _say(tester, r, words: '今天天气怎么样');
   });
 
   testWidgets('③ 🔴 停下语音**不许唤醒键盘**（那颗圆圈不碰焦点）', (tester) async {
     // 主人 2026-10-01：*"当我停下语音，键盘却被唤醒了。我认为停止语音，就是语音结束，
     // 不需要唤醒键盘。"*
-    // ⚠️ 现在底下那一格是 `VoiceBar`：开得了麦时它**一个输入框都不画**
-    //    （打字那条退路要他按「打字」才摊开）⇒ "键盘会不会被顶上来"就量
-    //    "树里有没有输入框在抢焦点"。
+    // ⚠️ 2026-10-07 推倒重来之后：那一格**就是一个真输入框**（字长在里面）
+    //    ⇒ "键盘会不会被顶上来"量的仍然是**有没有输入框在抢焦点**
+    //      （框在 ≠ 焦点在：它不 autofocus，按停也不去点它）。
     final r = _make();
     await _pump(tester, r.c);
     expect(_focused(tester), false, reason: '一开始键盘就该是收着的');
@@ -182,8 +190,7 @@ void main() {
     await tester.tap(find.byKey(voiceBarCircleKey));
     await tester.pumpAndSettle();
     expect(_focused(tester), false, reason: '★ 按停那一下**不许**唤醒键盘');
-    expect(find.byKey(voiceBarTypeKey), findsNothing,
-        reason: '★ 按停也不许把这一格切进打字那一档（"唤醒键盘"就是它）');
+    expect(_focused(tester), false, reason: '★ 按停那一下不许把光标放进那个框里');
 
     // 最后那句回来 ⇒ 字留着、键盘**还是收着**
     r.feeds.last({'type': 'asr/final', 'text': '今天天气怎么样', 'index': 0});

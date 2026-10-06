@@ -78,7 +78,6 @@ import '../widgets/time_mark.dart';
 import '../widgets/tool_row_view.dart';
 import '../widgets/trash_plan_sheet.dart';
 import 'discover_screen.dart';
-import 'hear_drill_screen.dart';
 import 'settings_screen.dart';
 
 /// "下面那一整块"的名字（状态条 + 内容 + 输入框）。
@@ -1201,7 +1200,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           autoSpeak: c.autoSpeak,
           onToggleAutoSpeak: (on) => c.setAutoSpeak(on),
           // ★ 2026-10-04（V2.0 第一件）：设置里那一场"说一句试试"（演练，不会发出去）
-          hearDrillPage: () => HearDrillScreen(controller: c),
           apps: _myApps,
           onGrant: _grantMyApp,
           // ★ 2026-10-01：**清空它存下来的东西**（`POST /api/app-db-clear`）——
@@ -2000,15 +1998,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             //   底下那一格已经让出来了，它露在外面 ⇒ **两端同一份实现**，
             //   不再需要"页面那一层再画一遍"（那一份已经在 `#285` 砍掉）。
             VoiceBar(
-              flow: c.voiceFlow,
+              text: c.composeText,
+              recording: c.voiceRecording,
+              wrapping: c.voiceWrapping,
               canHear: canHear,
-              speakable: canSpeak,
+              note: c.voiceNote,
               onMic: () => unawaited(c.toggleVoiceCompose()),
-              onTyped: (text) => unawaited(c.answerVoiceCompose(text)),
-              // ★ 2026-10-06：**他上回打了一半的那一句**接回这一格
-              //   （原来只有那个没人用的 `composer.dart` 会写它 ⇒ 刷新就没了）
-              draft: c.composeDraft ?? '',
-              onDraft: c.saveComposeDraft,
+              // ★ 2026-10-07：他动手改那个框 ⇒ 语音从此不再往框里写（发他手上那份）
+              onChanged: c.voiceEdited,
+              // 打字那条兜底（开不了麦的机器）：按「发送」。
+              onSend: (text) => unawaited(c.sendComposeLine(text)),
             ),
           ],
         ),

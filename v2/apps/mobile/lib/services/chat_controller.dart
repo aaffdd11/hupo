@@ -12,7 +12,7 @@ import 'package:flutter/foundation.dart';
 import '../models/conn_state.dart';
 import '../models/chat_queue.dart';
 import '../models/hearing_session.dart';
-import '../models/hear_drill.dart';
+import '../models/voice_words.dart';
 import '../models/job_ask.dart';
 import '../models/job_words.dart';
 import '../models/message_state.dart';
@@ -332,13 +332,6 @@ class ChatController extends ChangeNotifier {
   /// **正在念哪一条**（`null` = 没在念）。界面靠它把按钮变成"别念了"。
   String? _speakingId;
 
-  /// **语音那一步现在什么样**（纯状态机，`models/hearing_session.dart`）。
-  ///
-  /// ⚠️ 状态住在这儿（不属于某个 widget）：它要跨这一屏活着，
-  ///    而且收尾那几个字是**在用户按了结束之后**才回来的。
-  Hearing _hearing = const Hearing();
-
-
   /// 浮窗里现在挂着的那一条通知（契约 `29-NOTICE.md` 约束 1）。
   ///
   /// ⚠️ 它**只是浮窗那半边**：时间线那一条在 `Timeline` 里（约束 2），
@@ -359,7 +352,7 @@ class ChatController extends ChangeNotifier {
   /// ⚠️ 它必须**短于**那条连接自己的兜底（`hearing_*.dart` 的 `_lingerLimit`）——
   ///    那个一到，那条连接就被收干净了（之后再不会有任何一帧）⇒ 这一条要是比它长，
   ///    屏幕上就永远停在"收下了，正在整理……"。判据钉着这个大小关系
-  ///    （`test/unit/hear_drill_test.dart`）。
+  ///    （`test/unit/hearing_session_test.dart`）。
   /// ⚠️ 而且它**一个字都不许写进给他看的话**（不承诺时间）。
   static const stopLinger = Duration(seconds: 15);
 
@@ -805,188 +798,235 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// **语音那一步现在什么样**（界面照它画）。
-  Hearing get hearing => _hearing;
-
   /// 这台设备/这个页面**开得了麦吗**（`services/hearing.dart`）。
   /// ⚠️ 假 ⇒ 界面**不画那个话筒**（开不了就别摆在那儿）。
   bool get canHear => hearing_service.canHear;
 
-  /// **按了一下那个按钮**（开始 / 结束都由当前状态决定 —— 主人 2026-09-23：
-  /// *"是按一下开始语音跟踪…再按一下结束"*）。
+  // ── ★ 语音那一档（主人 2026-10-07 **推倒重来**）──────────────────────
+  //
+  // 主人：*"我认为，原本的语音转文字全套方案都应该推倒重来，忘记我们要修正语义。
+  //   我们就是 stream 回来的文字输入到文本框等待发送。"*
+  //   ＋ 当天他定的三样：**按停就发** · 字**直接流进底下那个能改的真输入框** ·
+  //     设置里那屏「说一句试试」删掉。
+  //
+  // ⇒ 一条链，就三步：
+  //   ① **按一下说**（`hearOnce` → `/api/asr`）；
+  //   ② **stream 回来的字直接长在底下那个真输入框里**（[composeText]）——
+  //      他随时可以点进去改（他一改，这一场就归他，见 [voiceEdited]）；
+  //   ③ **按停就发**：等 `asr/end` 那份**整段**回来 ⇒ `send`。
+  //
+  // ⚠️ 中间**没有第二层**（语义 / 反问 / 最多两轮）；那台演练状态机
+  //    （`models/hear_drill.dart`）与设置里那一屏**跟着一起删了**。
+  // ⚠️ **55 秒上限留着**（主人：*"防止关闭浪费钱"*）—— 到点只是**接着开下一轮**，
+  //    字一个都不清（`Hearing.roundDone`），**绝不在半路把它发出去**
+  //    （主人 2026-10-07 报的"前面那句话没了"就是那条路）。
+  // 发出去之后界面把**聊天记录窗口**打开（`voiceSent` 那一个号）。
+
+  /// **识别那一头攒出来的字**（`models/hearing_session.dart` —— 那台纯状态机）。
+  Hearing _hearing = const Hearing();
+
+  /// **框里那份字里"他自己写的"那一段**（他打的 / 改的 / 那份草稿读回来的）。
+  String _typed = '';
+
+  /// **开始录那一刻框里已有的字**（语音那份字接在它后面）。
+  String _voiceBase = '';
+
+  /// 🔴 **语音还在往框里写吗**：他一开始动那个框（打字 / 改字）就变 `false` ——
+  ///    从此发的是他手上那份字（他在设置那屏已经用过同一条规矩，是同一个意思）。
+  bool _voiceWriting = false;
+
+  /// **这一场开着吗**（按了开始、还没按停、也没坏）。
+  bool _voiceOn = false;
+
+  /// **他按了停、正等最后那一份字**（那颗圆圈这一小会儿按不动、也不闪）。
+  bool _voiceWrapping = false;
+
+  /// **如实说的那一句**（没听清 / 麦没打开…；空 = 没有）。
+  String _voiceNote = '';
+
+  /// **框里现在该显示的字**（唯一一处算它）。
   ///
-  /// ⚠️ 三条：
-  ///  ① **按下去立刻有反馈**（先变成"正在听"，再去开麦）—— 开麦要弹权限框，
-  ///     那一小会儿界面上不能什么都不动；
-  ///  ② 开麦那一步失败 ⇒ **如实说**（权限 / 没配钥匙 / 开不了），
-  ///     绝不用假的字糊过去（这一版把原来那个"演示"砍了）；
-  ///  ③ 结束那一下**只关麦**：最后那几个字是在我们说"结束"之后才回来的，
-  ///     所以状态先停在"听着"，等对面说 `asr/end` 才真的停（见 [Hearing.event]）。
-  Future<void> toggleHearing() async {
-    if (_hearing.listening) {
-      _stopHear();
-      _hearing = _hearing.tapped();
-      notifyListeners();
-      return;
-    }
-    // 收尾中（按了停、还在等最后一句）：按了不算 —— 界面上那颗按钮这期间也不画
-    if (_hearing.phase == HearingPhase.finishing) return;
-    final t = _token;
-    if (t == null) {
-      _hearing = _hearing.broke('failed');
-      notifyListeners();
-      return;
-    }
-    _hearing = _hearing.tapped();
-    notifyListeners();
-    final why = await _startHear(
-      // ⚠️ 地址由 `stream_uri.dart` 那一个函数算（同源看页面协议）——
-      //    语音这条**不许再拼一遍**（那条事故的第二个入口）。
-      url: asrUri(base: hupoApiBase, page: Uri.base),
-      token: t,
-      onEvent: _onHearingEvent,
-    );
-    if (why != null) {
-      _hearing = _hearing.broke(why);
-      notifyListeners();
-    }
-  }
+  /// ⚠️ 语音那份字**不写进 `_typed`**：它只在"语音正写着"那一档拼出来 ——
+  ///    他一动手（`_voiceWriting = false`）就整份让给他，一个字都不会被顶掉。
+  String get composeText => _voiceWriting ? '$_voiceBase${_hearing.text}' : _typed;
 
-  /// 语音那条回来的事件（**唯一入口** —— 和 `ingest()` 一个道理：
-  /// 状态只在一个地方被改，判据才打得准）。
-  void _onHearingEvent(Map<String, dynamic> e) {
-    _hearing = _hearing.event(e);
-    // ⚠️ 半句也要刷（"实时转文字"就是靠它）；事件很稀（一句一两个），不是热路径
-    notifyListeners();
-  }
+  /// 正在录（**含他按了停、正等最后那一份字**那一小会儿）—— 界面照它画那颗圆圈。
+  bool get voiceRecording => _voiceOn || _voiceWrapping;
 
-  // ── ★ 乙期：语音那一档（主人 2026-10-04 · 手册 `D3.14`／`D5.19`／`D5.18`）──
-  //
-  //  一颗圆圈：点一下开始录音、再点一下停 ⇒ 字长在屏幕上 ⇒ **他按停就发出去**
-  //  （不用点确认）。
-  //  🔴 **2026-10-07：中间那一层删了**（主人：*"我们之前对语音，是抽离出来做了一层，
-  //     没问题才发给聊天的。现在我需要把这个抽离的部分给去掉。"*）—— 语音 → 文字 → 发，
-  //     没有第二个 AI 插手、没有反问、没有"最多两轮"。
-  //  发出去之后界面把**聊天记录窗口**打开（`voiceSent` 那一个号）。
-  //
-  //  ⚠️ 状态机复用 `models/hear_drill.dart`（就是设置里那场演练那台）—— **不是第二套**：
-  //     甲期那 5 条判据与这一条链子量的是同一件事。
-  //  ⚠️ 这一层**只回话**：字从哪儿来（说话 / 打字兜底）、发不发，全在这一侧决定。
+  /// 他按了停、正等最后那一份字（圆圈不闪、按不动）。
+  bool get voiceWrapping => _voiceWrapping;
 
-  /// ⚠️ **`continuous: true`** —— 聊天那颗话筒要"连贯"（2026-10-07 主人：
-  ///    *「我的目的是语音输入。要连贯」*）：服务端到点／上游收一轮 ⇒ 接着开下一轮，
-  ///    只有他按停才算说完。`false`（老形状）留给设置里那颗「试一下」。
-  HearDrill _voiceFlow = const HearDrill(continuous: true);
-
-  /// 现在这一场说到哪儿了（界面照着画：听着 / 在懂 / 在问 / 可以了）。
-  HearDrill get voiceFlow => _voiceFlow;
+  /// 如实说的那一句（没听清 / 麦没打开…；空 = 没有）。
+  String get voiceNote => _voiceNote;
 
   /// **发出去几次**（界面据此把那扇聊天记录窗口打开 —— `D3.14`）。
   int voiceSent = 0;
 
-  /// 那一颗圆圈：按一下开始录，再按一下停。
+  /// **他一动那个框**（打字 / 改字）：从此语音不再往框里写，发的是他手上这份。
   ///
-  /// 🔴 **2026-10-05：按停要"当场有反应"**（主人报：*"点击停止录音响应很慢"*）——
-  ///    原来按停只做了一件事（把那一路麦撒手），**状态机不动、屏幕也不重画**
-  ///    ⇒ 要等 `asr/end` 那一帧回来（对面收尾，往往一秒多）屏幕上才变。
-  ///    ⇒ 现在按停**立刻**进 `wrapping`（圆圈不闪了、字说"收下了，正在整理……"）。
+  /// 🔴 为什么要这一条：字是**边听边长**的，他要是正改着，下一帧又把它顶掉 ——
+  ///    那就是"我改的字一会儿就没了"。他一动手就把这一格让给他。
+  void voiceEdited(String text) {
+    _voiceWriting = false;
+    _typed = text;
+    saveComposeDraft(text);
+    notifyListeners();
+  }
+
+  /// 那一颗圆圈：按一下开始录，再按一下停（**按停就发**）。
   Future<void> toggleVoiceCompose() async {
-    if (_voiceFlow.phase == DrillPhase.listening) {
-      _stopHear();
-      _voiceFlow = _voiceFlow.stopListening();
+    if (_voiceOn) return _stopVoice();
+    // 收尾中：再点也不许开第二场（那会把他刚说的那半句冲掉）
+    if (_voiceWrapping) return;
+    final t = _token;
+    if (t == null) {
+      _voiceNote = voiceFailedLead;
       notifyListeners();
-      // ⚠️ 兜底：万一对面一直不吐最后那一份（连接被收掉就再也不会有帧），
-      //    也**不许停在"收尾中"** —— 到点就用手上已经听到的那一份往下走。
-      _stopTimer?.cancel();
-      _stopTimer = Timer(stopLinger, _wrappingTimedOut);
       return;
     }
-    // 收尾中 / 正在懂：再点也不许开第二场（那会把他刚说的那半句冲掉）
-    if (_voiceFlow.phase == DrillPhase.wrapping) return;
-    if (_voiceFlow.phase == DrillPhase.thinking) return;
-    _voiceFlow = _voiceFlow.startListening();
+    _voiceOn = true;
+    _voiceWrapping = false;
+    _voiceWriting = true;
+    _voiceBase = _typed; // 他先前打的那些字**接在前面**（不丢）
+    _voiceNote = '';
+    // ⚠️ 开新一场：`tapped()` 会把上一次那些字清掉（新的一次是新的内容）
+    _hearing = const Hearing().tapped();
     notifyListeners();
-    final why = await hearOnce(_onComposeFrame);
-    if (why != null) {
-      _stopHear();
-      _voiceFlow = _voiceFlow.micFailed(why);
-      notifyListeners();
-    }
+    final why = await hearOnce(_onVoiceFrame);
+    if (why != null) _voiceBroke(voiceMicReason(why));
+  }
+
+  /// **他按了停**：麦收手 ＋ **当场有反应**（圆圈不闪了、框里那句换成"收下了…"），
+  /// 然后等对面把最后那一份字吐回来 ⇒ 到了就发（[stopLinger] 只兜最坏情况）。
+  void _stopVoice() {
+    _stopHear();
+    _voiceOn = false;
+    _voiceWrapping = true;
+    _hearing = _hearing.tapped();
+    notifyListeners();
+    // ⚠️ 兜底：万一对面一直不吐最后那一份（连接被收掉就再也不会有帧），
+    //    也**不许停在"收尾中"** —— 到点就用手上已经听到的那一份往下走。
+    _stopTimer?.cancel();
+    _stopTimer = Timer(stopLinger, _wrappingTimedOut);
   }
 
   /// 收尾那条兜底定时器（见 [stopLinger]）。
   Timer? _stopTimer;
 
-  /// 收尾等到头了（对面一直没吐）：**手上那份字照用**，一个字都不丢。
+  /// 收尾等到头了（对面一直没吐）：**手上那份字照发**，一个字都不丢。
   void _wrappingTimedOut() {
     _stopTimer = null;
-    if (_voiceFlow.phase != DrillPhase.wrapping) return;
-    final said = _voiceFlow.said.trim();
-    _voiceFlow = said.isEmpty
-        ? _voiceFlow.nothing('这句我没听清，再说一遍。')
-        : _voiceFlow.utterance(said);
-    notifyListeners();
-    if (_voiceFlow.phase == DrillPhase.thinking) unawaited(_composeSendNow());
+    if (!_voiceWrapping) return;
+    _voiceWrapping = false;
+    unawaited(_sendVoice());
   }
 
-  /// **打字那条兜底路**（麦克风真用不了时）：那一句与"说出来的"同一个去处。
-  Future<void> answerVoiceCompose(String text) async {
-    _voiceFlow = _voiceFlow.utterance(text);
-    notifyListeners();
-    await _composeSendNow();
-  }
-
-  void _onComposeFrame(Map<String, dynamic> e) {
-    final wasListening = _voiceFlow.phase == DrillPhase.listening;
-    final before = _voiceFlow;
-    final after = _voiceFlow.event(e);
-    _voiceFlow = after;
-    // 已经离开"收尾中" ⇒ 那条兜底定时器不用了
-    if (after.phase != DrillPhase.wrapping) {
-      _stopTimer?.cancel();
-      _stopTimer = null;
-    }
-    notifyListeners();
-    // 他这一段说完了（`asr/end`，**而且他已经按了停**）⇒ **当场发出去**
-    // （2026-10-07：中间那一层删了 —— 字就是字，没有第二个 AI 插手）
-    if (before.phase != DrillPhase.thinking && after.phase == DrillPhase.thinking) {
-      unawaited(_composeSendNow());
+  /// 语音那条回来的事件（**唯一入口** —— 状态只在一个地方被改，判据才打得准）。
+  void _onVoiceFrame(Map<String, dynamic> e) {
+    final t0 = e['type'];
+    // ── 一轮收尾：上游自己收 / 到点（`asr/capped`）/ 他按停之后那条整段 ──
+    if (t0 == 'asr/end' || t0 == 'asr/capped') {
+      // ⚠️ 用"这一场结束时那一份"（`asr/end` 带的是**整段**），不是把段拼起来。
+      //    他按停那一档 `_voiceWrapping` 也照收（**最后那一份字一个都不许丢**）。
+      _hearing = _hearing.roundDone((e['text'] as String?) ?? '', clearWhy: !_voiceWrapping);
+      notifyListeners();
+      if (_voiceWrapping) {
+        // 🔴 **他按了停** ⇒ 这就是"整段回来了" ⇒ **发**
+        _stopTimer?.cancel();
+        _stopTimer = null;
+        _voiceWrapping = false;
+        unawaited(_sendVoice());
+        return;
+      }
+      // ★ **他还没按停** ⇒ **接着开下一轮**：他那一场不能断、字一个都不清
+      //   （主人 2026-10-07：*「我的目的是语音输入。要连贯」*）
+      unawaited(_continueHear());
       return;
     }
-    // ★ **他还没按停，而对面把这一轮收了**（55 秒上限 `asr/capped` / 上游自己收尾）
-    //   ⇒ **当场接着开下一轮**：他那一场不能断，字**一个都不清**
-    //   （2026-10-07 主人：*「我的目的是语音输入。要连贯」*）。
-    final t = e['type'];
-    if (wasListening && after.phase == DrillPhase.listening && (t == 'asr/end' || t == 'asr/capped')) {
-      unawaited(_continueHear());
+    _hearing = _hearing.event(e);
+    // 半路坏了（没权限 / 没配钥匙 / 上游断）：**已经听到的字留着**，如实说一句
+    if (_hearing.phase == HearingPhase.failed ||
+        _hearing.phase == HearingPhase.unavailable ||
+        _hearing.phase == HearingPhase.denied) {
+      _voiceBroke(_hearing.why);
+      return;
     }
+    // ⚠️ 半句也要刷（"stream 回来的字长在框里"就是靠它）；事件很稀，不是热路径
+    notifyListeners();
   }
 
-  /// **接着开下一轮**（他还没按停 · 见 `_onComposeFrame` 那段）。
+  /// 开麦 / 识别半路坏了：**已经听到的字冻在框里**（不许丢），如实说一句。
+  void _voiceBroke(String why) {
+    _stopHear();
+    _stopTimer?.cancel();
+    _stopTimer = null;
+    _freezeVoice();
+    _voiceOn = false;
+    _voiceWrapping = false;
+    _voiceNote = why;
+    notifyListeners();
+  }
+
+  /// 把语音那份字**落进框里**（从此它就是"他手上的字"，语音不再往上写）。
+  void _freezeVoice() {
+    if (_voiceWriting) _typed = composeText;
+    _voiceWriting = false;
+    _voiceBase = '';
+  }
+
+  /// 🔴 **按停就发**：发的是**框里那份字**（他改过，就是他改的那一份）。
+  Future<void> _sendVoice() async {
+    final said = composeText.trim();
+    _freezeVoice();
+    _voiceOn = false;
+    _voiceWrapping = false;
+    _hearing = const Hearing();
+    if (said.isEmpty) {
+      _voiceNote = voiceFailedLead;
+      notifyListeners();
+      return;
+    }
+    _voiceNote = '';
+    _typed = '';
+    saveComposeDraft('');
+    voiceSent += 1; // ★ 界面据此把聊天记录窗口打开
+    notifyListeners();
+    await send(said); // ★ 不点确认、中间也没有第二层
+  }
+
+  /// **打字那条兜底**：按「发送」把它发出去（与语音那条**同一个落点**）。
+  Future<void> sendComposeLine(String text) async {
+    final said = text.trim();
+    if (said.isEmpty) return;
+    _typed = '';
+    _voiceNote = '';
+    saveComposeDraft('');
+    voiceSent += 1;
+    notifyListeners();
+    await send(said);
+  }
+
+  /// **接着开下一轮**（他还没按停 · 见 `_onVoiceFrame` 那段）。
   ///
   /// 🔴 为什么要有它：服务端那条 55 秒上限（`ASR_MAX_MS`）是**为了省钱**
   ///    （主人：*"60秒上限可以，防止忘记关闭浪费钱"*）—— 所以上限留着，
   ///    但它**不该把他的话切断**。到点就把这一轮的字收进 `settled`（`Hearing.roundDone`）、
-  ///    当场开下一条连接，屏幕上那份字一直长下去。
+  ///    当场开下一条连接，框里那份字一直长下去。
   ///
   /// ⚠️ **不开新的 `Hearing`**（那会把字清掉）：这一场是同一场，只是换了一条连接。
-  /// ⚠️ **一声不响**：接着开失败 ⇒ 照旧如实说（`micFailed`），**字留着**。
-  /// ⚠️ 他在这期间按了停（`phase != listening`）⇒ 开了也当场收掉，绝不多挂一条。
+  /// ⚠️ **一声不响**：接着开失败 ⇒ 照旧如实说（`_voiceBroke`），**字留着**。
+  /// ⚠️ 他在这期间按了停 ⇒ 开了也当场收掉，绝不多挂一条。
   Future<void> _continueHear() async {
     if (_continuing) return;
-    if (_voiceFlow.phase != DrillPhase.listening) return;
+    if (!_voiceOn || _voiceWrapping) return;
     _continuing = true;
     try {
-      final why = await hearOnce(_onComposeFrame);
-      if (_voiceFlow.phase != DrillPhase.listening) {
+      final why = await hearOnce(_onVoiceFrame);
+      if (!_voiceOn || _voiceWrapping) {
         _stopHear(); // 他按停了 ⇒ 这一条也收掉
         return;
       }
-      if (why != null) {
-        _stopHear();
-        _voiceFlow = _voiceFlow.micFailed(why);
-        notifyListeners();
-      }
+      if (why != null) _voiceBroke(voiceMicReason(why));
     } finally {
       _continuing = false;
     }
@@ -994,34 +1034,6 @@ class ChatController extends ChangeNotifier {
 
   /// 正在"接着开下一轮"（防重入）。
   bool _continuing = false;
-
-  /// 🔴 **语音到手就发**（2026-10-07 主人：*"我们之前对语音，是抽离出来做了一层，
-  ///   没问题才发给聊天的。现在我需要把这个抽离的部分给去掉。用户会说很多话的。
-  ///   不可能每个句号做断点，也必须是用户说完，语音变成文字拿回来了，我们再发出去。"*）。
-  ///
-  /// 四件：
-  ///   ① 发的是 `Hearing`／`asr/end` 攒出来的**整段** —— 取字只有 [HearDrill.toSend]
-  ///      这一个去处（说话那条落 `first`；**打字那条兜底也在 `first`**，`Hearing` 是空的。
-  ///      第一版写成 `_voiceFlow.said` ⇒ 打字那条一个字都没发出去，判据当场抓住 0 ≠ 1）；
-  ///   ② 一个字都没有 ⇒ **如实说一句**（不装发过）；
-  ///   ③ 发出去之后 `voiceSent += 1`（界面据此把聊天记录窗口打开 —— `D3.14`）；
-  ///   ④ 🔴 **收干净之后仍然是"连贯"那一档**（`continuous: true`）——
-  ///      落回默认那份（`false`）的话，他**第二条**话就退成"一到点就收场"：
-  ///      55 秒上限那条 `asr/end` 会**在半路把它发出去**、框当场清空，
-  ///      屏幕上看着就是"前面那句话没了"（主人 2026-10-07 报的正是这个）。
-  Future<void> _composeSendNow() async {
-    final said = _voiceFlow.toSend;
-    if (said.isEmpty) {
-      _voiceFlow = _voiceFlow.nothing('这句我没听清，再说一遍。');
-      notifyListeners();
-      return;
-    }
-    // ⚠️ **不是 `const HearDrill()`** —— 那一份的 `continuous` 是 `false`（见 ④）
-    _voiceFlow = const HearDrill(continuous: true);
-    voiceSent += 1;
-    notifyListeners();
-    await send(said); // ★ **点击结束就发送**（不点确认、中间也没有第二层）
-  }
 
   // ── ★ 批 7：配置页「语音」那一屏的「试一下」（主人 2026-09-26）──────────
   //
@@ -1160,6 +1172,8 @@ class ChatController extends ChangeNotifier {
     final draft = await compose.load();
     if (!identical(room, _room)) return;
     composeDraft = draft;
+    // ★ 2026-10-07：那份草稿现在就是**框里那份字**（语音那条也走同一个框）
+    _typed = draft ?? '';
 
     final saved = await drafts.load();
     if (!identical(room, _room)) return;

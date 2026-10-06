@@ -10,7 +10,7 @@ import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/appearance.dart';
 import 'package:hupo_app/models/desktop_words.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
-import 'package:hupo_app/models/hear_words.dart';
+import 'package:hupo_app/models/voice_words.dart';
 import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/models/job_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
@@ -193,24 +193,19 @@ void main() {
       noticeRepeatSuffix(4),
       // ★ 2026-10-02：时间那一行那两个字
       timeMarkToday,
-      // ★ 2026-10-06：「试一下」那一屏（`hear_drill_screen.dart`）的**全部句子** ——
-      //    原来这一组**一句都没挂**（顺手补上）。
-      //    ⚠️ 2026-10-07：中间那一层删了 ⇒ "在问 / 问够了 / 念不出来 / 那条路接不上"
-      //       那几句**跟着那一层一起删掉了**（数据源里也没了）。
-      hearDrillTitle,
-      hearDrillRowHint,
-      hearDrillBanner,
-      hearDrillIdleLead,
-      hearDrillListeningLead,
-      hearDrillWrappingLead,
-      hearDrillThinkingLead,
-      hearDrillReadyLead,
-      hearDrillReadyFoot,
-      hearDrillFailedLead,
-      hearDrillNothing,
-      hearDrillTypeInstead,
-      hearDrillAgain,
-      hearDrillAnswer,
+      // ★ 2026-10-07：**语音那一格的话**（推倒重来之后剩下的那几句）——
+      //    连同"机器原因翻成人话"那几个出口（它翻出来的话也要过这道闸）。
+      voiceListeningLead,
+      voiceWrappingLead,
+      voiceSendWords,
+      voiceTypeInstead,
+      voiceFailedLead,
+      voiceTalkLabel,
+      voiceStopLabel,
+      voiceMicReason('denied'),
+      voiceMicReason('not-configured'),
+      voiceMicReason('unsupported'),
+      voiceMicReason('说不清的机器原因'),
       timeMarkYesterday,
       // ★ 2026-10-02：工具行翻出来的人话 ＋ 展开那一块里“原始名”那个标签
       toolRowRawNameLabel,

@@ -1,26 +1,24 @@
-// **聊天底下那一格：一个圆圈 ＋ 它左边那句字**（乙期 · 手册 `D3.14`／`D5.19`）。
+// **聊天底下那一格：那颗圆圈 ＋ 它左边那个真输入框**（2026-10-07 推倒重来）。
 //
-// 主人 2026-10-04：*「聊天按钮直接只剩右下角一个圆圈。点击以后开始录音，录音会转文字，
-//   文字会出现在底部，录音按钮的左侧。」*
-// 🔴 **2026-10-07**（主人：*"我们之前对语音，是抽离出来做了一层，没问题才发给聊天的。
-//   现在我需要把这个抽离的部分给去掉。"*）⇒ 那一层没有了：**字就是字**，
-//   他按停就发。这里那一圈"还没校正"的**下划线也跟着去掉了**（没有第二步了，
-//   留着那条线等于一直在说"这份还不算数"）。
+// 主人 2026-10-07：*"我认为，原本的语音转文字全套方案都应该推倒重来，忘记我们要修正语义。
+//   我们就是 stream 回来的文字输入到文本框等待发送。"*
+//   ＋ 当天他定的三样：**按停就发** · 字**直接流进底下那个能改的真输入框** ·
+//     设置里那屏「说一句试试」删掉。
 //
-// ── 这一格只画三样 ────────────────────────────────────────
-//   ① **一个圆圈**（右下角）：点一下开始录、再点一下停（`onMic`）；
-//   ② **它左边那句字**：正在听的那一段 / 如实说的那一句；
-//   ③ **开不了麦时**那条打字的退路（`D3.14` 的注：不许让他没有路可走）。
+// ── 这一格只画两样 ────────────────────────────────────────
+//   ① **那颗圆圈**（右下角）：点一下开始录、再点一下停（`onMic`）；
+//   ② **它左边那个输入框**：识别回来的字**直接长在里面**（`text`）——
+//      而且它是个**真输入框**：他可以点进去改、可以混着打字（`onChanged`；
+//      他一动手，控制器那边就不再让语音往框里写）。
+//   ③ **开不了麦时**那条打字的退路（同名的那颗「打字」摊开这一格）。
 //
-// ⚠️ 状态在 `models/hear_drill.dart`（那台状态机就是设置里那场演练那台）——
-//    这一份**只负责画**：进来一个状态、出去两个回调。
-// ⚠️ 它是 widget ⇒ 只许 import models（楼层闸）：所以拿的是 `flow` ＋ 回调，**不是控制器**。
+// ⚠️ 空的时候**一个像素都不画**（主人 2026-10-04 定的：不摆空框、不摆提示）。
+// ⚠️ 这一份**只负责画**：进来一份字、出去几个回调；状态在控制器那边。
 
 import 'package:flutter/material.dart';
 
 import '../models/design.dart' as d;
-import '../models/hear_drill.dart';
-import '../models/hear_words.dart';
+import '../models/voice_words.dart';
 import 'dsh_look.dart';
 import 'rec_blink.dart';
 
@@ -28,51 +26,49 @@ import 'rec_blink.dart';
 class VoiceBar extends StatefulWidget {
   const VoiceBar({
     super.key,
-    required this.flow,
+    required this.text,
+    required this.recording,
+    required this.wrapping,
     required this.canHear,
+    required this.onChanged,
     required this.onMic,
-    required this.onTyped,
-    this.draft = '',
-    this.onDraft,
+    required this.onSend,
+    this.note = '',
     this.leading,
     this.hintAbove,
-    this.speakable = false,
   });
 
-  /// 这一场说到哪儿了（听着 / 收尾中 / 该发了 / 没听清…）。
-  final HearDrill flow;
+  /// **框里现在该显示的字**（识别回来的 / 他打的 —— 由控制器算好送进来）。
+  final String text;
+
+  /// **正在录**（含他按了停、正等最后那一份字的那一小会儿）。
+  final bool recording;
+
+  /// **他按了停、正等最后那一份字**：那颗圆圈这一小会儿按不动、也不闪。
+  final bool wrapping;
 
   /// 这台开得了麦吗（开不了 ⇒ 画打字的退路，**不画那颗圆圈**）。
   final bool canHear;
 
+  /// **他一动这个框**（打字 / 改字）⇒ 控制器从此不让语音再往框里写。
+  final ValueChanged<String> onChanged;
+
   /// 那颗圆圈：按一下开始录、再按一下停。
   final VoidCallback onMic;
 
-  /// 打字那条兜底路（他按了「就这句」）。
-  final ValueChanged<String> onTyped;
-
-  /// ★ 2026-10-06：**他上回打了一半的那一句**（账号/房间里存着的那份草稿）。
+  /// 打字那条兜底：按「发送」把它发出去。
   ///
-  /// 🔴 为什么要有它（主人 2026-09-22 就定过：*"草稿也是要记住的"*）：
-  ///    这一格换掉输入框那一次，草稿那条路**断在这儿** —— 原来只有
-  ///    `widgets/composer.dart` 会写它，而那个组件**已经没人实例化了**
-  ///    ⇒ 开不了麦时打了一半的字，**刷新一下就没了**（`docs/dev/194`）。
-  ///    ⇒ 这一份把它接回**活的这一格**：进来先把那份字填回框里、
-  ///      每敲一下喊一声 [onDraft]，发出去之后喊一声空的。
-  final String draft;
+  /// ⚠️ 语音那条**不走这一颗**（他定的是"按停就发"）。
+  final ValueChanged<String> onSend;
 
-  /// 打字框里的字变了 / 发出去了（空串 = 清掉那份草稿）。
-  final ValueChanged<String>? onDraft;
+  /// **如实说的那一句**（没听清 / 麦没打开…；空 = 没有）。
+  final String note;
 
-  /// 那一行最前面那颗（今天还是那颗 home —— 它搬到每个 app 右上角之前，
-  /// **出口不能没有**）。
+  /// 那一行最前面那颗（今天还是那颗 home）。
   final Widget? leading;
 
   /// 那颗圆圈上方偶尔飘一句（进屏提示那一类；不占排版）。
   final Widget? hintAbove;
-
-  /// 这台念不念得出来（念不出来时，屏幕上如实说一句）。
-  final bool speakable;
 
   @override
   State<VoiceBar> createState() => _VoiceBarState();
@@ -81,34 +77,30 @@ class VoiceBar extends StatefulWidget {
 class _VoiceBarState extends State<VoiceBar> {
   final _type = TextEditingController();
 
+  /// **打字那条退路**要不要摊开（默认不摊 —— 空白时屏幕上一个字都不许有）。
+  bool _typing = false;
+
   @override
   void initState() {
     super.initState();
-    // ★ 上一次打了一半的那一句：**回来就填回去**，而且把那一格摊开
-    //   （不摊开的话字在框里、框看不见 —— 那就是"字丢了"）。
-    _adoptDraft(widget.draft);
+    if (widget.text.isNotEmpty) _put(widget.text);
   }
 
   @override
   void didUpdateWidget(covariant VoiceBar old) {
     super.didUpdateWidget(old);
-    // ⚠️ 那份草稿是**异步读回来的**（`ChatController._restoreDrafts`）：这一格
-    //    先建出来时它还是空的，读到之后才送进来 ⇒ 只在"框里还没有字"时认它
-    //    （不然会把用户正打着的那半句顶掉）。
-    if (widget.draft != old.draft && _type.text.isEmpty) _adoptDraft(widget.draft);
+    // 🔴 外面那份字变了（语音在长字 / 那份草稿异步读回来了）⇒ 写进框里。
+    //    ⚠️ **只在与框里真的不一样时才写**：他每敲一下，控制器都会把同一个字
+    //       再送回来一次 —— 无脑写会把光标每一下都推到末尾（打字就没法打了）。
+    if (widget.text != old.text && widget.text != _type.text) _put(widget.text);
   }
 
-  /// 把 [text] 认成"他打了一半的那一句"（空串 ⇒ 不动）。
-  void _adoptDraft(String text) {
-    if (text.trim().isEmpty) return;
-    _type.text = text;
-    _typing = true;
-  }
-
-  /// 发出去 / 清掉那份草稿（两处**同一个去处**：框与存的那一份一起清）。
-  void _clearTyped() {
-    _type.clear();
-    widget.onDraft?.call('');
+  /// 把 [text] 写进框里，光标放到末尾。
+  void _put(String text) {
+    _type.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
   }
 
   @override
@@ -117,86 +109,95 @@ class _VoiceBarState extends State<VoiceBar> {
     super.dispose();
   }
 
-  /// **那颗圆圈现在是不是在录**（🔴 **按 `phase` 判，不许按 `hearing.listening`**）。
-  ///
-  /// ⚠️ 2026-10-05：他按了停之后进的是 `wrapping`（等对面吐最后那一份字），
-  ///    那会儿 `hearing.listening` **还是 true**（要等 `asr/end` 才收）——
-  ///    拿它当判据的话，屏幕上会**继续闪着"我在录"**（那就是主人报的"按了没反应"）。
-  bool get _listening => widget.flow.phase == DrillPhase.listening;
+  /// **那颗圆圈现在是不是在录**（`wrapping` 那一档不算 —— 那会儿按了也没用）。
+  bool get _listening => widget.recording && !widget.wrapping;
 
-  /// **打字那条退路**要不要摊开（默认不摊 —— 空白时屏幕上一个字都不许有）。
-  bool _typing = false;
-
-  /// **圆圈左边那句话**（**一句**：现在该让他看见什么）。
-  ///
-  /// 🔴 **2026-10-07：只有一种字了**（"直白的字"与"校正过的字"是同一份）——
-  ///    那个 `raw`（要不要画下划线）跟着那一层一起删掉了。
-  ({String text, bool loud}) get _line {
-    final f = widget.flow;
-    switch (f.phase) {
-      case DrillPhase.listening:
-        final said = f.said.trim();
-        return (text: said.isEmpty ? hearDrillListeningLead : said, loud: true);
-      case DrillPhase.wrapping:
-        // 🔴 他刚按了停 ⇒ **当场给一句话**（不然那一秒多屏幕上什么都不变）
-        final said = f.said.trim();
-        return (text: said.isEmpty ? hearDrillWrappingLead : said, loud: true);
-      case DrillPhase.thinking:
-        final said = f.said.trim();
-        return (text: said.isEmpty ? hearDrillThinkingLead : said, loud: true);
-      case DrillPhase.failed:
-        return (text: f.note.isEmpty ? hearDrillFailedLead : f.note, loud: true);
-      case DrillPhase.ready:
-      case DrillPhase.idle:
-        return (text: '', loud: false);
-    }
-  }
+  /// 这一格要不要画出来（空 ⇒ 什么都不画）。
+  bool get _showField => widget.recording || _typing || widget.text.isNotEmpty;
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
     final look = DshLook.of(context);
-    final line = _line;
-    // ★ **2026-10-04 主人**：*"如果是空的，小 bubble 自己就消失了。"*
-    //   ⇒ 什么都没有的时候**一个像素都不画**（不摆提示、不摆空框）：
-    //     · 有字 ⇒ 一颗**从右边长出来**的气泡（下面 `_bubble`）；
-    //     · 空 ⇒ 只剩那颗圆圈；
-    //     · 开不了麦 ⇒ 圆圈那个位置换成一颗「打字」，**按一下才摊开那一格**
-    //       （不按就什么都不摆 —— 这就是他看见"空对话上挂着一句开不了麦"的那一处）。
-    final typed = _typing || (!widget.canHear && widget.flow.phase != DrillPhase.idle);
+    // 没有字的时候框里那句提示：正在录 ⇒ 说清它在听（或正在收尾）；
+    // 其余（开不了麦那条退路）⇒ 说清这台为什么在这儿摆一个框。
+    final hint = widget.recording
+        ? (widget.wrapping ? voiceWrappingLead : voiceListeningLead)
+        : voiceTypeInstead;
     return Padding(
       padding: const EdgeInsets.fromLTRB(d.gapM, d.gapS, d.gapM, d.gapS),
-      child: Stack(
-        clipBehavior: Clip.none,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+          // 如实说的那一句（没听清 / 麦没打开…）—— **不占字符位、就一行**
+          if (widget.note.trim().isNotEmpty) ...[
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(widget.note, style: dshTextStyle(look.content, d.ink)),
+            ),
+            const SizedBox(height: d.gapXs),
+          ],
+          Stack(
+            clipBehavior: Clip.none,
             children: [
-              if (widget.leading != null) ...[widget.leading!, const SizedBox(width: d.gapS)],
-              // ── 字那一侧（在圆圈的**左边**）──
-              Expanded(
-                child: typed
-                    ? _typedField(t)
-                    : Align(
-                        alignment: Alignment.centerRight,
-                        // 空 ⇒ **什么都不画**（气泡自己消失）
-                        child: line.text.trim().isEmpty ? const SizedBox.shrink() : _bubble(look, line),
-                      ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  if (widget.leading != null) ...[widget.leading!, const SizedBox(width: d.gapS)],
+                  // ── 字那一侧（在圆圈的**左边**）──
+                  Expanded(
+                    child: _showField ? _field(look, hint) : const SizedBox.shrink(),
+                  ),
+                  const SizedBox(width: d.gapS),
+                  // ── 那个圆圈（右下角）──
+                  if (widget.canHear)
+                    _circle(t)
+                  else if (!_typing)
+                    _typeChip(t),
+                ],
               ),
-              const SizedBox(width: d.gapS),
-              // ── 那个圆圈（右下角）──
-              if (widget.canHear)
-                _circle(t)
-              else if (!_typing)
-                _typeChip(t),
+              if (widget.hintAbove != null)
+                Positioned(left: 0, right: 0, bottom: d.barButtonBox, child: widget.hintAbove!),
             ],
           ),
-          if (widget.hintAbove != null)
-            Positioned(left: 0, right: 0, bottom: d.barButtonBox, child: widget.hintAbove!),
         ],
       ),
     );
   }
+
+  /// **那个真输入框**：识别回来的字长在里面，他也可以动手改。
+  ///
+  /// ⚠️ **不 autofocus**：一按录就弹键盘会挡住半个屏幕（他要的是"看着字长出来"）。
+  Widget _field(DshLook look, String hint) => Row(
+        children: [
+          Expanded(
+            child: TextField(
+              key: voiceBarTypeKey,
+              controller: _type,
+              minLines: 1,
+              maxLines: 4,
+              // ★ 这一格的字**跟用户那条字号轴**（与时间线正文同一档）——
+              //   它属于"会话内容"，不是工具行那种小字（`docs/dev/194`）。
+              style: dshTextStyle(look.content, d.ink),
+              decoration: InputDecoration(hintText: hint),
+              onChanged: (v) {
+                // ⚠️ **他动手了**：这一格从此归他（控制器那边不再让语音往这儿写）
+                if (!_typing) setState(() => _typing = true);
+                widget.onChanged(v);
+              },
+            ),
+          ),
+          // 打字那条兜底才有这颗「发送」（语音那条**按停就发**）
+          if (!widget.recording && widget.text.trim().isNotEmpty) ...[
+            const SizedBox(width: d.gapS),
+            FilledButton(
+              key: voiceBarTypedSendKey,
+              onPressed: () => widget.onSend(_type.text),
+              child: const Text(voiceSendWords),
+            ),
+          ],
+        ],
+      );
 
   /// 那颗圆圈：**全局最显眼的一颗**（它服务的是打不了字、眼神不好的人）。
   ///
@@ -205,7 +206,7 @@ class _VoiceBarState extends State<VoiceBar> {
   ///    这一层只负责把它画成底色（**尺寸/位置/命中区一个像素都不动**）。
   Widget _circle(ThemeData t) => Semantics(
         button: true,
-        label: _listening ? hearDrillStopLabel : hearDrillTalkLabel,
+        label: _listening ? voiceStopLabel : voiceTalkLabel,
         child: SizedBox(
           key: voiceBarCircleKey,
           width: d.voiceCircleBox,
@@ -213,19 +214,14 @@ class _VoiceBarState extends State<VoiceBar> {
           child: RecBlink(
             on: _listening,
             builder: (context, glow) {
-              // 收尾中（`wrapping`）：**这颗圆圈这一小会儿没有可做的事**
+              // 收尾中：**这颗圆圈这一小会儿没有可做的事**
               //   ⇒ 画成"淡淡的、按不动"的样子（诚实：按了也没用），
               //     而**不是**继续闪着"我在录"（那正是他报的那个"慢"）。
-              final busy = widget.flow.phase == DrillPhase.wrapping;
+              final busy = widget.wrapping;
               final on = _listening;
               return Material(
-                // ★ **白底**（主人 2026-10-06 当天最后定的：*"现在把白色底加上"*）——
-                //   那张纸的白（`card`）＋ 一圈实色的琥珀；在录时整颗才变琥珀（一明一暗地闪）。
-                //   ⚠️ 这三颗（圆圈 ＋ 右边那一列两颗）**同一个底**（主人要的"颜色风格统一"）。
+                // ★ **白底**（主人 2026-10-06 当天最后定的：*"现在把白色底加上"*）
                 color: on ? recBlinkColor(glow) : d.card,
-                // ★ **外面那一圈琥珀色**（主人 2026-10-05：*"外面要加一个边框啊，
-                //   这个边框就是有那个琥珀色，就是按下去录音时候的那个颜色"*）——
-                //   平时也带着它：一眼看得出"这是录音那颗"。
                 shape: CircleBorder(side: BorderSide(color: d.accent, width: d.voiceCircleRing)),
                 child: InkWell(
                   customBorder: const CircleBorder(),
@@ -233,7 +229,6 @@ class _VoiceBarState extends State<VoiceBar> {
                   child: Icon(
                     on ? Icons.stop_rounded : Icons.mic_none_rounded,
                     size: d.voiceCircleIcon,
-                    // ★ **墨色**（白底回来之后它就是最清楚的：11.8:1；与别的图标同一个色）
                     color: on
                         ? d.card
                         : (busy ? d.muted : d.ink),
@@ -245,78 +240,21 @@ class _VoiceBarState extends State<VoiceBar> {
         ),
       );
 
-  /// **他说的话那一颗气泡**：从右边长出来，长满一行就换行（主人 2026-10-04）。
-  ///
-  /// ⚠️ 宽度是**跟着字长**的（`Flexible` ＋ 右对齐），最多占那一行的 76%；
-  ///    超过就换行（`maxLines: 4` 兜底，真长到 4 行也该发出去了）。
-  Widget _bubble(DshLook look, ({String text, bool loud}) line) => Container(
-        constraints: const BoxConstraints(maxWidth: 420),
-        padding: const EdgeInsets.symmetric(horizontal: d.gapM, vertical: d.gapS),
-        decoration: BoxDecoration(
-          color: d.card,
-          borderRadius: BorderRadius.circular(d.radiusField),
-          border: Border.all(color: d.line),
-        ),
-        child: Text(
-          line.text,
-          textAlign: TextAlign.right,
-          maxLines: 4,
-          overflow: TextOverflow.ellipsis,
-          // ★ 2026-10-06：这一行字**跟用户那条字号轴**（与时间线正文同一档
-          //   `look.content`）—— 原来走 `textTheme.bodyLarge`（16/24）⇒
-          //   设置里把字号从 12 调到 17，时间线会变、**底下这一行一个像素都不动**
-          //   （子 agent 在改判据时点名的真缺陷，`docs/dev/194`）。
-          style: dshTextStyle(
-            look.content,
-            line.loud ? d.ink : d.muted,
-          ),
-        ),
-      );
-
   /// **开不了麦**时，圆圈那个位置那颗「打字」（按一下才摊开输入格）。
   Widget _typeChip(ThemeData t) => TextButton(
         key: voiceBarTypeChipKey,
         onPressed: () => setState(() => _typing = true),
         child: const Text('打字'),
       );
-
-  /// 打字那条退路（**按了那颗「打字」**才有）。
-  Widget _typedField(ThemeData t) => Row(
-        children: [
-          Expanded(
-            child: TextField(
-              key: voiceBarTypeKey,
-              controller: _type,
-              // ★ 这一格的字**跟用户那条字号轴**（与时间线正文同一档）——
-              //   它属于"会话内容"，不是工具行那种小字（`docs/dev/194`）。
-              style: dshTextStyle(DshLook.of(context).content, d.ink),
-              decoration: const InputDecoration(hintText: hearDrillTypeInstead),
-              // 每敲一下就存一次（存不上也不能让打字卡住 —— 由控制器那边不 await）
-              onChanged: (v) => widget.onDraft?.call(v),
-              onSubmitted: (v) {
-                widget.onTyped(v);
-                _clearTyped();
-              },
-            ),
-          ),
-          const SizedBox(width: d.gapS),
-          FilledButton(
-            key: voiceBarTypedSendKey,
-            onPressed: () {
-              widget.onTyped(_type.text);
-              _clearTyped();
-            },
-            child: const Text(hearDrillAnswer),
-          ),
-        ],
-      );
 }
 
 /// 那个圆圈（判据要按它）。
 const Key voiceBarCircleKey = ValueKey<String>('voice-bar-circle');
 
-/// 打字那条退路（开不了麦时才画）。
+/// 那格输入框（打字那条退路，也是语音的字落下来的地方）。
 const Key voiceBarTypeKey = ValueKey<String>('voice-bar-type');
+
+/// 打字那条退路那颗「发送」。
 const Key voiceBarTypedSendKey = ValueKey<String>('voice-bar-typed-send');
 
 /// 开不了麦时那颗「打字」（按一下才摊开输入格）。

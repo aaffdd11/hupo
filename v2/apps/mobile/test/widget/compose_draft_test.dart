@@ -99,11 +99,13 @@ void main() {
         reason: '★ 打了一半的字被清掉了');
   });
 
-  testWidgets('🔴 上回打了一半的那句 ⇒ **回来还在框里**（而且那一格是摊开的）', (tester) async {
+  testWidgets('🔴 上回打了一半的那句 ⇒ **回来还在框里**', (tester) async {
     final s = await _pumpChat(tester);
-    // 模拟"读盘回来的那份草稿"（真那条路是 `ChatController._restoreDrafts`）
-    s.c.composeDraft = '半句话还没说完';
-    s.c.notifyListeners();
+    // 模拟"读盘回来的那份草稿"（真那条路是 `ChatController._restoreDrafts`：
+    // 它把那份字读进 `_typed` 并刷一下）。
+    // 🔴 2026-10-07 推倒重来之后：框里那份字的**唯一出处**是 `composeText`（`_typed`），
+    //    不再看 `composeDraft` 那一格 —— 所以这里走**真入口**（`voiceEdited`）。
+    s.c.voiceEdited('半句话还没说完');
     await tester.pump();
     expect(find.byKey(voiceBarTypeKey), findsOneWidget,
         reason: '★ 有草稿却把那一格收着 ⇒ 屏幕上等于"字丢了"');
@@ -117,7 +119,7 @@ void main() {
     await tester.enterText(find.byKey(voiceBarTypeKey), '帮我把这周的工时记一下');
     await tester.pump();
 
-    // 按「就这句」⇒ 交给 `/api/hear` 听懂那一层 ⇒ 通顺就**自己发出去**
+    // 按「发送」⇒ **当场发出去**（2026-10-07 推倒重来：中间没有第二层了）
     await tester.tap(find.byKey(voiceBarTypedSendKey));
     await tester.pumpAndSettle();
 

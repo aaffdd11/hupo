@@ -1,6 +1,9 @@
 // **语音输入要"连贯"**（2026-10-07 · 主人：*「我的目的是语音输入。要连贯，
 // 60秒上限可以，防止忘记关闭浪费钱。」* · 契约 `docs/dev/210-VOICE-CONTINUOUS.md`）。
 //
+// ⚠️ 2026-10-07 晚**推倒重来**之后：那份字现在长在**底下那个真输入框**里
+//    ⇒ 判据读的是 `composeText`（旧名字是 `voiceFlow.said`，同一件事）。
+//
 // ── 这一份钉什么 ──────────────────────────────────────────
 //   ① 🔴 **到点（`asr/capped`）不许把这一场断掉**：字一个都不清、**一次都不发**，
 //      而且**当场接着开下一轮**（服务端那条 55 秒上限只该管钱，不该管他的话）；
@@ -78,14 +81,14 @@ void main() {
     b.s.on?.call({'type': 'asr/partial', 'text': '我们出去', 'index': 0});
     b.s.on?.call({'type': 'asr/final', 'text': '我们出去走走吧。', 'index': 0});
     await _tick();
-    expect(b.c.voiceFlow.said.trim(), '我们出去走走吧。');
+    expect(b.c.composeText.trim(), '我们出去走走吧。');
 
     // ⏰ 服务端到点（55 秒上限）——**他还在说**
     b.s.on?.call({'type': 'asr/capped'});
     await _tick();
     await _tick();
     expect(b.s.said, isEmpty, reason: '★ 到点**不许**把他的话发出去（那是"断"）');
-    expect(b.c.voiceFlow.said.contains('我们出去走走吧。'), true,
+    expect(b.c.composeText.contains('我们出去走走吧。'), true,
         reason: '🔴 已经听到的字**一个都不许清**（主人报的就是这一条）');
     expect(b.s.rounds, 2, reason: '★ 到点要**当场接着开下一轮**（这才是"连贯"）');
 
@@ -93,7 +96,7 @@ void main() {
     b.s.on?.call({'type': 'asr/ready'});
     b.s.on?.call({'type': 'asr/partial', 'text': '今天天气', 'index': 0});
     await _tick();
-    expect(b.c.voiceFlow.said, contains('我们出去走走吧。今天天气'),
+    expect(b.c.composeText, contains('我们出去走走吧。今天天气'),
         reason: '★ 第二轮的字要接在第一轮后面（不是替换）');
   });
 
@@ -108,7 +111,7 @@ void main() {
     await _tick();
     expect(b.s.said, isEmpty, reason: '★ 他没按停 ⇒ 不许发（上游收一轮不等于他说完了）');
     expect(b.s.rounds, 2, reason: '★ 接着开下一轮');
-    expect(b.c.voiceFlow.said.contains('我说了半句话。'), true, reason: '★ 字留着');
+    expect(b.c.composeText.contains('我说了半句话。'), true, reason: '★ 字留着');
   });
 
   test('🔴 他按了停才算说完：发出去的是**几轮加起来**的那一份（只发一次）', () async {

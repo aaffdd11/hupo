@@ -1,34 +1,54 @@
-// **在录时那颗圆圈的"一明一暗"**（主人 2026-10-05：*"录音按钮在激活的时候，
-//   要有一个循环的效果，就是颜色一明一暗的闪烁。"*）。
+// **底下那一格**：那颗圆圈的样子 / 在录时的"一明一暗" / 框里那份字 / 字号轴 / 草稿。
 //
-// 这一份钉四件（每件都带反例）：
-//   ① 🔴 **正在录 ⇒ 底色真的在变**（拿同一个 widget 的颜色量，不看"像在闪"）；
-//   ② 🔴 **不录 ⇒ 一个像素都不动**（底色跨帧恒等）；
-//   ③ 🔴 **按停（收尾中）⇒ 不闪了，而且屏幕上当场有反应**（有字就留着他那份字，一个字都没说才给提示）
-//      —— 主人报的"点击停止录音响应很慢"修的就是这一条；
-//   ④ 🔴 **那个永不结束的动画必须读总开关**（手册 §6.1.1 M1–M4）：
-//      关掉之后判据**不超时**、而且**那一层照旧画**（M3：不动 ≠ 没有）。
+// 🔴 **2026-10-07 晚推倒重来**（主人：*"原本的语音转文字全套方案都应该推倒重来……
+//   我们就是 stream 回来的文字输入到文本框等待发送。"*）：
+//   · 那一格现在是一个**真输入框**（识别回来的字直接长在里面、他也能改）；
+//   · 那份字**不再画在气泡上** ⇒ 判据读的是框里那份字（`_fieldText`）；
+//   · "还没校正"那条下划线**跟着那一层一起删了**。
+//
+// 这一份钉七件（每件都带反例）：
+//   ① 那颗圆圈：**白底 ＋ 一圈琥珀**（图形墨色）；
+//   ② 🔴 **正在录 ⇒ 底色真的在变**（拿同一个 widget 的颜色量，不看"像在闪"）；
+//   ③ 🔴 **不在录 ⇒ 一个像素都不动**（底色跨帧恒等）；
+//   ④ 🔴 **按停（收尾中）⇒ 不闪了，而且当场有反应**（字留着他那份）—— 主人报的
+//      "点击停止录音响应很慢"修的就是这一条；
+//   ⑤ 那个永不结束的动画必须读总开关（手册 §6.1.1 M1–M4）；
+//   ⑥ 🔴 那份字**原样画在框里**（没有"还没校正"那条线，也没有重复）；
+//   ⑦ 🔴 框里那份字**跟用户那条字号轴**；打字那条退路的路由（草稿进 / 发送出）。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/design.dart' as d;
-import 'package:hupo_app/models/hear_drill.dart';
-import 'package:hupo_app/models/hear_words.dart';
 import 'package:hupo_app/models/dsh_design.dart';
 import 'package:hupo_app/models/motion_switch.dart';
+import 'package:hupo_app/models/voice_words.dart';
 import 'package:hupo_app/widgets/appearance_scope.dart';
 import 'package:hupo_app/widgets/voice_bar.dart';
 
-/// 一个把状态钉成某一档的夹具（状态住上层 ⇒ 直接给它一份 `HearDrill`）。
-Future<void> _pump(WidgetTester tester, HearDrill flow, {bool settle = true}) async {
+/// 一个把状态钉成某一档的夹具（状态住上层 ⇒ 直接告诉它"在录 / 收尾中 / 框里那份字"）。
+Future<void> _pump(
+  WidgetTester tester, {
+  String text = '',
+  bool recording = false,
+  bool wrapping = false,
+  String note = '',
+  bool canHear = true,
+  bool settle = true,
+  ValueChanged<String>? onChanged,
+  ValueChanged<String>? onSend,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
         body: VoiceBar(
-          flow: flow,
-          canHear: true,
+          text: text,
+          recording: recording,
+          wrapping: wrapping,
+          note: note,
+          canHear: canHear,
+          onChanged: onChanged ?? (_) {},
           onMic: () {},
-          onTyped: (_) {},
+          onSend: onSend ?? (_) {},
         ),
       ),
     ),
@@ -38,6 +58,14 @@ Future<void> _pump(WidgetTester tester, HearDrill flow, {bool settle = true}) as
   } else {
     await tester.pump();
   }
+}
+
+/// **框里现在那份字**（`EditableText` 那一层才是真拿字的 —— `TextField` 的
+/// `find.text` 查不到它）。
+String _fieldText(WidgetTester tester) {
+  final f = find.descendant(of: find.byType(VoiceBar), matching: find.byType(EditableText));
+  if (f.evaluate().isEmpty) return '';
+  return tester.widget<EditableText>(f.first).controller.text;
 }
 
 /// 那颗圆圈这一帧的底色（拿的是**它自己**那个 `Material`，不是外面那层）。
@@ -50,9 +78,9 @@ Color _circleColor(WidgetTester tester) {
   return m.color!;
 }
 
-HearDrill _listening() => const HearDrill().startListening();
-HearDrill _wrapping() =>
-    const HearDrill().startListening().event({'type': 'asr/final', 'text': '帮我看看天气'}).stopListening();
+/// **他按了停、正等最后那一份字**（手上已经有那句字了）。
+({String text, bool recording, bool wrapping}) _wrapping([String said = '帮我看看天气']) =>
+    (text: said, recording: true, wrapping: true);
 
 /// [c] 的三个通道是不是都夹在 [a] 与 [b] 之间（颜色插值出来的样子）。
 bool _between(Color c, Color a, Color b) {
@@ -86,50 +114,46 @@ void main() {
   testWidgets('🔴 那颗圆圈：**白底 ＋ 一圈琥珀色**（图形墨色）', (tester) async {
     // 主人原话（2026-10-05）：*"那个语音按钮呢上外面要加一个边框啊，这个边框就是有那个琥珀色，
     //   就是按下去录音时候的那个颜色，然后……录音按钮和展开按钮他们也都有一个白色的底色"*
-    // ★ **2026-10-06 改口径**（主人当天先说*"我们就用边框颜色加80%透明度"*、
-    //   再补一句*"不是边框透明，是按钮内部底色透明"*）：
-    //   ⇒ **内部就是透明的**，只剩那一圈实色的琥珀。
-    await _pump(tester, const HearDrill());
+    //   ★ **2026-10-06 定案**（主人当天最后一句：*"现在把白色底加上"*）。
+    await _pump(tester);
     final ring = _circleRing(tester);
     expect(ring.color, d.accent, reason: '★ 外面那一圈不是琥珀色（按下去录音时的那个颜色）');
     expect(ring.width > 0, isTrue, reason: '★ 那圈边框宽度是 0（等于没画）');
-    // ★ **2026-10-06 定案**（主人当天最后一句：*"现在把白色底加上"*）：
-    //   **那张纸的白**（`card`）＋ 一圈实色的琥珀；图形**墨色**（白底之上它最清楚）。
     expect(_circleColor(tester), d.card, reason: '★ 那颗圆圈没有白底（主人 2026-10-06 要的）');
     expect(_circleGlyph(tester).color, d.ink, reason: '★ 圆圈里的图形不是墨色（白底之上该用墨色）');
 
-    // 负向对照：在录的时候**整颗变琥珀**（那一圈还在，只是与底同色了）
-    await _pump(tester, _listening());
+    // 负向对照：在录的时候**整颗变琥珀**（那一圈还在）
+    await _pump(tester, recording: true, settle: false);
     expect(_circleRing(tester).color, d.accent);
   });
 
-  testWidgets('③ 🔴 按停（收尾中）⇒ **当场**换成那句话，而且不闪了', (tester) async {
+  testWidgets('③ 🔴 按停（收尾中）⇒ **当场**还是他那份字，而且不闪了', (tester) async {
     // 主人 2026-10-05：*"我们录音和停止录音上，点击停止录音响应很慢。"*
-    //   ⇒ 这一档是"按下去那一刻"的样子：字换了、底色不再是"在录"那个红。
-    // ⚠️ **2026-10-05 改了口径**（主人：*"第一步是把直白的语音转文字写出来……
-    //   不要直接结束"*）：收尾中**说的是他刚说的那份字**（带下划线），
-    //   **不再拿"收下了，正在整理……"把字盖掉** —— 那句只在他一个字都没说时才出来。
-    await _pump(tester, _wrapping());
-    expect(find.text('帮我看看天气'), findsOneWidget,
+    //   ⇒ 这一档是"按下去那一刻"的样子：字还在、底色不再是"在录"那个色。
+    final w = _wrapping();
+    await _pump(tester, text: w.text, recording: w.recording, wrapping: w.wrapping);
+    expect(_fieldText(tester), '帮我看看天气',
         reason: '★ 收尾中该看见**他刚说的那份字**（不是把它换成一句提示）');
     expect(_circleColor(tester), d.card,
         reason: '★ 已经不在录了 ⇒ 不许还画着"在录"那个底（该回到白底）');
     expect(find.byIcon(Icons.mic_none_rounded), findsOneWidget);
     expect(find.byIcon(Icons.stop_rounded), findsNothing, reason: '★ 收尾中不许还摆着"停"那个方块');
 
-    // 负向对照：在录那一档**必须**是"停"那个方块 + 不是白底
-    await _pump(tester, _listening());
+    // 负向对照：在录那一档**必须**是"停"那个方块
+    await _pump(tester, recording: true, settle: false);
     expect(find.byIcon(Icons.stop_rounded), findsOneWidget);
+
     // ⚠️ 负向对照：**一个字都没说**的收尾中 ⇒ 那句提示要出来（不然屏幕上什么都没有）
-    await _pump(tester, const HearDrill().startListening().stopListening());
-    expect(find.text(hearDrillWrappingLead), findsOneWidget,
+    await _pump(tester, recording: true, wrapping: true);
+    expect(find.text(voiceWrappingLead), findsOneWidget,
         reason: '★ 一个字都没说的时候，收尾中必须有一句人话');
   });
 
   testWidgets('② 🔴 不在录 ⇒ 底色跨帧一个字节都不许变（不许自己闪）', (tester) async {
     setHupoAnimationsEnabled(on: true);
     addTearDown(() => setHupoAnimationsEnabled(on: false));
-    await _pump(tester, _wrapping(), settle: false);
+    final w = _wrapping();
+    await _pump(tester, text: w.text, recording: w.recording, wrapping: w.wrapping, settle: false);
     final seen = <Color>{};
     for (var i = 0; i < 6; i++) {
       await tester.pump(const Duration(milliseconds: 120));
@@ -141,7 +165,7 @@ void main() {
   testWidgets('④ 🔴 打开总开关 ⇒ 正在录时底色**真的在变**', (tester) async {
     setHupoAnimationsEnabled(on: true);
     addTearDown(() => setHupoAnimationsEnabled(on: false));
-    await _pump(tester, _listening(), settle: false);
+    await _pump(tester, recording: true, settle: false);
     final seen = <Color>{};
     for (var i = 0; i < 8; i++) {
       await tester.pump(const Duration(milliseconds: 100));
@@ -165,7 +189,7 @@ void main() {
   testWidgets('④·补 🔴 总开关关着 ⇒ 判据不超时，而且那一层照旧画（M3：不动 ≠ 没有）', (tester) async {
     expect(hupoAnimationsEnabled, false, reason: '测试里那个开关该是关着的（M2 只有一处关它）');
     // 关着也能 `pumpAndSettle` 出来（能走到这儿就说明没超时）
-    await _pump(tester, _listening());
+    await _pump(tester, recording: true);
     expect(find.byKey(voiceBarCircleKey), findsOneWidget,
         reason: '★ 关掉开关之后那颗圆圈不见了 —— M3 说"不动"与"没有"是两件事');
     final before = _circleColor(tester);
@@ -173,51 +197,36 @@ void main() {
     expect(_circleColor(tester), before, reason: '★ 关着开关它还在动');
   });
 
-  testWidgets('⑥ 🔴 那份字**原样画出来**（没有"还没校正"那条下划线了）', (tester) async {
-    // 🔴 **2026-10-07**：主人 *"我们之前对语音，是抽离出来做了一层，没问题才发给聊天的。
-    //   现在我需要把这个抽离的部分给去掉。"* ⇒ 第二步没有了，"字就是字"：
-    //   原来那条"第一步带下划线、校正回来才去掉"的线**跟着那一层一起删掉了**
-    //   （留着它等于一直在说"这份还不算数"）。
+  testWidgets('⑥ 🔴 那份字**原样在框里**（能改；没有"还没校正"那条线）', (tester) async {
+    // 🔴 **2026-10-07 推倒重来**：主人要的是"stream 回来的文字输入到文本框" ⇒
+    //   那一格是一个**真输入框**：字长在里面，他也能点进去改。
     TextDecoration? decoOf(WidgetTester t) {
-      final texts = t.widgetList<Text>(find.byType(Text)).toList();
-      for (final x in texts) {
-        final d = x.style?.decoration;
-        if (d != null && d != TextDecoration.none) return d;
-      }
-      return null;
+      final f = find.byType(EditableText);
+      if (f.evaluate().isEmpty) return null;
+      return tester.widget<EditableText>(f.first).style.decoration;
     }
 
     // ① 在听（字还在长）
-    final listening = const HearDrill()
-        .startListening()
-        .event({'type': 'asr/partial', 'text': '帮我看一下明天北京的天气予报'});
-    await _pump(tester, listening, settle: true);
-    expect(find.text('帮我看一下明天北京的天气予报'), findsOneWidget,
-        reason: '★ 他说的那份字要真的画在屏幕上');
-    expect(decoOf(tester), isNull, reason: '★ 没有"还没校正"那条线了（第二步已经删掉）');
+    await _pump(tester, text: '帮我看一下明天北京的天气予报', recording: true);
+    expect(_fieldText(tester), '帮我看一下明天北京的天气予报',
+        reason: '★ 他说的那份字要真的长在框里');
+    expect(decoOf(tester), anyOf(isNull, TextDecoration.none),
+        reason: '★ 没有"还没校正"那条线了（第二步已经删掉）');
 
-    // ② 收尾中（他按了停、还没等到对面）⇒ 字**一个都不少**，样子也一样
-    await _pump(tester, listening.stopListening(), settle: true);
-    expect(find.text('帮我看一下明天北京的天气予报'), findsOneWidget,
+    // ② 收尾中（他按了停）⇒ 字**一个都不少**
+    await _pump(tester, text: '帮我看一下明天北京的天气予报', recording: true, wrapping: true);
+    expect(_fieldText(tester), '帮我看一下明天北京的天气予报',
         reason: '★ 收尾中那份字不许消失');
-    expect(decoOf(tester), isNull);
 
-    // ③ 该发了（对面把整段吐回来了）⇒ 还是那一份字（发出去的就是它）
-    final thinking = listening.stopListening().event(
-        {'type': 'asr/end', 'text': '帮我看一下明天北京的天气预报', 'reason': 'user-stop'});
-    await _pump(tester, thinking, settle: true);
-    expect(find.text('帮我看一下明天北京的天气预报'), findsOneWidget);
-    expect(decoOf(tester), isNull, reason: '★ 字就是字：一份字只有一种样子');
-
-    // 负向对照：**没在听的时候什么都不画**（空 ⇒ 那颗气泡自己消失）
-    await _pump(tester, const HearDrill(), settle: true);
-    expect(find.text('帮我看一下明天北京的天气预报'), findsNothing);
+    // ③ **空的时候一个像素都不画**（不摆空框、不摆提示）
+    await _pump(tester);
+    expect(find.byType(EditableText), findsNothing, reason: '★ 空的时候不该摆一个空框在那儿');
   });
 
-  testWidgets('⑦ 🔴 底下那一行字**跟用户那条字号轴**（12/14/17 都跟着变）', (tester) async {
+  testWidgets('⑦ 🔴 框里那份字**跟用户那条字号轴**（12/17 都跟着变）', (tester) async {
     // 🔴 2026-10-06 清过期判据时点名的真缺陷：这一行字原来走 `textTheme.bodyLarge`
-    //    （16/24，与用户那条轴无关）⇒ 设置里把字号从 12 调到 17，时间线会变、
-    //    **底下这一行一个像素都不动**。它属于"会话内容"，必须跟轴。
+    //    （与用户那条轴无关）⇒ 设置里把字号从 12 调到 17，时间线会变、
+    //    **底下这一格一个像素都不动**。它属于"会话内容"，必须跟轴。
     Future<double> sizeAt(int setting) async {
       await tester.pumpWidget(
         AppearanceScope(
@@ -226,53 +235,49 @@ void main() {
           child: MaterialApp(
             home: Scaffold(
               body: VoiceBar(
-                flow: _wrapping(),
+                text: '帮我看看天气',
+                recording: true,
+                wrapping: true,
                 canHear: true,
+                onChanged: (_) {},
                 onMic: () {},
-                onTyped: (_) {},
+                onSend: (_) {},
               ),
             ),
           ),
         ),
       );
       await tester.pumpAndSettle();
-      return tester.getSize(find.text('帮我看看天气')).height;
+      return tester.widget<EditableText>(find.byType(EditableText)).style.fontSize!;
     }
 
-    final h12 = await sizeAt(12);
-    final h17 = await sizeAt(17);
-    expect(h17, greaterThan(h12),
-        reason: '★ 字号调大 ⇒ 底下这一行也得跟着变大（原来它走 textTheme，一个像素都不动）');
+    final s12 = await sizeAt(12);
+    final s17 = await sizeAt(17);
+    expect(s17, greaterThan(s12),
+        reason: '★ 字号调大 ⇒ 底下这一格也得跟着变大（原来它走 textTheme，一个像素都不动）');
   });
 
-  testWidgets('⑧ 🔴 打字那条退路：**上回打了一半的那句还在**，发出去才清掉', (tester) async {
-    // 🔴 主人 2026-09-22 就定过"草稿也是要记住的"；而那一格换成语音之后，
-    //    唯一会写草稿的 `composer.dart` **没人实例化了** ⇒ 打了一半刷新就没了
+  testWidgets('⑧ 🔴 打字那条退路：**上回打了一半的那句填回框里**，发送交出的是框里那份', (tester) async {
+    // 🔴 主人 2026-09-22 就定过"草稿也是要记住的"；那一格换成语音之后，
+    //    唯一会写草稿的 `composer.dart` 没人实例化了 ⇒ 打了一半刷新就没了
     //    （2026-10-06 清判据时发现的真缺陷）。这一条钉"接回活的这一格"。
     final typed = <String>[];
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: VoiceBar(
-            flow: const HearDrill(),
-            canHear: false,
-            onMic: () {},
-            onTyped: (_) {},
-            draft: '帮我看一下明天',
-            onDraft: typed.add,
-          ),
-        ),
-      ),
+    final sent = <String>[];
+    await _pump(
+      tester,
+      text: '帮我看一下明天',
+      canHear: false,
+      onChanged: typed.add,
+      onSend: sent.add,
     );
-    await tester.pumpAndSettle();
     // ① 存着的那一句**填回框里**（而且这一格是摊开的 —— 不摊开就等于字丢了）
-    expect(find.text('帮我看一下明天'), findsOneWidget, reason: '★ 上回打了一半的那句没回来');
-    // ② 再敲一下 ⇒ 每一下都喊一声（存的那一份跟着变）
+    expect(_fieldText(tester), '帮我看一下明天', reason: '★ 上回打了一半的那句没回来');
+    // ② 再敲一下 ⇒ 每一下都喊一声（控制器那边把它存下来）
     await tester.enterText(find.byKey(voiceBarTypeKey), '帮我看一下明天北京的天气');
-    expect(typed, isNotEmpty, reason: '★ 敲了字却没喊 onDraft ⇒ 那份草稿还是没人写');
-    // ③ 发出去 ⇒ 喊一声空的（那一份清掉）
+    expect(typed, isNotEmpty, reason: '★ 敲了字却没喊 onChanged ⇒ 那份草稿还是没人写');
+    // ③ 按「发送」⇒ 交出去的是**框里那份字**（清框是控制器那边的事）
     await tester.tap(find.byKey(voiceBarTypedSendKey));
     await tester.pumpAndSettle();
-    expect(typed.last, '', reason: '★ 发出去了那份草稿还留着 ⇒ 下次回来又冒出一句他已经发过的话');
+    expect(sent, ['帮我看一下明天北京的天气'], reason: '★ 发出去的是他自己改过的那份字');
   });
 }

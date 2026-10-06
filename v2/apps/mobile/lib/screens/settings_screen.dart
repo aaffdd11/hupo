@@ -23,7 +23,6 @@ import '../models/app_spec.dart';
 import '../models/appearance.dart';
 import '../models/design.dart' as d;
 import '../models/dsh_design.dart';
-import '../models/hear_words.dart';
 import '../models/image_outcome.dart';
 import '../models/space.dart';
 import '../models/speak_words.dart';
@@ -82,7 +81,6 @@ class SettingsScreen extends StatelessWidget {
     this.apps = const [],
     this.onGrant,
     this.onClear,
-    this.hearDrillPage,
     this.autoSpeak = false,
     this.onToggleAutoSpeak,
   });
@@ -91,7 +89,6 @@ class SettingsScreen extends StatelessWidget {
   ///
   /// ⚠️ `null` ⇒ **不画那一行**（这条路没接上时不许摆一个按不动的东西）。
   /// ⚠️ 它是**演练**：整条链子走一遍，**一句都不会发出去**。
-  final Widget Function()? hearDrillPage;
 
   /// ★ **「读出来」那个开关**（`D5.16`／`docs/dev/68`）。
   ///
@@ -272,17 +269,6 @@ class SettingsScreen extends StatelessWidget {
               hint: wallpaperLabel(wallpaper),
               open: () => _openWallpaper(context),
             ),
-            // ②·补 ★ 2026-10-04（V2.0 第一件）：**说一句试试**（演练，不会发出去）
-            //   ⚠️ 它是"试一下"那一类（与语音那一屏的「试一下」同一族），
-            //      所以摆在壁纸之后、这块窗口之前。
-            if (hearDrillPage != null)
-              _row(
-                context,
-                icon: Icons.record_voice_over_outlined,
-                label: hearDrillTitle,
-                hint: hearDrillRowHint,
-                open: () => _openBare(context, hearDrillTitle, (page) => hearDrillPage!()),
-              ),
             // ③ 这块窗口
             _row(
               context,
@@ -472,13 +458,6 @@ class SettingsScreen extends StatelessWidget {
           children: [body(page)],
         ),
       ),
-    ));
-  }
-
-  /// **整屏的那一页**（body 自己带滚动 —— 那一屏是一个 `ListView`）。
-  void _openBare(BuildContext context, String title, Widget Function(BuildContext) body) {
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (page) => _subPage(page, title, body(page)),
     ));
   }
 
