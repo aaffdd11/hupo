@@ -33,6 +33,7 @@ import 'dart:js_util' as jsu;
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../models/asr_outbox.dart';
 import '../models/pcm16.dart';
 
 /// 这个页面能不能真开麦。
@@ -48,6 +49,14 @@ const int _blockFrames = 4096;
 
 /// 连上之后最多等多久"这台能不能听"（上游握手那一拍）。
 const Duration _readyLimit = Duration(seconds: 5);
+
+/// ★ **2026-10-06：「连接 ＋ 握手」这一拍最多等多久**（那道门的兜底）。
+///
+/// 🔴 现在这一拍与"开麦采集"是**并行**的（音频先攒在本机，见 `AsrOutbox`）——
+///    所以这里多等一会儿**不丢东西**，只是晚一点知道成不成。
+///    真读数：冷启那一下**连接**本身量到 **4.4 秒**（热 10~25 ms），
+///    再加握手 ~240 ms ⇒ 5 秒太紧（会误报"这条走不通"，而他其实马上就说上了）。
+const Duration _verdictLimit = Duration(seconds: 10);
 
 /// 说过"结束"之后，最多再等多久收尾（等那句最后的字回来）。
 // ⚠️ **2026-10-05：20 秒**（原来 8）。主人叮嘱过*"要等待语音结束和语义转换结束，
@@ -115,6 +124,9 @@ class _Session {
   StreamSubscription<dynamic>? wire;
   Timer? linger;
   bool stopping = false;
+
+  /// ★ **还没连上时攒着的音频**（见 `models/asr_outbox.dart`）：一包都不丢。
+  final AsrOutbox outbox = AsrOutbox();
 }
 
 /// **开麦**。
@@ -159,16 +171,21 @@ Future<String?> startHearing({
   //    多半还是 `suspended`（那会误杀本来能用的浏览器）⇒ 真正的判据放到 ③ 那一步
   //    （`await` 过 resume 之后再读，见下）。
 
-  // ── ① 先连上（令牌走子协议，和聊天那条一样；**不进 URL**）──────────
+  // ── ① 先把那条连接**开出去**（令牌走子协议，和聊天那条一样；**不进 URL**）──
+  //
+  //   🔴 **2026-10-06 第二处修**（主人：*"我说话以后，没有直接显示语音转换文字，
+  //   响应很慢，然后真正出现的时候，前面的几个字可能会不见。"*）：
+  //   原来这里是 `await ch.ready` —— **握上手才往下走**，而"握上手"冷启那一下
+  //   **真量到 4.4 秒**（热的时候 10~25ms）⇒ 那几秒里麦克风压根没开，
+  //   他开头说的字**采都没采**（补不回来）。
+  //   ⇒ 现在**不等它**：立刻往下开麦，音频先在**本机**攒着（[AsrOutbox]），
+  //     这条连接一握上手就把攒着的按顺序补发。
+  //   ⚠️ 失败（网关 / 隧道不认这条路径）**照旧如实说 `no-entry`** ——
+  //     只是那句话现在从下面那个 `ready` 回调里来，不是从这一行抛出来。
   final WebSocketChannel ch;
   try {
     ch = WebSocketChannel.connect(url, protocols: ['bearer', token]);
-    await ch.ready;
   } catch (_) {
-    // ⚠️ **这一句和"麦克风开不了"不是一回事**：那一步失败通常意味着
-    //    这条连接在中间某一跳就断了（网关 / 隧道不认这条路径）。
-    //    两句混在一起报，页面就在说假话（2026-09-23 在线上真的踩到了：
-    //    公网 nginx 没给 `/api/asr` 配升级头 ⇒ 屏幕上却说"开不了麦克风"）。
     return 'no-entry';
   }
 
@@ -179,8 +196,33 @@ Future<String?> startHearing({
   // ⚠️ **这道门现在只决定"要不要把麦克风收掉"**（2026-10-06 改）：
   //    原来它决定"要不要开麦"，而"按下去"到"能听"之间那一段麦克风压根没开
   //    ⇒ 他开口那几个字**从来没被采到过**（主人报的"开头说的话可能会少"）。
-  //    ⇒ 开麦已经挪到下面 ② 去了（按下去就开）；这里只等它一个结论。
+  //    ⇒ 开麦已经挪到下面 ③ 去了（按下去就开）；这里只等它一个结论。
   final gate = Completer<String?>();
+
+  /// **握上手了**（或者**永远握不上**）：补发攒着的音频；握不上就如实报 `no-entry`。
+  ///
+  /// ⚠️ 这一条是**异步**的（`connect` 不 await），所以它可能在开麦之后才跑到 ——
+  ///    那正是要的形状：**采集与连接并行**，谁也别等谁。
+  unawaited(() async {
+    try {
+      await ch.ready;
+    } catch (_) {
+      // 这一条路走不通（网关 / 隧道不认它）⇒ 让上面那道门如实收场
+      if (!gate.isCompleted) gate.complete('no-entry');
+      return;
+    }
+    if (!_open.contains(session)) return; // 这一会儿里已经被收掉了
+    // 跟对面说"我要开始了"（上游到这时候才连；它握上手会回 `asr/ready`）
+    try {
+      ch.sink.add(jsonEncode({'type': 'asr/start'}));
+      for (final b in session.outbox.open()) {
+        ch.sink.add(b);
+      }
+    } catch (_) {
+      /* 对面已经断了：收尾那一路会把它收干净 */
+    }
+  }());
+
   session.wire = ch.stream.listen(
     (raw) {
       if (raw is! String) return;
@@ -221,12 +263,8 @@ Future<String?> startHearing({
     },
     cancelOnError: true,
   );
-  // 跟对面说"我要开始了"（上游到这时候才连；它握上手会回 `asr/ready`）
-  try {
-    ch.sink.add(jsonEncode({'type': 'asr/start'}));
-  } catch (_) {
-    /* 对面已经断了 */
-  }
+  // ⚠️ `asr/start` 那一条**已经挪到**上面"握上手"那个回调里了（与补发攒着的音频
+  //    一起发）—— 这里一个字节都不发，免得在"还没连上"时先撞一次 sink。
 
   // ── ② 🔴 **现在就要麦克风 —— 不再等 `asr/ready`**（2026-10-06 修）───────
   //
@@ -322,10 +360,15 @@ Future<String?> startHearing({
             .toDart;
     final bytes = pcm16FromFloat(frames, sampleRate: session.rate);
     if (bytes.isEmpty) return;
-    try {
-      ch.sink.add(bytes);
-    } catch (_) {
-      /* 对面断了：收尾那一路会把它收干净 */
+    // 🔴 **还没连上就先攒着**（这一句就是"开头那几个字"的落点）：
+    //    `add` 在没握上手时把这一包留在本机（一包都不丢），握上手那个回调
+    //    会按顺序把它们补发出去。
+    for (final b in session.outbox.add(bytes)) {
+      try {
+        ch.sink.add(b);
+      } catch (_) {
+        /* 对面断了：收尾那一路会把它收干净 */
+      }
     }
   });
   jsu.setProperty(session.proc!, 'onaudioprocess', session.onAudio);
@@ -333,8 +376,11 @@ Future<String?> startHearing({
   // ── ③ **回头再看对面怎么说**（音频已经在往那边送了）──────────────
   //   ⚠️ 这一步**不能提前**：早了就等于把上面那段"没开麦的时间"又还回去。
   //   失败（没配钥匙 / 引擎出错 / 连不上）⇒ 把麦克风收掉、如实说（原样）。
+  //   ⚠️ 这条兜底钟**只兜"连接 + 握手"这一拍**（现在它俩是并行的，
+  //      而冷启那一下真量到 4.4 秒 ⇒ 给得比原来宽一点：攒着的音频不会丢，
+  //      所以多等一会儿是**白赚**，不是风险）。
   final verdict = await gate.future.timeout(
-    _readyLimit,
+    _verdictLimit,
     onTimeout: () => 'no-entry',
   );
   if (verdict != null) {
@@ -368,6 +414,8 @@ void _close(_Session s) {
   if (_open.isEmpty) _blockMenu(false);
   s.linger?.cancel();
   s.stopping = true;
+  // 攒着还没送出去的那些（这条连接没能握上手就结束了）—— 清掉，别留在内存里
+  s.outbox.clear();
   _stopCaptureHardware(s);
   try {
     s.wire?.cancel();

@@ -8,9 +8,19 @@
 // 他开口那几个字**从来没被采到过**（采都没采，谁也补不回来）。
 // 真读数（线上那条路 · 宿主 ⇒ 他自己的盒子 ⇒ 豆包）：**热 ~240 ms、冷启第一次 ~2.7 s**。
 //
-// ⇒ 现在的顺序：**按下去就要麦克风**，音频先往对面送（服务端那一侧本来就会把
-//   "握上手之前到的音频"攒住、握上手立刻补发 —— `test/asr.test.js` 那条判据），
-//   回头再验对面那句"能听"（失败就把麦克风收干净、如实说）。
+// ⇒ 现在的顺序：**按下去就要麦克风**。
+//
+// 🔴 **2026-10-06 第二处（同一天、同一个症状的第二个根）**：主人又说了一遍
+//   *"我说话以后，没有直接显示语音转换文字，响应很慢，然后真正出现的时候，
+//   前面的几个字可能会不见。"* —— 换了新顺序之后**还剩一个洞**：这两份实现
+//   仍然**先 `await` 那条连接握上手，再往下开麦**，而"握上手"冷启那一下真量到
+//   **4.4 秒**（热 10~25ms）⇒ 那几秒里还是一样丢。
+//   ⇒ 现在连"等连接"也不等了：**采集与连接并行**，音频先在**本机**攒着
+//     （`models/asr_outbox.dart`），一握上手就按顺序补发（服务端那一侧同样有一份
+//     攒法：`src/asr-doubao.js` 的队列／判据「连上之前推的音频不丢」）。
+//   ⇒ 这一份现在钉三件事：① 开麦在"验对面"之前；② **开麦也在"等连接"之外**
+//     （连接那条 `await …ready` 必须住在一个**不被 await 的闭包**里）；
+//     ③ 音频走 **outbox**（没连上攒着、连上按顺序补发）。
 //
 // ⚠️ **为什么这一条必须做成"源码级"**：这两份实现是**平台专用**的
 //   （`dart:html` / 原生 channel），在 VM 上跑不起来 —— 与 `mini_runtime_test.dart`
@@ -44,6 +54,32 @@ void main() {
   test('🔴 安卓那一份：**要麦克风**也必须在「等对面说能听」之前（两份顺序一样）', () {
     final nat = _read('lib/services/hearing_native.dart');
     _before(nat, "invokeMethod<String?>('start')", 'await gate.future', '安卓那一份');
+  });
+
+  test('🔴 两份实现：开麦**也不在"等连接"里面**（连接那条 await 住在不被 await 的闭包里）', () {
+    for (final (f, ready) in [
+      ('lib/services/hearing_web.dart', 'await ch.ready'),
+      ('lib/services/hearing_native.dart', 'await w.ready'),
+    ]) {
+      final src = _read(f);
+      // ⚠️ 注释里也会出现这几个字样（这一份的批注就在讲原来那行）⇒ 从那个闭包**往后找**。
+      final iStart = src.indexOf('unawaited(() async {');
+      expect(iStart >= 0, true,
+          reason: '★ $f：那条"握上手"的 await 不在 `unawaited(() async {…}())` 里 —— '
+              '它会被 await ⇒ 冷启那 4.4 秒里麦克风还没开（他开头那几个字就没了）');
+      final iReady = src.indexOf(ready, iStart);
+      expect(iReady > iStart, true,
+          reason: '★ $f：`$ready` 没住进那个不被 await 的闭包（找到的是注释里那一处吗）');
+    }
+  });
+
+  test('🔴 两份实现：音频走 outbox（没连上攒着、连上补发）', () {
+    for (final f in ['lib/services/hearing_web.dart', 'lib/services/hearing_native.dart']) {
+      final src = _read(f);
+      expect(src.contains('outbox.add('), true, reason: '★ $f：采到的音频没进 outbox');
+      expect(src.contains('outbox.open()'), true,
+          reason: '★ $f：握上手那一下没有把攒着的补发出去（攒了就白攒）');
+    }
   });
 
   test('★ 负向对照：那两处"等对面"的字样还在（不然上面两条会变成空转）', () {

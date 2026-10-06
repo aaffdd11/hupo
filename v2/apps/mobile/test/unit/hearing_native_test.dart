@@ -35,9 +35,14 @@ class _FakeWire implements AsrWire {
   bool closed = false;
   bool readyFails = false;
 
+  /// ★ 2026-10-06：**攥住"握上手"那一下**（演"冷启那 4.4 秒里连接还没好"）。
+  bool holdReady = false;
+  final Completer<void> readyGate = Completer<void>();
+
   @override
   Future<void> get ready async {
     if (readyFails) throw StateError('握不上手');
+    if (holdReady) await readyGate.future;
   }
 
   @override
@@ -66,6 +71,16 @@ class _FakeMic {
     if (c.method == 'start') return why;
     return null;
   }
+}
+
+/// **演 Kotlin 那边往回送一包音频**（走真的那条 `hupo/hearing` 通道）。
+Future<void> _pushAudio(Uint8List chunk) async {
+  await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .handlePlatformMessage(
+    'hupo/hearing',
+    const StandardMethodCodec().encodeMethodCall(MethodCall('onAudio', chunk)),
+    (_) {},
+  );
 }
 
 void main() {
@@ -137,6 +152,37 @@ void main() {
       expect(mic.calls, contains('start'));
     });
 
+    test('🔴 **连接还没握上手 ⇒ 音频先攒着；握上手按顺序补发**（开头那几个字一个都不丢）', () async {
+      // 🔴 2026-10-06 第二个根（主人又说了一遍"响应很慢……前面的几个字可能会不见"）：
+      //   换了"按下去就开麦"之后还剩一个洞 —— 客户端仍然**先等连接握上手再开麦**，
+      //   而冷启那一下**真量到 4.4 秒**（热 10~25ms）。
+      //   ⇒ 现在**采集与连接并行**：连上之前采到的音频先留在本机（`AsrOutbox`），
+      //     一握上手就按**原来的顺序**补发。
+      installNativeHearing();
+      wire.holdReady = true; // 攥住"握上手"，演冷启那几秒
+      final fut = start();
+      await settle();
+      // ① 连接还没好，麦克风**已经**在采了（不然那几秒的字就没了）
+      expect(mic.calls, contains('start'),
+          reason: '★ 还在等连接 ⇒ 冷启那 4.4 秒里他开口的字全丢');
+      // ② 这期间采回来的两包：一包都不许撞在 send 上（也不许扔）
+      final a = Uint8List.fromList(List<int>.generate(3200, (i) => i % 7));
+      final b = Uint8List.fromList(List<int>.generate(3200, (i) => (i + 3) % 11));
+      await _pushAudio(a);
+      await _pushAudio(b);
+      expect(wire.sent.whereType<Uint8List>(), isEmpty,
+          reason: '★ 还没握上手就把音频送出去了（那一包会掉在路上）');
+      // ③ 握上手 ⇒ asr/start 之后**按顺序**把攒着的补上
+      wire.readyGate.complete();
+      await settle();
+      expect(wire.sent.whereType<Uint8List>().toList(), [a, b],
+          reason: '★ 补发的顺序变了 —— 音频颠一包就是颠一句');
+      expect(wire.sent.first, jsonEncode({'type': 'asr/start'}),
+          reason: '★ asr/start 要在音频之前（对面靠它开这一场）');
+      wire.out.add(jsonEncode({'type': 'asr/ready'}));
+      expect(await fut, isNull, reason: 'null = 真开起来了');
+    });
+
     test('🔴 对面说"没配" ⇒ `not-configured`，而且**把麦克风收干净**', () async {
       // ⚠️ **2026-10-06 改口径**：麦克风现在是**按下去就开**（为了不丢开头那几个字）
       //   ⇒ 这一档不再是"一次都没碰麦克风"，而是"**碰了、但验完立刻收干净**"。
@@ -191,21 +237,11 @@ void main() {
       expect(await fut, isNull);
       // Kotlin 那边往回送一块（16k 单声道 PCM16 ⇒ 一块 3200 字节）
       final chunk = Uint8List.fromList(List<int>.generate(3200, (i) => i % 251));
-      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .handlePlatformMessage(
-        'hupo/hearing',
-        const StandardMethodCodec().encodeMethodCall(MethodCall('onAudio', chunk)),
-        (_) {},
-      );
+      await _pushAudio(chunk);
       expect(wire.sent.whereType<Uint8List>().toList(), [chunk], reason: '★ 原样送（不加工、不重采样）');
       // 收手之后：帧再回来也不许送（对面已经在收尾了）
       stopHearing();
-      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .handlePlatformMessage(
-        'hupo/hearing',
-        const StandardMethodCodec().encodeMethodCall(MethodCall('onAudio', chunk)),
-        (_) {},
-      );
+      await _pushAudio(chunk);
       expect(wire.sent.whereType<Uint8List>().toList(), hasLength(1));
     });
 
