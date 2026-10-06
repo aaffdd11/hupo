@@ -15,6 +15,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/v2/apps/mobile"
 FLUTTER="${FLUTTER_BIN:-$HOME/sdk/flutter/bin/flutter}"
 
+# ★ **同一棵树刚跑过 ⇒ 不重复跑**（读数 `docs/dev/212`：最贵那一轮里两次全闸占 1,454 秒；
+#   契约 `docs/dev/213`）。要真再跑一遍：`scripts/check-client.sh --again`。
+#   ⚠️ 认不出 / 读不出 / 过了窗口 ⇒ 一律照跑（fail-closed，绝不因为"读不出"而跳过）。
+AGAIN=0
+[ "${1:-}" = "--again" ] && AGAIN=1
+if [ "$AGAIN" = "0" ]; then
+  if bash "$ROOT/scripts/gate-stamp.sh" check client; then exit 0; fi
+fi
+
 command -v "$FLUTTER" >/dev/null || { echo "✗ 找不到 flutter（设 FLUTTER_BIN）"; exit 2; }
 cd "$APP" || exit 2
 
@@ -58,5 +67,11 @@ fi
 run "其余界面测试（提示）" "提示" -- "$FLUTTER" test "${HINT_FILES[@]}"
 
 echo "──────────────────────────────"
-if [ "$bad" = "0" ]; then echo "✅ 硬闸全过"; else echo "❌ 有硬闸没过"; fi
+if [ "$bad" = "0" ]; then
+  echo "✅ 硬闸全过"
+  # ★ 跑完留戳（下一轮同一棵树就不再跑一遍）
+  bash "$ROOT/scripts/gate-stamp.sh" write client "✅ 客户端硬闸全过"
+else
+  echo "❌ 有硬闸没过"
+fi
 exit "$bad"

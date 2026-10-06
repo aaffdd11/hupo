@@ -209,6 +209,11 @@ cd v2/services/core && npm test && npm run demo
 
 1. **迭代期只跑窄闸**（改哪块跑哪块：`node --test test/xxx.test.js` / `flutter test test/unit/xxx_test.dart`）；
    **全闸（`npm test` / `check-client.sh`）只在收尾跑一次**。
+   ✅ **窄闸有脚本了**：`scripts/gate-quick.sh <改动的路径…>` —— 它按"改哪块 ⇒ 跑哪条"的**唯一映射**
+   挑出来跑（认不出就**如实说"认不出"**，退回让你判断，绝不悄悄放过）；结尾一定会提醒"收尾还要跑全闸"。
+   ✅ **全闸带戳了**：`scripts/gate-server.sh`（服务端）与 `check-client.sh` 会在**跑过之后留一枚戳** ——
+   同一棵树、同一个工具链、**半小时内**再跑 ⇒ **当场跳过**并告诉你上一版刚跑过；真要重跑加 `--again`。
+   树一变（内容变了）戳就作废（指纹＝源码＋判据＋依赖清单＋工具链版本）。
 2. 🔴 **同一条全闸不许并行跑第二遍**；`check-client.sh` 之后**不许**再单独跑 `flutter test`（它已经包含 analyze ＋ unit ＋ 全部 widget ＋ 可访问性）。
 3. **整站重发（`deploy-web-v2.sh`）一轮只做一次**；迭代期不重发。
 4. **一条命令干一件事**：别把一次探索拆成几十条 `grep`/`read`/`sed`。

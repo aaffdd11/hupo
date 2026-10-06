@@ -51,7 +51,10 @@ command -v "$FLUTTER" >/dev/null || { echo "✗ 找不到 flutter（设 FLUTTER_
 #   · `HUPO_GATE_CLIENT` / `HUPO_GATE_SERVER` —— 给 `check-deploy-gate.sh` 做**变异验证**用
 #     （把闸换成 `false`，证明"红了真的会中止"）。
 GATE_CLIENT="${HUPO_GATE_CLIENT:-bash $ROOT/scripts/check-client.sh}"
-GATE_SERVER="${HUPO_GATE_SERVER:-bash -c 'cd $CORE && npm test'}"
+# ★ 服务端那道闸走 `gate-server.sh`（它带**留戳**：同一棵树刚跑过就不再跑一遍 ——
+#   读数 `docs/dev/212`：那一轮两次全闸占 1,454 秒；契约 `docs/dev/213`）。
+#   ⚠️ 判据一个字没变（还是 `npm test`），变的只是"什么时候真的再跑一遍"。
+GATE_SERVER="${HUPO_GATE_SERVER:-bash $ROOT/scripts/gate-server.sh}"
 
 if [ "${HUPO_SKIP_GATES:-}" = "1" ]; then
   echo "⚠️⚠️ HUPO_SKIP_GATES=1 —— **跳过硬闸直接部署**（这一行会留在日志里，事后查得到）"
