@@ -318,10 +318,6 @@ export function createDoubaoUpstream({ config, connectId = newConnectId, log = (
   /** @type {WebSocket|null} */
   let up = null;
   let ready = false;
-  // ── 临时诊断（见下面"帧形状"那一段；`docs/dev/217`）──
-  let diagNo = 0;
-  let diagPrev = '';
-  const diagT0 = Date.now();
   let closed = false;
   /** 我们发过"最后一包"了吗（之后第一帧回话 = 它把最后那些字吐完了）。 */
   let finished = false;
@@ -409,29 +405,6 @@ export function createDoubaoUpstream({ config, connectId = newConnectId, log = (
         //    上游按"这一句"给字，说下一句时上一句就不在里面了 ⇒ 我们按 `start_time`
         //    认出"换段了"，把前面的攒住、段号自己往前推。
         //    ⚠️ 这里**不许**再直接转发 `ev.text`（那正是"前半段被砍掉"）。
-        // ── 🔴 **临时的形状诊断**（2026-10-07 · 只记数字，一个字的正文都不记）──
-        //   为什么：主人念的那一段在框里**重复得离谱**，而"上游每一帧到底是什么形状"
-        //   只能靠这个看清（我们连着几刀都是猜的）。判据：`docs/dev/217`。
-        //   ⚠️ 查完就删（`docs/dev/217` 里记着删它的那一步）。
-        {
-          const t = typeof ev?.text === 'string' ? ev.text : '';
-          const n = t.length;
-          let pfx = 0;
-          {
-            const m = Math.min(n, diagPrev.length);
-            while (pfx < m && t[pfx] === diagPrev[pfx]) pfx += 1;
-          }
-          const holds = diagPrev !== '' && t.includes(diagPrev);
-          const inside = diagPrev !== '' && diagPrev.includes(t) && t !== diagPrev;
-          diagNo += 1;
-          log(
-            `asr 帧形状 #${diagNo} · ${Math.round(Date.now() - diagT0)}ms · ` +
-              `字 ${n} · 与上一帧共同开头 ${pfx} · 含上一帧 ${holds ? '是' : '否'} · ` +
-              `被上一帧含 ${inside ? '是' : '否'} · 段 ${(ev?.utterances ?? []).length} · ` +
-              `定稿 ${ev?.definite ? '是' : '否'} · 起点 ${Number.isFinite(ev?.utterances?.[0]?.start) ? ev.utterances[0].start : '-'}`,
-          );
-          diagPrev = t;
-        }
         const seg = tracker.push(ev);
         if (seg.partial) onEvt.onPartial?.(seg.partial);
         if (seg.final) onEvt.onFinal?.(seg.final);
