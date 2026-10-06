@@ -222,7 +222,7 @@
 | ~~`/api/conversations/:id`~~ | DELETE | ⏳ **不存在**；删一轮今天走 `/api/trash/remove`（墓碑 + 到期真删） |
 | ~~`/api/apps`、`/api/apps/:id/rollback`（HTTP）~~ | POST | ⏳ **HTTP 上没有这两条**：上传/发布走 MCP 工具（`app_create` 等九件 + `app_publish`）；`rollback` 走**域套接字**（`apps-socket.js`） |
 | ~~`/api/debug/report` · `/api/debug/tasks` · `/api/debug/analyze`~~ | GET/POST | ⏳ **三条都不存在**（全仓 0 命中）⇒ 今天没有这组监控出口 |
-| ~~`/api/harness`~~ | WS | ⏳ **不存在**（2026-10-06 删掉）。主人：*「「我自己那台」小程序要删掉。」* ⇒ 桌面上那一格、它那一层（`HarnessPane`）、服务端这条 WS、盒子那侧那个中继（`src/harness-session.mjs`）**一起从产品里去掉**；`BUILTIN_SCOPES` 从三个变两个。⚠️ `harness` 这个名字**仍留在 `REFUSED_APP_IDS`**（那是「别让人拿这个名字占坑」那条闸，与「桌面上还有没有那一格」是两件事）。落地 `docs/dev/200-REMOVE-HARNESS.md` |
+| ~~`/api/harness`~~ | WS | ⏳ **不存在**（2026-10-06 删掉）。主人：*「「我自己那台」小程序要删掉。」* ⇒ 桌面上那一格、它那一层（`HarnessPane`）、服务端这条 WS、盒子那侧那个中继（`src/harness-session.mjs`）**一起从产品里去掉**；`BUILTIN_SCOPES` 从三个变两个。⚠️ `harness` 这个名字**也从 `REFUSED_APP_IDS` 里收走了** —— 与 `math`（奥数题）同一条先例：**那一格从产品里去掉 ⇒ 这个名字不再是保留 id**（保留名单 = 主线 ＋ 内置那几格，这条等式不许破）。落地 `docs/dev/200-REMOVE-HARNESS.md` |
 
 ### 2.2 `L2 → L1` 事件（**新增的那些**）**【有效】**
 
