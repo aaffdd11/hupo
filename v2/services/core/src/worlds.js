@@ -32,7 +32,7 @@ import { appFailText } from './app-fail-words.js';
 // ★ `117`：排队那一帧的**形状**只从 `queue.js` 来（别在这儿再拼一遍字段）。
 import { queueChangedEvent } from './queue.js';
 import { RoomReclaimError, readReclaimedSeqs, reclaimScope } from './reclaim.js';
-import { AppWorkspaces, checkScope, scopeDirFor, safeScope, workspacesRoot } from './workspace.js';
+import { AppWorkspaces, checkScope, scopeDirFor, safeScope, workspaceStat, workspacesRoot } from './workspace.js';
 import { AppsSocket, appsSocketPath } from './apps-socket.js';
 import { appendAudit, auditLine, auditPath } from './audit.js';
 import { makeDrawImage } from './image-use.js';
@@ -77,7 +77,7 @@ import { UnreadBook } from './unread.js';
 // ★ **派活那本简登记**（契约 `docs/dev/102-APP-BIRTH-SCOPE.md`）：一个人一本，
 //   落 `<dir>/jobs.jsonl`；它是**索引**（谁·什么·在哪·最后一条总结），
 //   删掉它能从**那一条日志**重扫回来（`JobBook.rebuild`）。
-import { JobBook } from './job.js';
+import { JobBook, JOB_PLACEHOLDER_TITLE } from './job.js';
 
 /**
  * **主线那个房间的名字**（不属于任何 app 的对话 —— 契约 `83-APP-WORKSPACE.md` §三·2）。
@@ -767,6 +767,20 @@ export class Worlds {
         //   取的是**服务端记的**那一份（`dispatcher.turnInput`）；
         //   还没建好（`null`）⇒ 当作"没有明说"（那正是**开机那几秒**该有的保守行为）。
         turnInput: () => dispatcher?.turnInput ?? null,
+        // ★ **2026-10-06：这一间是不是"派活建的那一间"**（`apps-socket.js` 的 `create` 要用）。
+        //   🔴 **不许拿"在建"当判据**（`isBuilding`）：一个真小程序刚建好还没写内容时
+        //      也是在建 ⇒ 那会把"在小程序那一间里不许再开一个"那条闸放开
+        //      （判据 S5 当场抓到过）。**准的问法是问派活那本账**：
+        //      这一间有没有过一笔派活（`JobBook.forScope`）—— 有 ⇒ 它就是那一间。
+        //   ⚠️ 懒取（`dispatcher` 在本函数后面才建）：调用发生在真有人造东西的时候，
+        //      那时它一定已经在了；取不到 ⇒ `false`（照老口径：按"已有小程序"判）。
+        jobRoomOf: (scope) => {
+          try {
+            return dispatcher?.jobs?.forScope?.(scope) != null;
+          } catch {
+            return false;
+          }
+        },
         // ★ **按房间取"他这一轮说了什么"**（2026-09-26，契约 102 落地时发现的真缺陷）：
         //   上面那一句答的**只有主线**那一间 ⇒ 他在**某个小程序房间里**说
         //   "帮我做一个…"时，那条闸读到的是主线那份（多半是空的）⇒ **误拒**。
@@ -1026,6 +1040,33 @@ export class Worlds {
       startScope: (where) => {
         const id = checkScope(where);
         workspaces.ensure(id);
+        // ★ **2026-10-06：派活那一刻桌面上就长出那一格**（灰的"还在做"）。
+        //
+        //   🔴 为什么在这儿：主人问的是"选另一处之后，桌上那一格什么时候有" ——
+        //      原来要等**子进程**调 `app_create` 才登记 ⇒ 那一段窗口里那一间没有图标。
+        //      ⇒ 派活这一刀（服务端）就把它登记上：`building` 是**算出来的**
+        //      （`workspaces.isBuilding`：入口还是我们写的占位页）⇒ 此刻就是"在建"，
+        //      桌面画灰图标、点它只说一句"还在做"（`D4.27` 那套形状一个字没改）。
+        //   ⚠️ 名字先给一句通用的（`JOB_PLACEHOLDER_TITLE`）——`where` 是内部短名，
+        //      不许上屏；子进程做完登记时用它自己起的名字**顶掉**（`register` 是覆盖）。
+        //   ⚠️ 登记不上 / 喊不出去 ⇒ **不许把派活带走**（下面照旧建会话）：最多是桌上晚一会儿
+        //      才出现，而活照旧在那一间里干。
+        try {
+          if (apps.has(id) !== true) {
+            const stat = workspaceStat(workspaces, id);
+            apps.register({
+              id,
+              title: JOB_PLACEHOLDER_TITLE,
+              entry: stat.entry ?? 'index.html',
+              rootHash: stat.rootHash,
+              bytes: stat.bytes,
+              createdBy: 'agent',
+            });
+            timeline.emitTransient({ type: 'app/installed', appId: id, title: JOB_PLACEHOLDER_TITLE });
+          }
+        } catch (err) {
+          this.#warn(`  ⚠️ ${t.userId} 派活那一格没登记上（${id}）：${err?.message ?? err}`);
+        }
         return this.roomFor(t.userId, id)?.session ?? null;
       },
     });

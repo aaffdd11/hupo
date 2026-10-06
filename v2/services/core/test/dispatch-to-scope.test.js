@@ -45,7 +45,7 @@ import { createServer } from '../src/server.js';
 import { ScopeView } from '../src/timeline.js';
 import { Worlds, scopeTimelineId } from '../src/worlds.js';
 import { handleLedgerOp } from '../src/ledger-socket.js';
-import { APP_OPEN, JOB_ASK, JOB_ASK_EXPIRED, JOB_LINES, JOB_NUDGE_LINE, JOB_NUDGE_MAX, JobBook, SCOPE_OPEN, decideJobStart, jobAskEvent, jobAskText, jobPacketText, jobSummaryText, jobRowsFromEvents, scopeOpenEvent } from '../src/job.js';
+import { APP_OPEN, JOB_ASK, JOB_ASK_EXPIRED, JOB_LINES, JOB_PLACEHOLDER_TITLE, JOB_NUDGE_LINE, JOB_NUDGE_MAX, JobBook, SCOPE_OPEN, decideJobStart, jobAskEvent, jobAskText, jobPacketText, jobSummaryText, jobRowsFromEvents, scopeOpenEvent } from '../src/job.js';
 
 const HERE = nodePath.dirname(fileURLToPath(import.meta.url));
 const FAKE = nodePath.join(HERE, 'fake-agent.mjs');
@@ -317,6 +317,49 @@ test('🔴 P1：他说"做一个 X 的 app" ⇒ 他答了之后那一间**被建
 });
 
 // ════════════════════════════════════════════════════════════════
+// ★ 2026-10-06 · **派活那一刻，桌上就长出那一格**（灰的"还在做"）
+//
+// 主人当天追问的第二半：*「是创建了这个小程序的 placeholder 以后的工作区的聊天，
+// 还是一个孤独的聊天窗口？」* —— 工作区与它的 agent 是当场真建的；这一条钉的是
+// **那一格（icon）也要当场出现**（灰的、在建），做完换成**它自己起的名字**。
+// ════════════════════════════════════════════════════════════════
+
+test('🔴 派活那一刻桌上就有那一格（在建·通用名）；做完换成它自己起的名字', async () => {
+  const h = await boot({ scenario: 'job', job: { where: 'math-drill', name: '算数小练' } });
+  const w = h.worlds.worldFor('u1');
+  try {
+    // 起点：桌上没有它，也没有那个名字
+    assert.equal(w.apps.list().some((a) => a.id === 'math-drill'), false, '起点就该没有');
+
+    assert.equal(
+      (await post(h, '/api/say', { messageId: 'u_job', text: '帮我做一个练算数的小程序' })).status,
+      200,
+    );
+    const ask = await waitAsk(w);
+    // ⚠️ **没答之前桌上也不许有**（那正是"先做了再问"那条反例）
+    assert.equal(w.apps.list().some((a) => a.id === 'math-drill'), false, '还没答就登记了');
+
+    assert.equal((await answerJob(h, { id: ask.id, yes: true })).ok, true);
+
+    // ① **答了那一刻**：桌上当场有那一格，而且是"在建"（灰图标）＋ 一句通用的人话名字
+    await waitFor(() => w.apps.list().some((a) => a.id === 'math-drill'), '答了之后桌上还是没有那一格');
+    const early = w.apps.list().find((a) => a.id === 'math-drill');
+    assert.equal(early.title, JOB_PLACEHOLDER_TITLE, `★ 通用名不对：${early.title}`);
+    assert.equal(early.building, true, '★ 这一格该是"在建"（灰图标）—— 那一间里还只有占位页');
+    // 🔴 通用名里不许混内部短名（`math-drill` 那种不许上屏）
+    assert.equal(early.title.includes('math-drill'), false, '★ 内部短名上屏了');
+
+    // ② **做完** ⇒ 用它自己起的名字顶掉，而且不再是"在建"（大图标变回正常那一个）
+    await waitFor(() => w.jobs.forScope('math-drill')?.status === 'reported', '子进程没把总结交回来');
+    await waitFor(() => w.apps.list().find((a) => a.id === 'math-drill')?.building === false, '做完还画成在建');
+    const done = w.apps.list().find((a) => a.id === 'math-drill');
+    assert.equal(done.title, '算数小练', `★ 做完该用它自己起的名字：${done.title}`);
+  } finally {
+    await h.close();
+  }
+});
+
+// ════════════════════════════════════════════════════════════════
 // P2 · 活算子进程：创建过程在**那一间**，主进程里**没有**
 // ════════════════════════════════════════════════════════════════
 
@@ -400,6 +443,14 @@ test('🔴 那一间就是那个小程序：子进程给别的 id ⇒ 登记的�
       nodeFs.existsSync(nodePath.join(w.workspaces.root, 'math-drill', 'index.html')), true,
       '★ 产物不在被登记的那一间里',
     );
+    // ⑤ 🔴 **它那一次 `app_create` 必须真的生效**（这一条是这道判据的牙齿）：
+    //    名字换成**子进程自己起的那个**、而且**不再是"在建"**（真内容顶掉了占位页）。
+    //    ⚠️ 少了这一条，"id 没钉死"会以另一种面目溜过去：那一刀被
+    //       "里面不能再开一个"挡掉 ⇒ 桌上留下的仍是派活那一刻的占位格
+    //       （名字还是通用的、一直是灰的、内容也没落进去）—— 而前四条照样全绿。
+    const done = w.apps.list().find((a) => a.id === 'math-drill');
+    assert.equal(done.title, '算数小练', `★ 那一格还是占位名 —— 它那次 app_create 没生效：${done.title}`);
+    assert.equal(done.building, false, '★ 做完还画成在建 —— 内容没落进那一间');
   } finally {
     await h.close();
   }

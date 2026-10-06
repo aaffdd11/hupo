@@ -151,9 +151,6 @@ async function runAppsOp(apps, req, ctx = {}) {
         //      **不是** `scope !== main`：派活那间（长活"另开一处做"）本来就要在那里
         //      把新 app 造出来（`job.js` 抬头上那句注释），那条路照旧放行。
         const scopeNow = typeof req.scope === 'string' && req.scope.trim() !== '' ? req.scope.trim() : null;
-        if (scopeNow && scopeNow !== 'main' && isAnAppRoom(apps, scopeNow)) {
-          return { ok: false, error: INSIDE_APP_NO_CREATE, refused: 'inside-app' };
-        }
         const a = req.app ?? {};
         // 🔴 **2026-10-06：派活那一间 —— 这一间就是那个小程序的家**（主人：
         //    *"选择另一处时……原则上应该创建小程序工作区，启动那个工作区的 agent，
@@ -168,8 +165,30 @@ async function runAppsOp(apps, req, ctx = {}) {
         //    **另一个房间**，而真正干活的那一间**没有图标** —— 那就是"一个孤独的聊天窗口"
         //    （而干活那段对话谁也找不到）。钉死之后"图标 = 那一间的门"是**结构**，不是约定。
         //    ⚠️ 已经登记过的那一间进不来这里：上面"里面不能再开一个"那道闸先把它拦了。
-        const jobRoom = scopeNow !== null && scopeNow !== 'main' && !isAnAppRoom(apps, scopeNow);
+        //    ★ 补一处（同一天，我自己引进来的）：派活那一刻已经先把那一格登记成"在建"了，
+        //      所以**那一间此刻已经是"一个小程序那一间"** ⇒ 子进程回来把它做完时，
+        //      上面那道"里面不能再开一个"会把它自己拦掉。判据要问**那本派活账**
+        //      （`ctx.jobRoomOf`：这一间有没有过一笔派活），**不许拿"在建"猜** ——
+        //      一个真小程序刚建好还没写内容时也是在建（S5 那条判据就是这么抓到的）。
+        let dispatchedHere = false;
+        try {
+          dispatchedHere = scopeNow !== null && scopeNow !== 'main' && ctx.jobRoomOf?.(scopeNow) === true;
+        } catch {
+          dispatchedHere = false;
+        }
+        const jobRoom =
+          scopeNow !== null &&
+          scopeNow !== 'main' &&
+          (!isAnAppRoom(apps, scopeNow) || dispatchedHere);
         const appId = jobRoom ? scopeNow : a.id;
+        // ★ **已经**在一个**做好了**的小程序里 ⇒ 不许再开**另一个**（主人 2026-09-27）：
+        //   *"只有 main 里面是可以指导它创建小程序的；如果是在 workspace 下面的
+        //    小程序里面聊天的话，他无法继续创建小程序"*。
+        //   ⚠️ 本意是"里面不能再开**一个**"⇒ 指向**它自己**那一间时放行（那正是"把它做完"，
+        //      也是派活那条路）；判据是 `appId !== scopeNow`。
+        if (scopeNow && scopeNow !== 'main' && isAnAppRoom(apps, scopeNow) && appId !== scopeNow) {
+          return { ok: false, error: INSIDE_APP_NO_CREATE, refused: 'inside-app' };
+        }
         // ★★ **服务端那一刀**（契约 `83-APP-WORKSPACE.md` §三·4）：**服务端**把这一间
         //   建出来 ＋（给了内容就）落进去 —— 不靠模型记得建目录。
         //
