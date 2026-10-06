@@ -13,6 +13,7 @@ import '../models/conn_state.dart';
 import '../models/chat_queue.dart';
 import '../models/hearing_session.dart';
 import '../models/hear_drill.dart';
+import '../models/semantic_switch.dart';
 import '../models/job_ask.dart';
 import '../models/job_words.dart';
 import '../models/message_state.dart';
@@ -939,7 +940,15 @@ class ChatController extends ChangeNotifier {
   }
 
   /// 听不懂就问；**通顺就发**（这一步不问他"要不要发" —— `D5.19`）。
+  ///
+  /// 🔴 **2026-10-06：语义检查暂停了**（主人：*「先暂停语义检查。不要检查语义，
+  ///   直接快速语音转文字，点击结束就发送。」*）⇒ 这一条现在**分两档**：
+  ///   · `semanticCheckOn == false`（现在）：**手上那份字直接发** —— 不改字、不问、不等；
+  ///   · `true`（老形状）：送进听懂那一层（`/api/hear`，实测那一次往返 **0.6~1.4 秒**）。
+  /// ⚠️ 两档**都留着**（开关在 `models/semantic_switch.dart`）：主人说的是"先暂停"，
+  ///    所以要能一句话开回来；判据也把两档都钉住（关着那一档尤其要钉"一次都没调它"）。
   Future<void> _composeThink() async {
+    if (!semanticCheckOn) return _composeSendNow();
     final t = _token;
     final payload = _voiceFlow.payload();
     final said = (payload['text'] as String?) ?? '';
@@ -970,6 +979,31 @@ class ChatController extends ChangeNotifier {
       notifyListeners();
       await send(text); // ★ **自己发出去**（不点确认）
     }
+  }
+
+  /// ★ **语义检查关着的时候**：手上那份字**直接发**（主人 2026-10-06）。
+  ///
+  /// 三件：① 用的是 `Hearing` 攒出来的**整段**（`asr/end` 那条带的，就是"总结"那一份）；
+  ///      ② 一个字都没有 ⇒ **如实说一句**（不装发过）；③ 发出去之后 `voiceSent += 1`
+  ///      （界面据此把聊天记录窗口打开 —— 与老那条路同一个落点）。
+  /// ⚠️ 这里**不读 `history`、不问 `scene`、不调 `/api/hear`** —— 那正是"暂停"的意思。
+  Future<void> _composeSendNow() async {
+    // ⚠️ **取字的地方必须与老那条路一致**（`payload()['text']`）：
+    //    · 说话那条：`first` = 他这一句的整段（`asr/end` 带的）；
+    //    · **打字那条兜底**：字在 `first` 里，**不在** `hearing.text` 里
+    //      （`Hearing` 是空的）—— 第一版写成 `_voiceFlow.said` ⇒ 打字那条路一个字都没发出去，
+    //      而"点一次发送，服务端该收到恰好一句"那几条提示档判据当场抓住（0 ≠ 1）。
+    final payload = _voiceFlow.payload();
+    final said = ((payload['text'] as String?) ?? '').trim();
+    if (said.isEmpty) {
+      _voiceFlow = _voiceFlow.heardBack(ok: false, note: '这句我没听清，再说一遍。');
+      notifyListeners();
+      return;
+    }
+    _voiceFlow = const HearDrill(); // 这一场收干净（与老那条路同一个收场）
+    voiceSent += 1;
+    notifyListeners();
+    await send(said); // ★ 点击结束就发送（不点确认、也不等听懂那一层）
   }
 
   // ── ★ 批 7：配置页「语音」那一屏的「试一下」（主人 2026-09-26）──────────

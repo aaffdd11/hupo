@@ -1,5 +1,9 @@
 // **语音那一档：说一句 → 只听错别字 → 通顺就自己发出去**（乙期 · 手册 `D3.14`／`D5.18`／`D5.19`）。
 //
+// ── ⚠️ 2026-10-06 起：这几条**都要先把开关打开**（`setUp` 里那两行）────────
+//   主人当天说"先暂停语义检查" ⇒ 生产里那条路关着；**代码与判据都留着**（要能一句话开回来）。
+//   量"关着"那一档的是 `test/unit/semantic_pause_test.dart`。
+//
 // ── 这一份钉什么（V1–V4）────────────────────────────────────
 //   V1 🔴 **通顺就发**：听懂那一层说"没问题" ⇒ **一次 `/api/say`**，发出去的**就是屏幕上那句**
 //   V2 🔴 **不确定先问、不许发**：回执带 `ask` ⇒ `/api/say` **一次都没有**，屏幕上拿着那个问题
@@ -13,6 +17,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/hear_drill.dart';
+import 'package:hupo_app/models/semantic_switch.dart';
 import 'package:hupo_app/services/api.dart';
 import 'package:hupo_app/services/chat_controller.dart';
 import 'package:hupo_app/services/token_store.dart';
@@ -96,6 +101,14 @@ void _speak(_FakeHearing mic, String text) {
 }
 
 void main() {
+  // 🔴 **2026-10-06：这一份量的是"听懂那一层"那条路**（主人当天说*「先暂停语义检查。
+  //   不要检查语义，直接快速语音转文字，点击结束就发送。」*）⇒ 那条路**代码还在、
+  //   只是生产里关着** ⇒ 这里把它**临时打开**（判据才量得到 V1–V5 那五件事），
+  //   验完还原。**"关着"那一档**（说完直接发、一次都不调 `/api/hear`）住在
+  //   `test/unit/semantic_pause_test.dart`。
+  setUp(() => semanticCheckOn = true);
+  tearDown(() => semanticCheckOn = false);
+
   test('V1 🔴 通顺就发：一次 `/api/say`，发出去的就是屏幕上那句', () async {
     final b = _boot([
       {'heard': '帮我查一下明天北京的天气预报', 'ask': null, 'fact': '予报→预报', 'scene': 'do'},

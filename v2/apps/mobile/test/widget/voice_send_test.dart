@@ -12,6 +12,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hupo_app/models/semantic_switch.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
@@ -98,8 +99,18 @@ Future<void> _frames(WidgetTester tester) async {
 }
 
 void main() {
-  setUp(() => clearNativeHearing());
-  tearDown(() => clearNativeHearing());
+  // 🔴 **2026-10-06：这一份量的是"听懂那一层"那条路**（主人当天说*「先暂停语义检查。
+  //   不要检查语义，直接快速语音转文字，点击结束就发送。」*）⇒ 那条路**代码还在、
+  //   生产里关着** ⇒ 这里临时打开（判据才量得到 V6–V8），验完还原。
+  //   "关着"那一档（说完直接发、一次都不调 `/api/hear`）住 `test/unit/semantic_pause_test.dart`。
+  setUp(() {
+    semanticCheckOn = true;
+    clearNativeHearing();
+  });
+  tearDown(() {
+    semanticCheckOn = false;
+    clearNativeHearing();
+  });
 
   testWidgets('V6/V7 🔴 通顺 ⇒ 自己发出去 ＋ 记录窗口自己打开（一次都不用点）', (tester) async {
     final mic = _Mic();

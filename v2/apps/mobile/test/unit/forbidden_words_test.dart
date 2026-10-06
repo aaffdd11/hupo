@@ -10,6 +10,7 @@ import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/appearance.dart';
 import 'package:hupo_app/models/desktop_words.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
+import 'package:hupo_app/models/hear_words.dart';
 import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/models/job_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
@@ -192,6 +193,28 @@ void main() {
       noticeRepeatSuffix(4),
       // ★ 2026-10-02：时间那一行那两个字
       timeMarkToday,
+      // ★ 2026-10-06：「试一下」那一屏（`hear_drill_screen.dart`）的**全部句子** ——
+      //    原来这一组**一句都没挂**（顺手补上）；暂停那一句是新加的。
+      hearDrillTitle,
+      hearDrillRowHint,
+      hearDrillPausedNote,
+      hearDrillBanner,
+      hearDrillIdleLead,
+      hearDrillListeningLead,
+      hearDrillWrappingLead,
+      hearDrillThinkingLead,
+      hearDrillAskingLead,
+      hearDrillReadyLead,
+      hearDrillReadyFoot,
+      hearDrillOkFoot,
+      hearDrillRoundCap,
+      hearDrillFailedLead,
+      hearDrillNothing,
+      hearDrillNoVoice,
+      hearDrillTypeInstead,
+      hearDrillAgain,
+      hearDrillNoRoad,
+      hearDrillAnswer,
       timeMarkYesterday,
       // ★ 2026-10-02：工具行翻出来的人话 ＋ 展开那一块里“原始名”那个标签
       toolRowRawNameLabel,

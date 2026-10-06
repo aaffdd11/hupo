@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import '../models/design.dart' as d;
 import '../models/hear_drill.dart';
 import '../models/hear_words.dart';
+import '../models/semantic_switch.dart';
 import '../services/chat_controller.dart';
 import '../services/speech.dart' as speech;
 
@@ -103,6 +104,15 @@ class _HearDrillScreenState extends State<HearDrillScreen> {
       _set(_drill.heardBack(ok: false, note: hearDrillNothing));
       return;
     }
+    // ★ **2026-10-06：语义检查暂停了**（主人：*「先暂停语义检查。不要检查语义，
+    //   直接快速语音转文字，点击结束就发送。」*）⇒ 这一屏**也一样不问**：
+    //   把刚说的那份直白的字当"最终那一份"（下面那句原来那句怎么写、这里就怎么显示），
+    //   并在屏幕上**如实说一声**（不然他会以为"它没听懂、所以什么都没理顺"）。
+    //   ⚠️ 这一屏**本来就不发出去**（它是演练）；暂停只影响"问不问那一层"。
+    if (!semanticCheckOn) {
+      _set(_drill.heardBack(ok: true, heard: said, ask: null));
+      return;
+    }
     setState(() => _busy = true);
     final history = (payload['history'] as List?)?.cast<Map<String, String>>() ?? const <Map<String, String>>[];
     final got = await _c.api.hear(token, said, history: history);
@@ -141,6 +151,11 @@ class _HearDrillScreenState extends State<HearDrillScreen> {
           children: [
             Text(hearDrillTitle, style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: d.gapS),
+            // ★ 2026-10-06：语义检查暂停时**如实说一声**（不然他会以为"它没听懂"）
+            if (!semanticCheckOn) ...[
+              const SizedBox(height: d.gapS),
+              const Text(hearDrillPausedNote),
+            ],
             // 🔴 **先把"不会发出去"说清**（这一屏最要紧的一句）
             Container(
               padding: const EdgeInsets.all(d.gapM),

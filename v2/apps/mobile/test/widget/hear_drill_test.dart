@@ -14,6 +14,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hupo_app/models/semantic_switch.dart';
 import 'package:hupo_app/models/hear_words.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
@@ -137,6 +138,13 @@ class _FakeHearing implements NativeHearingApi {
 }
 
 void main() {
+  // 🔴 **2026-10-06**：这一屏原来展示的是"听懂那一层理顺之后的样子"；主人当天说
+  //   *「先暂停语义检查」* ⇒ 生产里**不问那一层**了（显示的是语音转文字的原话）。
+  //   下面那三条量的仍是**打开着**那条路（代码还在）⇒ 这里临时打开；验完还原。
+  //   ⚠️ **"关着"那一档**（生产形状）由这一份最后那一条单独钉住。
+  setUp(() => semanticCheckOn = true);
+  tearDown(() => semanticCheckOn = false);
+
   testWidgets('🔴 从设置进得去，整条链子走一遍；**一次都不发出去**', (tester) async {
     final s = await _pump(tester);
     await _openDrill(tester);
@@ -244,6 +252,23 @@ void main() {
     }
     expect(s.hearCalls, 2, reason: '★ 答完要再懂一遍');
     expect(find.text('帮我把上周的账理清楚。'), findsOneWidget, reason: '★ 最终那一份要看得见');
+    expect(s.sayCalls, 0, reason: '★★ 演练里仍然一次都不发');
+  });
+
+  testWidgets('🔴 **关着**（现在这一档）：不问那一层，直接把原话当最终那一份 ＋ 明说一句', (tester) async {
+    // ★ 2026-10-06：主人说"先暂停语义检查" ⇒ 这一屏**不调 `/api/hear`**，
+    //   显示的是**语音转文字的原话**，并且顶上如实说一句（不然他会以为"它没听懂"）。
+    semanticCheckOn = false;
+    final s = await _pump(tester);
+    await _openDrill(tester);
+
+    await _typeAndSend(tester, '帮我把上周的账理清楚');
+
+    expect(s.hearCalls, 0, reason: '★ 说了"暂停语义检查"，这一屏却还是调了它');
+    expect(find.text('帮我把上周的账理清楚'), findsOneWidget,
+        reason: '★ 要把**原话**当最终那一份摆出来（一个字都不许改）');
+    expect(find.text(hearDrillPausedNote), findsOneWidget,
+        reason: '★ 得如实说一句"现在不做语义检查"');
     expect(s.sayCalls, 0, reason: '★★ 演练里仍然一次都不发');
   });
 }
