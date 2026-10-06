@@ -82,6 +82,29 @@ void main() {
     }
   });
 
+  test('★ 预热那条路（`205`）：两份都"先取热的" ＋ 预热**自己不发 asr/start**', () {
+    final web = _read('lib/services/hearing_web.dart');
+    final nat = _read('lib/services/hearing_native.dart');
+    // ① 按下那一刻**先取热的那条**（取不到才现连）
+    for (final (f, src) in [('lib/services/hearing_web.dart', web), ('lib/services/hearing_native.dart', nat)]) {
+      expect(src.contains('_takeWarm()'), true,
+          reason: '★ $f：按下那一刻没有先取"热着的那条" ⇒ 预热白做（冷连那 1.1~4.4 秒还在按键那条路上）');
+      expect(src.contains('final warm = _takeWarm();'), true, reason: '★ $f：取得太晚 / 取的地方不对');
+    }
+    // ② **预热那一段里不许出现 `asr/start`**：一出现就等于"一进聊天就把上游开了"（花钱）
+    for (final (f, src, head) in [
+      ('lib/services/hearing_web.dart', web, 'Future<void> warmHearing('),
+      ('lib/services/hearing_native.dart', nat, 'Future<void> warmNativeHearing('),
+    ]) {
+      final i = src.indexOf(head);
+      expect(i >= 0, true, reason: '★ $f：找不到那份预热的实现（`$head`）');
+      final end = src.indexOf('\n}', i);
+      final body = src.substring(i, end < 0 ? src.length : end);
+      expect(body.contains('asr/start'), false,
+          reason: '🔴 $f：预热那一段里出现了 `asr/start` —— 那一下就把上游开了（花钱）；预热只许"先连上"');
+    }
+  });
+
   test('★ 负向对照：那两处"等对面"的字样还在（不然上面两条会变成空转）', () {
     // 上一条判据靠"两处都找得到"兜底，这一条把它说明白：**`asr/ready` 那道门还在**，
     //   只是它现在**只决定"要不要把麦克风收掉"**，不再决定"要不要开"。

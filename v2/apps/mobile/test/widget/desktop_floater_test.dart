@@ -56,6 +56,9 @@ class _Mic implements NativeHearingApi {
 
   @override
   void stop() {}
+
+  @override
+  Future<void> warm({required Uri url, required String token}) async {}
 }
 
 /// 假服务端：`/api/hear` 说"听清了"，`/api/say` 记下那句（"发就拉满"那两条要用）。

@@ -65,6 +65,11 @@ abstract class AsrWire {
   Stream<dynamic> get stream;
   void send(Object? data);
   Future<void> close();
+
+  /// ★ **这条还活着吗**（2026-10-06 · 预热用）：对面已经关掉它的话，**不许**拿去用
+  ///    （宁可现连一条慢一点，也不许拿着一条死的当"热的"）。
+  /// ⚠️ 给个**具体成员**（默认 `true`）：判据里那些假线不用为此改一个字。
+  bool get alive => true;
 }
 
 /// 造一条连接。**判据可以换掉它**。
@@ -78,6 +83,9 @@ AsrWire _realWire(Uri url, Iterable<String> protocols) {
 class _ChannelWire implements AsrWire {
   _ChannelWire(this._ch);
   final WebSocketChannel _ch;
+
+  @override
+  bool get alive => _ch.closeCode == null;
 
   @override
   Future<void> get ready => _ch.ready;
@@ -142,11 +150,18 @@ Future<String?> startNativeHearing({
   //     这条连接一握上手就把攒着的按顺序补发。
   //   ⚠️ 失败（网关 / 隧道不认这条路径）**照旧如实说 `no-entry`** ——
   //     只是那句话现在从下面那个 `ready` 回调里来，不是从这一行抛出来。
+  _warmUrl = url; // 收场之后按它热回来
+  _warmToken = token;
   final AsrWire w;
-  try {
-    w = asrWireFactory(url, <String>['bearer', token]);
-  } catch (_) {
-    return 'no-entry';
+  final warm = _takeWarm(); // ★ 热着的那一条（有就拿去用 —— 这就是"按下就通"）
+  if (warm != null) {
+    w = warm;
+  } else {
+    try {
+      w = asrWireFactory(url, <String>['bearer', token]);
+    } catch (_) {
+      return 'no-entry';
+    }
   }
 
   final session = _Session(w, onEvent);
@@ -305,6 +320,7 @@ void stopNativeHearing() {
 void _close(_Session s) {
   if (!identical(_open, s)) return;
   _open = null;
+  _warmAgain(); // ★ 一场说完 ⇒ 隔一会儿自己热回来（下一句多半就在几分钟内）
   s.linger?.cancel();
   s.stopping = true;
   // 攒着还没送出去的那些（这条连接没能握上手就结束了）—— 清掉，别留在内存里
@@ -322,6 +338,103 @@ void _close(_Session s) {
 void _closeAll() {
   final s = _open;
   if (s != null) _close(s);
+}
+
+// ── ★ **预热那一半**（2026-10-06 · "按下就通"）────────────────────────
+//
+// 🔴 只做一件事：**把那条连接先连上**。不发 `asr/start`（⇒ 上游不开、不花钱）、
+//    不碰麦克风、不碰权限。全部价值就是**把那 1.1~4.4 秒从按键那一刻挪到进聊天那一屏**。
+
+/// 热着的那条（`null` = 没有）。
+AsrWire? _warm;
+bool _warmOk = false;
+Timer? _warmIdle;
+/// "收场之后自己热回来"那个定时器（收掉时一起取消，别留下一个孤儿）。
+Timer? _warmBack;
+Uri? _warmUrl;
+String? _warmToken;
+
+/// 热着的那条**最多挂多久**；一场说完之后隔多久自己热回来。
+const Duration _warmKeep = Duration(minutes: 3);
+const Duration _warmAgainAfter = Duration(seconds: 3);
+
+/// **先连上**（进聊天那一屏就调它）。重复调没事；一次会话正开着时不热（那会多一条）。
+Future<void> warmNativeHearing({required Uri url, required String token}) async {
+  _warmUrl = url;
+  _warmToken = token;
+  if (_warm != null) return;
+  if (_open != null) return; // 正在说 —— 这时候再开一条是浪费
+  final AsrWire w;
+  try {
+    w = asrWireFactory(url, <String>['bearer', token]);
+  } catch (_) {
+    return; // 连都连不出去 ⇒ 静默（按下去那一下会照旧如实报 `no-entry`）
+  }
+  _warm = w;
+  _warmOk = false;
+  _warmIdle?.cancel();
+  _warmIdle = Timer(_warmKeep, () {
+    if (identical(_warm, w)) _dropWarm();
+  });
+  try {
+    await w.ready;
+  } catch (_) {
+    if (identical(_warm, w)) _dropWarm();
+    return;
+  }
+  if (!identical(_warm, w)) return; // 这一会儿里已经被取走/收掉了
+  _warmOk = true;
+}
+
+/// **把热着的那条取走**（真开始说的时候）。不健康 ⇒ 丢掉并回 `null`。
+AsrWire? _takeWarm() {
+  final w = _warm;
+  if (w == null) return null;
+  final ok = _warmOk && w.alive;
+  _dropWarm();
+  return ok ? w : null;
+}
+
+/// 把热着的那条收掉（过期 / 取走 / 连不上）。
+void _dropWarm() {
+  _warmIdle?.cancel();
+  _warmIdle = null;
+  _warmBack?.cancel();
+  _warmBack = null;
+  final w = _warm;
+  _warm = null;
+  _warmOk = false;
+  if (w == null) return;
+  unawaited(w.close().catchError((Object _) {}));
+}
+
+/// **一场说完之后自己热回来**。
+void _warmAgain() {
+  final url = _warmUrl;
+  final token = _warmToken;
+  if (url == null || token == null) return;
+  _warmBack?.cancel();
+  _warmBack = Timer(_warmAgainAfter, () {
+    _warmBack = null;
+    unawaited(warmNativeHearing(url: url, token: token));
+  });
+}
+
+/// （给判据用的）把"热着的那条"与"还挂着的那一轮"都清干净
+/// —— 判据之间不许互相带状态（**生产里没有人调它**；同 `clearNativeHearing()` 那条路）。
+void resetHearingForTest() {
+  _dropWarm();
+  final s = _open;
+  if (s == null) return;
+  _open = null;
+  s.linger?.cancel();
+  s.stopping = true;
+  try {
+    s.sub?.cancel();
+  } catch (_) {
+    /* 已经没了 */
+  }
+  unawaited(s.wire.close().catchError((Object _) {}));
 }
 
 /// **原生那一份**：装钩子（**只在 Android 上调**）。
@@ -342,4 +455,8 @@ class _NativeHearing implements NativeHearingApi {
 
   @override
   void stop() => stopNativeHearing();
+
+  @override
+  Future<void> warm({required Uri url, required String token}) =>
+      warmNativeHearing(url: url, token: token);
 }

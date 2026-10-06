@@ -134,6 +134,9 @@ class _FakeHearing implements NativeHearingApi {
   @override
   void stop() {}
 
+  @override
+  Future<void> warm({required Uri url, required String token}) async {}
+
   void push(Map<String, dynamic> e) => _on?.call(e);
 }
 

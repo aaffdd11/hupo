@@ -68,6 +68,30 @@ const Duration _lingerLimit = Duration(seconds: 20);
 /// 手里开着的那些（通常 0 或 1 条；"正在等最后一句"那条也算开着）。
 final Set<_Session> _open = <_Session>{};
 
+/// ★ **2026-10-06：热着的那一条连接**（"按下就通"）。
+///
+/// 🔴 为什么要有它：那条连接**冷启那一次真量到 1.1~4.4 秒**（热的时候 16 ms，见 `199` §二、
+///    与 `202` §五·补 那次复测）—— 那一段原来就落在**"按下 → 屏幕上出第一个字"**这条路上。
+///    把它挪到"进聊天那一屏"去付（`warmHearing`），按键那一刻就只剩握手那一拍（~200 ms）。
+///
+/// ⚠️ **它只是"连上了"**：没有麦克风、没有音频图，也**没有跟对面说 `asr/start`**
+///    （上游那一跳是 `asr/start` 才开的 ⇒ **预热不花钱**）。
+/// ⚠️ **不许一直挂着**：`_warmKeep` 到点自己收；真开始说的时候被 `_takeWarm()` **取走**
+///    （取走就不再是"预热"）；一条会话正开着的时候不许再热（`_open` 非空 ⇒ 直接不做）。
+WebSocketChannel? _warmCh;
+bool _warmOk = false;
+Timer? _warmIdle;
+/// "收场之后自己热回来"那个定时器（收掉时一起取消，别留下一个孤儿）。
+Timer? _warmBack;
+/// 上一次用过的地址与令牌 —— 一场说完之后**按它自己热回来**（下一句多半就在几分钟内）。
+Uri? _warmUrl;
+String? _warmToken;
+
+/// 热着的那条**最多挂多久**（到点自己收掉，别把一条连接永远挂在那儿）。
+const Duration _warmKeep = Duration(minutes: 3);
+/// 一场说完之后隔多久自己热回来（留一点空当，别在收尾那一拍上抢）。
+const Duration _warmAgainAfter = Duration(seconds: 3);
+
 /// 拦住"长按弹出来的那个菜单"（右键 / 手机上的长按菜单）。
 StreamSubscription<html.MouseEvent>? _menuBlocker;
 
@@ -139,6 +163,8 @@ Future<String?> startHearing({
   required void Function(Map<String, dynamic>) onEvent,
 }) async {
   _closeAll(); // ③ 一次只开一条
+  _warmUrl = url; // 收场之后按它热回来
+  _warmToken = token;
 
   final md = html.window.navigator.mediaDevices;
   if (md == null) return 'unsupported';
@@ -183,10 +209,15 @@ Future<String?> startHearing({
   //   ⚠️ 失败（网关 / 隧道不认这条路径）**照旧如实说 `no-entry`** ——
   //     只是那句话现在从下面那个 `ready` 回调里来，不是从这一行抛出来。
   final WebSocketChannel ch;
-  try {
-    ch = WebSocketChannel.connect(url, protocols: ['bearer', token]);
-  } catch (_) {
-    return 'no-entry';
+  final warm = _takeWarm(); // ★ 热着的那一条（有就拿去用 —— 这就是"按下就通"）
+  if (warm != null) {
+    ch = warm;
+  } else {
+    try {
+      ch = WebSocketChannel.connect(url, protocols: ['bearer', token]);
+    } catch (_) {
+      return 'no-entry';
+    }
   }
 
   final session = _Session(ch: ch);
@@ -411,7 +442,10 @@ void stopHearing() {
 /// 收干净一条（连接、音频图、麦克风）。
 void _close(_Session s) {
   if (!_open.remove(s)) return;
-  if (_open.isEmpty) _blockMenu(false);
+  if (_open.isEmpty) {
+    _blockMenu(false);
+    _warmAgain(); // ★ 一场说完 ⇒ 隔一会儿自己热回来（下一句多半就在几分钟内）
+  }
   s.linger?.cancel();
   s.stopping = true;
   // 攒着还没送出去的那些（这条连接没能握上手就结束了）—— 清掉，别留在内存里
@@ -474,4 +508,76 @@ void _stopTracks(html.MediaStream stream) {
   } catch (_) {
     /* 已经没了 */
   }
+}
+
+// ── ★ **预热那一半**（2026-10-06 · "按下就通"）────────────────────────
+//
+// 🔴 这一半只做一件事：**把那条连接先连上**。它不发 `asr/start`（⇒ 上游不开、不花钱）、
+//    不碰麦克风。它的全部价值就是**把那 1.1~4.4 秒从按键那一刻挪到"进聊天那一屏"**。
+
+/// **先连上**（进聊天那一屏就调它）。重复调没事；一次会话正开着时不热（那会多一条）。
+Future<void> warmHearing({required Uri url, required String token}) async {
+  _warmUrl = url;
+  _warmToken = token;
+  if (_warmCh != null) return; // 已经热着一条
+  if (_open.isNotEmpty) return; // 正在说 —— 这时候再开一条是浪费
+  final WebSocketChannel ch;
+  try {
+    ch = WebSocketChannel.connect(url, protocols: ['bearer', token]);
+  } catch (_) {
+    return; // 连都连不出去 ⇒ 静默（按下去那一下会照旧如实报 `no-entry`）
+  }
+  _warmCh = ch;
+  _warmOk = false;
+  _warmIdle?.cancel();
+  _warmIdle = Timer(_warmKeep, () {
+    if (identical(_warmCh, ch)) _dropWarm();
+  });
+  try {
+    await ch.ready;
+  } catch (_) {
+    if (identical(_warmCh, ch)) _dropWarm();
+    return;
+  }
+  if (!identical(_warmCh, ch)) return; // 这一会儿里已经被取走/收掉了
+  _warmOk = true;
+}
+
+/// **把热着的那条取走**（真开始说的时候）。不健康（没连上过 / 已经被对面关了）⇒
+/// 丢掉并回 `null`（调用方照旧现连一条 —— **宁可慢一点，不许拿着一条死的**）。
+WebSocketChannel? _takeWarm() {
+  final ch = _warmCh;
+  if (ch == null) return null;
+  final ok = _warmOk && ch.closeCode == null;
+  _dropWarm();
+  return ok ? ch : null;
+}
+
+/// 把热着的那条收掉（过期 / 取走 / 连不上）。
+void _dropWarm() {
+  _warmIdle?.cancel();
+  _warmIdle = null;
+  _warmBack?.cancel();
+  _warmBack = null;
+  final ch = _warmCh;
+  _warmCh = null;
+  _warmOk = false;
+  if (ch == null) return;
+  try {
+    ch.sink.close();
+  } catch (_) {
+    /* 已经没了 */
+  }
+}
+
+/// **一场说完之后自己热回来**（下一句多半就在几分钟内 —— 不热的话又得付那次冷连）。
+void _warmAgain() {
+  final url = _warmUrl;
+  final token = _warmToken;
+  if (url == null || token == null) return;
+  _warmBack?.cancel();
+  _warmBack = Timer(_warmAgainAfter, () {
+    _warmBack = null;
+    unawaited(warmHearing(url: url, token: token));
+  });
 }

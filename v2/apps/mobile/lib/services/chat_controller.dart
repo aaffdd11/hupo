@@ -75,6 +75,8 @@ class ChatController extends ChangeNotifier {
       required void Function(Map<String, dynamic>) onEvent,
     })? startHear,
     void Function()? stopHear,
+    /// ★ **预热**那一条连接（可注入 —— 同上面两个；默认 `hearing_service.warmHearing`）。
+    Future<void> Function({required Uri url, required String token})? warmHear,
     /// **那条流怎么造**（可注入 —— 判据要能验"切房间**只发焦点、不重连**"）。
     /// `null` = 生产那一条（`StreamClient` → `/api/stream`）。
     /// ⚠️ 判据里注一个假的进去 ⇒ 不用真开 socket 也验得了 `setScope` 那几件事
@@ -89,7 +91,8 @@ class ChatController extends ChangeNotifier {
        _speak = speak ?? speech_service.speakAloud,
        _stopSpeaking = stop ?? speech_service.stopSpeaking,
        _startHear = startHear ?? hearing_service.startHearing,
-       _stopHear = stopHear ?? hearing_service.stopHearing {
+       _stopHear = stopHear ?? hearing_service.stopHearing,
+       _warmHear = warmHear ?? hearing_service.warmHearing {
     // ⚠️ 构造时就带令牌的场合（`main.dart` 冷启动那条路）也要先绑好命名空间，
     //    否则第一次 `_restoreLocal()` 读的还是默认那一份（= 上一个人的）。
     _bindNamespace(token);
@@ -224,6 +227,11 @@ class ChatController extends ChangeNotifier {
   })
   _startHear;
   final void Function() _stopHear;
+
+  /// ★ **预热那一条连接**（"按下就通"）：进聊天那一屏就调它，把冷连那 1.1~4.4 秒
+  ///   从"按下 → 出第一个字"这条路上挪走（真正那个实现在平台那两份里：
+  ///   只连 WS、**不发 `asr/start`** ⇒ 不碰上游、不花钱、不碰麦克风）。
+  final Future<void> Function({required Uri url, required String token}) _warmHear;
 
   /// 收进来的**服务端事实**（只留带号的），存缓存就是从这份存。
   ///
@@ -1033,6 +1041,24 @@ class ChatController extends ChangeNotifier {
     final t = _token;
     if (t == null) return 'failed';
     return _startHear(url: asrUri(base: hupoApiBase, page: Uri.base), token: t, onEvent: onEvent);
+  }
+
+  /// ★ **先把那条连接热上**（"按下就通" · 契约 `docs/dev/205-ASR-WARM.md`）。
+  ///
+  /// 🔴 为什么：那条连接冷启那一次真量到 **1.1~4.4 秒**（热 16 ms）——
+  ///    原来那一段落在"按下 → 屏幕上出第一个字"这条路上。
+  ///
+  /// ⚠️ **一声不响**：预热是"顺手先连上"，连不上**什么都不说**（按下去那一下照旧如实报）；
+  ///    ⚠️ 开不了麦的地方不做（`canHear == false` ⇒ 热了也没用）；没令牌也不做。
+  Future<void> warmHear() async {
+    if (!canHear) return;
+    final t = _token;
+    if (t == null) return;
+    try {
+      await _warmHear(url: asrUri(base: hupoApiBase, page: Uri.base), token: t);
+    } catch (_) {
+      /* 热身失败不是事：按下去那一下会照旧如实说 */
+    }
   }
 
   /// **收手**（配置页那颗「试一下」按第二下）：这一场到此为止。

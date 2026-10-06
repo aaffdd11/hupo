@@ -40,6 +40,9 @@ class _FakeWire implements AsrWire {
   final Completer<void> readyGate = Completer<void>();
 
   @override
+  bool get alive => !closed;
+
+  @override
   Future<void> get ready async {
     if (readyFails) throw StateError('握不上手');
     if (holdReady) await readyGate.future;

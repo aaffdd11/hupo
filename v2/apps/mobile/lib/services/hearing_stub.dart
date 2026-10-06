@@ -28,3 +28,9 @@ Future<String?> startHearing({
 void stopHearing() {
   nativeHearingApi?.stop();
 }
+
+/// ★ **预热**（2026-10-06）：装了原生钩子就转过去；没装 ⇒ **什么都不做**
+/// （开不了麦的地方也没什么可热的 —— 不许假装）。
+Future<void> warmHearing({required Uri url, required String token}) async {
+  await nativeHearingApi?.warm(url: url, token: token);
+}

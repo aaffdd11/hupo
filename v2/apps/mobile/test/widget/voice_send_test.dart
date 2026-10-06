@@ -41,6 +41,9 @@ class _Mic implements NativeHearingApi {
   @override
   void stop() {}
 
+  @override
+  Future<void> warm({required Uri url, required String token}) async {}
+
   void say(String text) {
     _on?.call({'type': 'asr/ready'});
     _on?.call({'type': 'asr/final', 'text': text});

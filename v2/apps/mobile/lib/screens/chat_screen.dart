@@ -500,6 +500,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     unawaited(_loadAppearance());
     // ★ 2026-09-29：桌面那张壁纸（读不出来 ⇒ 那张暖纸）。
     unawaited(_loadWallpaper());
+    // ★★ **2026-10-06：把语音那条连接先热上**（"按下就通" · 契约 `docs/dev/205-ASR-WARM.md`）。
+    //    🔴 为什么在这儿：那条连接**冷启那一次真量到 1.1~4.4 秒**（热 16 ms）——
+    //      它原来落在"按下 → 屏幕上出第一个字"这条路上。进这一屏就把那次付掉，
+    //      按键那一刻就只剩握手那一拍（~200 ms）。
+    //    ⚠️ **只连 WS、不发 `asr/start`** ⇒ 上游不开、不花钱、不碰麦克风、不弹权限框；
+    //      连不上**一声不响**（按下去那一下照旧如实报）。
+    //    ⚠️ 开不了麦的平台这一句是空操作（`canHear == false` ⇒ 直接返回）。
+    unawaited(widget.controller.warmHear());
   }
 
   /// 🔴 **"看得见的那块地方"变了 ⇒ 时间线重新对一次底**（2026-09-30 主人报的真缺陷）。

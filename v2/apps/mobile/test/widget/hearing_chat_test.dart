@@ -54,6 +54,9 @@ class _FakeNative implements hs.NativeHearingApi {
   }) async => 'unsupported';
   @override
   void stop() {}
+
+  @override
+  Future<void> warm({required Uri url, required String token}) async {}
 }
 
 /// 先喂两句历史（**展开那一档要有点东西可展开**；空时间线时抓手点了不展）。
