@@ -180,7 +180,20 @@ class Hearing {
   ///    （`asr.js` 的 `segs` 是按连接来的）⇒ 在这里只当"这一轮"那一份用。
   Hearing roundDone(String summary, {bool clearWhy = false}) {
     final s = summary.trim();
-    final base = text; // 这一轮拼起来的那一份（服务端那条整段常常就是它）
+    final base = text.trim(); // 这一轮拼起来的那一份（服务端那条整段常常就是它）
+    // 🔴 **2026-10-07：这一下只许让框里的字变长，绝不许变短。**
+    //
+    //   服务端那条"整段"是从**同一路上游**自己攒出来的，正常它更全（以它为准）；
+    //   但它也可能把后面那一句**并进**前面那一段（上游按句给字、时间对不上时）
+    //   ⇒ 那一份会**少一段** —— 这正是主人报的
+    //      *"说着说着，转文字的早期的那部分内容在输入框里没了"*。
+    //   我们手上这份是**同一路帧**攒出来的 ⇒ **谁长用谁**（丢字比多字坏得多）。
+    // ⚠️ 不是"两份里挑长的那份"（那样会把**新的一句**丢掉：服务端那条整段只有
+    //    新那一句、而我们手上是"前几句 ＋ 新的"，挑长的就只剩前面那几句了）。
+    //    正确的做法：**接上去**（`_joined` 会把重叠那一段去掉、不重复），
+    //    接完还是比手上短（＝服务端那份是手上这份的子集）⇒ 用手上这份。
+    final joined = s.isEmpty ? base : _joined(settled, s);
+    final best = joined.length >= base.length ? joined : base;
     return _copy(
       // ⚠️ 收一轮**不是出错** —— 但"要不要把刚才那句话清掉"看调用方：
       //    · 聊天那条路（**接着开下一轮**）⇒ `clearWhy: true`（那一轮完了不是失败）；
@@ -188,7 +201,7 @@ class Hearing {
       phase: HearingPhase.listening,
       why: clearWhy ? '' : why,
       segments: const <int, String>{},
-      settled: s.isEmpty ? base : _joined(settled, s),
+      settled: best.isEmpty ? settled : _joined(settled, best),
     );
   }
 

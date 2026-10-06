@@ -240,6 +240,34 @@ void main() {
     expect(h.text, '说了很久');
   });
 
+  test('🔴 收一轮**只许变长**：服务端那份整段少了前面那半句 ⇒ 手上那份留着', () {
+    // 🔴 2026-10-07 主人：*"说着说着，转文字的早期的那部分内容在输入框里没了。"*
+    //   上游按句给字；盒子里那台"接段"的机器一旦把后面那句并进前面那一段
+    //   ⇒ 收尾那条"整段"就**少了前半句**。原来这里无条件用服务端那份 ⇒ 框里当场变短。
+    //   ⇒ 现在**谁长用谁**（我们手上这份是同一路帧攒出来的）。
+    final h = const Hearing()
+        .tapped()
+        .event({'type': 'asr/partial', 'text': '今天天气不错。', 'index': 0})
+        .event({'type': 'asr/partial', 'text': '我想出去走走。', 'index': 1});
+    expect(h.text, '今天天气不错。我想出去走走。');
+
+    // 服务端那条"整段"**少了前半句**（只剩第二句）
+    final folded = h.roundDone('我想出去走走。');
+    expect(folded.text, '今天天气不错。我想出去走走。',
+        reason: '★ 收一轮绝不许把框里那半句抹掉（只许变长）');
+
+    // 负向对照：服务端那份**更全**（正常情形）⇒ 以它为准
+    final h2 = const Hearing().tapped().event({'type': 'asr/partial', 'text': '我想出去', 'index': 0});
+    final folded2 = h2.roundDone('我想出去走走吧。');
+    expect(folded2.text, '我想出去走走吧。', reason: '★ 服务端更全 ⇒ 用它的（同一路攒出来的整段）');
+
+    // 负向对照 2：**几轮接着攒**也一样（前后都不许丢）
+    final h3 = folded.roundDone('第三句。', clearWhy: true);
+    expect(h3.text, contains('今天天气不错。'));
+    expect(h3.text, contains('我想出去走走。'));
+    expect(h3.text, contains('第三句。'));
+  });
+
   test('★ P1-3：断了但**一个字都没有** ⇒ 还是"什么都没听到"那句（不冒充"断了"）', () {
     final h = const Hearing().tapped().event({'type': 'asr/end', 'index': 0, 'reason': 'upstream'});
     expect(h.why, hearNothing);

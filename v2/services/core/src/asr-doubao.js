@@ -303,11 +303,16 @@ export function createSegmentTracker() {
       if (text === '') return {};
       // 刚说定过的那一段又回一次（上游会把最后那一帧再吐一遍，收尾那一包之后也是它）
       // 刚说定过的那一段又回一次（上游会把最后那一帧再吐一遍，收尾那一包之后也是它）——
-      // ⚠️ 这里**从严**：只有"起点一模一样"或"时间叠着**且**字像是同一句"才算它，
-      //    不然会把**下一句**误并进上一句（那就丢了一句）。
+      // ⚠️ 这里**从严**：**时间上像同一句**（起点一模一样 **或** 区间叠着）**而且
+      //    `字`也像同一句**，才算它；不然会把**下一句**误并进上一句（那就丢了一句）。
+      // 🔴 **2026-10-07 再收严一处**（主人报 *"说着说着，转文字的早期的那部分内容
+      //    在输入框里没了"*）：原来 `sameStart`（起点一模一样）**单凭它就替换** ——
+      //    而上游重新划句时，**新的一句也可能报出与上一句一样的起点**，
+      //    那时就会把上一段**整段替换掉**（框里那半句当场没了、收尾拼出来的整段也少了它）。
+      //    ⇒ 现在**两样都要**：时间像 **而且** 字像。
       if (cur === '' && done.length > 0 && span && doneSpan
-        && (sameStart(doneSpan, span)
-          || (overlaps(doneSpan, span) && looksLikeSame(done[done.length - 1], text)))) {
+        && (sameStart(doneSpan, span) || overlaps(doneSpan, span))
+        && looksLikeSame(done[done.length - 1], text)) {
         // 一模一样 ⇒ 纯回声，丢掉；**又准了一点 ⇒ 换掉那一段**（不许接成两遍）
         if (text === done[done.length - 1]) return {};
         done[done.length - 1] = text;
