@@ -24,6 +24,7 @@
 | **某一批具体怎么实现、怎么验的** | `dev/NN-*.md`（按编号找那一篇） | 动那一块之前 |
 | **这是个什么东西 · 给谁 · 为什么这样** | [`handbook/01-PROJECT.md`](handbook/01-PROJECT.md) | 第一次接触这个项目 |
 | **系统由什么组成 · 边界在哪 · 不变量** | [`handbook/02-ARCHITECTURE.md`](handbook/02-ARCHITECTURE.md) | 要把东西加进去之前 |
+| **一眼看懂"聊天长什么样"和"它跟 DSH 怎么接"**（两张图） | [`dev/196-CHAT-AND-DSH.md`](dev/196-CHAT-AND-DSH.md) | 要跟人说清结构 / 自己先捋一遍时 |
 | **代码长什么样 · 往哪改 · 协议与状态机** | [`handbook/03-DEVELOPMENT.md`](handbook/03-DEVELOPMENT.md) | 写代码之前 |
 | **先做什么后做什么 · 怎么算做完** | [`handbook/04-ROADMAP.md`](handbook/04-ROADMAP.md) | 排期 / 验收时 |
 | **为什么不能那样做**（已拍板） | [`handbook/05-DECISIONS.md`](handbook/05-DECISIONS.md) | 想改一处**看起来该改**的地方时 |

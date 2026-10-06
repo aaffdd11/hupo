@@ -1,0 +1,84 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { width:1500px; height:1010px; background:#F8F5EE; color:#2B2320;
+         font-family:"Noto Sans CJK SC","Droid Sans Fallback",sans-serif; }
+  .title { padding:24px 36px 4px; font-size:30px; font-weight:700; }
+  .sub { padding:0 36px 16px; font-size:16px; color:#7A6E66; }
+  .band { margin:0 36px 14px; padding:16px 22px 18px; background:#FFFDF9;
+          border:2px solid #E8E0D4; border-radius:16px; display:flex; gap:26px; }
+  .left { width:640px; flex:none; }
+  .right { flex:1; font-size:16.5px; line-height:1.72; }
+  h2 { font-size:20px; font-weight:700; margin-bottom:4px; }
+  .note { font-size:14.5px; color:#7A6E66; margin-bottom:10px; }
+  .screen { background:#F8F5EE; border:2px solid #C8452F; border-radius:12px; padding:12px; }
+  .row { display:flex; gap:9px; }
+  .tile { width:74px; height:74px; border-radius:14px; background:#F9DCCB;
+          border:2px solid #C8452F; display:flex; align-items:center; justify-content:center;
+          font-size:13px; text-align:center; flex:none; }
+  .tile.plain { background:#FFFDF9; border:2px dashed #E8E0D4; color:#7A6E66; }
+  .bar { margin-top:10px; height:52px; background:#FFFDF9; border:2px dashed #C8452F;
+         border-radius:10px; display:flex; align-items:center; justify-content:flex-end;
+         gap:8px; padding:0 12px; font-size:13px; color:#7A6E66; }
+  .bar .words { margin-right:auto; }
+  .mic { width:44px; height:44px; border-radius:50%; background:#F9DCCB; border:2px solid #C8452F; flex:none; }
+  .aux { width:34px; height:17px; border-radius:6px; background:#F9DCCB; border:2px solid #C8452F; }
+  ul { padding-left:20px; } li { margin-bottom:6px; }
+  code { font-family:monospace; background:#F2ECE2; padding:1px 5px; border-radius:5px; font-size:14px; }
+  .k { color:#C8452F; font-weight:700; }
+  .line { background:#FFFDF9; border:2px solid #E8E0D4; border-radius:10px; padding:10px 12px; font-size:14px; }
+</style></head><body>
+<div class="title">一、聊天长什么样（屏幕上那几层）</div>
+<div class="sub">一个窗口 ＋ 一张桌子。屏幕上永远只有两件事：你在哪、你在跟哪一本说话。</div>
+
+<div class="band"><div class="left">
+  <h2>① 桌面（图标墙）</h2>
+  <div class="note">一格 = 一个本子（工程词：工作区 / 作用域）。点一下 = 进这一本。</div>
+  <div class="screen">
+    <div class="row">
+      <div class="tile">主线</div><div class="tile">设置</div><div class="tile">发现</div>
+      <div class="tile">我自己那台</div><div class="tile">飞行棋</div><div class="tile plain">＋</div>
+    </div>
+    <div class="bar"><span class="words">收起档那条浮窗压在这一行上</span><span class="mic"></span><span class="aux"></span><span class="aux"></span></div>
+  </div>
+</div><div class="right"><ul>
+  <li>内置那几格（设置 / 发现 /「我自己那台」）与你的小程序<b>长得一样</b>，都是一格。</li>
+  <li>点桌面空白 = 把聊天收起来；点一格 = 进那一本，聊天条<b>一直在底下</b>。</li>
+  <li>桌面的壁纸是<b>按账号</b>存的（换台设备登录还是它），但不影响排布。</li>
+</ul></div></div>
+
+<div class="band"><div class="left">
+  <h2>② 点开一格：那一屏铺满</h2>
+  <div class="note">真小程序在网页上是 <code>&lt;iframe&gt;</code>（画在画布<b>上面</b>）；在安卓包里是 WebView（画在画布<b>下面</b>）。</div>
+  <div class="screen">
+    <div class="row">
+      <div class="tile plain" style="width:420px;height:96px;font-size:15px">小程序自己画的那一页</div>
+      <div class="tile plain" style="width:170px;height:96px;font-size:12.5px;line-height:1.5">要问你一句 / 要上网 / 要拍照<br>都得先跟你要许可</div>
+    </div>
+    <div class="bar"><span class="words">聊天条与那颗圆圈露在底下</span><span class="mic"></span><span class="aux"></span><span class="aux"></span></div>
+  </div>
+</div><div class="right"><ul>
+  <li><span class="k">底下那条浮窗一直在</span>（聊天永续）：网页上小程序让出底下那一格；安卓上小程序铺满、浮窗压在它上面。</li>
+  <li>右上角那颗 ✕ = 退出这一屏、回桌面。</li>
+  <li>小程序跑在<b>另一个原点、沙箱里</b>：碰不到你的钥匙，要什么能力得<b>你点头</b>。</li>
+</ul></div></div>
+
+<div class="band"><div class="left">
+  <h2>③ 底下那条浮窗 = 唯一的聊天入口</h2>
+  <div class="note">只有两档：完全收起（一颗录音圆圈 ＋ 右边两颗小按钮）／ 完全展开（那条时间线）。</div>
+  <div class="screen">
+    <div class="row" style="align-items:flex-start">
+      <div class="tile plain" style="width:430px;height:92px;font-size:14px;line-height:1.5;text-align:left;display:block;padding:9px">
+        时间线：一条<b>按编号排</b>的流水<br>（你说的话 · 它的话 · 它做的事 · 出处 · 每一步的账）</div>
+      <span class="mic" style="margin-top:12px"></span>
+      <div style="display:flex;flex-direction:column;gap:6px;padding-top:14px"><span class="aux"></span><span class="aux"></span></div>
+    </div>
+    <div class="bar"><span class="words">说话时：<b>直白转出来的字带下划线</b> → 只改错别字那一层回来 → <b>线去掉</b> → 通顺就自己发出去</span></div>
+  </div>
+</div><div class="right"><ul>
+  <li><span class="k">录音那颗圆圈</span>：按一下开始说、再按一下停（在录时一明一暗地闪）。</li>
+  <li>右边那一列：上面「展开 / 收起」、下面「播放语音」（念它回话里那两段大字）。</li>
+  <li>它没听清 / 要问你一句时，那一行就摆那句话，你按圆圈答一句 ⇒ 用来<b>修正</b>前面那句。</li>
+  <li>时间线<b>只认编号</b>（不靠猜谁跟谁配对）；新的一来自己跟到底部，往上翻就不打断你。</li>
+</ul></div></div>
+</body></html>

@@ -1,0 +1,106 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { width:1560px; height:960px; background:#F8F5EE; color:#2B2320;
+         font-family:"Noto Sans CJK SC","Droid Sans Fallback",sans-serif; }
+  .title { padding:24px 36px 4px; font-size:30px; font-weight:700; }
+  .sub { padding:0 36px 16px; font-size:16px; color:#7A6E66; }
+  .page { display:flex; gap:26px; padding:0 36px; }
+  .main { width:1080px; flex:none; }
+  .aside { flex:1; display:flex; flex-direction:column; gap:14px; }
+  .box { border-radius:14px; padding:13px 18px; background:#FFFDF9; }
+  .l1 { border:3px solid #C8452F; }
+  .l2 { border:3px solid #E0A030; }
+  .l3 { border:3px solid #7A6E66; }
+  .l4 { border:3px solid #E8E0D4; }
+  .h { font-size:20px; font-weight:700; margin-bottom:5px; }
+  .b { font-size:15.5px; line-height:1.66; }
+  code { font-family:monospace; background:#F2ECE2; padding:1px 5px; border-radius:5px; font-size:14px; }
+  .k { color:#C8452F; font-weight:700; }
+  .flow { display:flex; justify-content:space-between; margin:5px 0; }
+  .arrow { width:48%; font-size:14px; color:#7A6E66; line-height:1.5; }
+  .arrow.down { text-align:left; padding-left:26px; }
+  .arrow.up { text-align:right; padding-right:26px; }
+  .sym { font-size:22px; color:#C8452F; }
+  .sidebox { background:#F9DCCB; border:2px solid #C8452F; border-radius:14px; padding:12px 15px;
+             font-size:14.5px; line-height:1.62; }
+  .sidebox.plain { background:#FFFDF9; border-color:#E8E0D4; }
+  .sidebox h3 { font-size:16.5px; margin-bottom:5px; }
+</style></head><body>
+<div class="title">二、它跟 DSH 是怎么接的</div>
+<div class="sub">三层：你的设备 → 服务端那个调度器 → 一个本子一台真 agent（DSH）。中间只有两条线。</div>
+
+<div class="page">
+  <div class="main">
+    <div class="box l1">
+      <div class="h">① 你的设备：手机网页 / 安卓包（同一套 Flutter 代码）</div>
+      <div class="b">桌面 ＋ 底下那条浮窗（时间线 / 录音圆圈）＋ 小程序那一屏。<span class="k">它只上报事实、不做判断</span>。</div>
+    </div>
+
+    <div class="flow">
+      <div class="arrow down">① 你说一句<br><span class="sym">▼</span><br><code>POST /api/say</code></div>
+      <div class="arrow up"><code>WebSocket /api/stream</code><br><span class="sym">▲</span><br>④ 一帧一帧回来（它的话 / 它做的事）</div>
+    </div>
+
+    <div class="box l2">
+      <div class="h">② 服务端：调度器（<code>services/core</code>，一台永续进程）</div>
+      <div class="b">
+        · <b>把话投给谁</b>：一个本子 = 一条 DSH 会话（映射落盘 ⇒ 一个房间永远同一条）<br>
+        · <b>拼成一条时间线</b>：编号、收口、排队、撤回、回收站 —— <b>先落盘，再推给你</b><br>
+        · <b>每个本子各一条日志</b>（服务端那本 ＋ 你设备上那份缓存）⇒ 退回桌面那本一个字没丢<br>
+        · 鉴权 / 准入 / 长活与提醒 / 小程序制品分发<br>
+        · <b>语音那三步也住这儿</b>：<code>/api/asr</code>（豆包，钥匙只在服务端）→ <code>/api/hear</code>（只改错别字）→ 再走 <code>/api/say</code>
+      </div>
+    </div>
+
+    <div class="flow">
+      <div class="arrow down">② 交给那一本的 agent<br><span class="sym">▼</span><br>stdio JSON-RPC</div>
+      <div class="arrow up">同一条管道<br><span class="sym">▲</span><br>③ 它说的话 / 调的工具 / 每一步的账</div>
+    </div>
+
+    <div class="box l3">
+      <div class="h">③ 一个本子 = 一台真 agent（DSH 子进程）</div>
+      <div class="b">
+        <code>dsh --profile sdk --patch 人格 --patch 能力 --patch 模型 --patch SDK 收发</code><br>
+        · <b>人格</b>（<code>hupo-persona.yml</code>）：它是谁、怎么说话（短、直白、不客套）<br>
+        · <b>工具</b>（<code>hupo-capabilities.yml</code> ＋ 账本 / 小程序那两台 MCP）：跑命令、记长活、造小程序、上网<br>
+        · <b>记忆</b>：会话历史按工作区 root 分区 ⇒ <b>一本一套记忆</b>；换房间 = 换一条会话（不是改一个字段）<br>
+        · <b>不直接对你说话</b>：别的那几本只写进自己那一本
+      </div>
+    </div>
+
+    <div class="flow">
+      <div class="arrow down">⑤ 模型那一条（按人注入的钥匙）<br><span class="sym">▼</span></div>
+      <div class="arrow up"></div>
+    </div>
+
+    <div class="box l4">
+      <div class="h">④ 模型与外面的世界</div>
+      <div class="b">模型走 <code>hupo-model-proxy.yml</code> 那一层（<b>用你自己的钥匙</b>）；工具跑起来就是真跑 —— 在他自己那台<b>盒子</b>里跑，不在宿主上跑。</div>
+    </div>
+  </div>
+
+  <div class="aside">
+    <div class="sidebox">
+      <h3>「有自己一台」的号</h3>
+      宿主把这些口（<code>/api/stream</code>、<code>/api/asr</code>）<b>原样转进他自己的盒子</b> ⇒ 聊天与语音都跑在<b>盒子里那份代码</b>上（产品层只读挂在 <code>/app/code</code>）。<br>
+      ⇒ "改一次产品" = 换一份挂载 ＋ 盒子自己重开一次。
+    </div>
+    <div class="sidebox plain">
+      <h3>三条边界（手册里写着）</h3>
+      · 终端：<b>只上报事实，不做判断</b><br>
+      · 调度器：<b>不能有表达欲</b>（只有几句产品固定话术）<br>
+      · 工作层：<b>永不直接对你说话</b>，也不许自己决定自己有什么能力
+    </div>
+    <div class="sidebox plain">
+      <h3>一句话</h3>
+      你看到的是<b>一个窗口</b>；底下是<b>一本本各有一条会话的 agent</b>；中间那个调度器决定"谁的话投给谁"，并把它们拼成你看到的那<b>一条</b>时间线。
+    </div>
+    <div class="sidebox plain">
+      <h3>为什么中间非要这一层</h3>
+      编号、收口、排队与撤回、回收站、未读、长活与提醒、断线续做 —— 全住在它里面。<br>
+      ⇒ <b>没有"去掉它还能照旧"这回事</b>。
+    </div>
+  </div>
+</div>
+</body></html>
