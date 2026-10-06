@@ -344,8 +344,16 @@ export function createSegmentTracker() {
       //      `partial` ⇒ **把那段换掉** ⇒ 框里前半句当场没了（收尾拼出来的整段也少了它）。
       //    ⇒ 现在**字说了算**：字明显不像同一句 ⇒ 就算换句（时间只能"补充说它换了"，
       //      不能反过来把"换句"否掉）。⚠️ 判据 `test/asr-doubao.test.js` D14。
-      const same = sameSentence(cur, text);
-      const fresh = cur !== '' && (!same || (curSpan && span ? !overlaps(curSpan, span) : false));
+      // 🔴 **2026-10-07 再收一刀**（主人那段真录音：*"…会是被切割还是不会被切割？"* 那句话
+      //    在框里被**接了好多遍**）：上一版还是留了时间那一支 —— 只要两帧的区间**不叠**
+      //    就算换句。而上游对**同一句**常常按词给**首尾相接、不叠**的区间
+      //    （`0-800` / `800-1500` …）⇒ 那一支会让**每一帧都变成新的一段**
+      //    ⇒ 客户端一段段接上去 ⇒ 同一句在框里重复 N 遍（看起来就像"被切割"）。
+      //    ⇒ **只有字说了算**：字明显不像同一句才算换句（时间**不再**能把它掰成换句）。
+      //      ⚠️ 代价如实认下：他**连着说两遍一模一样的话**会被合成一遍
+      //      （那与既有的"同一句被说了两遍只算一遍"是同一条口径，见 `onceOnly`）。
+      //      ⚠️ 判据 `test/asr-doubao.test.js` D15。
+      const fresh = cur !== '' && !sameSentence(cur, text);
       if (fresh) {
         done.push(cur);
         curSpan = null;

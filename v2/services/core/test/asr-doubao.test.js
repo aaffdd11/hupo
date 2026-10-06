@@ -274,6 +274,32 @@ test('★ D14 🔴 区间**叠着**但字完全不是同一句 ⇒ 必须算换�
   assert.equal(t3.whole(), '今天天气不错');
 });
 
+test('★ D15 🔴 同一句按词给**首尾相接（不叠）**的区间 ⇒ 不许变成新的一段（否则会重复 N 遍）', () => {
+  // 🔴 2026-10-07 主人那段真录音（他自己念的）：同一句在框里被接了好多遍 ——
+  //   「…会是被切割还是不会被切割？…」一遍、两遍、三遍……看起来就像"被切割"。
+  //   根子：上游对**同一句**常常按词给**首尾相接、不叠**的区间（0-800 / 800-1500 …），
+  //   而上一版判据里留了时间那一支（不叠 ⇒ 算换句）⇒ **每一帧都成了一段**。
+  //   ⇒ 现在**只有字说了算**：字是同一句在往下长 ⇒ 替换那一帧（段号不动）。
+  const t = createSegmentTracker();
+  assert.equal(t.push(said('我想知道', { start: 0, end: 800 })).partial.index, 0);
+  assert.equal(t.push(said('我想知道现在的', { start: 800, end: 1500 })).partial.index, 0,
+      '★ 首尾相接（不叠）也是同一句 ⇒ 段号不许往前走');
+  assert.equal(t.push(said('我想知道现在的几句话', { start: 1500, end: 2400 })).partial.index, 0);
+  assert.equal(t.whole(), '我想知道现在的几句话', '★ 一个字都不许重复');
+
+  // 负向对照：**真换了一句**（字明显不像）⇒ 照旧另起一段
+  const t2 = createSegmentTracker();
+  t2.push(said('我想知道现在的几句话', { start: 0, end: 2400 }));
+  assert.equal(t2.push(said('然后我们再说别的', { start: 2400, end: 3600 })).partial.index, 1);
+  assert.equal(t2.whole(), '我想知道现在的几句话然后我们再说别的');
+
+  // 负向对照 2：**同一个词说两遍**（语音真重复）⇒ 也合成一遍
+  //   （与既有的"同一句被说了两遍只算一遍"同一条口径）
+  const t3 = createSegmentTracker();
+  t3.push(said('测试测试', { start: 0, end: 1000 }));
+  assert.equal(t3.whole(), '测试测试');
+});
+
 test('★ D11 空字不许把已经听到的擦掉（收尾帧不带 result 那一族）', () => {
   const t = createSegmentTracker();
   t.push(said('今天天气'));
