@@ -45,7 +45,14 @@ bool get canHear => html.window.navigator.mediaDevices != null;
 
 /// 一次采集多少帧（`ScriptProcessor` 的块大小）。
 /// ⚠️ 它只是**缓冲粒度**，不是"某个尺寸"：48000 采样率下 ≈ 85 毫秒一片。
-const int _blockFrames = 4096;
+/// **一包音频多少采样**（官方文档：单包 **100~200 ms**、双向流式 **200 ms 最优**）。
+///
+/// ⚠️ **2026-10-07 改 4096 → 2048**：4096 采样 = **256 ms**，**超出文档那个区间**。
+///   2048 = **128 ms**（在区间内）。`createScriptProcessor` 只收 2 的幂
+///   （256…16384）⇒ 200 ms（3200 采样）**表达不出来**，128 ms 是最接近又合规的一档。
+///   ⚠️ 没有改成"攒够 200 ms 再发"：那要多一个缓冲 ＋ 停手时那一下 flush，
+///      而 flush 漏了就会**切掉他最后 200 毫秒**（比"少 72 ms 的包"严重得多）。
+const int _blockFrames = 2048;
 
 /// 连上之后最多等多久"这台能不能听"（上游握手那一拍）。
 const Duration _readyLimit = Duration(seconds: 5);

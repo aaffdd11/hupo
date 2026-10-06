@@ -33,7 +33,15 @@ import * as nodeZlib from 'node:zlib';
 import WebSocket from 'ws';
 
 /** 默认端点（**可覆盖**：`DOUBAO_ASR_URL`）。 */
-export const DOUBAO_ASR_URL = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel';
+// 🔴 **2026-10-07 换成"优化版"**（主人把官方协议文档贴过来之后逐条对出来的）：
+//   文档原话 —— *"该模式下，不再是每一包输入对应一包返回，只有当结果有变化时才会返回
+//   新的数据包（性能优化 rtf 和首字、尾字时延均有一定程度提升）"*、*"更推荐使用"*。
+//   **真读数**（同一段 2 秒合成音、同一把真钥匙，`scripts/check-asr-doubao.mjs --spend`）：
+//     · `bigmodel`（旧，每包一回）⇒ **22 帧**
+//     · `bigmodel_async`（优化版）⇒ **2 帧**
+//   而主人那一场真录音里，说完之后上游把同一份结果**重发了一百多遍**（535 帧里 120+ 帧
+//   一模一样）—— 那就是"每包一回"的后果。换端点之后这一族**从根上没有了**。
+export const DOUBAO_ASR_URL = 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async';
 
 /** 默认资源 id（**可覆盖**：`DOUBAO_ASR_RESOURCE`）。1.0 小时版；2.0 是 `volc.seedasr.sauc.duration`。 */
 export const DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
