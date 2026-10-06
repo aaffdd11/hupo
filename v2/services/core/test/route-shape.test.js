@@ -24,7 +24,6 @@ const REPO = nodePath.resolve(import.meta.dirname, '../../../..');
 const SPEC = nodePath.join(REPO, 'docs/handbook/08-SPEC.md');
 const SERVER = nodePath.join(REPO, 'v2/services/core/src/server.js');
 const ASR = nodePath.join(REPO, 'v2/services/core/src/asr.js');
-const HARNESS = nodePath.join(REPO, 'v2/services/core/src/harness-session.mjs');
 const DEV_MODE = nodePath.join(REPO, 'v2/services/core/src/dev-mode.js');
 
 /** 手册 §2.1 那一节（从它的标题到下一个同级/更高级标题）。 */
@@ -42,14 +41,13 @@ function interfaceSection() {
 /**
  * **路径只住在常量里**的那几条路（`server.js` 里只有常量名，没有字面量）。
  *
- * ⚠️ 为什么单列一张表：这三条（`/api/harness`、`/api/dev-harness`、`/api/dev-mode`）
+ * ⚠️ 为什么单列一张表：这几条（`/api/dev-harness`、`/api/dev-mode`）
  *    是从常量模块加进来的，而这条闸原先**只扫 `server.js` 的字面量** ⇒
  *    它们**既没进手册、也没被闸盖住**（闸全绿，却漏了三条）。
  * ⇒ 现在逐条认常量，而且**取不到就红**：常量被改名/删掉时不许静默漏掉。
  */
 const PATH_CONSTANTS = [
   { file: ASR, name: 'ASR_PATH' }, // /api/asr
-  { file: HARNESS, name: 'HARNESS_PATH' }, // /api/harness
   { file: DEV_MODE, name: 'DEV_MODE_PATH' }, // /api/dev-mode
   { file: DEV_MODE, name: 'DEV_HARNESS_PATH' }, // /api/dev-harness
 ];

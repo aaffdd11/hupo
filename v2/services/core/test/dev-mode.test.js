@@ -1544,22 +1544,6 @@ test('★ 看板那句话：非 HTML / 子路径**一个字节都不碰**（认�
   assert.equal(r.res.body(), doc, '不是 HTML ⇒ **原样**（一个字节都不许动）');
 });
 
-test('★ 看板那句话：JS 与 Dart 两份文案**逐字一样**（改一份不改另一份 ⇒ 当场红）', () => {
-  // ⚠️ 同一句话不许有两处来源 —— 但它们**必须**跨语言各存一份
-  //    （一份给盒子里的页面，一份给 App 那一层）⇒ 用这条闸把它们钉在一起。
-  const dart = nodeFs.readFileSync(
-    nodePath.resolve(import.meta.dirname, '../../../apps/mobile/lib/models/dev_harness_words.dart'),
-    'utf8',
-  );
-  const pick = (name) => {
-    const m = new RegExp(`const String ${name} = '([^']*)';`, 'u').exec(dart);
-    assert.ok(m, `Dart 那份里找不到 ${name}`);
-    return m[1];
-  };
-  assert.equal(pick('devBoardNotHupo'), DEV_BOARD_NOT_HUPO, '那句话两份必须逐字一样');
-  assert.equal(pick('devBoardWhyNot'), DEV_BOARD_WHY_NOT, '那句解释两份必须逐字一样');
-});
-
 // ════════════════════════════════════════════════════════════
 // ★ 换房间的**内存峰值**（2026-09-25 真机踩出来的 · `DEV_EXIT_WAIT_MS`）
 //

@@ -351,7 +351,7 @@ void main() {
     // 🔴 **2026-10-06 修回来的口径**（清判据时抓到的真缺陷）：**内置那几屏不是制品**
     //    ⇒ 两种平台上都要让（手册 §6.4 规则 1 原话）。原来那一行是
     //    `kIsWeb ? (margin + _barH) : 0`，把"安卓铺满"那一档也套到了它们身上
-    //    ⇒ 收起条压在它们底部（设置最后一行、`HarnessPane` 那颗按钮**真手势点不到**）。
+    //    ⇒ 收起条压在它们底部（设置最后一行**真手势点不到**）。
     //    "只有制品（平台视图）＋ 不是网页才铺满"这条真值表钉在 `test/unit/mini_native_test.dart`。
     expect(
       tester.widget<MiniAppHost>(find.byType(MiniAppHost)).bottomInset,

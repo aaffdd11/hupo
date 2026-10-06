@@ -33,13 +33,13 @@ void main() {
     }
   });
 
-  test('③ 🔴 桌面第一眼那三个（设置 / 发现 / 我自己那台）**互不同色**', () {
+  test('③ 🔴 桌面第一眼那两格（设置 / 发现）**互不同色**', () {
+    // ⚠️ 2026-10-06：内置那三格变两格（「我自己那台」删了）—— 这一条跟着改成两格。
     final set = {
       appTintFor(builtInSettingsId),
       appTintFor(builtInDiscoverId),
-      appTintFor(builtInHarnessId),
     };
-    expect(set.length, 3, reason: '三个内置的撞色了 —— 它们永远同时出现在桌面上，一眼看得见');
+    expect(set.length, 2, reason: '两个内置的撞色了 —— 它们永远同时出现在桌面上，一眼看得见');
   });
 
   test('④ 底色那一族都够浅：**墨色**（`d.ink`）压上去读得出来', () {

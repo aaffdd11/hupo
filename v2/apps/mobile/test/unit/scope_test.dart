@@ -185,18 +185,17 @@ void main() {
       expect('mine:dice'.startsWith(mineAppPrefix), true);
     });
 
-    test('★ B16-4：内置那三个 ⇒ **各回自己的 id**（每个图标一间房，不再落回主线）', () {
+    test('★ B16-4：内置那两格 ⇒ **各回自己的 id**（每个图标一间房，不再落回主线）', () {
       // 🔴 与客户端 `app_spec.dart` 的 `builtIn*Id` 逐字对齐，也与服务端
       //    `worlds.js` 的 `BUILTIN_SCOPES` 逐字对齐。
       final expected = <String, String>{
         builtInSettingsId: 'settings',
         builtInDiscoverId: 'discover',
-        builtInHarnessId: 'harness',
       };
-      expect(expected.length, 3, reason: '三个内置 id 不许有重的（重了 = 两个图标一间房）');
+      expect(expected.length, 2, reason: '两个内置 id 不许有重的（重了 = 两个图标一间房）');
       expected.forEach((open, scope) {
         expect(scopeOfOpenApp(open), scope, reason: '★ 内置的「$open」就是它自己的房间');
-        expect(scope, isNot(mainScope), reason: '★ 内置那三个**不再**落回主线');
+        expect(scope, isNot(mainScope), reason: '★ 内置那两格**不再**落回主线');
         // 它必须是**服务端认得的形状**（小写字母数字与短横，`safeScope` 那条）
         expect(
           RegExp(r'^[a-z0-9][a-z0-9-]*$').hasMatch(scope),

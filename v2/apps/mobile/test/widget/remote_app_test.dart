@@ -15,7 +15,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/widgets/mini_app_icons.dart';
 import 'package:hupo_app/models/app_words.dart';
-import 'package:hupo_app/models/harness_words.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
@@ -125,11 +124,13 @@ void main() {
     final desktop = tester.widget<AppDesktop>(find.byType(AppDesktop));
     final labels = desktop.apps.map((a) => a.label).toList();
     // ⚠️ 2026-09-27 起末尾还多**一格"创建小程序"**（主人要的那颗空心加号）——
-    //    它不是内置格，但**也在桌面上**，所以这一条按"内置那三格 ＋ 那一格"对表。
+    //    它不是内置格，但**也在桌面上**，所以这一条按"内置那两格 ＋ 那一格"对表。
+    // ⚠️ 2026-10-06：内置那三格**变两格**（主人：*"「我自己那台」小程序要删掉。"*）
+    //    ⇒ 这一份表跟着少一格（还画着它 ⇒ 红）。
     expect(
       labels,
-      [settingsAppLabel, discoverAppLabel, harnessAppLabel, createAppLabel],
-      reason: '★ 桌面上的内置格就是这三个（奥数题那一格已从产品里去掉）；'
+      [settingsAppLabel, discoverAppLabel, createAppLabel],
+      reason: '★ 桌面上的内置格就是这两个（奥数题、我自己那台都已从产品里去掉）；'
           '末尾那一格是"创建小程序"；多一格 / 少一格 / 还画着它 ⇒ 红',
     );
     // 而且**真的画到屏幕上**了（配置里有、屏上没有 ⇒ 红）

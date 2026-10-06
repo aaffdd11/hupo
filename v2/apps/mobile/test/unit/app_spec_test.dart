@@ -132,11 +132,16 @@ void main() {
     }
   });
 
-  test('内置那三个不算"我的"（而 `math` 已经**不是**内置了）', () {
+  test('内置那两格不算"我的"（`math` 与 `harness` 都已经**不是**内置了）', () {
     expect(MiniApp.isBuiltIn('settings'), true);
     expect(MiniApp.isBuiltIn('discover'), true);
-    expect(MiniApp.isBuiltIn('harness'), true);
     expect(MiniApp.isBuiltIn('dice'), false);
+    // 🔴 2026-10-06（主人：*"「我自己那台」小程序要删掉。"*）：那一格从桌面上拿掉了
+    //    ⇒ 客户端这边**不许再认它**（认了就是"点得到、打不开"那一族）。
+    expect(MiniApp.isBuiltIn('harness'), false,
+        reason: '★ 那一格删了 ⇒ `harness` 不再是内置 id');
+    // ⚠️ 服务端那边它**照旧在保留名单里**（`apps.js` 的 `REFUSED_APP_IDS`）——
+    //    那是**另一件事**：留着是为了"别让人拿这个名字占坑"，不是因为桌上还有它。
     // 🔴 2026-09-25（契约 `docs/dev/105-DROP-MATH.md`）：奥数题那一格从产品里去掉 ⇒
     //    服务端 `BUILTIN_SCOPES` 不再认这个名字，客户端这里也必须跟着放手。
     expect(MiniApp.isBuiltIn('math'), false, reason: '★ 那个内置格没了 ⇒ `math` 不再是内置 id');

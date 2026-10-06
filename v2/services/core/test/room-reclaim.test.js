@@ -303,7 +303,7 @@ test('R2 四道闸：`main` / 内置那几间 / 还有制品的那一间 / 认�
   assert.match(mainBody, /主线/u, '要有一句人话（不许说"没有这一间"）');
 
   // ② 内置那几间（桌面上就有图标）
-  for (const builtin of ['settings', 'discover', 'harness']) {
+  for (const builtin of ['settings', 'discover']) {
     const rr = await postRoom(origin, token, { scope: builtin });
     assert.equal(rr.status, 409, `${builtin} 必须拒：${await rr.text()}`);
   }

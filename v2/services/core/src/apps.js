@@ -312,7 +312,10 @@ export function checkAppId(id) {
  * ⚠️ 与客户端 `v2/apps/mobile/lib/models/app_spec.dart` 的三个内置 id **逐字一致**
  *    （对不上 ⇒ 客户端拿一个服务端不认的 scope 去连 ⇒ 404）。
  */
-export const REFUSED_APP_IDS = Object.freeze(['main', 'settings', 'discover', 'harness']);
+// ⚠️ **2026-10-06**：`'harness'`（桌面上那格「我自己那台」）**从这一串里收走了** ——
+//    与 `'math'`（奥数题，`105-DROP-MATH.md`）同一条先例：**那一格从产品里去掉 ⇒
+//    这个名字不再是保留 id**（保留名单 = 主线 ＋ 内置那几格，判据 S5 钉着这条等式）。
+export const REFUSED_APP_IDS = Object.freeze(['main', 'settings', 'discover']);
 
 /**
  * 保留 id ⇒ **人话拒**（N11）；不是保留 id ⇒ 原样返回。

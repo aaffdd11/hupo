@@ -144,14 +144,16 @@ test('S1 `newAppId`：合法 · 撞了就换一个 · 试满还撞 ⇒ 明着抛
     '★ 试满还撞 ⇒ 明着抛（不许返回一个会被拒的 id）',
   );
 
-  // `isAnAppRoom`：main 不算、内置那几格算、他自己的 app 算、别的不算
+  // `isAnAppRoom`：main 不算、内置那两格算、他自己的 app 算、别的不算
   const apps = { has: (x) => x === 'aoshu' };
   assert.equal(isAnAppRoom(apps, 'main'), false, '桌面本身不算"一个小程序"');
   assert.equal(isAnAppRoom(apps, ''), false);
   assert.equal(isAnAppRoom(apps, null), false);
   assert.equal(isAnAppRoom(apps, 'settings'), true, '内置那几格也是"一个小程序那一屏"');
   assert.equal(isAnAppRoom(apps, 'discover'), true);
-  assert.equal(isAnAppRoom(apps, 'harness'), true);
+  // ⚠️ 2026-10-06：「我自己那台」那一格删了 ⇒ 它**不再是**桌面上的一屏
+  assert.equal(isAnAppRoom(apps, 'harness'), false,
+    '★ 那一格已经从产品里去掉（`docs/dev/200-REMOVE-HARNESS.md`）');
   assert.equal(isAnAppRoom(apps, 'aoshu'), true, '他自己的小程序');
   assert.equal(isAnAppRoom(apps, 'job-x7'), false, '派活那间不是（长活要在那里造 app）');
   assert.equal(isAnAppRoom({ has: () => { throw new Error('坏了'); } }, 'aoshu'), false, '认不出 ⇒ false，不抛');

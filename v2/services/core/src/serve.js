@@ -38,7 +38,6 @@ import { createBoxApps } from './apps-box.js';
 // ★ **B15 存量迁移**：宿主那份旧库经**现有隧道**推进他自己的盒子（维护口 + 核心逻辑）。
 import { createAppsMigrateServer, migrateSocketPath } from './apps-migrate.js';
 import { createAsrRelay } from './asr.js';
-import { createHarnessRelay } from './harness-session.mjs';
 import { createDevWebRelay } from './dev-mode.js';
 import { readUserCreds, tenantCredsPack, writeUserCreds } from './creds-store.js';
 import { readUserPrefs, writeUserPrefs } from './prefs-store.js';
@@ -1073,19 +1072,6 @@ const { listen, listenTrusted, close, askApp, agentAsk, agentPoll, deliverAppTas
         scopeId: MAIN_SCOPE,
       });
     },
-  }),
-  /**
-   * ★ **甲那条**（`/api/harness` · 2026-09-24）：盒子里那台 DSH 自己的**原始会话流**。
-   *
-   * ⚠️ 它**只在容器侧够得着**：`server.js` 那道闸门要求 `trusted === true`，
-   *    而宿主上根本不听那条 UDS（`cfg.trustedSocketPath` 只有盒里设）。
-   *
-   * ⚠️ 它和琥珀自己那条路**完全隔离**（判据 H7）：另起进程、**不带人格/能力 patch**，
-   *    也不碰 `AgentRuntime` 的实例与 LRU —— 见 `src/harness-session.mjs` 顶上那段。
-   */
-  harness: createHarnessRelay({
-    cfg,
-    log: (m) => console.log(`▶ ${m}`),
   }),
   /**
    * ★ **开发者模式**（契约 `docs/dev/82-DEV-MODE.md` · 2026-09-24；

@@ -24,7 +24,6 @@ import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/services.dart';
 
 import '../models/appearance.dart';
-import '../models/dev_harness.dart';
 import '../models/image_outcome.dart';
 import '../models/chat_time.dart';
 import '../models/conn_state.dart';
@@ -37,8 +36,6 @@ import '../models/scroll_follow.dart';
 import '../models/space.dart';
 import '../models/app_spec.dart';
 import '../models/app_words.dart';
-import '../models/harness.dart';
-import '../models/harness_words.dart';
 import '../models/mini_frame.dart';
 import '../models/mini_update.dart';
 import '../models/scope.dart';
@@ -55,8 +52,6 @@ import '../services/api.dart';
 import '../services/recorder.dart' as rec;
 import '../services/appearance_store.dart';
 import '../services/chat_controller.dart';
-import '../services/dev_harness_client.dart';
-import '../services/harness_client.dart';
 import '../services/links.dart';
 import '../services/hearing.dart';
 import '../services/speech.dart';
@@ -65,7 +60,6 @@ import '../widgets/app_desktop.dart';
 import '../widgets/app_grants_ask.dart';
 import '../widgets/appearance_scope.dart';
 import '../widgets/dsh_look.dart';
-import '../widgets/harness_pane.dart';
 import '../widgets/job_ask_sheet.dart';
 import '../widgets/mini_app_icons.dart';
 import '../widgets/plan_strip.dart';
@@ -121,8 +115,6 @@ class ChatScreen extends StatefulWidget {
     this.onCancelMe,
     this.onKeyChanged,
     this.initialTier = FloaterTier.collapsed,
-    this.harnessFeed,
-    this.devHarnessEntry,
   });
 
   final ChatController controller;
@@ -154,20 +146,6 @@ class ChatScreen extends StatefulWidget {
   /// ⚠️ 要**展开态**的测试/调用方**显式传 `FloaterTier.full|half`** ——
   ///    别去改默认值来"哄断言"：默认值这件事本身就是主人定的产品行为。
   final FloaterTier initialTier;
-
-  /// **「我自己那台」那条通道怎么造**（契约 `docs/dev/81-HARNESS-ENTRY.md` §5.4）。
-  ///
-  /// `null` = 生产那一条（`HarnessClient` → `/api/harness`）；
-  /// 判据里注入一个假的 ⇒ "磁贴点开真的进去了"这件事**不用真连一个口**也验得了。
-  final HarnessFeed Function()? harnessFeed;
-
-  /// ★ **那个次要入口怎么接**（契约 `docs/dev/82-DEV-MODE.md` §四 / §五）：
-  /// 「在浏览器里打开」那一句普通话 + 一个按钮。
-  ///
-  /// `null` = 生产那一条（`DevHarnessClient` → `/api/dev-harness`，再由
-  /// `services/links.dart` 的 `canOpenLinks` / `openExternal` 去开）；
-  /// 判据里注入一个 ⇒ "拿到链接真有按钮 / 没被标真没按钮"不用真开浏览器也验得了。
-  final DevHarnessEntry? devHarnessEntry;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -560,8 +538,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     widget.controller.removeListener(_onChanged);
     FocusManager.instance.removeListener(_onFocusChanged);
-    // 离开这一屏 ⇒ 把「我自己那台」那一头收干净（对面就不会留一个孤儿进程）
-    _closeHarness();
     // ★ 那条浮窗的钟也要收（不然它到点会去动一棵已经没了的树）
     // ★ 那两个"会通知订阅者"的状态也得收（子页订阅着它们）
     _appearanceVN.dispose();
@@ -858,17 +834,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   icon: _builtInIcon(builtInDiscoverId),
                   onOpen: (from) => _openMiniApp(from, builtInDiscoverId),
                 ),
-                // ★ **「我自己那台」**（2026-09-24 · 契约 `docs/dev/81-HARNESS-ENTRY.md` §5.4）：
-                //   点开 = 桌面上多一层**终端**，里面是**他自己那一台**的原始会话流
-                //   （它的思考、它吐的字，**原样**；我们只当显示器 + 键盘）。
-                //   ⚠️ 走的是宿主那条 `/api/harness`（连接建立 = 对面起它那一台），
-                //      所以这里**不摆"取不到就不画"**：接不上那一层会**如实说一句 + 重来**。
-                DesktopApp(
-                  label: harnessAppLabel,
-                  id: builtInHarnessId,
-                  icon: _builtInIcon(builtInHarnessId),
-                  onOpen: (from) => _openMiniApp(from, builtInHarnessId),
-                ),
                 // ★ **我的小程序**（乙-1）：他自己/助手造的那一批 ——
                 //   图标与名字都来自 `/api/apps`，点开跑在**另一个原点**的沙箱里（N1）。
                 for (final a in _myApps)
@@ -890,7 +855,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     // ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §一 ·
                     //   `docs/dev/104-APP-MENU.md` §一）：
                     //   **只有"他自己做的那几个"才给这个面板** —— 内置那几格
-                    //   （设置 / 发现 /「我自己那台」）不在 `/api/apps` 里，
+                    //   （设置 / 发现）不在 `/api/apps` 里，
                     //   服务端那三条路都认不出它们（传 `null` = 连面板都不出）。
                     //   ⚠️ 传下去的是**服务端那一份的 id**（`a.id`），不是屏幕上带前缀那串。
                     onRename: () => _renameMyApp(a.id, a.title),
@@ -962,8 +927,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               //   这一行原来是 `kIsWeb ? (margin + _barH) : 0` —— 把"安卓铺满"
               //   那一档**也套在"内置那几屏"身上了**（设置 / 发现 /「我自己那台」）。
               //   🔴 手册 `08-SPEC.md` §6.4 规则 1 明说：**内置那几屏不是制品 ⇒ 照旧由壳内缩**
-              //      —— 否则收起那条会压在它们底部（设置最后一行、`HarnessPane` 那颗按钮
-              //      **真手势点不到**；判据 `harness_test` 当场红过）。
+              //      —— 否则收起那条会压在它们底部（设置最后一行
+              //      **真手势点不到**；判据当场红过）。
               //   ⇒ 只有"**制品那一屏（平台视图）＋ 不是网页**"才铺满：
               //      网页 ⇒ 平台视图是 DOM、压在画布**上面** ⇒ 底下那一格必须让出来
               //      （主人 2026-10-05 定的"网页不铺满"）；安卓 ⇒ 平台视图在画布**下面**
@@ -1172,20 +1137,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       );
     }
     // ★ **「我自己那台」**（契约 `81-HARNESS-ENTRY.md` §5.4）：桌面上的一层**终端**，
-    //   里面是那台 DSH 自己的原始流（`HarnessPane` 只认 `models` 里那条通道的形状）。
-    //   ⚠️ **不 push 新页面** —— 它就是 `MiniAppHost` 里的一个孩子（和别的小程序一样）。
-    if (_openApp == builtInHarnessId) {
-      return (
-        view: HarnessPane(
-          feed: _ensureHarness(),
-          // ★ 那个**次要入口**（契约 `82-DEV-MODE.md` §五）：形状在 `models/`，
-          //   实现是 `services/` + `links.dart` —— 这一层负责接上。
-          devEntry: widget.devHarnessEntry ?? _devHarnessEntry(),
-        ),
-        title: harnessAppLabel,
-        platform: false,
-      );
-    }
     if (_openApp == builtInSettingsId) {
       return (
         view: SettingsScreen(
@@ -1277,7 +1228,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   ///    在两处长得不一样）⇒ 图标只写在这儿，两处都从这儿取。
   static IconData _builtInIcon(String which) => switch (which) {
     builtInDiscoverId => Icons.travel_explore_outlined,
-    builtInHarnessId => Icons.computer_outlined,
     _ => Icons.settings_outlined,
   };
 
@@ -1309,7 +1259,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// **点那颗 home**（主人 2026-09-27：*"点击 home 就是回到桌面"*）。
   ///
   /// 两件一起做，缺一件都"回不到桌面"：
-  ///   ① 开着某一屏 ⇒ **关掉它**（与原来那个返回箭头同一套：收 harness ＋ 回主线 ＋ 收回动效）；
+  ///   ① 开着某一屏 ⇒ **关掉它**（与原来那个返回箭头同一套：回主线 ＋ 收回动效）；
   ///   ② 再把聊天**收起来**（桌面才露得出来 —— 展开的聊天是盖满屏的）。
   /// ⚠️ 在桌面上按它也一样有结果：只有 ②（把聊天收起来）—— 所以它**任何时候都不是一颗空按钮**。
   void _backToDesktop(ChatController c) {
@@ -1322,8 +1272,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   /// **关掉现在开着那一屏**（原来挂在容器顶栏那个返回箭头上，2026-09-27 起挂在 home 上）。
   void _closeApp(ChatController c) {
-    // 离开这个入口 ⇒ 把「我自己那台」那一头收掉（对面就把那一台停掉）
-    _closeHarness();
     setState(() {
       _openApp = null;
       _appSettled = false; // 收回动效开始 ⇒ 图标先别回来
@@ -1514,13 +1462,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   /// 房间名 ⇒ "哪一屏"（`_openApp` 认得的那种写法）。
   ///
-  /// * 内置那三格 ⇒ 它自己的 id；
+  /// * 内置那两格 ⇒ 它自己的 id；
   /// * 我的小程序 ⇒ `mine:<id>`，**但它还在做时不返回**（见 [_gotoWorkRoom]）；
   /// * 认不出 ⇒ `null`（只切房间，不开屏）。
   String? _whichForScope(String scope) {
-    if (scope == builtInSettingsId ||
-        scope == builtInDiscoverId ||
-        scope == builtInHarnessId) {
+    if (scope == builtInSettingsId || scope == builtInDiscoverId) {
       return scope;
     }
     for (final a in _myApps) {
@@ -1867,72 +1813,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// **「我自己那台」那条通道**（契约 `docs/dev/81-HARNESS-ENTRY.md` §5.1 / §5.4）。
-  ///
-  /// 一个连接 = 对面一台 DSH：`say` 说一句、`stop` 收掉这一轮、断了就「重来」。
-  /// ⚠️ 它**不自动重连**（悄悄重开一台不是"显示器 + 键盘"该做的事）。
-  /// ⚠️ 它**只在这个入口开着的时候活着**：离开就收掉（对面不会留孤儿）。
-  HarnessFeed? _harness;
-
-  /// 造（或者拿）那一条通道，并且**接上**。
-  ///
-  /// ⚠️ 造完立刻 `open()`：一进去就该是"正在打开…"，而不是等用户点一下才动。
-  /// ⚠️ 生产那条在 `services/harness_client.dart`（`/api/harness`，令牌用法同 `/api/stream`）。
-  HarnessFeed _ensureHarness() {
-    final old = _harness;
-    if (old != null) return old;
-    final make =
-        widget.harnessFeed ??
-        () => HarnessClient(
-          base: widget.controller.api.base,
-          token: widget.controller.token ?? '',
-        );
-    final feed = make();
-    _harness = feed;
-    feed.open();
-    return feed;
-  }
-
-  /// 收掉这一头（**离开这个入口 = 对面把那一台停掉** —— 不留孤儿）。
-  void _closeHarness() {
-    final h = _harness;
-    if (h == null) return;
-    _harness = null;
-    unawaited(h.close());
-  }
-
-  /// **那个次要入口**那三样（契约 `docs/dev/82-DEV-MODE.md` §五）。
-  ///
-  /// ⚠️ **取回来那条链接要缓存住**（有过期时间）⇒ 这条来源只造一次
-  ///    （造两次 = 两个缓存 = 来回问）。
-  /// ⚠️ 令牌**现取**（`DevHarnessClient` 拿的是个 getter）：登录是异步的。
-  DevHarnessEntry? _devEntry;
-
-  DevHarnessEntry _devHarnessEntry() =>
-      _devEntry ??= DevHarnessEntry(
-        source: DevHarnessClient(
-          api: widget.controller.api,
-          token: () => widget.controller.token ?? '',
-        ),
-        // ⚠️ 能不能开由**平台那一份**说（`services/links.dart` 的条件导出）；
-        //    非网页那一侧它是 `false` ⇒ 那个入口**如实说打不开**，不去问也不要按钮。
-        canOpen: canOpenLinks,
-        openExternal: openExternal,
-      );
-
   /// **打开一个小程序**：先把聊天收起（§6.4 规则 5），再记下"从哪儿开的"（那个图标的矩形）。
   ///
   /// ⚠️ **入口 URL 只有十分钟有效**（服务端现签、绑人绑版本）⇒ 页面开着不动、过一会儿再点图标，
   ///    那条 URL 就已经过期了，点开是空的。⇒ 快过期/已过期就先**重拉一次清单**再开。
   Future<void> _openMiniApp(Rect? from, String which) async {
     _floaterKey.currentState?.collapse();
-    // ★ **「我自己那台」那一头跟着这个入口走**：开它 ⇒ 起这一条；
-    //   开别的 ⇒ 把这一条收掉（一个连接 = 对面一台，走了就不许还挂着）。
-    if (which == builtInHarnessId) {
-      _ensureHarness();
-    } else {
-      _closeHarness();
-    }
     if (which.startsWith(_minePrefix) &&
         (_mineStale(which) || _staleMine.contains(which.substring(_minePrefix.length)))) {
       // ★ 拿新的签名 URL；**或者**拿新那一版（听说"有新版"时 —— 契约 111 判据 U4：

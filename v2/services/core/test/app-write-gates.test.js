@@ -117,11 +117,14 @@ test('★ S4 负向对照：工作区**写得进** `.data/`／`.exp/`，但发�
 // S5 · 保留 id：从任何一条写入路都进不去
 // ════════════════════════════════════════════════════════════════
 
-test('★ S5 起点：保留名单只有一个出处，而且就是契约点的那几个（`main` ＋ 三个内置）', () => {
-  assert.deepEqual([...REFUSED_APP_IDS], ['main', 'settings', 'discover', 'harness']);
+test('★ S5 起点：保留名单只有一个出处，而且就是契约点的那几个（`main` ＋ 内置那几格）', () => {
+  // ⚠️ 2026-10-06：「我自己那台」（`harness`）删了 ⇒ 保留名单里也收走（同 `math` 那条先例）
+  assert.deepEqual([...REFUSED_APP_IDS], ['main', 'settings', 'discover']);
   // ⚠️ **2026-09-25（契约 `105-DROP-MATH.md` §一⑤）：`'math'` 从这一串里收走了** ——
   //    奥数题那个内置格没了 ⇒ 那个名字不再是保留 id（这里也顺手钉住）。
   assert.equal(REFUSED_APP_IDS.includes('math'), false, '★ `math` 不再是保留 id');
+  assert.equal(REFUSED_APP_IDS.includes('harness'), false,
+    '★ `harness` 也不再是保留 id（那一格已经删了 —— 同 `math` 那条先例）');
   // `worlds.js` 那两个导出与它是同一份（**不是各抄一遍**）
   assert.deepEqual([...RESERVED_APP_SCOPES], [...REFUSED_APP_IDS]);
   assert.deepEqual([...REFUSED_APP_IDS], [MAIN_SCOPE, ...BUILTIN_SCOPES]);

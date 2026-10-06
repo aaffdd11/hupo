@@ -19,9 +19,6 @@ const String builtInDiscoverId = 'discover';
 /// ★ **「我自己那台」**（2026-09-24 · 契约 `docs/dev/81-HARNESS-ENTRY.md` §5.4）：
 /// 桌面上那个内置磁贴，点开是**他自己那一台的原始会话流**（显示器 + 键盘，不包装）。
 /// ⚠️ 它同样**不在** `/api/apps` 的清单里（不是他自己造的小程序）——
-///    那一层连的是宿主那条 `/api/harness` 通道（`services/harness_client.dart`）。
-/// ⚠️ 这里是 **id**（`'harness'`），**不是界面上那两个字**（那是 `harness_words.dart`）。
-const String builtInHarnessId = 'harness';
 
 /// 清单里的一条（**这是"他自己造的小程序"，与他自己的数据同一份**）。
 class MiniApp {
@@ -203,13 +200,11 @@ class MiniApp {
 
   /// 内置那三个**不算"我的小程序"**：设置 / 发现 /「我自己那台」是由开发者写死在壳里的。
   ///
-  /// ⚠️ 这里是 **id**（`'settings'` / `'discover'` / `'harness'`），**不是界面上那几个字**
-  ///    （那是 `space_words.dart` / `app_words.dart` / `harness_words.dart`）。
+  /// ⚠️ 这里是 **id**（`'settings'` / `'discover'`），**不是界面上那几个字**
+  ///    （那是 `space_words.dart` / `app_words.dart`）。
   ///    两处混用的话，`_openApp` 那个开关迟早对不上（这次就是这么被自己的判据抓到的）。
   static bool isBuiltIn(String id) =>
-      id == builtInSettingsId ||
-      id == builtInDiscoverId ||
-      id == builtInHarnessId;
+      id == builtInSettingsId || id == builtInDiscoverId;
 }
 
 /// 「发现」里的一条（**别人发出来的**）。⚠️ 只读：装 / 发 / 改都在对话里做。

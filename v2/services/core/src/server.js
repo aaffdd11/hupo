@@ -90,7 +90,6 @@ import { readLiveApp } from './workspace.js';
 import { RoomReclaimError } from './reclaim.js';
 import { USAGE_KINDS } from './usage.js';
 import { ASR_PATH } from './asr.js';
-import { HARNESS_PATH } from './harness-session.mjs';
 import { DEV_HARNESS_PATH, DEV_MODE_PATH, DEV_PATH_PREFIX, createDevHostRelay, devEntryLink, devHostFor } from './dev-mode.js';
 import { isCredField } from './creds.mjs';
 
@@ -344,17 +343,6 @@ export function createServer({
    * 而聊天那条的协议已经冻结了 —— 不往里面塞新东西。
    */
   asr = null,
-  /**
-   * **甲那条**（`/api/harness`：盒子里那台 DSH 自己的**原始会话流** · `src/harness-session.mjs`）。
-   *
-   * `null` = 这台部署没有这条路 ⇒ 那条升级**拒**（404）。
-   *
-   * 🔴 **只有 `trusted === true`（容器里那条内核保证的 UDS）才接得上** ——
-   *    公网口（`trusted === false`）走到它**一律拒**（判据 H1）。
-   *    宿主那一侧的公开口只把**别人的**升级转进他自己那台盒子（`proxyUpgrade`），
-   *    所以"远端用户"这条正常路**不经过这里的拒绝分支**。
-   */
-  harness = null,
   /**
    * **开发者模式 · 宿主这一侧**（契约 `docs/dev/82-DEV-MODE.md`）。
    *
@@ -2397,14 +2385,6 @@ const TENANT_ROUTES = [
     handleProtocols: (protocols) => (protocols.has('bearer') ? 'bearer' : false),
   });
 
-  // **`/api/harness` 那条**（甲 · 2026-09-24）：一个连接 = 一个 DSH 进程，
-  // 协议只有那三种消息（契约 `docs/dev/81-HARNESS-ENTRY.md` §5.2）。
-  // ⚠️ 另开一个 `WebSocketServer`（和 `/api/asr` 同一个道理）：聊天那条协议**一个字不动**。
-  const harnessWss = new WebSocketServer({
-    noServer: true,
-    handleProtocols: (protocols) => (protocols.has('bearer') ? 'bearer' : false),
-  });
-
   /**
    * WS 的握手处理。**抽成函数**是因为它有两条听入口：
    * 普通那条（要令牌）与**可信本地那条**（容器里 · 身份由内核保证 · 选项甲）。
@@ -2447,8 +2427,7 @@ const TENANT_ROUTES = [
       return devContainer.handleUpgrade(req, socket, head, rel);
     }
     const wantAsr = url.pathname === ASR_PATH;
-    const wantHarness = url.pathname === HARNESS_PATH;
-    if (url.pathname !== '/api/stream' && !wantAsr && !wantHarness) {
+    if (url.pathname !== '/api/stream' && !wantAsr) {
       return rejectUpgrade(socket, 404, 'Not Found', { error: 'not-found' });
     }
     let claim;
@@ -2495,25 +2474,6 @@ const TENANT_ROUTES = [
         }
         return proxyUpgrade(req, socket, head, sock);
       }
-    }
-    if (wantHarness) {
-      // 🔴 **公网口（`trusted === false`）一律拒** —— 判据 H1 的反例就在这一行。
-      //
-      // 为什么：那台 DSH 住在**租户自己的盒子**里（"只出不进"）。
-      // 宿主这一侧的公开口只做一件事：把**有租户的人**的升级原样转进他自己的盒子
-      // （上面那条 `proxyUpgrade`，那时容器里收到的是 `trusted === true`）。
-      // 走到这儿还是 `trusted === false` 的，只有两种：
-      //   · 盒子**自己那个公网口**（`0.0.0.0:8080`）—— 那条绝对不许服务它；
-      //   · 宿主上没租户可转的人（例如主人自己那一份在宿主上，没有盒子）。
-      // 两种都**没有那台 DSH 可给** ⇒ 拒，而且**不许**假装有。
-      if (!trusted) {
-        return rejectUpgrade(socket, 404, 'Not Found', { error: 'not-found' });
-      }
-      if (!harness) {
-        // 可信那条也接不上 = 这台盒子还没更新到有这条路 ⇒ **如实说没有**（别先连上再关）
-        return rejectUpgrade(socket, 404, 'Not Found', { error: 'not-found' });
-      }
-      return harnessWss.handleUpgrade(req, socket, head, (ws) => onHarness(ws, req, claim));
     }
     if (wantAsr) {
       // 音频那条：身份**同一个来源**（验过签的 `claim`），但帧走另一套。
@@ -2565,19 +2525,6 @@ const TENANT_ROUTES = [
     //   · `sub` = **验过签的身份**（上面那个 `claim`），只用来**选哪份凭据**（P1-26）；
     //   · `ua` 只用于日志（某台手机上不行时，这一行是唯一线索）。
     asr.attach(ws, { sub: claim?.sub ?? null, ua: req?.headers?.['user-agent'] ?? '未知设备' });
-  }
-
-  /**
-   * **`/api/harness`**：把这条连接交给"盒子那台 DSH"的中继（`src/harness-session.mjs`）。
-   *
-   * ⚠️ 能走到这里的**只有** `trusted === true`（上面那个闸门）——
-   *    也就是说：身份已经由内核（`0600` 的 UDS）保证了，这里不再查令牌。
-   */
-  function onHarness(ws, req = null, claim = null) {
-    harness.attach(ws, {
-      sub: claim?.sub ?? null,
-      ua: req?.headers?.['user-agent'] ?? '未知设备',
-    });
   }
 
   /**
@@ -3866,16 +3813,12 @@ const TENANT_ROUTES = [
       // ⚠️ `server.close()` 会等所有连接自己断开。WS 是长连接，
       //    所以必须先**主动**结束它们——否则关闭会一直挂着
       //    （测试里表现为超时，生产里表现为"停不下来"）。
-      //    🔴 **三条 WS 都要终止**：2026-09-23 加 `/api/asr` 时漏了它，
+      //    🔴 **两条 WS 都要终止**：2026-09-23 加 `/api/asr` 时漏了它，
       //       当场被测试抓住 —— 只要有一个语音连接开着，`restart-core.sh` 就会卡住。
-      //       ⚠️ 2026-09-24 加 `/api/harness` 时**同时**补上了进程收尾：
-      //       那条路上每条连接背后是**一个真子进程**，光断连接不够（端到端的 `bye` 会杀，
-      //       但这里再兜一次 —— "不许留孤儿"）。
-      harness?.shutdown?.();
-      // ⚠️ 开发者模式那条路背后**也是一个真子进程**（盒里那台 `dsh web`）——
+      // ⚠️ 开发者模式那条路背后**是一个真子进程**（盒里那台 `dsh web`）——
       //    光断连接不够，要把它收干净（"不许留孤儿"）。
       devContainer?.shutdown?.();
-      for (const client of [...wss.clients, ...asrWss.clients, ...harnessWss.clients]) {
+      for (const client of [...wss.clients, ...asrWss.clients]) {
         try {
           client.terminate();
         } catch {
@@ -3896,7 +3839,6 @@ const TENANT_ROUTES = [
           });
         }),
         new Promise((resolve) => asrWss.close(() => resolve())),
-        new Promise((resolve) => harnessWss.close(() => resolve())),
         closeTrusted,
       ]).then(() => undefined);
     },

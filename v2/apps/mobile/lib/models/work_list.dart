@@ -19,7 +19,6 @@
 
 import 'app_spec.dart';
 import 'app_words.dart';
-import 'harness_words.dart';
 import 'landing_words.dart';
 import 'scope.dart';
 import 'space_words.dart';
@@ -93,7 +92,7 @@ List<WorkingRow>? parseWorkingList(Object? json) {
 /// 顺序（**一处一处往后退，最后一定有个说人话的名字**）：
 ///   ① 服务端给的那个名字（他自己写在那一格上的）；
 ///   ② 壳里那份清单里的名字（`mine`：app id ⇒ 它现在的名字）—— 服务端认不出时补位；
-///   ③ 内置那三格各自的词（设置 / 发现 / 我自己那台）；
+///   ③ 内置那两格各自的词（设置 / 发现）；
 ///   ④ 主对话 ⇒ 与窗口抬头同一句（[appName]）；
 ///   ⑤ 都认不出 ⇒ [workNamelessName]（**绝不把那串内部 id 摆出来**）。
 String workRowName({
@@ -108,7 +107,6 @@ String workRowName({
   if (scope == mainScope) return appName;
   if (scope == builtInSettingsId) return settingsAppLabel;
   if (scope == builtInDiscoverId) return discoverAppLabel;
-  if (scope == builtInHarnessId) return harnessAppLabel;
   return workNamelessName;
 }
 

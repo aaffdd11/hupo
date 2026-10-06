@@ -9,7 +9,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/app_spec.dart';
 import 'package:hupo_app/models/app_words.dart';
-import 'package:hupo_app/models/harness_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
 import 'package:hupo_app/models/scope.dart';
 import 'package:hupo_app/models/space_words.dart';
@@ -80,10 +79,9 @@ void main() {
     );
     // ② 服务端没给 ⇒ 壳里那份清单补位
     expect(workRowName(scope: 'abc', mine: {'abc': '记账'}), '记账');
-    // ③ 内置那三格各自有词（它们不在"我的清单"里）
+    // ③ 内置那两格各自有词（它们不在"我的清单"里）
     expect(workRowName(scope: builtInSettingsId), settingsAppLabel);
     expect(workRowName(scope: builtInDiscoverId), discoverAppLabel);
-    expect(workRowName(scope: builtInHarnessId), harnessAppLabel);
     // ④ 主对话 ⇒ 与窗口抬头同一句
     expect(workRowName(scope: mainScope), appName);
     // ⑤ 都认不出 ⇒ 通用那句

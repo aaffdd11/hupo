@@ -162,7 +162,7 @@
 ### 2.1 `L1 ⇄ L2`（HTTP + WebSocket）**【有效】**
 
 > 🔴 **2026-09-23 核过一遍（只读审计），当天就补全了一次**：这张表原来"照上一代的设计"写，
-> **有 6 条今天不存在**（已逐条标 ⏳ —— **留着是为了让下一个人知道"它们被删过"**，
+> **有 7 条今天不存在**（已逐条标 ⏳ —— **留着是为了让下一个人知道"它们被删过"**，
 > 而不是照它们去接客户端），**另有 8 组在跑的路由没进表** ⇒ **这一批按 `server.js` 逐条补成了行**。
 > ⇒ **表与代码仍然可能再漂**：**改路由的人顺手改这一张表**（它是唯一被指针指过来的接口清单）。
 
@@ -206,7 +206,6 @@
 | `/api/working` | GET | 需令牌 | ★ **“正在干活的那几间”**（主人 2026-10-06：*「我觉得应该在左下角有一个清单按钮，点击会出来浮窗，浮窗里有正在干活的聊天的列表。」*）⇒ `{ok, working:[{scope, title, since, count}]}`。🔴 **事实只有一个出处**：就是**桌面上那一格“在做”读的同一本逐件活账**（`world.work.live()`）—— 两处不可能给出两个答案。⚠️ `title` 只从**他自己那份小程序库**里取（认不出就是 `null`：界面那边会退回一个通用说法，**绝不把 scope 那串内部 id 发给屏幕**）。⚠️ 租户那一侧**在盒子里算**（活账在他盒子里 —— 与 `/api/apps` 的 `working` 同一条道理）。契约 `docs/dev/198-WORKING-LIST.md` |
 | `/api/stream` | WS | 需令牌（子协议 `['bearer', token]`） | 下行事件；`sinceSeq` 续传；🔴 **首次打开只给最近的"存量"一段**（`sinceSeq === 0`：上限住代码）—— 更早的由客户端**往上翻**时按页取（`/api/timeline`，§2.1 上面那一行）；⚠️ **断线重连那条补发（`sinceSeq > 0`）不截**：它带着「你不在的时候发生了什么」的语义，截了会让中间那一段**看起来是连着的**（说假话比慢更坏）。为什么要有这一条：整条推过来时**客户端每收一帧就重排一次那一屏** ⇒ 收 N 条是 O(N²)，真机上历史一长首屏就掉到个位数帧率（契约 `docs/dev/141-HISTORY-FIRST-OPEN.md`）；**`dev=1` 是附加通道不是替代**；＋ **可选 `&scope=`** —— 🔴 语义**收窄成"初始焦点"**（老客户端照旧能连、能收自己那一间）。**一条连接服务所有房间**（§四 核心原则 3）：**切焦点不重连** —— 客户端→服务端帧 `{"t":"focus","scope":"<id>","sinceSeq":<n>}`（`sinceSeq` 可省 = 只切、不补发）⇒ 服务端回 `{"type":"client/focus","ok":…}`（没这个房间 ⇒ `ok:false` 且**焦点不动**）；服务端 `client/hello` **加**一个可选字段 `focus`（"这条连接现在的焦点"）；＋ **可选 `&device=<标识>`**（D 期 · `100` §6.1·补）：焦点**按设备各记一份**（落盘 `focus.json`），"答不准就标 `unknown`"（不带 ⇒ 老行为一字不变）。判断全在 `focus.js`（纯函数）· 契约 `docs/dev/84-DISPATCHER-FOCUS.md` §四 |
 | `/api/asr` | WS | 需令牌（**同一个子协议 `['bearer', token]`**） | **语音那条**（主人 2026-09-23）：上行**二进制帧 = 16k 单声道 16bit PCM**，文本帧只是 `asr/start` / `asr/stop`；下行 `asr/ready` · `asr/partial{text}` · `asr/final{text}` · `asr/end{text}` · `asr/capped` · `asr/error{reason,message,code?}` · `asr/unavailable{reason}`。🔴 **另开一条、不动已冻结的 `/api/stream`**；🔴 **SecretKey 只在服务端**（音频经这台机转给上游，绝不把签名下发给浏览器）；**没配钥匙时接上就如实回 `asr/unavailable`**。契约 `docs/dev/71-MIC-ASR.md` |
-| `/api/harness` | WS | 需令牌（**同一个子协议 `['bearer', token]`**） | **"那台 DSH 本人"那条路**（主人 2026-09-24）：一个 WS 连接 = 一个 DSH 进程；线上消息只有 `say` / `stop` / `state` / `raw` —— 容器**不做任何投影**（`raw` = DSH stdout 原样转发，"什么意思"全在客户端解）。🔴 **不挂人格、不挂能力层**（`--profile sdk` + 模型那条 patch）；🔴 **公网口（`trusted === false`）一律拒**，只有容器里那条 UDS 接得上。契约 `docs/dev/81-HARNESS-ENTRY.md` §5.1 |
 | `/api/dev-harness` | GET | 需令牌 | **要一条开发者入口的签名链接**（契约 `docs/dev/82-DEV-MODE.md` §六 D6）：回 `{ok, dev, url, expiresAt}`，`url` 是短时效的 `https://dsh<手机号>.<base>/__enter?…`。只给**自己**，`owner` 可带 `?phone=` 点名别人（别人 403）；**没被标成开发者 ⇒ 如实回"还没有入口"**（不是 403）。⚠️ 可信口（容器里）404 |
 | `/api/dev-mode` | POST | 需令牌 | **翻"开发者"那个标记**（契约 `docs/dev/82-DEV-MODE.md` §三）：`{phone, on}` ⇒ `{ok, id, on, changed}`。🔴 **只有 `owner` 能翻**（别人 403）；翻一次**记一笔**审计（手机号是掩码形态）。⚠️ 可信口（容器里）404 |
 
@@ -223,6 +222,7 @@
 | ~~`/api/conversations/:id`~~ | DELETE | ⏳ **不存在**；删一轮今天走 `/api/trash/remove`（墓碑 + 到期真删） |
 | ~~`/api/apps`、`/api/apps/:id/rollback`（HTTP）~~ | POST | ⏳ **HTTP 上没有这两条**：上传/发布走 MCP 工具（`app_create` 等九件 + `app_publish`）；`rollback` 走**域套接字**（`apps-socket.js`） |
 | ~~`/api/debug/report` · `/api/debug/tasks` · `/api/debug/analyze`~~ | GET/POST | ⏳ **三条都不存在**（全仓 0 命中）⇒ 今天没有这组监控出口 |
+| ~~`/api/harness`~~ | WS | ⏳ **不存在**（2026-10-06 删掉）。主人：*「「我自己那台」小程序要删掉。」* ⇒ 桌面上那一格、它那一层（`HarnessPane`）、服务端这条 WS、盒子那侧那个中继（`src/harness-session.mjs`）**一起从产品里去掉**；`BUILTIN_SCOPES` 从三个变两个。⚠️ `harness` 这个名字**仍留在 `REFUSED_APP_IDS`**（那是「别让人拿这个名字占坑」那条闸，与「桌面上还有没有那一格」是两件事）。落地 `docs/dev/200-REMOVE-HARNESS.md` |
 
 ### 2.2 `L2 → L1` 事件（**新增的那些**）**【有效】**
 

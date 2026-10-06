@@ -8,11 +8,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hupo_app/models/about_facts.dart';
 import 'package:hupo_app/models/appearance.dart';
-import 'package:hupo_app/models/dev_harness.dart';
-import 'package:hupo_app/models/dev_harness_words.dart';
 import 'package:hupo_app/models/desktop_words.dart';
 import 'package:hupo_app/models/forbidden_words.dart';
-import 'package:hupo_app/models/harness_words.dart';
 import 'package:hupo_app/models/hearing_words.dart';
 import 'package:hupo_app/models/job_words.dart';
 import 'package:hupo_app/models/landing_words.dart';
@@ -211,69 +208,6 @@ void main() {
       speakAutoHintOn,
       speakAutoHintOff,
       speakCannotWords,
-      // ★ 2026-09-24：「我自己那台」那个入口（契约 `docs/dev/81-HARNESS-ENTRY.md` §5.4）——
-      //    桌面上那个字 + 那一层里**每一句**（状态、每一行的抬头、结构行、说明行、
-      //    未知事件那一条）。**直接引数据源**（手抄会漂）。
-      //    ⚠️ 硬闸点名的那几个词（模型 / 会话 / 客户端 / 工作区 / 口令 / 连接 / 云端 /
-      //       工具名 / `web_search`）这一组**一个都不许有**。
-      harnessAppLabel,
-      harnessOpening,
-      harnessGoneLine,
-      harnessWhyPrefix,
-      harnessRestart,
-      harnessDroppedWhy,
-      harnessSayHint,
-      harnessSend,
-      harnessStop,
-      harnessYourPrefix,
-      harnessItsPrefix,
-      harnessThinkPrefix,
-      harnessSystemPrefix,
-      harnessAnswered,
-      harnessUnknownLine,
-      harnessNoTextLine,
-      harnessInterruptedLine,
-      // ⚠️ 拼出来的那几句也要扫（模板里最可能混进内部词）
-      harnessTurnStartLine(1),
-      harnessStepStartLine(1, 2),
-      harnessStepEndLine(2),
-      harnessTurnEndLine(harnessReasonWords('completed')),
-      harnessReasonWords('completed'),
-      harnessReasonWords('canceled'),
-      harnessReasonWords('max-tokens'),
-      harnessReasonWords('interrupted'),
-      harnessReasonWords(null),
-      harnessReasonWords('some-other-reason'),
-      harnessHeaderLine(0),
-      harnessHeaderLine(3),
-      harnessContextLine,
-      harnessTitleLine('记一笔账'),
-      harnessTitleLine(''),
-      harnessPermissionLine,
-      harnessSandboxLine,
-      harnessApprovalLine,
-      harnessSplicedLine(0),
-      harnessSplicedLine(2),
-      harnessRunStatusLine(true),
-      harnessRunStatusLine(false),
-      // ★ 2026-09-24（契约 `docs/dev/82-DEV-MODE.md` §四 / §五）：那一层里
-      //    **新加的那个次要入口**（「在浏览器里打开」）的每一句 —— **直接引数据源**。
-      //    ⚠️ 文案纪律没松：这几句一个内部词都不许有
-      //       （尤其不许把"开发者 / 盒子 / 域名"那类实现细节写到屏幕上）。
-      devOpenLead,
-      devOpenAction,
-      devOpenAsking,
-      devOpenNotMarked,
-      devOpenUnreachable,
-      devOpenCannotHere,
-      devOpenFailed,
-      // ★ 2026-09-25（主人 2026-09-25 拍的「甲」·
-      //    契约 `docs/dev/109-DEV-ENTRY-IS-YOURS.md` §八）：**看板那句话** ——
-      //    这一层里回话的**不是琥珀**，所以页面上必须明写（诚实纪律，不许省）。
-      devBoardNotHupo,
-      devBoardWhyNot,
-      // ⚠️ 每一档实际画出来的那一句也扫（`devEntryWords` 就是屏幕上的那句）
-      for (final v in DevEntryView.values) devEntryWords(v),
       // ★ 2026-09-25（契约 `docs/dev/103-APP-DELETE.md` §三）：桌面图标长按 / 右键
       //    那个小面板的两句 + 成没成那两句 —— **直接引数据源**（手抄会漂）。
       //    ⚠️ 这一批的诚实边界（不许承诺"能拿回来"）在

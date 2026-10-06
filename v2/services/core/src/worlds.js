@@ -107,7 +107,12 @@ export const ROOM_RECLAIM_WHAT = 'reclaim-room';
  *     自己一条 timeline、自己的 `agentKey`、自己的 cwd `<dir>/workspaces/<id>/`；
  *   ⇒ **但不许被 app 占用**（与 `main` 同一条规矩：它们已经是别人的房间了）。
  */
-export const BUILTIN_SCOPES = Object.freeze(['settings', 'discover', 'harness']);
+// ⚠️ **2026-10-06**：原来还有第三个 `'harness'`（桌面上那格「我自己那台」）——
+//    主人当天说*"「我自己那台」小程序要删掉。"* ⇒ 那一格与它那条路一起从产品里去掉了
+//    （见 `docs/dev/200-REMOVE-HARNESS.md`）。
+//    ⚠️ 它**也**不在 `apps.js` 的 `REFUSED_APP_IDS` 里了 —— 与 `'math'`（奥数题）同一条先例：
+//       **那一格从产品里去掉 ⇒ 这个名字不再是保留 id**（保留名单 = 主线 ＋ 内置那几格）。
+export const BUILTIN_SCOPES = Object.freeze(['settings', 'discover']);
 
 /** 这是不是桌面上的内置那一格（**认不出 ⇒ `false`**，不许猜）。 */
 export function isBuiltinScope(raw) {

@@ -1146,22 +1146,25 @@ test('🔴 A1·补（反例三·失败）：一轮**中途失败**（进程没�
 //   B16-4 客户端纯逻辑那一条在 `v2/apps/mobile/test/unit/scope_test.dart`
 // ════════════════════════════════════════════════════════════════
 
-test('★ B16：内置那三个**是合法房间**，但**不许被 app 占用**（纯规则，含反例）', () => {
+test('★ B16：内置那两格**是合法房间**，但**不许被 app 占用**（纯规则，含反例）', () => {
   // 🔴 与客户端 `lib/models/app_spec.dart` 的 `builtIn*Id` **逐字一致**
   //    （对不上 ⇒ 客户端拿着一个服务端不认识的 scope 去连 = 404）
-  assert.deepEqual([...BUILTIN_SCOPES], ['settings', 'discover', 'harness']);
+  // ⚠️ 2026-10-06：「我自己那台」那一格删了 ⇒ 内置房间少一个
+  assert.deepEqual([...BUILTIN_SCOPES], ['settings', 'discover']);
   for (const id of BUILTIN_SCOPES) {
     assert.equal(isBuiltinScope(id), true);
     assert.equal(safeScope(id), id, `内置 id 本身就得是合法 scope：${id}`);
     assert.equal(checkScope(id), id, `★ ${id} 过得了 checkScope —— 它是**房间**，不是保留名`);
   }
-  // 保留名单 = 主线 ＋ 三个内置（app 一个都不许占）
-  assert.deepEqual([...RESERVED_APP_SCOPES], ['main', 'settings', 'discover', 'harness']);
+  // 保留名单 = 主线 ＋ 内置那两格（app 一个都不许占）
+  //    ⚠️ 2026-10-06：`'harness'` 从这一串里收走了（同 `math` 那条先例）
+  assert.deepEqual([...RESERVED_APP_SCOPES], ['main', 'settings', 'discover']);
 
   // **反例**：不是内置的照旧不是；认不出的一律 `false`（不许猜）
   //   ⚠️ **2026-09-25（契约 `105-DROP-MATH.md` §一⑤）：`'math'` 就住在这一串里** ——
   //      奥数题那个内置格从产品里去掉了 ⇒ 它**不再是**内置、也不再是保留 id。
-  for (const bad of ['Setting', 'dice', 'main', '', null, 'settings-x', 'math']) {
+  //   ⚠️ **2026-10-06：「我自己那台」（`'harness'`）同一条先例**（`200-REMOVE-HARNESS.md`）。
+  for (const bad of ['Setting', 'dice', 'main', '', null, 'settings-x', 'math', 'harness']) {
     assert.equal(isBuiltinScope(bad), false, `这不该被当成内置：${String(bad)}`);
   }
   // 而 `main` 仍然由 `checkScope` 拦（老规矩一个字没动）

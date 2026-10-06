@@ -872,8 +872,10 @@ function escapeHtml(s) {
 //      不然就是"名字一样、东西不一样"（那是界面在说假话，手册 §六·4）。
 //
 // ⚠️ **一处文案、两处落点**：这一页（进之前）与**那一页本体**（进去之后，`injectDevBanner`）。
-//    客户端那边（`v2/apps/mobile/lib/models/dev_harness_words.dart`）也有同样两句 ——
-//    **防漂的判据**在 `test/dev-mode.test.js`（逐字比对两份，改一份不改另一份 ⇒ 当场红）。
+//    ⚠️ **2026-10-06 起只有这一处**：原来客户端那份 `dev_harness_words.dart` 里
+//      也抄了同样两句（给 App 那一层画），而那一层（「我自己那台」）当天删了
+//      ⇒ 这里就是唯一的出处（那条"两份逐字一样"的跨语言判据也跟着删了 ——
+//      它防的那份已经不存在了）。
 export const DEV_BOARD_NOT_HUPO = '在这儿说话的不是琥珀。';
 export const DEV_BOARD_WHY_NOT = '干的活、记的事都是琥珀那一份；说话的规矩和口气是这台机器自带的。';
 
