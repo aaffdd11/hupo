@@ -173,44 +173,45 @@ void main() {
     expect(_circleColor(tester), before, reason: '★ 关着开关它还在动');
   });
 
-  testWidgets('⑥ 🔴 第一步那份"直白的字"**带下划线**，校正回来才去掉（主人 2026-10-05）', (tester) async {
-    // 主人原话：*"第一步是把直白的语音转文字写出来，然后是语义校正。通用的办法是
-    //   第一步给下划线，第二步转换才去掉下划线。"*
+  testWidgets('⑥ 🔴 那份字**原样画出来**（没有"还没校正"那条下划线了）', (tester) async {
+    // 🔴 **2026-10-07**：主人 *"我们之前对语音，是抽离出来做了一层，没问题才发给聊天的。
+    //   现在我需要把这个抽离的部分给去掉。"* ⇒ 第二步没有了，"字就是字"：
+    //   原来那条"第一步带下划线、校正回来才去掉"的线**跟着那一层一起删掉了**
+    //   （留着它等于一直在说"这份还不算数"）。
     TextDecoration? decoOf(WidgetTester t) {
       final texts = t.widgetList<Text>(find.byType(Text)).toList();
       for (final x in texts) {
         final d = x.style?.decoration;
-        if (d != null) return d;
+        if (d != null && d != TextDecoration.none) return d;
       }
       return null;
     }
 
-    // ① 在听（字还在长）⇒ **带下划线**
-    await _pump(tester, const HearDrill().startListening().utterance('帮我看一下明天北京的天气予报'),
-        settle: true);
-    // ⚠️ `utterance` 会把它推进 `thinking`（那也是"还没校正"那一档）
-    expect(decoOf(tester), TextDecoration.underline, reason: '★ 还没校正的那份字没有下划线');
-
-    // ② 收尾中（他按了停、还没等到对面）⇒ **还是带下划线**
-    await _pump(tester, _wrapping());
-    expect(decoOf(tester), TextDecoration.underline, reason: '★ 收尾中那份字该还是"没校正"的样子');
-
-    // ③ 校正回来了（可以发了）⇒ **下划线去掉**
-    final ready = const HearDrill()
+    // ① 在听（字还在长）
+    final listening = const HearDrill()
         .startListening()
-        .utterance('帮我看一下明天北京的天气预报')
-        .heardBack(ok: true, heard: '帮我看一下明天北京的天气预报');
-    await _pump(tester, ready);
-    expect(decoOf(tester), isNot(TextDecoration.underline),
-        reason: '★ 校正回来了下划线还在 ⇒ 他分不出"这一步过了没有"');
+        .event({'type': 'asr/partial', 'text': '帮我看一下明天北京的天气予报'});
+    await _pump(tester, listening, settle: true);
+    expect(find.text('帮我看一下明天北京的天气予报'), findsOneWidget,
+        reason: '★ 他说的那份字要真的画在屏幕上');
+    expect(decoOf(tester), isNull, reason: '★ 没有"还没校正"那条线了（第二步已经删掉）');
 
-    // 负向对照：它在问那一档 ⇒ 也**不带**下划线（那一句是它问的，不是他说的那份字）
-    final asking = const HearDrill()
-        .startListening()
-        .utterance('那个东西弄一下')
-        .heardBack(ok: true, heard: '那个东西弄一下', ask: '哪个东西？');
-    await _pump(tester, asking);
-    expect(decoOf(tester), isNot(TextDecoration.underline));
+    // ② 收尾中（他按了停、还没等到对面）⇒ 字**一个都不少**，样子也一样
+    await _pump(tester, listening.stopListening(), settle: true);
+    expect(find.text('帮我看一下明天北京的天气予报'), findsOneWidget,
+        reason: '★ 收尾中那份字不许消失');
+    expect(decoOf(tester), isNull);
+
+    // ③ 该发了（对面把整段吐回来了）⇒ 还是那一份字（发出去的就是它）
+    final thinking = listening.stopListening().event(
+        {'type': 'asr/end', 'text': '帮我看一下明天北京的天气预报', 'reason': 'user-stop'});
+    await _pump(tester, thinking, settle: true);
+    expect(find.text('帮我看一下明天北京的天气预报'), findsOneWidget);
+    expect(decoOf(tester), isNull, reason: '★ 字就是字：一份字只有一种样子');
+
+    // 负向对照：**没在听的时候什么都不画**（空 ⇒ 那颗气泡自己消失）
+    await _pump(tester, const HearDrill(), settle: true);
+    expect(find.text('帮我看一下明天北京的天气预报'), findsNothing);
   });
 
   testWidgets('⑦ 🔴 底下那一行字**跟用户那条字号轴**（12/14/17 都跟着变）', (tester) async {

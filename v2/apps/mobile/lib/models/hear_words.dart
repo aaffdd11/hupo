@@ -8,14 +8,7 @@
 const String hearDrillTitle = '说一句试试';
 
 /// 设置里那一行下面那句小字。
-const String hearDrillRowHint = '先听懂你的意思，再问你一句；演练，不会真的发出去。';
-
-/// 那一屏最上面那句（**红字那块**：先把"不会发出去"说清）。
-/// ★ **2026-10-06：语义检查暂停时那一屏顶上补的一句**（主人：*「先暂停语义检查」*）。
-///
-/// ⚠️ 它是**实话**：这一屏原来展示的是"听懂那一层理顺之后的样子"，暂停之后
-///    下面显示的就是**语音转文字的原话**（一个字都没改）。
-const String hearDrillPausedNote = '现在不做语义检查：下面显示的就是你说出来的原话。';
+const String hearDrillRowHint = '把你说的话听成字；演练，不会真的发出去。';
 
 const String hearDrillBanner = '这是演练：一句都不会发出去，也不会打扰到谁。';
 
@@ -35,20 +28,11 @@ const String hearDrillWrappingLead = '收下了，正在整理……';
 /// 正在听懂（那一下很短）。
 const String hearDrillThinkingLead = '我在听懂你这句……';
 
-/// 它在问一句（**问的话在下面**）。
-const String hearDrillAskingLead = '我有一处不确定，你答一句就行：';
-
 /// 差不多了，这是最终那一份。
 const String hearDrillReadyLead = '我听到的是这一句 —— 真的时候，到这儿就发出去：';
 
 /// 最后那一步**在演练里不会发生**（说清）。
 const String hearDrillReadyFoot = '（演练：就停在这儿，不会发出去。）';
-
-/// 一轮一答之后都顺了，也没有别的要问。
-const String hearDrillOkFoot = '这一句我觉得可以了。';
-
-/// 问了两轮还没问完 ⇒ 按已经听懂的那份走（不吹毛求疵，但如实说）。
-const String hearDrillRoundCap = '问得够多了，就按我听懂的这份来。';
 
 /// 没听懂 / 那边没答上来。
 const String hearDrillFailedLead = '这句我没听清，你再说一遍。';
@@ -56,17 +40,11 @@ const String hearDrillFailedLead = '这句我没听清，你再说一遍。';
 /// 一个字都没听到。
 const String hearDrillNothing = '我什么都没听到，再说一句吧。';
 
-/// 这台念不出来（老老实实说 —— 不许假装会说话）。
-const String hearDrillNoVoice = '这台还念不出来，我写成字问你。';
-
 /// 这台开不了麦 ⇒ 给它一个"打字"的兜底（屏幕上不许出现按不动的东西）。
 const String hearDrillTypeInstead = '这台开不了麦，先打字试试。';
 
 /// 再走一遍。
 const String hearDrillAgain = '再来一句';
-
-/// 把听到的那句**送进听懂那一层**失败了（网/那边）。
-const String hearDrillNoRoad = '这条现在还接不上，等下再试。';
 
 /// 「我答一句」那颗按钮的字（打字兜底那条路）。
 const String hearDrillAnswer = '就这句';
@@ -79,7 +57,3 @@ const String hearDrillTalkLabel = '说一句';
 
 /// 那颗圆圈的读屏名（正在录时）。
 const String hearDrillStopLabel = '说完了';
-
-/// ★ 它在问的时候，圆圈旁边那半句"怎么答"（2026-10-04 主人报"只出来了问句，就没有然后"）：
-/// 他得知道**按一下那颗圆圈、答一句就行**。
-const String hearDrillAnswerHint = '（按一下圆圈，答一句就行）';

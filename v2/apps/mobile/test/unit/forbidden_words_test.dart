@@ -194,26 +194,22 @@ void main() {
       // ★ 2026-10-02：时间那一行那两个字
       timeMarkToday,
       // ★ 2026-10-06：「试一下」那一屏（`hear_drill_screen.dart`）的**全部句子** ——
-      //    原来这一组**一句都没挂**（顺手补上）；暂停那一句是新加的。
+      //    原来这一组**一句都没挂**（顺手补上）。
+      //    ⚠️ 2026-10-07：中间那一层删了 ⇒ "在问 / 问够了 / 念不出来 / 那条路接不上"
+      //       那几句**跟着那一层一起删掉了**（数据源里也没了）。
       hearDrillTitle,
       hearDrillRowHint,
-      hearDrillPausedNote,
       hearDrillBanner,
       hearDrillIdleLead,
       hearDrillListeningLead,
       hearDrillWrappingLead,
       hearDrillThinkingLead,
-      hearDrillAskingLead,
       hearDrillReadyLead,
       hearDrillReadyFoot,
-      hearDrillOkFoot,
-      hearDrillRoundCap,
       hearDrillFailedLead,
       hearDrillNothing,
-      hearDrillNoVoice,
       hearDrillTypeInstead,
       hearDrillAgain,
-      hearDrillNoRoad,
       hearDrillAnswer,
       timeMarkYesterday,
       // ★ 2026-10-02：工具行翻出来的人话 ＋ 展开那一块里“原始名”那个标签

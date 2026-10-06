@@ -1,15 +1,23 @@
-// **"说一句试试"那一场演练的状态机**（纯的：进事件、出状态）。
-//
-// V2.0 第一件（主人 2026-10-04）：*"把输入框抽离出来……有一个 AI 会去理解这个文本是什么意思……
-// 这个 AI 的目的是完善这个文本，完善完文本以后，他觉得 ok 了，他就会输入到文本框里面，
-// 并且自动发送；如果不 ok，他就会询问用户……不要吹毛求疵……"*
+// **说一句 / 说一段那一步的状态机**（纯的：进事件、出状态）。
 //
 // ⚠️ 纯逻辑 ⇒ 进 `test/unit`（`test/unit/hear_drill_test.dart`）。
 //    界面那一层只负责把状态画出来、把按钮接上。
 //
-// 🔴 **这一份的地基**：
-//   ① **最多问两轮**（`drillMaxRounds`，与服务端那个上限同一个数）——"不吹毛求疵"落在这儿；
-//   ② **每一步都要有一个能说出口的状态**（听着 / 在听懂 / 在问 / 可以了 / 没听清）；
+// ── 2026-10-07：**那一层"抽离"删掉了** ─────────────────────────
+//
+// 主人原话：*"我们之前对语音，是抽离出来做了一层，没问题才发给聊天的。
+//   现在我需要把这个抽离的部分给去掉。用户会说很多话的。不可能每个句号做断点，
+//   也必须是用户说完，语音变成文字拿回来了，我们再发出去。"*
+//
+// ⇒ 原来那一套（"听懂那一层" `/api/hear` ＋ `heardBack` ＋ `asking` ＋ `turns`
+//   ＋ `payload` ＋ 最多两轮那些东西）**从这一份里删掉了**，一个字都不留：
+//   语音 → 文字 → **他按停就发**，中间没有第二个 AI 插手。
+//   ⚠️ 服务端那条老接口还在（老包里有人在调），只是**这一侧不再走它**。
+//
+// 🔴 **这一份的地基**（三条）：
+//   ① **一个字都不许丢**：一轮完了只把这一轮的字**接在** `settled` 后面
+//      （`Hearing.roundDone`），不清、不发 —— 清一下就是他报的"前面那句话没了"；
+//   ② **只有他按停才算说完**：到那一下才发，**只发一次**；
 //   ③ 🔴 **它自己不发送**：这一场从头到尾**没有任何"发出去"的动作**
 //      （判据 `test/widget/hear_drill_test.dart` 量的就是"一次 `/api/say` 都没有"）。
 
@@ -17,7 +25,7 @@ import 'hearing_session.dart';
 
 /// 这一场走到哪儿了。
 enum DrillPhase {
-  /// 还没开始（或者刚按了"再来一句"）。
+  /// 还没开始（或者刚按了"再来一次"）。
   idle,
 
   /// 麦克风开着，正在听。
@@ -33,11 +41,8 @@ enum DrillPhase {
   /// 而 `asr/end` 一到就照旧进 [thinking]（**字一个都不丢** —— [event] 在这一档照收）。
   wrapping,
 
-  /// 说完了，正在把这一句送进听懂那一层。
+  /// 说完了，手上那一份字就是最终那一份（**没有第二层了**）。
   thinking,
-
-  /// 它有不确定的，正问他一句（等着他答）。
-  asking,
 
   /// 差不多了 —— **最终那一份**已经拿在手里。
   ready,
@@ -46,20 +51,7 @@ enum DrillPhase {
   failed,
 }
 
-/// 最多问几轮。**与服务端 `MAX_HISTORY` 同一个数**（两处都写死会漂，所以这儿有判据）。
-const int drillMaxRounds = 2;
-
-/// 问过、也答过的一轮。
-class DrillTurn {
-  const DrillTurn({required this.ask, required this.answer});
-
-  final String ask;
-  final String answer;
-
-  Map<String, String> toWire() => {'ask': ask, 'answer': answer};
-}
-
-/// **那一场演练的整个状态**（值类：改一步换一份）。
+/// **这一场的声音那一步的整个状态**（值类：改一步换一份）。
 class HearDrill {
   const HearDrill({
     /// ★ **这一场要不要"连贯"**（2026-10-07 · 主人：*「我的目的是语音输入。要连贯」*）。
@@ -73,9 +65,6 @@ class HearDrill {
     this.hearing = const Hearing(),
     this.heard = '',
     this.first = '',
-    this.question = '',
-    this.turns = const <DrillTurn>[],
-    this.done = false,
     this.note = '',
   });
 
@@ -88,38 +77,27 @@ class HearDrill {
   /// **语音那一步**（复用聊天那颗话筒那台状态机 —— 不另造一套）。
   final Hearing hearing;
 
-  /// 目前听懂的**理顺版原话**（还没有的话是空串）。
+  /// 最终那一份字（`ready` 时就是这个）。
   final String heard;
 
-  /// **这一场最开始那一句**（他第一次说的原话）。
-  /// 🔴 一定要留着：第二轮送进听懂那一层时，`text` 仍然是**这一句** ——
-  ///    他后来答的那几句走 `history`（"我问…他答…"）。
-  ///    只送最后那一答、把原话丢了，那一层就只能凭一句"上周"猜他要干什么。
+  /// **他这一整段**（他说的原话；打字那条兜底也落这儿）。
   final String first;
 
-  /// 它在问的那一句（`asking` 时有）。
-  final String question;
-
-  /// 已经问过答过的（最多 [drillMaxRounds] 轮）。
-  final List<DrillTurn> turns;
-
-  /// 它说"可以了"（不用再问了）。
-  final bool done;
-
-  /// **如实说的那一句**（失败 / 到点了 / 没听懂…）。
+  /// **如实说的那一句**（失败 / 没听清 / 这台开不了麦…）。
   final String note;
 
   /// 现在这一句听完的字（半句也算 —— 他要看见"在长字"）。
   String get said => hearing.text;
 
-  /// 问了几轮了。
-  int get round => turns.length;
-
-  /// 还能不能再问（到上限就不问了 —— 不吹毛求疵）。
-  bool get canAskMore => round < drillMaxRounds;
-
   /// 最终那一份（`ready` 时就是这个）。
   String get finalText => heard;
+
+  /// 🔴 **该发出去的那一份**：说话那条落 `first`（`asr/end` 带回来的整段），
+  ///    打字那条兜底也落 `first`（`Hearing` 是空的）⇒ 取字**只有这一个去处**。
+  String get toSend {
+    final f = first.trim();
+    return f.isNotEmpty ? f : said.trim();
+  }
 
   HearDrill _copy({
     DrillPhase? phase,
@@ -127,9 +105,6 @@ class HearDrill {
     Hearing? hearing,
     String? heard,
     String? first,
-    String? question,
-    List<DrillTurn>? turns,
-    bool? done,
     String? note,
   }) =>
       HearDrill(
@@ -138,18 +113,10 @@ class HearDrill {
         hearing: hearing ?? this.hearing,
         heard: heard ?? this.heard,
         first: first ?? this.first,
-        question: question ?? this.question,
-        turns: turns ?? this.turns,
-        done: done ?? this.done,
         note: note ?? this.note,
       );
 
   /// **按了一下那颗麦**：开始听。
-  ///
-  /// 🔴 **上下文一个字都不许丢**：他答那一句时也走这一个动作 ——
-  ///    把 `first` / `heard` / `turns` 清掉，第二轮送上去的就只剩一句"上周"了。
-  ///    （2026-10-04 主人真机上试出来的那个"能转文字、没有后文"，根子就在这一族：
-  ///     这一层当时只认"从零开始的那一下"。）
   HearDrill startListening() => _copy(phase: DrillPhase.listening, hearing: const Hearing().tapped(), note: '');
 
   /// 🔴 **他按了停**（2026-10-05）：**立刻**换档 —— 不再"装作还在听"。
@@ -158,21 +125,14 @@ class HearDrill {
   /// ⚠️ 它**不动 `hearing`**：那台状态机由它自己那几帧推（`asr/end` 一到就收干净）。
   HearDrill stopListening() => _copy(phase: DrillPhase.wrapping);
 
-
   /// 语音那边回来的一帧（**原样喂给那台状态机**，与聊天那颗话筒同一条路）。
   ///
   /// ⚠️ 只有"正在听"与**"收尾中"**这两档才理它：别的档里来的帧（迟到的定稿）不许把这一场弄乱。
-  ///    🔴 `wrapping` 那一档**必须收**：他按了停之后，最后那一份字正是这时候回来的
-  ///    （不许它被丢掉 —— 那就是"能转文字、没有后文"那一族的老病）。
+  ///    🔴 `wrapping` 那一档**必须收**：他按了停之后，最后那一份字正是这时候回来的。
   HearDrill event(Map<String, dynamic> e) {
     if (phase != DrillPhase.listening && phase != DrillPhase.wrapping) {
-      // 🔴 **2026-10-05 主人**：*"用户点击结束录音，你要等待语音结束和语义转换结束。
-      //   不要直接结束。"* ⇒ 两条：
-      //   ① 按停之后**不直接收场**（见 [stopListening] 与控制器那条兜底钟）；
-      //   ② **迟到的定稿也不许扔掉** —— 正在"听懂"那一层跑的时候（`thinking`）
-      //      它到了就把字**收进来**：屏幕上那份"直白的字"当场补全
-      //      （⚠️ **不重跑**那一层：重跑要再花一次他的钱，而且那一条已经在路上了）。
-      //      ⚠️ 已经在问 / 已经可以了 ⇒ 一个字节都不动（那两步的显示不是这一份字）。
+      // ⚠️ 迟到的定稿在 `thinking` 那一档也收（屏幕上那份直白的字当场补全），
+      //    别的档一个字节都不动。
       if (phase == DrillPhase.thinking) return _copy(hearing: hearing.event(e));
       return this;
     }
@@ -198,26 +158,15 @@ class HearDrill {
       return utterance(whole, hearing: folded);
     }
     final next = hearing.event(e);
-    // 🔴 **`asr/end` ＝ "他这一段说完了"** —— 这就是该送进听懂那一层的那一刻。
+    // 🔴 **`asr/end` ＝ "他这一段说完了"**（非连贯那一档）。
     //   ⚠️ **不看引擎给的那个 `reason`**：真机（网页那一份）在**每次停顿**处都会收一段，
-    //      而且往往带 `upstream`/`engine` —— 那是"这一段结束了"，**不是"这一场断了"**
-    //      （`voice_try.dart` 那一屏为同一件事专门写过一个模型）。
-    //      原来这里只认"那台状态机走到 `idle`" ⇒ 带原因的收尾全被当成"断了"，
-    //      屏幕上就只剩那几个字、**没有后文**。
+    //      而且往往带 `upstream`/`engine` —— 那是"这一段结束了"，**不是"这一场断了"**。
+    //   🔴 **用"这一场结束时那一份"，不是把段拼起来**（2026-10-04 主人指出来的）：
+    //      服务端那条 `asr/end` **带着整段**（`asr.js` 把前面几段按段号接起来）—— 以它为准。
+    //   🔴 **2026-10-07**：这一份整段**已经**被 `Hearing.roundDone` 接进 `settled` 了
+    //      ⇒ 这里要用**攒起来的那一份**，不是单看这一帧
+    //      （原来直接取 `e['text']` ⇒ **按停那一刻"第一句"就没了**）。
     if (e['type'] == 'asr/end') {
-      // 🔴 **用"这一场结束时那一份"，不是把段拼起来**（2026-10-04 主人指出来的）：
-      //    *"应该是用户说完，然后 stream 完成，再去判断语义……stream 进来的 message 可能有两条：
-      //      一条是 stream，还有一条是 stream 结束后的总结。"*
-      //    ⇒ 服务端那条 `asr/end` **带着整段**（`asr.js` 把前面几段按段号接起来，
-      //      见 `docs/dev/193-SPEAK-ACCUMULATE.md`），它就是"总结"那一份 —— **以它为准**。
-      //    ⚠️ 拼段（`hearing.text`）在有停顿的那一场里会得到"只有后半段"或者重复的文本，
-      //      而那一层就是拿这份去判语义的 ⇒ 判出奇怪的结论（反问、或者发出去两遍）。
-      //    ⚠️ 它没带字（老引擎 / 空收尾）⇒ 退回拼起来那一份（不许一个字都没有）。
-      // 🔴 **2026-10-07 改一处**：这一份整段**已经**被 `Hearing.roundDone` 接进
-      //    `settled` 了（见 `hearing_session.dart` 那条改口径）⇒ 这里要用
-      //    **攒起来的那一份**（前面几轮 ＋ 这一轮），不是单看这一帧。
-      //    ⚠️ 原来直接取 `e['text']` ⇒ **按停那一刻，"第一句"就没了**
-      //      （判据 `voice_continue_test` 当场抓到）。
       final got = next.text.trim();
       if (got.isEmpty) return _copy(hearing: next, phase: DrillPhase.failed, note: next.why.isEmpty ? '' : next.why);
       return utterance(got, hearing: next);
@@ -225,63 +174,33 @@ class HearDrill {
     return _copy(hearing: next, note: next.why.isEmpty ? '' : next.why);
   }
 
-  /// **他这一句（或这一答）是什么** —— 麦克风那条与打字那条**同一个去处**。
-  ///
-  /// * 正等着他答（`question` 非空）⇒ 这就是那一答：记进 [turns]，回 `thinking`；
-  /// * 否则 ⇒ 这是这一场的**第一句**：`first` 记下，回 `thinking`。
+  /// **他这一整段是什么** —— 麦克风那条与打字那条**同一个去处**。
   HearDrill utterance(String text, {Hearing? hearing}) {
     final t = onceOnly(text);
     if (t.isEmpty) return this;
-    if (question.isNotEmpty) {
-      return _copy(
-        phase: DrillPhase.thinking,
-        hearing: hearing,
-        turns: [...turns, DrillTurn(ask: question, answer: t)],
-        question: '',
-        note: '',
-      );
-    }
-    return _copy(
-      phase: DrillPhase.thinking,
-      hearing: hearing,
-      first: turns.isEmpty ? t : first,
-      note: '',
-    );
+    return _copy(phase: DrillPhase.thinking, hearing: hearing, first: t, note: '');
   }
 
   /// **打字那条兜底路**（开不了麦的机器上才有）：把这一句当成"他说的"。
-  ///
-  /// ⚠️ 与真说话走的是**同一个去处**（进 `thinking` ⇒ 界面拿去问那一层），
-  ///    只是没有经过麦克风。开不了麦就**别装作能听**：界面上给的是这一格。
   HearDrill saidByTyping(String text) => utterance(text, hearing: const Hearing());
 
   /// 开麦那一步就失败了（权限 / 没配钥匙 / 开不了）。
   HearDrill micFailed(String why) => _copy(phase: DrillPhase.failed, hearing: hearing.unavailable(), note: why);
 
-  /// **听懂那一层答回来了**（界面拿到 `/api/hear` 的回执之后调它）。
+  /// ★ **话已经在手上了** ⇒ `ready`（**没有任何第二层**：字就是字）。
   ///
-  /// * 成了、而且它还要问、而且还没问够 ⇒ `asking`（问题在 [question]）；
-  /// * 成了、不用再问（或者问够了）⇒ `ready`（最终那一份在 [heard]）；
-  /// * 没成 ⇒ `failed`（[note] 是人话）。
-  HearDrill heardBack({required bool ok, String heard = '', String? ask, String note = '', bool done = false}) {
-    if (!ok) return _copy(phase: DrillPhase.failed, note: note.isEmpty ? '' : note);
-    final wants = (ask ?? '').trim();
-    if (done || wants.isEmpty || !canAskMore) {
-      return _copy(phase: DrillPhase.ready, heard: heard, question: '', done: true, note: '');
-    }
-    return _copy(phase: DrillPhase.asking, heard: heard, question: wants, note: '');
+  /// 🔴 2026-10-07（抽离层删掉之后）：这就是"语音变成文字拿回来了"的那一下。
+  HearDrill recognized(String text) {
+    final t = onceOnly(text);
+    if (t.isEmpty) return _copy(phase: DrillPhase.failed, note: note.isEmpty ? '' : note);
+    return _copy(phase: DrillPhase.ready, heard: t, first: first.isEmpty ? t : first, note: '');
   }
+
+  /// **一个字都没听清**（如实说一句 —— 不装发过）。
+  HearDrill nothing(String why) => _copy(phase: DrillPhase.failed, note: why);
 
   /// 这一场重来。
   HearDrill again() => const HearDrill();
-
-  /// 送到听懂那一层的**这一份原文**：**最开始那一句** ＋ 前面几轮问答。
-  ///
-  /// ⚠️ `text` 永远是 `first`（他第一次说的那句）—— 他后来的回答走 `history`。
-  Map<String, dynamic> payload() => {
-        'text': first.isNotEmpty ? first : said,
-        if (turns.isNotEmpty) 'history': turns.map((t) => t.toWire()).toList(),
-      };
 }
 
 /// **同一句被说了两遍 ⇒ 只算一遍**（2026-10-04 主人报的"识别的时候出现了两次"）。

@@ -1,18 +1,20 @@
-// **说完 ⇒ 自己发出去 ⇒ 聊天记录窗口自己打开**（乙期 · 手册 `D3.14`／`D5.19`）。
+// **按停 ⇒ 自己发出去 ⇒ 聊天记录窗口自己打开**（乙期 · 手册 `D3.14`／`D5.19`）。
 //
-// ── 这一份钉什么（V6–V7）────────────────────────────────────
-//   V6 🔴 语义没问题 ⇒ **自己发出去**（一次 `/api/say`，发的是**改过错别字**那句）
+// ── 这一份钉什么（V6–V8）────────────────────────────────────
+//   V6 🔴 按停 ⇒ **自己发出去**（一次 `/api/say`，发的就是**他说的原话**）
 //   V7 🔴 **发出去之后那扇聊天记录窗口自己打开**（主人：*"发出去以后聊天窗口自动打开。"*）
-//   V8 它在问的时候 ⇒ **一次都不许发**、窗口也**不许**打开（负向对照）
+//   V8 🔴 **没按停就不发**（到点收了一轮也一样）、窗口也不打开（负向对照）
 //
-// ⚠️ 这一层是**界面那一条**：链子在控制器里（`test/unit/voice_compose_test.dart` 5/0），
+// 🔴 **2026-10-07：那一层"抽离"删了** ⇒ 原来 V6 量的是"改过错别字那句"、
+//   V8 量的是"它在问的时候不许发"；现在**一个字都不改、也不问** ⇒ 改成上面那三条。
+//
+// ⚠️ 这一层是**界面那一条**：链子在控制器里（`test/unit/voice_compose_test.dart`），
 //    这里量的是"屏幕上真发生了没有"。
 
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hupo_app/models/semantic_switch.dart';
 import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/space.dart';
 import 'package:hupo_app/screens/chat_screen.dart';
@@ -44,27 +46,27 @@ class _Mic implements NativeHearingApi {
   @override
   Future<void> warm({required Uri url, required String token}) async {}
 
-  /// 说完一句（🔴 **2026-10-07 起：他按停才算说完** —— 主人*「我的目的是语音输入。要连贯」*；
-  /// 这里只补"按停"那一下，量的事一件没变：按停之后发的是哪一份字）。
+  void push(Map<String, dynamic> e) => _on?.call(e);
+
+  /// 说完一句（🔴 **2026-10-07 起：他按停才算说完**）。
   void say(String text) {
-    _on?.call({'type': 'asr/ready'});
-    _on?.call({'type': 'asr/final', 'text': text});
-    _on?.call({'type': 'asr/end', 'text': text, 'reason': 'user-stop'});
+    push({'type': 'asr/ready'});
+    push({'type': 'asr/final', 'text': text});
+    push({'type': 'asr/end', 'text': text, 'reason': 'user-stop'});
   }
 }
 
 class _Server {
-  _Server(this.hearReply);
-  final Map<String, Object?> hearReply;
   final List<String> said = [];
-  final List<String> asked = [];
+  int hearCalls = 0;
 
   late final Api api = Api(
     base: '',
     client: MockClient((req) async {
       if (req.url.path == '/api/hear') {
-        asked.add(req.body);
-        return http.Response(jsonEncode(hearReply), 200, headers: {'content-type': 'application/json'});
+        // 🔴 那一层删了 ⇒ 走到这儿就是判据要抓的事
+        hearCalls += 1;
+        return http.Response('{"error":"这一层已经删了"}', 500, headers: {'content-type': 'application/json'});
       }
       if (req.url.path == '/api/say') {
         final b = jsonDecode(req.body) as Map<String, dynamic>;
@@ -79,8 +81,8 @@ class _Server {
   );
 }
 
-Future<_Server> _pump(WidgetTester tester, Map<String, Object?> hearReply) async {
-  final s = _Server(hearReply);
+Future<_Server> _pump(WidgetTester tester) async {
+  final s = _Server();
   await tester.pumpWidget(
     MaterialApp(
       home: ChatScreen(
@@ -104,28 +106,13 @@ Future<void> _frames(WidgetTester tester) async {
 }
 
 void main() {
-  // 🔴 **2026-10-06：这一份量的是"听懂那一层"那条路**（主人当天说*「先暂停语义检查。
-  //   不要检查语义，直接快速语音转文字，点击结束就发送。」*）⇒ 那条路**代码还在、
-  //   生产里关着** ⇒ 这里临时打开（判据才量得到 V6–V8），验完还原。
-  //   "关着"那一档（说完直接发、一次都不调 `/api/hear`）住 `test/unit/semantic_pause_test.dart`。
-  setUp(() {
-    semanticCheckOn = true;
-    clearNativeHearing();
-  });
-  tearDown(() {
-    semanticCheckOn = false;
-    clearNativeHearing();
-  });
+  setUp(clearNativeHearing);
+  tearDown(clearNativeHearing);
 
-  testWidgets('V6/V7 🔴 通顺 ⇒ 自己发出去 ＋ 记录窗口自己打开（一次都不用点）', (tester) async {
+  testWidgets('V6/V7 🔴 按停 ⇒ 自己发出去（原话）＋ 记录窗口自己打开（一次都不用点）', (tester) async {
     final mic = _Mic();
     nativeHearingApi = mic;
-    final s = await _pump(tester, {
-      'heard': '帮我查一下明天北京的天气预报',
-      'ask': null,
-      'fact': '予报→预报',
-      'scene': 'do',
-    });
+    final s = await _pump(tester);
     // 说话之前：聊天是**收起的**（那颗收起/展开的标志不在）
     expect(find.byTooltip(chatCollapse), findsNothing);
 
@@ -136,31 +123,33 @@ void main() {
     mic.say('帮我查一下明天北京的天气予报');
     await _frames(tester);
 
-    expect(s.said, ['帮我查一下明天北京的天气预报'], reason: '★ 发出去的是改过错别字那句');
+    expect(s.said, ['帮我查一下明天北京的天气予报'], reason: '★ 发出去的就是他说的原话（一个字都不改）');
+    expect(s.hearCalls, 0, reason: '★ 那一层删了：一次都不许调');
     // ⚠️ 2026-10-05：展开态里「收起」有**两颗**（标题行那颗 ＋ 录音旁边那颗翻过来的）
     expect(find.byTooltip(chatCollapse), findsWidgets,
         reason: '★★ 发出去之后聊天记录窗口**自己打开**了（他没点任何东西）');
   });
 
-  testWidgets('V8 🔴 它在问的时候：一次都不发、窗口也不打开（负向对照）', (tester) async {
+  testWidgets('V8 🔴 没按停 ⇒ 一次都不发、窗口也不打开（负向对照）', (tester) async {
+    // 主人：*"不可能每个句号做断点，也必须是用户说完，语音变成文字拿回来了，我们再发出去。"*
+    //   ⇒ 说到一半（哪怕到点收了一轮）**都不算说完**。
     final mic = _Mic();
     nativeHearingApi = mic;
-    final s = await _pump(tester, {
-      'heard': '那个东西弄一下',
-      'ask': '你说的那个东西是指什么？',
-      'scene': 'do',
-    });
+    final s = await _pump(tester);
+
     await tester.tap(find.byKey(voiceBarCircleKey));
     await tester.pump();
-    await tester.tap(find.byKey(voiceBarCircleKey)); // ★ 按停（才算说完）
-    await tester.pump();
-    mic.say('那个东西弄一下');
+    mic.push({'type': 'asr/ready'});
+    mic.push({'type': 'asr/final', 'text': '那个东西弄一下'});
+    mic.push({'type': 'asr/end', 'text': '那个东西弄一下', 'reason': 'upstream'}); // 一句完了
+    await _frames(tester);
+    mic.push({'type': 'asr/capped'}); // 到点收了一轮
     await _frames(tester);
 
-    expect(s.asked.length, 1, reason: '★ 它问了一句');
-    expect(s.said, isEmpty, reason: '★★ 问了就不许发');
-    // ⚠️ 现在是**气泡里那一句**（后面还带着"（按一下圆圈，答一句就行）"）
-    expect(find.textContaining('你说的那个东西是指什么？'), findsWidgets, reason: '★ 那一句写在屏幕上');
+    expect(s.said, isEmpty, reason: '★★ 他还没按停 ⇒ 一次都不许发');
+    expect(s.hearCalls, 0);
     expect(find.byTooltip(chatCollapse), findsNothing, reason: '★ 没发出去 ⇒ 窗口不许自己打开');
+    // ★ 而那份字**还在屏幕上**（一个字都没丢）
+    expect(find.textContaining('那个东西弄一下'), findsWidgets, reason: '★ 前面那句不许没');
   });
 }

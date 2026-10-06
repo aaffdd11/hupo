@@ -13,7 +13,6 @@ import '../models/conn_state.dart';
 import '../models/chat_queue.dart';
 import '../models/hearing_session.dart';
 import '../models/hear_drill.dart';
-import '../models/semantic_switch.dart';
 import '../models/job_ask.dart';
 import '../models/job_words.dart';
 import '../models/message_state.dart';
@@ -356,7 +355,7 @@ class ChatController extends ChangeNotifier {
   ///
   /// 主人 2026-10-05 又叮嘱了一遍：*"用户点击结束录音，你要等待语音结束和语义转换结束。
   ///   不要直接结束。"* ⇒ 这一条钟**只兜最坏情况**，绝不是"到点就收场"：
-  ///   正常路径是 **`asr/end`（语音结束）→ `/api/hear`（语义转换）→ 才发/才问**。
+  ///   正常路径是 **他按停 → `asr/end`（整段回来）→ 当场发**（2026-10-07：中间那一层删了）。
   /// ⚠️ 它必须**短于**那条连接自己的兜底（`hearing_*.dart` 的 `_lingerLimit`）——
   ///    那个一到，那条连接就被收干净了（之后再不会有任何一帧）⇒ 这一条要是比它长，
   ///    屏幕上就永远停在"收下了，正在整理……"。判据钉着这个大小关系
@@ -863,8 +862,11 @@ class ChatController extends ChangeNotifier {
 
   // ── ★ 乙期：语音那一档（主人 2026-10-04 · 手册 `D3.14`／`D5.19`／`D5.18`）──
   //
-  //  一颗圆圈：点一下开始录音、再点一下停 ⇒ 字长在屏幕上 ⇒ **听懂那一层只改错别字** ⇒
-  //  **通顺就自己发出去**（不用点确认）；不确定就问一句，**他答的那句用来修正前面那**句**；
+  //  一颗圆圈：点一下开始录音、再点一下停 ⇒ 字长在屏幕上 ⇒ **他按停就发出去**
+  //  （不用点确认）。
+  //  🔴 **2026-10-07：中间那一层删了**（主人：*"我们之前对语音，是抽离出来做了一层，
+  //     没问题才发给聊天的。现在我需要把这个抽离的部分给去掉。"*）—— 语音 → 文字 → 发，
+  //     没有第二个 AI 插手、没有反问、没有"最多两轮"。
   //  发出去之后界面把**聊天记录窗口**打开（`voiceSent` 那一个号）。
   //
   //  ⚠️ 状态机复用 `models/hear_drill.dart`（就是设置里那场演练那台）—— **不是第二套**：
@@ -921,17 +923,17 @@ class ChatController extends ChangeNotifier {
     if (_voiceFlow.phase != DrillPhase.wrapping) return;
     final said = _voiceFlow.said.trim();
     _voiceFlow = said.isEmpty
-        ? _voiceFlow.heardBack(ok: false, note: '这句我没听清，再说一遍。')
+        ? _voiceFlow.nothing('这句我没听清，再说一遍。')
         : _voiceFlow.utterance(said);
     notifyListeners();
-    if (_voiceFlow.phase == DrillPhase.thinking) unawaited(_composeThink());
+    if (_voiceFlow.phase == DrillPhase.thinking) unawaited(_composeSendNow());
   }
 
   /// **打字那条兜底路**（麦克风真用不了时）：那一句与"说出来的"同一个去处。
   Future<void> answerVoiceCompose(String text) async {
     _voiceFlow = _voiceFlow.utterance(text);
     notifyListeners();
-    await _composeThink();
+    await _composeSendNow();
   }
 
   void _onComposeFrame(Map<String, dynamic> e) {
@@ -945,9 +947,10 @@ class ChatController extends ChangeNotifier {
       _stopTimer = null;
     }
     notifyListeners();
-    // 他这一段说完了（`asr/end`，**而且他已经按了停**）⇒ 送进听懂那一层
+    // 他这一段说完了（`asr/end`，**而且他已经按了停**）⇒ **当场发出去**
+    // （2026-10-07：中间那一层删了 —— 字就是字，没有第二个 AI 插手）
     if (before.phase != DrillPhase.thinking && after.phase == DrillPhase.thinking) {
-      unawaited(_composeThink());
+      unawaited(_composeSendNow());
       return;
     }
     // ★ **他还没按停，而对面把这一轮收了**（55 秒上限 `asr/capped` / 上游自己收尾）
@@ -992,71 +995,32 @@ class ChatController extends ChangeNotifier {
   /// 正在"接着开下一轮"（防重入）。
   bool _continuing = false;
 
-  /// 听不懂就问；**通顺就发**（这一步不问他"要不要发" —— `D5.19`）。
+  /// 🔴 **语音到手就发**（2026-10-07 主人：*"我们之前对语音，是抽离出来做了一层，
+  ///   没问题才发给聊天的。现在我需要把这个抽离的部分给去掉。用户会说很多话的。
+  ///   不可能每个句号做断点，也必须是用户说完，语音变成文字拿回来了，我们再发出去。"*）。
   ///
-  /// 🔴 **2026-10-06：语义检查暂停了**（主人：*「先暂停语义检查。不要检查语义，
-  ///   直接快速语音转文字，点击结束就发送。」*）⇒ 这一条现在**分两档**：
-  ///   · `semanticCheckOn == false`（现在）：**手上那份字直接发** —— 不改字、不问、不等；
-  ///   · `true`（老形状）：送进听懂那一层（`/api/hear`，实测那一次往返 **0.6~1.4 秒**）。
-  /// ⚠️ 两档**都留着**（开关在 `models/semantic_switch.dart`）：主人说的是"先暂停"，
-  ///    所以要能一句话开回来；判据也把两档都钉住（关着那一档尤其要钉"一次都没调它"）。
-  Future<void> _composeThink() async {
-    if (!semanticCheckOn) return _composeSendNow();
-    final t = _token;
-    final payload = _voiceFlow.payload();
-    final said = (payload['text'] as String?) ?? '';
-    if (t == null || said.isEmpty) {
-      _voiceFlow = _voiceFlow.heardBack(ok: false, note: '这句我没听清，再说一遍。');
-      notifyListeners();
-      return;
-    }
-    final history = (payload['history'] as List?)?.cast<Map<String, String>>() ?? const <Map<String, String>>[];
-    final got = await api.hear(t, said, history: history);
-    if (!got.ok) {
-      _voiceFlow = _voiceFlow.heardBack(ok: false, note: got.error ?? '这条现在还接不上，等下再试。');
-      notifyListeners();
-      return;
-    }
-    final next = _voiceFlow.heardBack(ok: true, heard: got.heard!, ask: got.ask);
-    _voiceFlow = next;
-    notifyListeners();
-    if (next.phase == DrillPhase.asking) {
-      // 问回去那一下：**用话说一遍**（念得出来才念）+ 屏幕上一直有字
-      _speak(next.question);
-      return;
-    }
-    if (next.phase == DrillPhase.ready) {
-      final text = next.finalText;
-      _voiceFlow = const HearDrill(); // 这一场收干净
-      voiceSent += 1; // ★ 界面据此把聊天记录窗口打开
-      notifyListeners();
-      await send(text); // ★ **自己发出去**（不点确认）
-    }
-  }
-
-  /// ★ **语义检查关着的时候**：手上那份字**直接发**（主人 2026-10-06）。
-  ///
-  /// 三件：① 用的是 `Hearing` 攒出来的**整段**（`asr/end` 那条带的，就是"总结"那一份）；
-  ///      ② 一个字都没有 ⇒ **如实说一句**（不装发过）；③ 发出去之后 `voiceSent += 1`
-  ///      （界面据此把聊天记录窗口打开 —— 与老那条路同一个落点）。
-  /// ⚠️ 这里**不读 `history`、不问 `scene`、不调 `/api/hear`** —— 那正是"暂停"的意思。
+  /// 四件：
+  ///   ① 发的是 `Hearing`／`asr/end` 攒出来的**整段** —— 取字只有 [HearDrill.toSend]
+  ///      这一个去处（说话那条落 `first`；**打字那条兜底也在 `first`**，`Hearing` 是空的。
+  ///      第一版写成 `_voiceFlow.said` ⇒ 打字那条一个字都没发出去，判据当场抓住 0 ≠ 1）；
+  ///   ② 一个字都没有 ⇒ **如实说一句**（不装发过）；
+  ///   ③ 发出去之后 `voiceSent += 1`（界面据此把聊天记录窗口打开 —— `D3.14`）；
+  ///   ④ 🔴 **收干净之后仍然是"连贯"那一档**（`continuous: true`）——
+  ///      落回默认那份（`false`）的话，他**第二条**话就退成"一到点就收场"：
+  ///      55 秒上限那条 `asr/end` 会**在半路把它发出去**、框当场清空，
+  ///      屏幕上看着就是"前面那句话没了"（主人 2026-10-07 报的正是这个）。
   Future<void> _composeSendNow() async {
-    // ⚠️ **取字的地方必须与老那条路一致**（`payload()['text']`）：
-    //    · 说话那条：`first` = 他这一句的整段（`asr/end` 带的）；
-    //    · **打字那条兜底**：字在 `first` 里，**不在** `hearing.text` 里
-    //      （`Hearing` 是空的）—— 第一版写成 `_voiceFlow.said` ⇒ 打字那条路一个字都没发出去，
-    //      而"点一次发送，服务端该收到恰好一句"那几条提示档判据当场抓住（0 ≠ 1）。
-    final payload = _voiceFlow.payload();
-    final said = ((payload['text'] as String?) ?? '').trim();
+    final said = _voiceFlow.toSend;
     if (said.isEmpty) {
-      _voiceFlow = _voiceFlow.heardBack(ok: false, note: '这句我没听清，再说一遍。');
+      _voiceFlow = _voiceFlow.nothing('这句我没听清，再说一遍。');
       notifyListeners();
       return;
     }
-    _voiceFlow = const HearDrill(); // 这一场收干净（与老那条路同一个收场）
+    // ⚠️ **不是 `const HearDrill()`** —— 那一份的 `continuous` 是 `false`（见 ④）
+    _voiceFlow = const HearDrill(continuous: true);
     voiceSent += 1;
     notifyListeners();
-    await send(said); // ★ 点击结束就发送（不点确认、也不等听懂那一层）
+    await send(said); // ★ **点击结束就发送**（不点确认、中间也没有第二层）
   }
 
   // ── ★ 批 7：配置页「语音」那一屏的「试一下」（主人 2026-09-26）──────────

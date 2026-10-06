@@ -1,12 +1,15 @@
 // **聊天底下那一格：一个圆圈 ＋ 它左边那句字**（乙期 · 手册 `D3.14`／`D5.19`）。
 //
 // 主人 2026-10-04：*「聊天按钮直接只剩右下角一个圆圈。点击以后开始录音，录音会转文字，
-//   文字会出现在底部，录音按钮的左侧。系统如果询问这句话什么意思，用户回答，会修正用户前面
-//   说的那句话，一旦没有语义问题，就会被发出去。」*
+//   文字会出现在底部，录音按钮的左侧。」*
+// 🔴 **2026-10-07**（主人：*"我们之前对语音，是抽离出来做了一层，没问题才发给聊天的。
+//   现在我需要把这个抽离的部分给去掉。"*）⇒ 那一层没有了：**字就是字**，
+//   他按停就发。这里那一圈"还没校正"的**下划线也跟着去掉了**（没有第二步了，
+//   留着那条线等于一直在说"这份还不算数"）。
 //
 // ── 这一格只画三样 ────────────────────────────────────────
 //   ① **一个圆圈**（右下角）：点一下开始录、再点一下停（`onMic`）；
-//   ② **它左边那句字**：正在听的那半句 / 它在问的那一句 / 如实说的那一句；
+//   ② **它左边那句字**：正在听的那一段 / 如实说的那一句；
 //   ③ **开不了麦时**那条打字的退路（`D3.14` 的注：不许让他没有路可走）。
 //
 // ⚠️ 状态在 `models/hear_drill.dart`（那台状态机就是设置里那场演练那台）——
@@ -36,7 +39,7 @@ class VoiceBar extends StatefulWidget {
     this.speakable = false,
   });
 
-  /// 这一场说到哪儿了（听着 / 在懂 / 在问 / 没听清…）。
+  /// 这一场说到哪儿了（听着 / 收尾中 / 该发了 / 没听清…）。
   final HearDrill flow;
 
   /// 这台开得了麦吗（开不了 ⇒ 画打字的退路，**不画那颗圆圈**）。
@@ -124,46 +127,28 @@ class _VoiceBarState extends State<VoiceBar> {
   /// **打字那条退路**要不要摊开（默认不摊 —— 空白时屏幕上一个字都不许有）。
   bool _typing = false;
 
-  /// 圆圈左边那句话（**一句**：现在该让他看见什么）。
+  /// **圆圈左边那句话**（**一句**：现在该让他看见什么）。
   ///
-  /// ★ **2026-10-05 主人**：*"第一步是把直白的语音转文字写出来，然后是语义校正。
-  ///   通用的办法是第一步给下划线，第二步转换才去掉下划线。"*
-  ///   ⇒ 多一个 [raw]：**这句话还是"机器直白转出来的"**（听着 / 收尾中 / 在听懂）
-  ///     ⇒ 那一行**带下划线**；校正回来（可以发了 / 它在问）⇒ **下划线去掉**
-  ///     （"两条路"一眼分得开：带线的 = 还没校正，没线的 = 校正过了）。
-  ({String text, bool loud, bool raw}) get _line {
+  /// 🔴 **2026-10-07：只有一种字了**（"直白的字"与"校正过的字"是同一份）——
+  ///    那个 `raw`（要不要画下划线）跟着那一层一起删掉了。
+  ({String text, bool loud}) get _line {
     final f = widget.flow;
     switch (f.phase) {
       case DrillPhase.listening:
         final said = f.said.trim();
-        // 还在听 ⇒ 字是**直白转出来的**（带下划线）
-        return (text: said.isEmpty ? hearDrillListeningLead : said, loud: true, raw: true);
+        return (text: said.isEmpty ? hearDrillListeningLead : said, loud: true);
       case DrillPhase.wrapping:
         // 🔴 他刚按了停 ⇒ **当场给一句话**（不然那一秒多屏幕上什么都不变）
         final said = f.said.trim();
-        return (
-          text: said.isEmpty ? hearDrillWrappingLead : said,
-          loud: true,
-          raw: true,
-        );
+        return (text: said.isEmpty ? hearDrillWrappingLead : said, loud: true);
       case DrillPhase.thinking:
         final said = f.said.trim();
-        // 正在校正 ⇒ **还是那一份直白的字**（下划线还在）
-        return (text: said.isEmpty ? hearDrillThinkingLead : said, loud: true, raw: true);
-      case DrillPhase.asking:
-        // ⚠️ 问句后面**带上"怎么答"**：只摆一个问句，他就不知道下一步干什么
-        //   （主人 2026-10-04：*"出现了一个问句，然后就没有然后"*）。
-        //   ⚠️ 这一句是**它问的**（不是他说的那一份直白字）⇒ **不带下划线**
-        return (
-          text: (f.question.isEmpty ? hearDrillAskingLead : f.question) + hearDrillAnswerHint,
-          loud: true,
-          raw: false,
-        );
+        return (text: said.isEmpty ? hearDrillThinkingLead : said, loud: true);
       case DrillPhase.failed:
-        return (text: f.note.isEmpty ? hearDrillFailedLead : f.note, loud: true, raw: false);
+        return (text: f.note.isEmpty ? hearDrillFailedLead : f.note, loud: true);
       case DrillPhase.ready:
       case DrillPhase.idle:
-        return (text: '', loud: false, raw: false);
+        return (text: '', loud: false);
     }
   }
 
@@ -264,7 +249,7 @@ class _VoiceBarState extends State<VoiceBar> {
   ///
   /// ⚠️ 宽度是**跟着字长**的（`Flexible` ＋ 右对齐），最多占那一行的 76%；
   ///    超过就换行（`maxLines: 4` 兜底，真长到 4 行也该发出去了）。
-  Widget _bubble(DshLook look, ({String text, bool loud, bool raw}) line) => Container(
+  Widget _bubble(DshLook look, ({String text, bool loud}) line) => Container(
         constraints: const BoxConstraints(maxWidth: 420),
         padding: const EdgeInsets.symmetric(horizontal: d.gapM, vertical: d.gapS),
         decoration: BoxDecoration(
@@ -284,12 +269,6 @@ class _VoiceBarState extends State<VoiceBar> {
           style: dshTextStyle(
             look.content,
             line.loud ? d.ink : d.muted,
-          ).copyWith(
-            // ★ **还没校正的那一份**：带一条下划线（主人 2026-10-05 要的"通用办法"）——
-            //   校正回来之后这条线**自己去掉**，一眼看得出"这一步过了"。
-            decoration: line.raw ? TextDecoration.underline : TextDecoration.none,
-            decorationColor: d.accent,
-            decorationThickness: d.voiceRawUnderline,
           ),
         ),
       );
