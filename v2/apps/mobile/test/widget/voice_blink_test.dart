@@ -78,15 +78,18 @@ BorderSide _circleRing(WidgetTester tester) {
 }
 
 void main() {
-  testWidgets('🔴 那颗圆圈：**白底 ＋ 一圈琥珀色**（主人 2026-10-05）', (tester) async {
-    // 主人原话：*"那个语音按钮呢上外面要加一个边框啊，这个边框就是有那个琥珀色，
+  testWidgets('🔴 那颗圆圈：**浅橙底 ＋ 一圈琥珀色**（主人 2026-10-05 要那一圈；2026-10-06 定浅橙底）', (tester) async {
+    // 主人原话（2026-10-05）：*"那个语音按钮呢上外面要加一个边框啊，这个边框就是有那个琥珀色，
     //   就是按下去录音时候的那个颜色，然后……录音按钮和展开按钮他们也都有一个白色的底色"*
+    // ★ **2026-10-06 改口径**（主人：*"白色底变成浅橙色底，跟边框一个色系但是要浅色"*）：
+    //   "白底"那一句作废 ⇒ 现在是 `accentFace`（与那一圈琥珀**同色系、明显更浅**）。
     await _pump(tester, const HearDrill());
     final ring = _circleRing(tester);
     expect(ring.color, d.accent, reason: '★ 外面那一圈不是琥珀色（按下去录音时的那个颜色）');
     expect(ring.width > 0, isTrue, reason: '★ 那圈边框宽度是 0（等于没画）');
-    // 白底：不在录的时候就是那张纸（与聊天窗口同一个白）
-    expect(_circleColor(tester), d.card, reason: '★ 那颗圆圈没有白底');
+    // 浅橙底：与那一圈**同一个色系**（红多蓝少）、但**明显更浅**（不是那张纸的白）
+    expect(_circleColor(tester), d.accentFace, reason: '★ 那颗圆圈的底不是"浅橙"那一档');
+    expect(_circleColor(tester), isNot(d.card), reason: '★ 又变回白底了（主人 2026-10-06 要的是浅橙）');
 
     // 负向对照：在录的时候**整颗变琥珀**（那一圈还在，只是与底同色了）
     await _pump(tester, _listening());
@@ -102,7 +105,7 @@ void main() {
     await _pump(tester, _wrapping());
     expect(find.text('帮我看看天气'), findsOneWidget,
         reason: '★ 收尾中该看见**他刚说的那份字**（不是把它换成一句提示）');
-    expect(_circleColor(tester), d.card, reason: '★ 已经不在录了 ⇒ 不许还画着"在录"那个底色');
+    expect(_circleColor(tester), d.accentFace, reason: '★ 已经不在录了 ⇒ 不许还画着"在录"那个底色');
     expect(find.byIcon(Icons.mic_none_rounded), findsOneWidget);
     expect(find.byIcon(Icons.stop_rounded), findsNothing, reason: '★ 收尾中不许还摆着"停"那个方块');
 

@@ -225,13 +225,15 @@ void main() {
     nativeHearingApi = _Mic();
     await _pump(tester);
 
-    // ① **录音圆圈**：白底（那张纸）＋ 一圈琥珀色（`voice_bar.dart` 的 `_circle`）
+    // ① **录音圆圈**：**浅橙底** ＋ 一圈琥珀色（`voice_bar.dart` 的 `_circle`）
+    //    ⚠️ 2026-10-06 主人把"白底"改成浅橙了（*"白色底变成浅橙色底，跟边框一个色系但是要浅色"*）
+    //      ⇒ 底色这一格从 `d.card` 改成 `d.accentFace`（"实底"这件事一个字没松）。
     final circleFace = tester.widget<Material>(
       find
           .descendant(of: find.byKey(voiceBarCircleKey), matching: find.byType(Material))
           .first,
     );
-    expect(circleFace.color, d.card, reason: '★ 圆圈没实底 —— bar 透了它也跟着透');
+    expect(circleFace.color, d.accentFace, reason: '★ 圆圈没实底（或不是那个浅橙底）—— bar 透了它也跟着透');
     expect(circleFace.color!.a, 1.0, reason: '★ 圆圈的底是半透明的');
     expect(circleFace.shape, isA<CircleBorder>(), reason: '★ 录音那颗不是圆的');
     expect((circleFace.shape! as CircleBorder).side.color, d.accent, reason: '★ 那一圈不是琥珀色');
@@ -243,7 +245,7 @@ void main() {
     );
     final dec = face.decoration! as BoxDecoration;
     expect(dec.color!.a, 1.0, reason: '★ 那一列的面是半透明的 —— bar 透了它就跟着透');
-    expect(dec.color, d.card, reason: '★ 那一列的面不是那张纸');
+    expect(dec.color, d.accentFace, reason: '★ 那一列的面与录音那颗不是同一个底（三颗要统一成浅橙）');
     expect(dec.border, isNotNull, reason: '★ 那一列的面没有轮廓');
 
     // ③ 负向对照：**bar 自己是透明的** ⇒ "按钮不透明"这件事只能靠每颗自己那层底

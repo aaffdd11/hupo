@@ -199,7 +199,25 @@ void main() {
       ).decoration! as BoxDecoration;
       expect(box.border!.top.color, d.accent, reason: '★ 那一圈的顔色与录音那颗不一致');
       expect(box.border!.top.width, d.voiceCircleRing, reason: '★ 那一圈的粗细与录音那颗不一致');
-      expect(box.color, d.card, reason: '★ 底色与录音那颗不一致（该是同一张纸的白）');
+      // ★ **2026-10-06**（主人：*"颜色风格要统一一下，然后白色底变成浅橙色底，
+      //   跟边框一个色系但是要浅色"*）⇒ 三颗**同一个底**：`accentFace`。
+      expect(box.color, d.accentFace, reason: '★ 底色与录音那颗不一致（三颗该是同一个"浅橙"底）');
+      expect(box.color, isNot(d.card), reason: '★ 又变回白底了（主人 2026-10-06 要的是浅橙）');
     }
+    // ⑤ **图形也是同一个墨色**（"颜色风格统一"的另一半）：
+    //   ⚠️ 那两颗原来走 `labelTertiary`（#81858C）—— 压在这个浅橙底上只有 **2.85:1**
+    //     （发虚）；录音那颗的图形一直是 `d.ink`（11.8:1）。
+    // ⚠️ 那一格里有好几层 `CustomPaint`（边框也画在一层上）⇒ 点名我们自己那个 painter
+    final chevron = tester
+        .widgetList<CustomPaint>(
+          find.descendant(of: find.byKey(chatHandleKey), matching: find.byType(CustomPaint)),
+        )
+        .firstWhere((w) => '${w.painter.runtimeType}'.contains('FlatChevron'))
+        .painter;
+    expect((chevron as dynamic).color, d.ink, reason: '★ 那颗箭头的图形色与录音那颗不一致（该是墨色）');
+    final speaker = tester.widget<Icon>(
+      find.descendant(of: find.byKey(chatSpeakKey), matching: find.byType(Icon)).first,
+    );
+    expect(speaker.color, d.ink, reason: '★ 那颗喇叭的图形色与录音那颗不一致（关着也是墨色）');
   });
 }

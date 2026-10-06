@@ -484,9 +484,10 @@ class ChatFloaterState extends State<ChatFloater> {
         width: d.voiceAuxFaceW,
         height: d.voiceAuxFaceH,
         decoration: BoxDecoration(
-          // ★ 底色（主人 2026-10-05 要的）：平时就是那张纸（与录音那颗圆圈同一个底），
-          //   开着时整块变琥珀 —— 状态一眼看得出
-          color: lit ? d.accent : d.card,
+          // ★ 底色（主人 2026-10-05 要的"要底色"；2026-10-06 定"浅橙"）：
+          //   平时是 `accentFace`（**与录音那颗圆圈同一个底**、与那一圈琥珀同色系但更浅），
+          //   开着时整块变琥珀 —— 状态一眼看得出。
+          color: lit ? d.accent : d.accentFace,
           borderRadius: BorderRadius.circular(d.voiceAuxRadius),
           // 🔴 **风格统一**（主人 2026-10-05）：与录音那颗圆圈**同一圈琥珀色、同一个粗细**
           //   —— 三颗长得是同一套东西，只是形状（圆 / 长方）不同。
@@ -521,7 +522,11 @@ class ChatFloaterState extends State<ChatFloater> {
           lit: false,
           child: CustomPaint(
             size: const Size(22, 6),
-            painter: _FlatChevron(color: p.labelTertiary, up: collapsed),
+            // ★ 2026-10-06 主人：*「颜色风格要统一一下」* ⇒ 三颗的图形**同一个墨色**。
+            //   ⚠️ 原来这里与下面那颗喇叭都是 `labelTertiary`（#81858C）—— 压在新的
+            //     **浅橙底**（`accentFace`）上只有 **2.85:1**（灰得发虚，放大看就是"洗过"）。
+            //     换 `d.ink` ⇒ **11.8:1**，与录音那颗图形一个色。
+            painter: _FlatChevron(color: d.ink, up: collapsed),
           ),
         ),
         ),
@@ -567,7 +572,9 @@ class ChatFloaterState extends State<ChatFloater> {
               child: Icon(
                 on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
                 size: d.voiceAuxIcon,
-                color: on ? d.card : p.labelTertiary,
+                // ★ 同上：关着的时候也是**墨色**（"关"这件事已经由底色与那条斜杠说清了，
+                //   而 `labelTertiary` 压在这个浅橙底上只有 2.85:1 —— 发虚）
+                color: on ? d.card : d.ink,
               ),
             ),
             ),
