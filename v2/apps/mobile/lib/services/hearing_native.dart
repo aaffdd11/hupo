@@ -7,8 +7,12 @@
 //   · 这一份：连我们那条 `/api/asr`、把帧送出去、把回帧翻成事件。
 //
 // ── 与网页那一份（`hearing_web.dart`）**逐条对齐**（不然同一件事会有两种说法）──
-//   ① 🔴 **先连上、问对面"这台能不能听"，能听才去要麦克风**：没配钥匙的部署上
-//      先弹一个权限框、再说"没配好"，是白打扰一次（2026-09-23 线上实测到过）。
+//   ① 🔴 **先连上、跟对面说"我要开始了"，然后立刻就要麦克风**（2026-10-06 改：
+//      原来要等 `asr/ready` 才开麦，而"按下去"到"能听"之间那一段 **~240 ms（冷启 ~2.7 s）**
+//      麦克风压根没开 ⇒ **他开口那几个字从来没被采到过**，主人报的"开头说的话可能会少"
+//      就是它；音频先送出去，服务端会把"握上手之前到的"攒住再补发）。
+//      ⚠️ 代价如实认下：没配钥匙的部署上他会**先看到权限框、再看到"还没配好"**
+//      —— 宁可多弹一次框，也不许弄丢开头那几个字。
 //   ② **只有 `asr/ready` 才算能听**（上游握手真的成了）；`asr/unavailable` ⇒
 //      `not-configured`、`asr/error` ⇒ `engine`、连不上 ⇒ `no-entry`（**与"开不了麦"
 //      不是一回事**：2026-09-23 那条线上事故就是这两句混着说）。
@@ -132,7 +136,7 @@ Future<String?> startNativeHearing({
   final session = _Session(w, onEvent);
   _open = session;
 
-  // ── ② 对面说"能听"之前，一下都不去碰麦克风 ────────────────────
+  // ── ② 接住对面的回话（**开麦已经不等它了** —— 见下面 ③ 那段批注）────
   final gate = Completer<String?>();
   session.sub = w.stream.listen(
     (raw) {
@@ -179,17 +183,22 @@ Future<String?> startNativeHearing({
     /* 对面已经断了 */
   }
 
-  final verdict = await gate.future.timeout(_readyLimit, onTimeout: () => 'no-entry');
-  if (verdict != null) {
-    _close(session);
-    return verdict;
-  }
   if (myGen != _generation || !identical(_open, session)) {
     _close(session);
     return 'failed';
   }
 
-  // ── ③ 对面能听 ⇒ 现在才去要麦克风（用户那一下手势还在这一拍里）────
+  // ── ③ 🔴 **现在就要麦克风 —— 不再等 `asr/ready`**（2026-10-06 修）────
+  //
+  //   **主人报的原话**：*"语音处理有问题，开头说的话可能会少。"*
+  //   **量出来的根子**：按下去到"对面说能听"之间那一段，麦克风**压根没开** ——
+  //   真读数（线上那条路 · 宿主 ⇒ 他自己的盒子 ⇒ 豆包）：热的时候 **~240 ms**、
+  //   冷启第一次 **~2.7 s** ⇒ **他开口那几个字从来没被采到过**（采都没采，补不回来）。
+  //
+  //   ⚠️ **为什么现在敢先开**：服务端那一侧**本来就会**把"握上手之前到的音频"
+  //   攒住、握上手立刻补发（`src/asr-doubao.js` 的队列 ＋ 判据 `test/asr.test.js`
+  //   「连上之前推的音频不丢」）。⚠️ 代价如实认下：这台要是**没配钥匙**，
+  //   他会先看到权限框、再看到"还没配好" —— 宁可多弹一次框，也不许弄丢开头那几个字。
   //
   // ⚠️ 帧从 Kotlin 那半回来（`onAudio`，16k 单声道 PCM16），到这里原样送出去。
   _mic.setMethodCallHandler((call) async {
@@ -224,6 +233,15 @@ Future<String?> startNativeHearing({
     // 要权限这一会儿里用户按了停 ⇒ 别把麦克风留在手里
     await _mic.invokeMethod<void>('stop').catchError((Object _) {});
     return 'failed';
+  }
+
+  // ── ④ **回头再看对面怎么说**（音频已经在往那边送了）────────────────
+  //   ⚠️ 这一步**不能提前**：早了就等于把上面那段"没开麦的时间"又还回去。
+  //   失败（没配钥匙 / 引擎出错 / 连不上）⇒ 把麦克风收掉、如实说（原样）。
+  final verdict = await gate.future.timeout(_readyLimit, onTimeout: () => 'no-entry');
+  if (verdict != null) {
+    _close(session);
+    return verdict;
   }
   return null; // 真开起来了
 }

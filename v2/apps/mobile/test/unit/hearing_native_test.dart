@@ -115,7 +115,12 @@ void main() {
   });
 
   group('装上钩子（安卓那一档）', () {
-    test('🔴 顺序：先连上 → 对面说"能听" → **才**去要麦克风', () async {
+    test('🔴 顺序：先连上 → **立刻就要麦克风** → 再看对面说没说"能听"', () async {
+      // 🔴 **2026-10-06 改口径**（主人：*"语音处理有问题，开头说的话可能会少。"*）：
+      //  老顺序是"先问能不能听、能听才碰麦克风"，而**按下去到能听之间**那一段
+      //  麦克风压根没开 —— 实测（线上那条路）**热 ~240 ms、冷启 ~2.7 s**
+      //  ⇒ 他开口那几个字**从来没被采到过**。现在**按下去就开**，
+      //  音频先往对面送（服务端会把"握上手之前到的"攒住再补发）。
       installNativeHearing();
       expect(canHear, true);
       final fut = start();
@@ -123,29 +128,38 @@ void main() {
       // ① 先跟对面说"我要开始了"
       expect(wire.sent, contains(jsonEncode({'type': 'asr/start'})));
       expect(wire.protocols, ['bearer', 'tok-判据'], reason: '★ 令牌走子协议，不进 URL');
-      // ② 对面还没说"能听"之前，**一下都不许碰麦克风**
-      expect(mic.calls, isEmpty, reason: '★ 没配钥匙的部署上先弹权限框 = 白打扰一次');
-      // ③ 对面说能听 ⇒ 这才去要麦
+      // ② 🔴 **对面还没回话，麦克风就已经开起来了**（这就是那次"开头少"的修法）
+      expect(mic.calls, contains('start'),
+          reason: '★ 还在等 `asr/ready` 才开麦 ⇒ 那 240ms～2.7s 里他开口的字全丢');
+      // ③ 对面说能听 ⇒ 这一场成立
       wire.out.add(jsonEncode({'type': 'asr/ready'}));
       expect(await fut, isNull, reason: 'null = 真开起来了');
       expect(mic.calls, contains('start'));
     });
 
-    test('🔴 对面说"没配" ⇒ `not-configured`，而且**一次都没要麦克风**', () async {
+    test('🔴 对面说"没配" ⇒ `not-configured`，而且**把麦克风收干净**', () async {
+      // ⚠️ **2026-10-06 改口径**：麦克风现在是**按下去就开**（为了不丢开头那几个字）
+      //   ⇒ 这一档不再是"一次都没碰麦克风"，而是"**碰了、但验完立刻收干净**"。
+      //   ⚠️ 代价如实认下：没配钥匙的部署上他会先看到权限框、再看到"还没配好" ——
+      //      宁可多弹一次框，也不许把他开口那几个字弄丢。
       installNativeHearing();
       final fut = start();
       await settle();
       wire.out.add(jsonEncode({'type': 'asr/unavailable', 'reason': 'no-creds'}));
       expect(await fut, 'not-configured');
-      expect(mic.calls, isEmpty, reason: '★ 白打扰那一条：这一档不许碰麦克风');
+      expect(mic.calls, contains('start'), reason: '★ 按下去就该在采（不然开头那几个字没了）');
+      expect(mic.calls, contains('stop'), reason: '★ 对面说没配 ⇒ 麦克风必须收干净（不许挂在手里）');
       expect(events.map((e) => e['type']), contains('asr/unavailable'), reason: '★ 事件要转给界面');
     });
 
-    test('🔴 握不上手 ⇒ `no-entry`（**不是**"开不了麦"），且不会去要麦克风', () async {
+    test('🔴 握不上手 ⇒ `no-entry`（**不是**"开不了麦"）；麦克风不许留在手里', () async {
+      // ⚠️ **2026-10-06 改口径**：连都没连上 ⇒ 麦克风根本没开过（这一档没到那一步），
+      //   所以这里量的是"**没把它留在手里**"（要么没开、要么开过已经收了）。
       installNativeHearing();
       wire.readyFails = true;
       expect(await start(), 'no-entry');
-      expect(mic.calls, isEmpty);
+      expect(mic.calls.contains('start') && !mic.calls.contains('stop'), false,
+          reason: '★ 麦克风开着没收 —— 连接都没了，别再占着他的麦');
     });
 
     test('★ 上游那一头出错（`asr/error`）⇒ `engine`', () async {
@@ -159,11 +173,12 @@ void main() {
     });
 
     test('★ 麦克风那一侧说"没权限" ⇒ `denied`，而且连接收干净', () async {
+      // ⚠️ **2026-10-06 改口径**：麦克风现在是**按下去就开**（不再等 `asr/ready`）
+      //   ⇒ 这一条**不用再喂那一帧 `asr/ready`**（喂了反而会撞上"流已经关了"）。
       installNativeHearing();
       mic.why = 'denied';
       final fut = start();
       await settle();
-      wire.out.add(jsonEncode({'type': 'asr/ready'}));
       expect(await fut, 'denied');
       expect(wire.closed, true, reason: '★ 开不了麦 ⇒ 这条连接不许挂在那儿');
     });
