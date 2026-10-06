@@ -261,6 +261,28 @@ export function createSegmentTracker() {
   /** 这条连接到目前为止的**整段**。 */
   let text = '';
 
+  /**
+   * **两句话像不像"同一句又准了一点"**（只看字，不看时间）。
+   *
+   * 🔴 2026-10-07（主人念的 `…版本我们是，` → `…版本我们是好的了。` 出现了重复）：
+   *   上游**修订**一句时，会把末尾的标点/词换掉 —— 那一份**既不以旧的开头、也不是旧的尾巴**
+   *   （`…我们是，` vs `…我们是好的了。`）⇒ 只靠 `startsWith`/`endsWith` 判不出来，
+   *   就会被当成新的一句**接上去**（重复）。⇒ 加这一条**模糊**判断：
+   *   · 一句包含另一句 ⇒ 同一句；
+   *   · 共同开头够长（≥ 一半）⇒ 同一句（改个标点、补几个字）；
+   *   · 一小截（≤3 字）被换掉 ⇒ "说错了重来"（真帧里 `嗯` → `今天`）。
+   * ⚠️ 判据 `test/asr-doubao.test.js` D14。
+   */
+  const looksSame = (a, b) => {
+    if (a === '' || b === '') return true;
+    if (a.includes(b) || b.includes(a)) return true;
+    if (a.length <= 3 && b.length > a.length) return true;
+    const m = Math.min(a.length, b.length);
+    let n = 0;
+    while (n < m && a[n] === b[n]) n += 1;
+    return n / m >= 0.5;
+  };
+
   /** `a` 的尾巴与 `b` 的开头最长重合几个字（接缝去重用）。 */
   const overlap = (a, b) => {
     const max = Math.min(a.length, b.length);
@@ -296,6 +318,17 @@ export function createSegmentTracker() {
         // 比手里那份短、而且**已经在里面了**（开头或结尾都对得上）
         // ⇒ 迟到的旧帧 / 回声（累积式上游常见）⇒ **一个字都不动**
         return definite ? { final: { text, index: 0 } } : {};
+      } else if (looksSame(text, next)) {
+        // 🔴 **同一句又准了一点**（上游把末尾的标点/词换掉了）⇒ **取更全的那一份**，
+        //    **绝不许接上去**（接上去就是主人看见的那种重复）。
+        //    ⚠️ 换掉了就要**把新的那一份发下去**（`partial`，见下面统一的出口）——
+        //      这一支不是"什么都不发"（那是回声那一支）。
+        //    ⚠️ 比手里那份**短**的修订**不许把整段缩掉**（回声/迟到帧）⇒ 一个字都不动。
+        if (next.length >= text.length) {
+          text = next;
+        } else {
+          return definite ? { final: { text, index: 0 } } : {};
+        }
       } else {
         // **只给了新的一句**（或者上游把前面那句重划了一遍）⇒ 接缝去重之后接上
         text = text + next.slice(overlap(text, next));
