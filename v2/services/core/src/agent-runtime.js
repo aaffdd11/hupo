@@ -42,6 +42,7 @@ import { EventEmitter } from 'node:events';
 import { createOomWatcher } from './oom.js';
 // ★ **一个房间一条会话**（契约 110）：那份映射（每个用户一份）。
 import { dshSessionIdFor } from './dsh-sessions.mjs';
+import { rotateSessionFor } from './dsh-sessions.mjs';
 
 /** 默认的 dsh 可执行文件。 */
 export function resolveDshBin() {
@@ -368,6 +369,48 @@ export class AgentRuntime extends EventEmitter {
     await a.dispose();
     this.emit('agent-stopped', sessionId, reason);
     return true;
+  }
+
+  /**
+   * ★ **翻页**：把这一间的会话换成下一条新的（2026-10-06 · 主人：*「响应依然很慢」* ·
+   * 契约 `docs/dev/209-SESSION-ROTATE.md`）。
+   *
+   * 两步、顺序不能换：
+   *   ① **先卸掉那一条 agent**（不然它还在往旧会话里写）；
+   *   ② 再把映射指到**新的一条**（旧的那条**文件原样留着** —— 那是档，不是垃圾）。
+   *
+   * 🔴 **为什么宿主这一层要包一个**：这两步分开放，调用方很容易只做一半
+   *    （只改映射 ⇒ 老进程还在写；只卸进程 ⇒ 下一次又接回同一条旧会话）。
+   *
+   * ⚠️ 一声不响地失败也要**说得出话**：回 `{from:null,to:null,error}`，调用方记进它那条错误里。
+   * ⚠️ **下一次取用**（`agent(sessionId)`）才会按新映射建一条新的 —— 这里不主动起进程。
+   *
+   * @param {string} sessionId 进程池那把键（`<userId>/<scope>`）
+   * @param {{reason?:string}} [o]
+   * @returns {Promise<{from:string|null, to:string|null, error?:string}>}
+   */
+  async rotateSession(sessionId, { reason = 'rotate' } = {}) {
+    let cfg = {};
+    try {
+      cfg = this.#cfgFor(sessionId);
+    } catch (err) {
+      return { from: null, to: null, error: `取不到这一间的配置：${err?.message ?? err}` };
+    }
+    try {
+      await this.stop(sessionId, { reason });
+    } catch (err) {
+      // 卸不掉也照旧往下走：映射换掉之后，下一次取用建的也是新会话
+      // （旧进程若还活着，宿主会在它退出时把它摘掉 —— 不会把两间并进一条）
+      this.emit('rotate-error', sessionId, err);
+    }
+    try {
+      const r = rotateSessionFor({ agentKey: sessionId, cfg });
+      this.emit('session-rotated', sessionId, r);
+      return r;
+    } catch (err) {
+      this.emit('rotate-error', sessionId, err);
+      return { from: null, to: null, error: err?.message ?? String(err) };
+    }
   }
 
   async shutdown() {

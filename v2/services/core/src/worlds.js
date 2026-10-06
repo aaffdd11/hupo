@@ -94,6 +94,13 @@ export const MAIN_SCOPE = 'main';
 export const ROOM_RECLAIM_WHAT = 'reclaim-room';
 
 /**
+ * 审计里「会话翻页」那一条叫什么（2026-10-06 · 主人：*「响应依然很慢」* ·
+ * 契约 `docs/dev/209-SESSION-ROTATE.md`）。
+ * ⚠️ **只有这一处**：写它的与判据读的是同一个常量。
+ */
+export const SESSION_ROTATE_WHAT = 'session-rotate';
+
+/**
  * **桌面上的内置磁贴**（设置 / 发现 /「我自己那台」）。
  *
  * 🔴 这几个字符串与客户端 `v2/apps/mobile/lib/models/app_spec.dart` 的
@@ -974,6 +981,25 @@ export class Worlds {
       // ★ **93 §5.2·A：`usage` 从这里接上** —— 翻译层拿到的上游 usage 不再被丢掉，
       //   按**这一间的 `scopeId`** 记一笔（主人第 8 条：含它触发的子任务）。
       //   ⚠️ 只记量、不记内容；回调失败不挡轮（`UsageLedger.note` 自己吞）。
+      /**
+       * ★ **会话翻页了就说一声**（2026-10-06 · 契约 `docs/dev/209-SESSION-ROTATE.md`）。
+       *
+       * 🔴 为什么要留痕：翻页 = 那一间**往后接得上的细节变少**（新实例只喂最近 40 句）。
+       *    它一句人话都不用上屏，但**必须查得到**（"它怎么突然不记得了"这类问题
+       *    事后要靠这一行回答）。
+       */
+      onRotate: ({ scopeId, from, to, promptTokens }) => {
+        appendAudit({
+          file: auditPath(this.#cfg.dataDir),
+          line: auditLine({
+            what: SESSION_ROTATE_WHAT,
+            userId: t.userId,
+            detail: `${scopeId ?? 'main'}：上一轮上下文 ${Math.round(promptTokens / 1000)}k token ⇒ 换到下一条（${from ?? '?'} → ${to}）`,
+          }),
+          fs: nodeFs,
+          onError: (m) => this.#warn(m),
+        });
+      },
       onUsage: ({ scopeId, turn, usage: u }) => {
         usage.note(scopeId, { kind: USAGE_KINDS.agentTurn, usage: u, scopeId, turn });
       },

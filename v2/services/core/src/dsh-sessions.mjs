@@ -247,6 +247,59 @@ export function writeSessions({ file, entries, fs = nodeFs, mode = 0o600 } = {})
  * @param {object} [o.fs] 注入的 fs
  * @returns {string}
  */
+/**
+ * 一条会话 id 的**"第几页"加一**（纯函数）：
+ *   `main` → `main.1` · `owner/main.x.1` → `owner/main.x.2`
+ *
+ * ★ 2026-10-06（主人：*「响应依然很慢」* · 契约 `docs/dev/209-SESSION-ROTATE.md`）：
+ *    上下文涨到一定程度就要**换一条新的**（旧的那条文件原样留着当档）。
+ *    ⚠️ **新 id 必须是一个"盘上还没有的名字"** —— 拿一个已有的 id 去开，
+ *      DSH 会**接着那条旧的**（那就不是翻页，是原地打转）。
+ *
+ * @param {string} id
+ * @returns {string}
+ */
+export function nextSessionGeneration(id) {
+  const s = String(id ?? '');
+  if (s === '') throw new Error('空会话 id 没有"下一页"（不许猜）');
+  const m = /\.([0-9]+)$/.exec(s);
+  if (!m) return `${s}.1`;
+  const n = Number.parseInt(m[1], 10) + 1;
+  return `${s.slice(0, s.length - m[0].length)}.${n}`;
+}
+
+/**
+ * ★ **翻页**：把这一间的映射指到**下一条新会话**（旧的那条文件**一个字节都不动**）。
+ *
+ * 🔴 调用方**必须先把那一条 agent 停掉/卸掉**（不然它还在往旧会话里写）。
+ *    宿主那条路上，`AgentRuntime.rotateSession()` 把这两步按顺序包好了 —— 用它，别手拼。
+ *
+ * ⚠️ **没有映射落点**（手搭的 cfg / 判据）⇒ 只回一个新名字，**不落盘**
+ *    （那种 cfg 本来就没有"这个人的数据目录"，见 `mappingPathFor`）。
+ *
+ * @param {object} o
+ * @param {string} o.agentKey 进程池那把键（`<userId>/<scope>`）
+ * @param {object} [o.cfg]
+ * @param {object} [o.fs]
+ * @returns {{from:string|null, to:string}}
+ */
+export function rotateSessionFor({ agentKey, cfg = {}, fs = nodeFs } = {}) {
+  const scope = scopeOfAgentKey(agentKey);
+  const file = mappingPathFor(cfg);
+  if (!file) return { from: null, to: nextSessionGeneration(sessionIdFor(scope)) };
+  const entries = readSessions({ file, fs });
+  const from = typeof entries[scope] === 'string' && entries[scope] !== ''
+    ? entries[scope]
+    : sessionIdFor(scope);
+  // 新名字不许撞上**别间**正在用的那个（撞了就把两间的话并进一条 —— 这条映射的底线）
+  const used = new Set(Object.entries(entries).filter(([k]) => k !== scope).map(([, v]) => v));
+  let to = nextSessionGeneration(from);
+  for (let i = 0; i < 50 && used.has(to); i += 1) to = nextSessionGeneration(to);
+  entries[scope] = to;
+  writeSessions({ file, entries, fs });
+  return { from, to };
+}
+
 export function dshSessionIdFor({ agentKey, cfg = {}, fs = nodeFs } = {}) {
   const scope = scopeOfAgentKey(agentKey);
   const file = mappingPathFor(cfg);

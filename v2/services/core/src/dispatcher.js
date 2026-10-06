@@ -19,6 +19,7 @@ import { newMessageId } from './message-writer.js';
 //   未读那半（D-6）。裁决本体与那本落盘的账在 `handoff.js`，这里只做**调度**。
 import { HandoffBook, HandoffError, decideHandoff } from './handoff.js';
 import { resolveFocus } from './focus-book.js';
+import { SESSION_ROTATE_RETRY_MS, promptTokensOf, shouldRotateSession } from './session-budget.js';
 // ★ **派活**（契约 `docs/dev/102-APP-BIRTH-SCOPE.md` · 主人 2026-09-25 拍「乙」）：
 //   与**转交**（交给**已有**的一间 · N16）分开的**另一条路** —— 派活是**新建**一间，
 //   把它做完的**总结**扔回主进程，主进程侧只留一份**简登记**（索引，不是日志副本）。
@@ -173,6 +174,25 @@ class Session {
   #lastRecap = null;
   /** ★ 用量账（见构造参数 `onUsage`）。不接 ⇒ 老行为。 */
   #onUsage = null;
+
+  /**
+   * ★ **这一间上一轮的上下文有多大**（token；`0` = 还不知道）。
+   *
+   * 从上游回来的 usage 里量（`promptTokensOf` = `uncachedInput + cacheRead`）——
+   * 超过 `SESSION_ROTATE_PROMPT_TOKENS` 就在下一次开口**之前**翻页
+   * （2026-10-06 · 主人：*「响应依然很慢」* · 契约 `docs/dev/209-SESSION-ROTATE.md`）。
+   * ⚠️ **与记不记账无关**：`#onUsage` 没接也要量（翻页是「这一间自己」的事）。
+   */
+  #promptTokens = 0;
+
+  /** 翻页失败之后的冷却（那之前不再试同一件坏事）。 */
+  #rotateBlockedUntil = 0;
+
+  /** 有没有从盘上把「上一轮多大」读回来过（一个进程只读一次）。 */
+  #tokensSeeded = false;
+
+  /** ★ 翻页留痕（可选；`Worlds` 接上审计）。不接 ⇒ 只做、不留（老行为）。 */
+  #onRotate = null;
   /** ★ P2-8 出网留痕（见构造参数 `onEgress`）。不接 ⇒ 老行为。 */
   #onEgress = null;
   /**
@@ -483,6 +503,8 @@ class Session {
      *   不接 ⇒ 老行为（与改前逐字一致）。
      */
     onUsage = null,
+    /** ★ **翻页了就说一声**（可选 · 审计用；见 `#onRotate`）。 */
+    onRotate = null,
     /**
      * ★ **P2-8 出网留痕**（主人 2026-09-25「② 先只做留痕」）：
      *   翻译层从 `tool/result` 里取出"域名/量"，从这里交给上层（`worlds.js` 那本
@@ -544,6 +566,7 @@ class Session {
     this.#backgroundAfterMs = backgroundAfterMs;
     this.#onAuthFailure = onAuthFailure;
     this.#onUsage = onUsage;
+    this.#onRotate = typeof onRotate === 'function' ? onRotate : null;
     this.#onEgress = onEgress;
     this.#onQueueChanged = onQueueChanged;
     // ★ B46 ①：那个"让开这一间"的动作（不接 ⇒ `null` ⇒ 一次都不问）
@@ -703,6 +726,9 @@ class Session {
    * ⚠️ `usage` 为空 / 认不出 ⇒ **不记**（不许拿 0 充一笔）。
    */
   #noteUsage(turn, usage) {
+    // ★ **先量这一间的上下文**（与「记不记账」无关 —— 见 `#promptTokens` 那段）
+    const tokens = promptTokensOf(usage);
+    if (tokens !== null) this.#promptTokens = tokens;
     if (!this.#onUsage || !usage || typeof usage !== 'object') return;
     try {
       this.#onUsage({
@@ -1343,6 +1369,113 @@ class Session {
    * ⚠️ 但**监听只能挂一次**——同一个实例重复挂就会重复翻译，
    *    用户看到两条一样的回答。所以按**实例身份**比一下再挂。
    */
+  /**
+   * ★ **会话太长了就翻一页**（2026-10-06 · 主人：*「响应依然很慢」* ·
+   * 契约 `docs/dev/209-SESSION-ROTATE.md`）。
+   *
+   * 判据是**上一轮真的用了多少上下文**（`#promptTokens`，从上游 usage 量的）——
+   * 不是文件大小那种近似。超过 `SESSION_ROTATE_PROMPT_TOKENS` ⇒
+   * **卸掉这一条 agent ＋ 把会话映射指到下一条新的**（旧的那条文件原样留着）。
+   *
+   * 🔴 **一声不响地失败不行**：失败记进 `#lastError`，并且**冷却 5 分钟**再试
+   *    （不然每一轮都去撞同一件坏事）。
+   * ⚠️ 翻页**只影响「往后接得上多少细节」**：新实例第一次投递照样喂那段时间线
+   *    （最近 40 句），与「重启之后接着聊」走的是同一条路。
+   */
+  async #rotateSessionIfTooLong() {
+    this.#seedPromptTokensOnce();
+    if (Date.now() < this.#rotateBlockedUntil) return false;
+    if (!shouldRotateSession({ promptTokens: this.#promptTokens })) return false;
+    const before = this.#promptTokens;
+    let r = null;
+    try {
+      r = await this.#runtime.rotateSession?.(this.#agentSessionKey, { reason: 'too-long' });
+    } catch (err) {
+      this.noteError(`翻页没成：${err?.message ?? err}`);
+      this.#rotateBlockedUntil = Date.now() + SESSION_ROTATE_RETRY_MS;
+      return false;
+    }
+    if (!r || r.error || !r.to) {
+      this.noteError(`翻页没成：${r?.error ?? '没有新的一条'}`);
+      this.#rotateBlockedUntil = Date.now() + SESSION_ROTATE_RETRY_MS;
+      return false;
+    }
+    this.#promptTokens = 0; // 新的一条，从头量
+    try {
+      this.#onRotate?.({
+        scopeId: this.#scopeId ?? null,
+        from: r.from ?? null,
+        to: r.to,
+        promptTokens: before,
+        turn: null,
+      });
+    } catch (err) {
+      // 留痕失败不许把这一轮弄坏（与 `onUsage` 同一条纪律）
+      this.noteError(`翻页留痕没写下去：${err?.message ?? err}`);
+    }
+    return true;
+  }
+
+  /**
+   * ★ **重启之后把「这一间上一轮多大」读回来**（一个进程只读一次）。
+   *
+   * 🔴 为什么非要它：`#promptTokens` 是**内存里**的计数 ⇒ 服务一重启就归零，
+   *    而**会话本身没变小**（它躺在盘上）⇒ 不读回来的话，重启之后的第一轮
+   *    一定会拿一条 49 万 token 的会话去撞一次（就是 `208` 量到的那 16 秒），
+   *    而且**一句话都不说**地慢。
+   *
+   * 读的是那条日志上**最后一条 `turn/usage`**（那一轮的用量，持久）。
+   * ⚠️ 那一笔是**一轮里几次调用的合计**（`foldUsage`）⇒ 拿它当"单次上下文"
+   *    会**偏大** ⇒ 只会**更早**翻页、不会更晚（这个方向的偏差可以接受，
+   *    另一个方向才是"该翻没翻、他还是慢"）。
+   * ⚠️ 读不到 / 认不出 ⇒ 什么都不做（宁可这一轮慢，也不许凭猜把对话换了）。
+   */
+  #seedPromptTokensOnce() {
+    if (this.#tokensSeeded) return;
+    this.#tokensSeeded = true;
+    const scope = String(this.#scopeId ?? 'main');
+    try {
+      const all = this.#store?.readAll?.(this.#timeline?.id ?? 'main') ?? [];
+      for (let i = all.length - 1; i >= 0; i -= 1) {
+        const e = all[i];
+        if (!e || e.type !== 'turn/usage') continue;
+        if (String(e.scopeId ?? 'main') !== scope) continue;
+        const t = promptTokensOf(e.usage);
+        if (t !== null) {
+          this.#promptTokens = t;
+          return;
+        }
+      }
+    } catch (err) {
+      this.noteError(`翻页那一笔账读不回来：${err?.message ?? err}`);
+    }
+  }
+
+  /**
+   * ★ **预热**（2026-10-06 · 契约 `docs/dev/209-SESSION-ROTATE.md` §二）：
+   * 把这一间的 agent **先拉起来**，省掉「他开口 → agent 就绪」那一段
+   * （真读数：**3.2 秒**，见 `208` §二）。
+   *
+   * ⚠️ 只**起进程**：不投任何话、不动时间线、不花模型的钱。
+   * ⚠️ **一声不响**：起不来什么都不说（他真开口那一下会照旧如实说）。
+   * ⚠️ 已经在跑的（`ready`）⇒ 直接返回（`start()` 自己就是幂等的）。
+   */
+  warmAgent() {
+    let agent = null;
+    try {
+      agent = this.#ensureAgent();
+    } catch (err) {
+      this.noteError(`预热没成：${err?.message ?? err}`);
+      return;
+    }
+    if (!agent || agent.ready) return;
+    try {
+      void agent.start().catch((err) => this.noteError(`预热没成：${err?.message ?? err}`));
+    } catch (err) {
+      this.noteError(`预热没成：${err?.message ?? err}`);
+    }
+  }
+
   #ensureAgent() {
     const id = this.#agentSessionKey;
     const agent = this.#runtime.agent(id);
@@ -1445,6 +1578,9 @@ class Session {
     // 🔴 **B46 ①**：主人在产品里跟这一间说话 ⇒ 先让开发者入口从这一间上让开
     //   （必须在 `#ensureAgent()` / `prompt` **之前** —— 那一台正占着写租约）。
     await this.#yieldEntryForTalk();
+    // ★ **这一间的会话太长了 ⇒ 先翻一页**（2026-10-06 · 主人：「响应依然很慢」）
+    //   ⚠️ 必须在 `#ensureAgent()` **之前**：翻页要先把那一条 agent 卸掉。
+    await this.#rotateSessionIfTooLong();
     const agent = this.#ensureAgent();
 
     // 只对"还没喂过的那个实例"喂一次。按**实例**记，不按"启动过没有"记——
@@ -1946,6 +2082,9 @@ export class Dispatcher {
   /** ★ 用量账（见 `Session` 的 `onUsage`）——每个用户一份，所有会话共用。 */
   #onUsage;
 
+  /** ★ **翻页留痕**（见 `Session` 的 `onRotate`）——每个人一份，所有会话共用。 */
+  #onRotate;
+
   /** ★ P2-8 出网留痕（见 `Session` 的 `onEgress`）——每个用户一份，所有会话共用。 */
   #onEgress;
 
@@ -2066,6 +2205,7 @@ export class Dispatcher {
     this.#backgroundAfterMs = args.backgroundAfterMs ?? BACKGROUND_AFTER_MS;
     // ★ 93 §5.2·A：用量账（一个人一份）。主线与会话都从这里拿同一个回调。
     this.#onUsage = args.onUsage ?? null;
+    this.#onRotate = typeof args.onRotate === 'function' ? args.onRotate : null;
     // ★ P2-8：出网留痕同理（一个人一份，房间里的出网也记到同一个人头上）。
     this.#onEgress = args.onEgress ?? null;
     this.#onQueueChanged = args.onQueueChanged ?? null;
@@ -2135,6 +2275,16 @@ export class Dispatcher {
       // ⚠️ **只有不带设备标识才动 C 期那一份** —— 让"按设备记"与
       //    "最后被告知的那一个"互不污染（D-9：不许拿最新那台顶替）。
       this.#focusScope = s;
+    }
+    // ★ **2026-10-06：他打开哪一间，就把那一间的 agent 预热起来**
+    //   （契约 `docs/dev/209-SESSION-ROTATE.md` §二）。真读数：他开口到 agent 就绪
+    //   那一段是 **3.2 秒**（`208` §二）—— 它跟"他在看哪一间"完全无关，
+    //   所以可以**提前**付掉。⚠️ 只起进程：不投话、不动时间线、不花钱；
+    //   起不来一声不响（真开口那一下会照旧如实说）。
+    try {
+      this.#sessions.get(s)?.warmAgent?.();
+    } catch {
+      /* 预热是旁路：它出事不许把焦点这一下带走 */
     }
     return s;
   }
@@ -2236,6 +2386,8 @@ export class Dispatcher {
       backgroundAfterMs: this.#backgroundAfterMs,
       // ★ 93 §5.2·A：**每一个房间**的用量都记到它自己的 scope 头上。
       onUsage: this.#onUsage,
+      // ★ 2026-10-06：**翻页留痕**（房间也走同一个回调；`Worlds` 写审计）
+      onRotate: this.#onRotate,
       // ★ P2-8：**每一个房间**的出网痕迹都记到同一个人头上（留痕只分人，不分房间）。
       onEgress: this.#onEgress,
       // ★ `117`：**每一个房间**的排队都报到**它自己那条视图**上（`worlds.js` 接线）——
