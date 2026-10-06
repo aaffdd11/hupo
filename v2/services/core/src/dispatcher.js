@@ -23,7 +23,7 @@ import { resolveFocus } from './focus-book.js';
 //   与**转交**（交给**已有**的一间 · N16）分开的**另一条路** —— 派活是**新建**一间，
 //   把它做完的**总结**扔回主进程，主进程侧只留一份**简登记**（索引，不是日志副本）。
 //   ⚠️ `handoff.js` 那套一个字都没动。
-import { JOB_ASK_TIMEOUT_MS, JOB_LINES, JOB_NUDGE_LINE, JOB_NUDGE_MAX, JOB_REPORT, JOB_START, appOpenEvent, decideJobStart, jobAskEvent, jobAskExpiredEvent, jobPacketText, jobSummaryText, scopeOpenEvent } from './job.js';
+import { JOB_ABANDONED, JOB_ASK_TIMEOUT_MS, JOB_LINES, JOB_NUDGE_LINE, JOB_NUDGE_MAX, JOB_REPORT, JOB_START, appOpenEvent, decideJobStart, jobAskEvent, jobAskExpiredEvent, jobPacketText, jobSummaryText, scopeOpenEvent } from './job.js';
 // ★ P1 时间分级（契约 `docs/dev/88-P1-TIME-WAIT.md`）：
 //   **逐件落盘**的活账（T2）、后台四句（T4）、承诺行与再报（T5）。
 import { WORK_STATES, isOpen, pairKey } from './worklog.js';
@@ -256,6 +256,9 @@ class Session {
    */
   #resolveJobTile = null;
 
+  /** ★ **2026-10-06：那一笔派活作废**（活没了下文 ⇒ 日志 ＋ 账 ＋ 那一格，见 `Dispatcher`）。 */
+  #abandonJob = null;
+
   /** ★ **B39：这件活我替它接过几次**（`where` → 次数）。**有上限**（`JOB_NUDGE_MAX`）。 */
   #jobNudges = new Map();
 
@@ -439,6 +442,13 @@ class Session {
      */
     resolveJobTile = null,
     /**
+     * ★ **2026-10-06：那一笔派活作废那一刀**（`Dispatcher.#abandonJob`）。
+     *
+     * 活没了下文时叫它：把 `job/abandoned` 落进日志、把那本登记推进到 `abandoned`，
+     * 顺手把桌面那一格收场。**不接 ⇒ 只收那一格**（老行为那半）。
+     */
+    abandonJob = null,
+    /**
      * 🔴 **上游说"钥匙不对"时叫一声**（可选）。
      *
      * ⚠️ 为什么需要它：钥匙**填错了**的用户，得**能重新填** ——
@@ -524,6 +534,8 @@ class Session {
     this.#notice = notice;
     // ★ 2026-10-06：派活那一格的结局（`Worlds.resolveJobTile`；不接 ⇒ 什么都不做）
     this.#resolveJobTile = typeof resolveJobTile === 'function' ? resolveJobTile : null;
+    // ★ 2026-10-06：那一笔作废那一刀（`Dispatcher.#abandonJob`）
+    this.#abandonJob = typeof abandonJob === 'function' ? abandonJob : null;
     this.#mainLeak = mainLeak;
     this.#work = work;
     this.#promises = promises;
@@ -640,7 +652,7 @@ class Session {
           if (kind === 'completed' || kind === 'max-tokens') {
             this.#nudgeStalledJob({ where: isJobWhere, kind });
           } else {
-            this.closeJobTile({ where: isJobWhere });
+            this.#jobOver({ where: isJobWhere, reason: String(kind ?? 'stopped') });
           }
         }
         this.#jobReported = false;
@@ -1576,6 +1588,19 @@ class Session {
    * ⚠️ 只在**活真的没了下文**的三条路上叫：派发那一刀失败 · 兜底接满了 · 那一轮以
    *    "接不了"的方式收的（超时 / 进程没了）。**活着还在跑的时候一次都不许叫**。
    */
+  #jobOver({ where = '', reason = null } = {}) {
+    // ① **作废**（日志 ＋ 账；`Dispatcher` 那一刀顺手把那一格也收场）
+    let done = 'none';
+    try {
+      done = this.#abandonJob?.({ where, reason }) ?? 'none';
+    } catch (err) {
+      this.#lastError = `那一笔派活没收场：${err?.message ?? err}`;
+    }
+    // ② **不接那一刀**（判据里没接 / 老部署）⇒ 至少把那一格收掉（那半条路照旧）
+    if (done === 'none') this.closeJobTile({ where });
+    return done;
+  }
+
   closeJobTile({ where = '', name = null, say = true } = {}) {
     const w = String(where ?? '');
     if (w === '') return 'none'; // 不知道是哪一间 ⇒ 什么都不做（不猜）
@@ -1603,9 +1628,9 @@ class Session {
       if (this.#jobNudges.get(`${key}:told`) === true) return; // 只如实说一次
       this.#jobNudges.set(`${key}:told`, true);
       this.#sayProactive(JOB_LINES.nudgeGaveUp, { kind: 'work-nudge' });
-      // ★ **2026-10-06**：接满了 = 这件活没下文 ⇒ **桌面那一格也要收场**
+      // ★ **2026-10-06**：接满了 = 这件活没下文 ⇒ **那一笔作废 ＋ 桌面那一格收场**
       //   （那一间里什么都没做出来 ⇒ 收掉 ＋ 说一句；有东西 ⇒ 留着）
-      this.closeJobTile({ where: key });
+      this.#jobOver({ where: key, reason: 'nudges-exhausted' });
       return;
     }
     const n = given + 1;
@@ -2221,6 +2246,8 @@ export class Dispatcher {
       yieldRoom: this.#yieldRoom,
       // ★ 2026-10-06：派活那一格的结局（每一间都要有 —— 派活建的那一间正是房间）
       resolveJobTile: this.#resolveJobTile,
+      // ★ 2026-10-06：活没了下文 ⇒ 那一笔**作废**要落日志＋账（同样每一间都要有）
+      abandonJob: (o) => this.#abandonJob(o),
     });
     this.#sessions.set(id, s);
     return s;
@@ -2776,7 +2803,9 @@ export class Dispatcher {
     const to = this.sessionFor(where) ?? created ?? null;
     if (!to) {
       from?.noteError(`派活那一间没挂上来（${where}）`);
-      // ★ 2026-10-06：那一格是`startScope` 刚放上去的 ⇒ **这里就收掉**（不留孤儿格）
+      // ★ 2026-10-06：那一格是 `startScope` 刚放上去的 ⇒ **这里就收掉**（不留孤儿格）
+      //   ⚠️ 这一条**不走** `#abandonJob`：那一笔**还没记上账**（就是它失败的那一步）
+      //      ⇒ 没有"作废"可落；只把那一格收干净。
       from?.closeJobTile?.({ where });
       return { ok: false, error: 'create-failed', reason: 'create-failed', text: JOB_LINES.failed };
     }
@@ -2845,6 +2874,45 @@ export class Dispatcher {
     target.deliver(text).catch((err) => {
       target.noteError(`回给它的那句话没送出去：${err?.message ?? err}`);
     });
+  }
+
+  /**
+   * ★ **2026-10-06：那一笔派活作废**（活没了下文 · 主人：*「好的，帮我收尾收掉。」*）。
+   *
+   * 两件、顺序与 `finishJob` 同：① **事实先落那条日志**（主进程那一间那一帧
+   * `job/abandoned` —— 它是登记的**唯一真相**，`JobBook.rebuild()` 靠它重扫）；
+   * ② 登记推进到 `abandoned`。③ 顺带把**桌面那一格**收场（同一批动作，见 `closeJobTile`）。
+   *
+   * 🔴 **只对"还开着"的那一笔有效**：已经交回过的 ⇒ **一个字都不许动**
+   *    （"作废"不许把一件真做成的活说成没做成）。
+   *
+   * @returns {'abandoned'|'none'}
+   */
+  #abandonJob({ where = null, reason = null, name = null, say = true, tile = true } = {}) {
+    const w = String(where ?? '').trim();
+    if (w === '') return 'none';
+    const row = (() => {
+      try {
+        return this.#jobs?.forScope?.(w) ?? null;
+      } catch {
+        return null;
+      }
+    })();
+    if (!row || row.status !== 'started') return 'none'; // 交回过了（或压根没有这一笔）⇒ 不动
+    const at = Date.now();
+    try {
+      this.#main?.noteProduct({ type: JOB_ABANDONED, id: row.id, where: w, reason, at });
+    } catch (err) {
+      // 落不下去也要如实记一笔（不假装它在盘上）—— 但**照旧往下走**（账那一份还得推）
+      this.#main?.noteError(`那一笔作废没落盘：${err?.message ?? err}`);
+    }
+    try {
+      this.#jobs?.recordAbandoned?.({ id: row.id, where: w, reason, at });
+    } catch (err) {
+      this.#main?.noteError(`那一笔作废没记上账：${err?.message ?? err}`);
+    }
+    if (tile) this.#main?.closeJobTile?.({ where: w, name, say });
+    return 'abandoned';
   }
 
   /**

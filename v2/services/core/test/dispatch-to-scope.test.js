@@ -705,6 +705,29 @@ test('🔴 活没了下文（兜底接满）⇒ 那一格**从桌上收掉** ＋
     const said = noticesOfKind(w.dir, 'work-nudge').filter((e) => /收掉了/.test(String(e.text ?? '')));
     assert.equal(said.length, 1, `★ 那一格是**我们**放的 ⇒ 它消失要说一声：${JSON.stringify(said.map((x) => x.text))}`);
     assert.doesNotMatch(String(said[0].text ?? ''), /math-drill|工作区|客户端/, '★ 内部词/短名上了屏');
+
+    // ③ 🔴 **账上也要收场**（2026-10-06）：那一笔记成 `abandoned`，而且**日志里有那一帧**
+    //    （登记的**唯一真相**在日志上 —— 删掉 `jobs.jsonl` 重扫也得对得上）
+    assert.equal(
+      w.jobs.forScope('math-drill').status,
+      'abandoned',
+      '★ 活没了下文，账上却还写着"还开着"',
+    );
+    const frames = logEvents(w.dir).filter((e) => e.type === 'job/abandoned');
+    assert.equal(frames.length, 1, `★ 那一帧要正好一条：${frames.length}`);
+    assert.equal(frames[0].scopeId, undefined, '★ 它落在主进程那条日志上（与 job/start 同一处）');
+    assert.equal(frames[0].where, 'math-drill', '★ 那一帧要带是哪一间（重扫靠它）');
+    // 重扫一遍（P5：删掉登记 ⇒ 重扫日志又对得上）：状态照样是"没做成"
+    const rebuilt = w.jobs.rebuild();
+    assert.equal(
+      rebuilt.find((r) => r.where === 'math-drill')?.status,
+      'abandoned',
+      '★ 重扫日志对不上（那一帧没落 / 落错了地方）',
+    );
+    // ④ 🔴 **回头问一句，答的必须是"没做成"**（`humanLines` 是模型照着说的那份）
+    const lines = w.jobs.humanLines().items.map((i) => i.text).join('\n');
+    assert.doesNotMatch(lines, /还在做/, `★ 活都黄了还说"还在做"：${lines}`);
+    assert.match(lines, /没做成/, `★ 该说"没做成"：${lines}`);
   } finally {
     await h.close();
   }
@@ -1152,8 +1175,12 @@ test('🔴 B39-b/c：它停下不交回 ⇒ **自动替它接**（有上限）�
       stallsAtGiveUp,
       `🔴 接满上限之后还在替它接（无限接就是这个形状）：${stallsAtGiveUp} → ${stallCount()}`,
     );
-    // ③ **接满还是没交回 ⇒ 登记仍挂在"还在做"**（不许假报做完了）
-    assert.equal(w.jobs.forScope('math-drill').status, 'started', '🔴 没交回却记成做完了');
+    // ③ **接满还是没交回 ⇒ 那一笔记 `abandoned`**（不许假报做完了）
+    //   ⚠️ 2026-10-06 改口径：原来是"仍挂在 started"—— 而 `humanLines()` 对那一档说的是
+    //      「「X」还在做，做完告诉你」⇒ 会经 `job_list` 交给模型、由它说给主人听 = **假话**
+    //      （主人刚看到"没做成、那一格收掉了"）。⇒ 现在记 `abandoned`，那句话改成"没做成"。
+    assert.equal(w.jobs.forScope('math-drill').status, 'abandoned', '🔴 没交回却没记成没做成');
+    assert.notEqual(w.jobs.forScope('math-drill').status, 'reported', '🔴 没交回却记成做完了');
     assert.equal(logEvents(w.dir).some((e) => e.type === 'job/report'), false, '🔴 没交回却落了回报那一帧');
     // ④ 🔴 **留痕是给主进程看的**（那几句 notice 落在主进程那条日志上，不带房间标签）
     for (const e of nudges) {

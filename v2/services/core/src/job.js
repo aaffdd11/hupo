@@ -42,6 +42,16 @@ import { MAIN_SCOPE } from './worlds.js';
 /** 派活那两帧的事件类型（**产品事件**，落在那一条日志上）。 */
 export const JOB_START = 'job/start';
 export const JOB_REPORT = 'job/report';
+/**
+ * ★ **2026-10-06：那一笔派活作废了**（主人：*「好的，帮我收尾收掉。」*）。
+ *
+ * 🔴 什么时候发：那件活**没了下文**（兜底接满了 / 那一轮以"接不了"的方式收 / 派发那一刀失败）。
+ *    它与 `job/start` 同族（**产品事件**、落在主进程那条日志上）——
+ *    这样 `JobBook.rebuild()`（删掉登记文件 ⇒ 重扫日志）**照样对得上**（P5 那条不变量）。
+ * ⚠️ **客户端一个字节都不用改**：`job/start` / `job/report` 本来就没有界面上的一格，
+ *    这一条同理（它服务的是那本登记与"我干过什么"那几问）。
+ */
+export const JOB_ABANDONED = 'job/abandoned';
 
 /**
  * ★ **"这件事要另开一处做吗"那一帧**（契约 `docs/dev/108-JOB-ASK-FLOW.md` §一 第①步）。
@@ -382,7 +392,7 @@ export function jobRowsFromEvents(events) {
   const out = new Map();
   for (const e of Array.isArray(events) ? events : []) {
     if (!e || typeof e.type !== 'string') continue;
-    if (e.type !== JOB_START && e.type !== JOB_REPORT) continue;
+    if (e.type !== JOB_START && e.type !== JOB_REPORT && e.type !== JOB_ABANDONED) continue;
     const where = typeof e.where === 'string' ? e.where.trim() : '';
     if (where === '') continue;
     const had = out.get(where) ?? {
@@ -399,6 +409,9 @@ export function jobRowsFromEvents(events) {
     if (e.type === JOB_START) {
       had.status = 'started';
       if (typeof e.why === 'string' && e.why.trim() !== '') had.why = e.why.trim();
+    } else if (e.type === JOB_ABANDONED) {
+      // ★ 2026-10-06：这件活没了下文 ⇒ 那一行**不再是"还在做"**
+      had.status = 'abandoned';
     } else {
       had.status = 'reported';
       if (typeof e.name === 'string' && e.name.trim() !== '') had.name = e.name.trim();
@@ -566,6 +579,33 @@ export class JobBook {
     return { ...rec };
   }
 
+  /**
+   * ★ **2026-10-06：那一笔作废**（活没了下文）。
+   *
+   * 🔴 **只对"还开着"的那一笔有效**（已经交回过的 ⇒ 什么都不做）——
+   *    "作废"不许把一件真做成的活说成没做成。
+   * @returns {{ok:boolean, where?:string, error?:string}}
+   */
+  recordAbandoned({ id = null, where, reason = null, at = Date.now() } = {}) {
+    const wid = String(where ?? '').trim();
+    if (wid === '') return { ok: false, error: 'no-where' };
+    const had = this.#rows.get(wid);
+    if (!had || had.status !== 'started') return { ok: false, error: 'not-open' };
+    const rec = {
+      type: 'job',
+      id: typeof id === 'string' && id !== '' ? id : had.id,
+      at,
+      where: wid,
+      status: 'abandoned',
+      name: null,
+      summary: null,
+      reason: typeof reason === 'string' && reason.trim() !== '' ? reason.trim().slice(0, 200) : null,
+    };
+    this.#append(rec);
+    this.#merge(rec);
+    return { ok: true, where: wid };
+  }
+
   /** 盘上"有哪些小程序／工作区"（**只取，不另存**）。 */
   #scopes() {
     const o = (() => {
@@ -657,6 +697,14 @@ export class JobBook {
         return {
           where: r.where,
           text: shown ? `「${shown}」还在做，做完告诉你` : '有一处还在做，做完告诉你',
+        };
+      }
+      // ★ 2026-10-06：那一笔**作废了**（活没了下文）—— 照实说，绝不说"还在做"
+      //   （主人刚看到"没做成、那一格收掉了"，回头问一句被答"还在做"就是假话）
+      if (r.status === 'abandoned') {
+        return {
+          where: r.where,
+          text: shown ? `「${shown}」没做成（没交回总结）` : '有一处没做成（没交回总结）',
         };
       }
       const what = r.summary ? `：${r.summary}` : '';
