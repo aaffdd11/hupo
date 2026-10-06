@@ -61,6 +61,9 @@ Future<void> _speakAndEnd(
   final feed = feedOf();
   feed({'type': 'asr/partial', 'text': whole.substring(0, 2), 'index': 0});
   feed({'type': 'asr/final', 'text': whole, 'index': 0});
+  // 🔴 **2026-10-07 起：他按停才算说完**（主人：*「我的目的是语音输入。要连贯」*）——
+  //   引擎到点/上游收一轮只是"接着开下一轮"，只有这一下才是"发出去"。
+  await c.toggleVoiceCompose(); // 按停
   feed({'type': 'asr/end', 'text': whole, 'index': 0, 'reason': 'user-stop'});
   await Future<void>.delayed(const Duration(milliseconds: 30));
 }

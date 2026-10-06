@@ -44,10 +44,12 @@ class _Mic implements NativeHearingApi {
   @override
   Future<void> warm({required Uri url, required String token}) async {}
 
+  /// 说完一句（🔴 **2026-10-07 起：他按停才算说完** —— 主人*「我的目的是语音输入。要连贯」*；
+  /// 这里只补"按停"那一下，量的事一件没变：按停之后发的是哪一份字）。
   void say(String text) {
     _on?.call({'type': 'asr/ready'});
     _on?.call({'type': 'asr/final', 'text': text});
-    _on?.call({'type': 'asr/end', 'text': text, 'reason': 'upstream'});
+    _on?.call({'type': 'asr/end', 'text': text, 'reason': 'user-stop'});
   }
 }
 
@@ -129,6 +131,8 @@ void main() {
 
     await tester.tap(find.byKey(voiceBarCircleKey));
     await tester.pump();
+    await tester.tap(find.byKey(voiceBarCircleKey)); // ★ 按停（才算说完）
+    await tester.pump();
     mic.say('帮我查一下明天北京的天气予报');
     await _frames(tester);
 
@@ -147,6 +151,8 @@ void main() {
       'scene': 'do',
     });
     await tester.tap(find.byKey(voiceBarCircleKey));
+    await tester.pump();
+    await tester.tap(find.byKey(voiceBarCircleKey)); // ★ 按停（才算说完）
     await tester.pump();
     mic.say('那个东西弄一下');
     await _frames(tester);

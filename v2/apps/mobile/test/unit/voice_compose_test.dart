@@ -93,11 +93,15 @@ Future<void> _waitFor(bool Function() pred, String why) async {
   return (c: c, s: server, mic: mic);
 }
 
-/// 说完一句（真机上那一串帧 —— 收尾**带原因**也是"说完了"）。
-void _speak(_FakeHearing mic, String text) {
+/// 说完一句 ⇒ **按停**（🔴 2026-10-07 起的新形状：主人 *「我的目的是语音输入。要连贯」*
+/// ⇒ **他按停才算说完**；引擎到点/上游收一轮只是"接着开下一轮"）。
+/// 所以这一串帧是：能听 → 定稿 → **按停** → 对面那条收尾。
+/// ⚠️ 判据本身量的事一件没变（"发的是哪一份字"），变的只是"什么时候算说完"。
+Future<void> _speak(_FakeHearing mic, ChatController c, String text) async {
   mic.on?.call({'type': 'asr/ready'});
   mic.on?.call({'type': 'asr/final', 'text': text});
-  mic.on?.call({'type': 'asr/end', 'text': text, 'reason': 'upstream'});
+  await c.toggleVoiceCompose(); // 按停
+  mic.on?.call({'type': 'asr/end', 'text': text, 'reason': 'user-stop'});
 }
 
 void main() {
@@ -114,7 +118,7 @@ void main() {
       {'heard': '帮我查一下明天北京的天气预报', 'ask': null, 'fact': '予报→预报', 'scene': 'do'},
     ]);
     await b.c.toggleVoiceCompose();
-    _speak(b.mic, '帮我查一下明天北京的天气予报');
+    await _speak(b.mic, b.c, '帮我查一下明天北京的天气予报');
     await _waitFor(() => b.s.said.isNotEmpty, '它自己发出去');
     expect(b.s.said, ['帮我查一下明天北京的天气预报'], reason: '★ 发出去的是**改过错别字**那一句');
     expect(b.s.hearCalls, 1);
@@ -127,7 +131,7 @@ void main() {
       {'heard': '那个东西弄一下', 'ask': '你说的那个东西是指什么？', 'scene': 'do'},
     ]);
     await b.c.toggleVoiceCompose();
-    _speak(b.mic, '那个东西弄一下');
+    await _speak(b.mic, b.c, '那个东西弄一下');
     await _waitFor(() => b.c.voiceFlow.phase == DrillPhase.asking, '它问回来');
     expect(b.s.said, isEmpty, reason: '★★ 问了就不许发');
     expect(b.c.voiceFlow.question, '你说的那个东西是指什么？');
@@ -139,7 +143,7 @@ void main() {
       {'heard': '把上个月的账理一下', 'ask': null, 'scene': 'do'},
     ]);
     await b.c.toggleVoiceCompose();
-    _speak(b.mic, '把上周的账理一下');
+    await _speak(b.mic, b.c, '把上周的账理一下');
     await _waitFor(() => b.c.voiceFlow.phase == DrillPhase.asking, '它问回来');
     await b.c.answerVoiceCompose('上个月');
     await _waitFor(() => b.s.said.isNotEmpty, '答完就发出去');
@@ -156,7 +160,7 @@ void main() {
       {'heard': '帮我把账理一下，按天分。', 'ask': '要发给谁吗？', 'scene': 'do'},
     ]);
     await b.c.toggleVoiceCompose();
-    _speak(b.mic, '帮我把账理一下');
+    await _speak(b.mic, b.c, '帮我把账理一下');
     await _waitFor(() => b.c.voiceFlow.phase == DrillPhase.asking, '第一问');
     await b.c.answerVoiceCompose('上个月的');
     await _waitFor(() => b.c.voiceFlow.phase == DrillPhase.asking, '第二问');

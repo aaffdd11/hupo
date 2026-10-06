@@ -45,6 +45,20 @@ export const DEFAULT_MODEL_NAME = 'bigmodel';
 export const AUDIO_CHUNK_BYTES = 3200;
 
 /**
+ * ★ 2026-10-07（主人：*「我的目的是语音输入。要连贯」*）：**发完"最后一包"之后，
+ * 等多久才算上游把最后那些字吐完了**。
+ *
+ * 🔴 真机读数（那天的探针）：按停之后**回来的第一帧只有「我们」**，
+ *    而原来"第一帧 = 吐完了"⇒ 那一份"整段"就停在「我们」上
+ *    （屏幕上原本对的字被这条更短的整段顶掉 —— 主人说的"前面的话被清除"）。
+ * ⇒ 改成**安静下来才算吐完**：每来一帧把静音钟往后推一格；
+ *    再从"最后一包"起算一个上限（引擎一直吐也得收场，别把用户挂在那儿）。
+ */
+export const FLUSH_QUIET_MS = 400;
+/** 收尾最多等多久（从"最后一包"算起）。 */
+export const FLUSH_MAX_MS = 2_500;
+
+/**
  * 凭据从**环境变量**读（与老那套同一个纪律：`data/asr.env` 由 systemd 喂进来）。
  *
  * ⚠️ 三个名字：`DOUBAO_ASR_APPID` · `DOUBAO_ASR_TOKEN` ·（可选）`DOUBAO_ASR_RESOURCE`。
@@ -344,6 +358,17 @@ export function createDoubaoUpstream({ config, connectId = newConnectId, log = (
   let finished = false;
   /** `onEnd` 只许报一次。 */
   let ended = false;
+  /** 收尾那两个钟（见 `FLUSH_QUIET_MS`／`FLUSH_MAX_MS`）。 */
+  let flushQuiet = null;
+  let flushCeiling = null;
+  /** 收场（只报一次，并把两个钟都停掉）。 */
+  const endNow = () => {
+    if (flushQuiet !== null) { clearTimeout(flushQuiet); flushQuiet = null; }
+    if (flushCeiling !== null) { clearTimeout(flushCeiling); flushCeiling = null; }
+    if (ended) return;
+    ended = true;
+    onEvt.onEnd?.();
+  };
   /** 还没握上手时先攒着（音频不能丢：丢一段就是丢一句话的开头）。 */
   const queue = [];
   let onEvt = {};
@@ -418,11 +443,15 @@ export function createDoubaoUpstream({ config, connectId = newConnectId, log = (
         const seg = tracker.push(ev);
         if (seg.partial) onEvt.onPartial?.(seg.partial);
         if (seg.final) onEvt.onFinal?.(seg.final);
-        // 🔴 **"最后一包"之后的第一帧 = 整段说完了**（上游不一定马上关连接）——
-        //    不发这一下的话，用户按了"停"之后界面会一直挂着（判据 W/那条测试抓过）。
+        // 🔴 **"最后一包"之后要等它安静下来才算吐完**（2026-10-07 改）。
+        //    原来这里是"第一帧就到站" ⇒ 真机上那一帧常常只是**半句**
+        //    （实测：「我们」），于是"整段"被截尾、屏幕上的字跟着变短。
+        //    ⚠️ 不发这一下的话，用户按了"停"之后界面会一直挂着（判据 W 抓过）——
+        //       所以上限那一个钟必须留着（`FLUSH_MAX_MS`）。
         if (finished && !ended) {
-          ended = true;
-          onEvt.onEnd?.();
+          if (flushQuiet !== null) clearTimeout(flushQuiet);
+          flushQuiet = setTimeout(endNow, FLUSH_QUIET_MS);
+          if (flushCeiling === null) flushCeiling = setTimeout(endNow, FLUSH_MAX_MS);
         }
       });
       // 🔴 **握手那一关被拒**（HTTP 401/403…）单独报一类：`ws` 那条 `error` 只说
@@ -444,10 +473,7 @@ export function createDoubaoUpstream({ config, connectId = newConnectId, log = (
           return;
         }
         // 握过手 ⇒ 这是**正常收尾**（上游说完了 / 我们发了最后一包之后它关了）
-        if (!ended) {
-          ended = true;
-          onEvt.onEnd?.();
-        }
+        endNow();
       });
     },
 

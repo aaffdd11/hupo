@@ -62,6 +62,13 @@ class DrillTurn {
 /// **那一场演练的整个状态**（值类：改一步换一份）。
 class HearDrill {
   const HearDrill({
+    /// ★ **这一场要不要"连贯"**（2026-10-07 · 主人：*「我的目的是语音输入。要连贯」*）。
+    ///
+    /// * `true`（**聊天那颗话筒**）：服务端到点（55 秒上限）或上游自己收了一轮
+    ///   ⇒ **接着开下一轮**，字一个都不清、**一次都不发** —— 只有他按停才算说完；
+    /// * `false`（**设置里那颗「试一下」**，也是默认）：照老形状 —— 一轮完了就算
+    ///   这一场完了（那一屏要的是"走一圈看看"，不是长听）。
+    this.continuous = false,
     this.phase = DrillPhase.idle,
     this.hearing = const Hearing(),
     this.heard = '',
@@ -74,6 +81,9 @@ class HearDrill {
 
   /// 走到哪儿了。
   final DrillPhase phase;
+
+  /// 这一场要不要"连贯"（见构造参数那一段）。
+  final bool continuous;
 
   /// **语音那一步**（复用聊天那颗话筒那台状态机 —— 不另造一套）。
   final Hearing hearing;
@@ -113,6 +123,7 @@ class HearDrill {
 
   HearDrill _copy({
     DrillPhase? phase,
+    bool? continuous,
     Hearing? hearing,
     String? heard,
     String? first,
@@ -122,6 +133,7 @@ class HearDrill {
     String? note,
   }) =>
       HearDrill(
+        continuous: continuous ?? this.continuous,
         phase: phase ?? this.phase,
         hearing: hearing ?? this.hearing,
         heard: heard ?? this.heard,
@@ -164,6 +176,27 @@ class HearDrill {
       if (phase == DrillPhase.thinking) return _copy(hearing: hearing.event(e));
       return this;
     }
+    // ★ **2026-10-07（主人：*「我的目的是语音输入。要连贯」*）**：
+    //   **连贯那一档**（聊天那颗话筒）—— 一轮完了只是"该接着开下一轮"，
+    //   **不是"他说完了"**。服务端那条 55 秒上限（`ASR_MAX_MS`）是**为了省钱**
+    //   （他：*"防止关闭浪费钱"*），绝不该把他的话切断。
+    //   → 把**这一轮**的字接进 `settled`（前面的轮次一个字都不许丢）、段号清零；
+    //   → 他按了停那一档（`wrapping`）接着走老路：进 `thinking` ⇒ 发出去，
+    //     但发的是**攒起来的那一份**（几轮加起来）。
+    //   ⚠️ 非连贯那一档（设置里那颗「试一下」）**一个字都不改**：走下面那条老路。
+    final t0 = e['type'];
+    if (continuous && (t0 == 'asr/end' || t0 == 'asr/capped')) {
+      final summ = (e['text'] as String?)?.trim() ?? '';
+      final folded = hearing.roundDone(summ, clearWhy: phase == DrillPhase.listening);
+      if (phase == DrillPhase.listening) {
+        return _copy(hearing: folded, phase: DrillPhase.listening, note: '');
+      }
+      final whole = folded.text.trim();
+      if (whole.isEmpty) {
+        return _copy(hearing: folded, phase: DrillPhase.failed, note: folded.why.isEmpty ? '' : folded.why);
+      }
+      return utterance(whole, hearing: folded);
+    }
     final next = hearing.event(e);
     // 🔴 **`asr/end` ＝ "他这一段说完了"** —— 这就是该送进听懂那一层的那一刻。
     //   ⚠️ **不看引擎给的那个 `reason`**：真机（网页那一份）在**每次停顿**处都会收一段，
@@ -180,8 +213,12 @@ class HearDrill {
       //    ⚠️ 拼段（`hearing.text`）在有停顿的那一场里会得到"只有后半段"或者重复的文本，
       //      而那一层就是拿这份去判语义的 ⇒ 判出奇怪的结论（反问、或者发出去两遍）。
       //    ⚠️ 它没带字（老引擎 / 空收尾）⇒ 退回拼起来那一份（不许一个字都没有）。
-      final summ = (e['text'] as String?)?.trim() ?? '';
-      final got = summ.isNotEmpty ? summ : next.text.trim();
+      // 🔴 **2026-10-07 改一处**：这一份整段**已经**被 `Hearing.roundDone` 接进
+      //    `settled` 了（见 `hearing_session.dart` 那条改口径）⇒ 这里要用
+      //    **攒起来的那一份**（前面几轮 ＋ 这一轮），不是单看这一帧。
+      //    ⚠️ 原来直接取 `e['text']` ⇒ **按停那一刻，"第一句"就没了**
+      //      （判据 `voice_continue_test` 当场抓到）。
+      final got = next.text.trim();
       if (got.isEmpty) return _copy(hearing: next, phase: DrillPhase.failed, note: next.why.isEmpty ? '' : next.why);
       return utterance(got, hearing: next);
     }

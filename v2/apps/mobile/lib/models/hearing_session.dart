@@ -167,6 +167,47 @@ class Hearing {
     return _put(index, text);
   }
 
+  /// ★ **2026-10-07（主人：*「我的目的是语音输入。要连贯」*）：这一轮完了、
+  /// 可他还没按停** —— 把这一轮的字**接在 `settled` 后面**、段号清零，
+  /// 下一轮从 0 开始接着长。
+  ///
+  /// 🔴 它与 [replaceAll] 的分工（别把这两件事混成一个）：
+  ///   · [replaceAll]：**这一场到此为止**（他按了停）⇒ 整段换掉；
+  ///   · [roundDone]：这一场**还在继续**（服务端到点 `asr/capped`，或上游自己收了一轮）
+  ///     ⇒ 只把**这一轮**那一份接到后面 —— **前面几轮的字一个都不许丢**
+  ///     （丢了就是主人报的那句"前面的话会被清除"）。
+  /// ⚠️ 服务端那条 `asr/end` 带的"整段"**只覆盖它那一条连接**
+  ///    （`asr.js` 的 `segs` 是按连接来的）⇒ 在这里只当"这一轮"那一份用。
+  Hearing roundDone(String summary, {bool clearWhy = false}) {
+    final s = summary.trim();
+    final base = text; // 这一轮拼起来的那一份（服务端那条整段常常就是它）
+    return _copy(
+      // ⚠️ 收一轮**不是出错** —— 但"要不要把刚才那句话清掉"看调用方：
+      //    · 聊天那条路（**接着开下一轮**）⇒ `clearWhy: true`（那一轮完了不是失败）；
+      //    · 非连贯那一档（他到点/上游收尾就收场）⇒ 照旧留着（"一分钟到了"那句要看得见）。
+      phase: HearingPhase.listening,
+      why: clearWhy ? '' : why,
+      segments: const <int, String>{},
+      settled: s.isEmpty ? base : _joined(settled, s),
+    );
+  }
+
+  /// **接上去，但不许重复** —— 引擎收尾那一包常常把**最后那一句又吐一遍**
+  /// （真机判据 `hear_drill_test` 的 ⑦ 抓到的就是这个：屏幕上会变成
+  /// "帮我看看天气帮我看看上海的天气"）。
+  /// 规矩：`a` 的尾巴与 `b` 的开头**最长重叠**那一段只算一次。
+  static String _joined(String a, String b) {
+    if (a.isEmpty) return b;
+    if (b.isEmpty) return a;
+    final max = a.length < b.length ? a.length : b.length;
+    for (var n = max; n > 0; n -= 1) {
+      if (a.substring(a.length - n) == b.substring(0, n)) {
+        return a + b.substring(n);
+      }
+    }
+    return a + b;
+  }
+
   /// ★ 2026-10-06：**整段那一份换掉拼起来的那一份**（收尾那条 `asr/end` 带的字）。
   ///
   /// 🔴 为什么不能按段塞进去：`asr/end` 带的是**整段**（服务端把前面几段接好了），
@@ -270,6 +311,10 @@ class Hearing {
         // ★ 2026-10-06：收尾那条带的是**整段**（服务端 `asr.js` 把前面几段接好了）
         //   ⇒ **整段换掉**拼起来的那一份（按段塞会和前面的段重复一遍）。
         //   ⚠️ 它没带字（老引擎 / 空收尾）⇒ 一个字都不动，拼起来那份留着。
+        // 🔴 **2026-10-07 改口径**（主人：*"要连贯"*）：这一条"整段"覆盖的是
+        //   **它那一条连接**（= 这一轮）⇒ 接在 `settled` 后面，**不是**把
+        //   前面几轮的字一起换掉（那样一来"第一句"就在按停那一刻没了 ——
+        //   判据 `voice_continue_test` 当场抓到过）。
         final h = replaceAll(text);
         if (!cut) return h.done();
         // ⚠️ 判"有没有字"要看**整份**（`hasText`），不是只看 `segments`：

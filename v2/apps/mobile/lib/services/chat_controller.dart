@@ -871,7 +871,10 @@ class ChatController extends ChangeNotifier {
   //     甲期那 5 条判据与这一条链子量的是同一件事。
   //  ⚠️ 这一层**只回话**：字从哪儿来（说话 / 打字兜底）、发不发，全在这一侧决定。
 
-  HearDrill _voiceFlow = const HearDrill();
+  /// ⚠️ **`continuous: true`** —— 聊天那颗话筒要"连贯"（2026-10-07 主人：
+  ///    *「我的目的是语音输入。要连贯」*）：服务端到点／上游收一轮 ⇒ 接着开下一轮，
+  ///    只有他按停才算说完。`false`（老形状）留给设置里那颗「试一下」。
+  HearDrill _voiceFlow = const HearDrill(continuous: true);
 
   /// 现在这一场说到哪儿了（界面照着画：听着 / 在懂 / 在问 / 可以了）。
   HearDrill get voiceFlow => _voiceFlow;
@@ -932,6 +935,7 @@ class ChatController extends ChangeNotifier {
   }
 
   void _onComposeFrame(Map<String, dynamic> e) {
+    final wasListening = _voiceFlow.phase == DrillPhase.listening;
     final before = _voiceFlow;
     final after = _voiceFlow.event(e);
     _voiceFlow = after;
@@ -941,11 +945,52 @@ class ChatController extends ChangeNotifier {
       _stopTimer = null;
     }
     notifyListeners();
-    // 他这一段说完了（`asr/end`）⇒ 送进听懂那一层
+    // 他这一段说完了（`asr/end`，**而且他已经按了停**）⇒ 送进听懂那一层
     if (before.phase != DrillPhase.thinking && after.phase == DrillPhase.thinking) {
       unawaited(_composeThink());
+      return;
+    }
+    // ★ **他还没按停，而对面把这一轮收了**（55 秒上限 `asr/capped` / 上游自己收尾）
+    //   ⇒ **当场接着开下一轮**：他那一场不能断，字**一个都不清**
+    //   （2026-10-07 主人：*「我的目的是语音输入。要连贯」*）。
+    final t = e['type'];
+    if (wasListening && after.phase == DrillPhase.listening && (t == 'asr/end' || t == 'asr/capped')) {
+      unawaited(_continueHear());
     }
   }
+
+  /// **接着开下一轮**（他还没按停 · 见 `_onComposeFrame` 那段）。
+  ///
+  /// 🔴 为什么要有它：服务端那条 55 秒上限（`ASR_MAX_MS`）是**为了省钱**
+  ///    （主人：*"60秒上限可以，防止忘记关闭浪费钱"*）—— 所以上限留着，
+  ///    但它**不该把他的话切断**。到点就把这一轮的字收进 `settled`（`Hearing.roundDone`）、
+  ///    当场开下一条连接，屏幕上那份字一直长下去。
+  ///
+  /// ⚠️ **不开新的 `Hearing`**（那会把字清掉）：这一场是同一场，只是换了一条连接。
+  /// ⚠️ **一声不响**：接着开失败 ⇒ 照旧如实说（`micFailed`），**字留着**。
+  /// ⚠️ 他在这期间按了停（`phase != listening`）⇒ 开了也当场收掉，绝不多挂一条。
+  Future<void> _continueHear() async {
+    if (_continuing) return;
+    if (_voiceFlow.phase != DrillPhase.listening) return;
+    _continuing = true;
+    try {
+      final why = await hearOnce(_onComposeFrame);
+      if (_voiceFlow.phase != DrillPhase.listening) {
+        _stopHear(); // 他按停了 ⇒ 这一条也收掉
+        return;
+      }
+      if (why != null) {
+        _stopHear();
+        _voiceFlow = _voiceFlow.micFailed(why);
+        notifyListeners();
+      }
+    } finally {
+      _continuing = false;
+    }
+  }
+
+  /// 正在"接着开下一轮"（防重入）。
+  bool _continuing = false;
 
   /// 听不懂就问；**通顺就发**（这一步不问他"要不要发" —— `D5.19`）。
   ///

@@ -19,8 +19,10 @@ import {
   DEFAULT_MODEL_NAME,
   DEFAULT_RESOURCE_ID,
   DOUBAO_ASR_URL,
+  createDoubaoUpstream,
   createSegmentTracker,
   decodeServerFrame,
+  FLUSH_QUIET_MS,
   doubaoConfigFromEnv,
   doubaoHeaders,
   encodeAudioFrame,
@@ -248,4 +250,95 @@ test('D7 认不出来的回帧 ⇒ 如实说认不出（不许当成识别结果
   // gzip 那一格写着压缩、但正文不是 gzip ⇒ 认不出（**不抛**）
   const bogus = Buffer.concat([Buffer.from([0x11, 0x90, 0x11, 0x00]), (() => { const s = Buffer.alloc(4); s.writeUInt32BE(3, 0); return s; })(), Buffer.from([1, 2, 3])]);
   assert.deepEqual(decodeServerFrame(bogus), { kind: 'unknown', why: 'gunzip' });
+});
+
+// ── ★ 2026-10-07：收尾那一份"整段"不许被截尾（主人："前面的话会被清除"）──────
+
+/** 一条**假的上游 WS**（只记它被喂了什么、能手动回帧）。 */
+class _FakeWS {
+  static OPEN = 1;
+  static CONNECTING = 0;
+  static instances = [];
+  constructor(url) {
+    this.url = url;
+    this.readyState = _FakeWS.CONNECTING;
+    this.handlers = {};
+    this.sent = [];
+    _FakeWS.instances.push(this);
+  }
+  on(ev, fn) {
+    (this.handlers[ev] ??= []).push(fn);
+  }
+  emit(ev, ...a) {
+    for (const f of this.handlers[ev] ?? []) f(...a);
+  }
+  send(buf) {
+    this.sent.push(buf);
+  }
+  close() {
+    this.readyState = 3;
+    this.emit('close', 1000, '');
+  }
+  /** 造一条"连上了" */
+  connect() {
+    this.readyState = _FakeWS.OPEN;
+    this.emit('open');
+  }
+  reply(buf) {
+    this.emit('message', buf);
+  }
+}
+
+function _upstreamForTest() {
+  _FakeWS.instances = [];
+  const evs = [];
+  const up = createDoubaoUpstream({
+    config: { configured: true, apiKey: 'k', resource: DEFAULT_RESOURCE_ID, url: DOUBAO_ASR_URL },
+    WebSocketImpl: _FakeWS,
+    log: () => {},
+  });
+  up.open({
+    onReady: () => evs.push(['ready']),
+    onPartial: (p) => evs.push(['partial', p.text]),
+    onFinal: (p) => evs.push(['final', p.text]),
+    onEnd: () => evs.push(['end']),
+    onError: (e) => evs.push(['error', e?.message ?? '']),
+  });
+  return { up, evs, ws: _FakeWS.instances[0] };
+}
+
+test('★ D9 🔴 发完"最后一包"之后：**第一帧不算吐完**（等它安静下来才算）', async () => {
+  const { up, evs, ws } = _upstreamForTest();
+  ws.connect();
+  ws.reply(serverFrame({})); // 握手那一拍
+  assert.equal(evs.some(([k]) => k === 'ready'), true, '握上手才算 ready');
+  up.audio(Buffer.alloc(AUDIO_CHUNK_BYTES, 3));
+  up.finish();
+  // 按停之后回来的**第一帧**——真机上它常常只是半句（实测：「我们」）
+  ws.reply(serverFrame({ text: '我们', start: 0 }));
+  assert.equal(evs.some(([k]) => k === 'end'), false,
+    '🔴 第一帧就收尾 ⇒ 那一份"整段"被截在半句上（屏幕上原本对的字会被它顶掉）');
+  // 真正的定稿那一帧到了 ⇒ 安静下来之后收一次
+  ws.reply(serverFrame({ text: '我们出去走走吧。', definite: '我们出去走走吧。', start: 0 }));
+  await new Promise((r) => setTimeout(r, FLUSH_QUIET_MS + 250));
+  const ends = evs.filter(([k]) => k === 'end');
+  assert.equal(ends.length, 1, '安静下来之后**只收一次**');
+  // 🔴 负向对照：把它改回"第一帧就到站"那种写法 ⇒ 上面那条断言当场假
+  assert.equal(evs.filter(([k]) => k === 'partial').length >= 2, true,
+    '两帧都要出字（第一帧半句、第二帧定稿）—— 判据量的就是"第二帧有没有等到"');
+});
+
+test('★ D9·补 🔴 引擎一直吐个不停 ⇒ 到上限也必须收场（不许把用户挂在那儿）', async () => {
+  const { up, evs, ws } = _upstreamForTest();
+  ws.connect();
+  ws.reply(serverFrame({}));
+  up.finish();
+  // 每 100ms 来一帧（比 `FLUSH_QUIET_MS` 密）⇒ 静音钟永远推后，只有上限那个钟能收场
+  for (let i = 0; i < 8; i += 1) {
+    ws.reply(serverFrame({ text: `第${i}句`, start: i * 100, index: i }));
+    await new Promise((r) => setTimeout(r, 100));
+    if (evs.some(([k]) => k === 'end')) break;
+  }
+  await new Promise((r) => setTimeout(r, 600));
+  assert.equal(evs.some(([k]) => k === 'end'), true, '上限那一个钟必须留着 —— 不然界面永远挂在"收尾中"');
 });
