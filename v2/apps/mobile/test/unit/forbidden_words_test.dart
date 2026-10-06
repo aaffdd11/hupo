@@ -27,6 +27,8 @@ import 'package:hupo_app/models/space_words.dart';
 import 'package:hupo_app/models/speak_words.dart';
 import 'package:hupo_app/models/tool_row_words.dart';
 import 'package:hupo_app/models/trash_words.dart';
+import 'package:hupo_app/models/work_list.dart';
+import 'package:hupo_app/models/work_words.dart';
 
 void main() {
   test('★ 永久禁用的那几个，一个都不许漏', () {
@@ -397,6 +399,36 @@ void main() {
       askOnOpenNone,
       askOnOpenLater,
       askOnOpenFailed,
+      // ★ 2026-10-06：**左下角那张「清单」**（主人：*"左下角有一个清单按钮，点击会出来
+      //   浮窗，浮窗里有正在干活的聊天的列表。"* · 契约 `docs/dev/198-WORK-LIST.md`）——
+      //   **直接引数据源**（手抄会漂）。
+      //   ⚠️ 这一批最容易混进来的是"工作区 / 会话 / 房间 / scope"那类内部词。
+      workButtonLabel,
+      workButtonHint,
+      workPanelTitle,
+      workCloseWords,
+      workBusyLabel,
+      workAgeDoing,
+      workAgeJustNow,
+      workAgeMinute,
+      workAgeHour,
+      workAgeDay,
+      workCountUnit,
+      workPartSep,
+      workRowHint,
+      workNamelessName,
+      workEmptyWords,
+      workLoadingWords,
+      workFailWords,
+      // 拼出来的那几句也要扫（模板／拼接里最可能混进内部词）
+      workAgeLabel(1770000000000 - 2 * 60 * 1000, now: 1770000000000)!,
+      workAgeLabel(1770000000000 - 3 * 60 * 60 * 1000, now: 1770000000000)!,
+      workRowSubtitle(
+        const WorkingRow(scope: 'abc', title: '记账', since: 1, count: 3),
+        now: 1770000000000,
+      ),
+      workRowName(scope: 'abc', title: '记账'),
+      workRowName(scope: '认不出的那一间'),
     ];
     for (final c in copies) {
       final hits = scanForbidden(c);

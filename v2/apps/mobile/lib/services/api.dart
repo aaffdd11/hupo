@@ -24,6 +24,7 @@ import '../models/server_address.dart';
 import '../models/space.dart';
 import '../models/trash.dart';
 import '../models/wallpaper.dart';
+import '../models/work_list.dart';
 
 /// 说话的结果。**把"为什么没成功"分清楚**——
 /// 因为对用户说的话不一样，能做的事也不一样。
@@ -316,6 +317,31 @@ class Api {
     } catch (_) {
       return null;
     }
+  }
+
+  /// **正在干活的那几间**（主人 2026-10-06 要的那张清单 · 契约 `docs/dev/198-WORK-LIST.md`）。
+  ///
+  /// 🔴 **`null` = 这一次没问上**（网不通 / 非 200 / 读不懂）—— 与"一件活都没有"（空表）
+  ///    **必须分得开**（同 [appsOrNull] 那条纪律，而这条的理由更硬：这张清单的全部意义
+  ///    就是"它现在到底在干什么"，看不见的时候说一句"没有在干的活"是**假话**）。
+  /// ⚠️ 认证只走令牌（服务端按 `claim.sub` 去**他盒子里的那本活账**上取）。
+  /// ⚠️ 盒子那条路上这一条由**盒子自己**算（服务端 `TENANT_ROUTES`）。
+  Future<List<WorkingRow>?> workingOrNull(String token) async {
+    try {
+      final r = await _c
+          .get(_u('/api/working'), headers: {'authorization': 'Bearer $token'})
+          .timeout(const Duration(seconds: 8));
+      if (r.statusCode != 200) return null;
+      return parseWorkingList(jsonDecode(r.body));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 同 [workingOrNull]，但**问不上就是空清单**（不抛）。
+  /// ⚠️ 要覆盖旧清单的地方**必须**用 [workingOrNull]（见那一条）。
+  Future<List<WorkingRow>> working(String token) async {
+    return (await workingOrNull(token)) ?? const [];
   }
 
   /// **从桌面上删掉一个**（契约 `docs/dev/103-APP-DELETE.md` §二 / 判据 C6）。

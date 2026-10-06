@@ -562,13 +562,19 @@ export function createServer({
    * ⚠️ 拿不到（盒子那条路还没接 / 老部署 / 身份不合法）⇒ **空集合**：
    *    宁可**不亮**，也不许凭猜点亮（"它还在做"这种假话最容易被当真）。
    */
+  const liveWorkRows = (sub) => {
+    try {
+      return worldFor?.(sub)?.work?.live?.() ?? [];
+    } catch {
+      /* 读不到就是"不知道" ⇒ 空数组 */
+      return [];
+    }
+  };
+
   const workingScopes = (sub) => {
     const out = new Set();
-    try {
-      const live = worldFor?.(sub)?.work?.live?.() ?? [];
-      for (const r of live) if (typeof r?.scopeId === 'string' && r.scopeId !== '') out.add(r.scopeId);
-    } catch {
-      /* 读不到就是"不知道" ⇒ 空集合（不点亮） */
+    for (const r of liveWorkRows(sub)) {
+      if (typeof r?.scopeId === 'string' && r.scopeId !== '') out.add(r.scopeId);
     }
     return out;
   };
@@ -903,6 +909,46 @@ export function createServer({
         }
         return sendJson(res, 200, { ok: true, unread: d.unreadScopes() });
       }
+      // ── ★ 2026-10-06：**正在干活的那几间**（主人要的那个清单）───────────────
+      //
+      //   **主人原话**：*「我觉得应该在左下角有一个清单按钮，点击会出来浮窗，
+      //   浮窗里有正在干活的聊天的列表。」*
+      //
+      //   ⚠️ **只读、只报事实**：哪几间在干活由**调度器**说了算（那一间有没有
+      //      没说完的话 / 有没有开着的活），这一层不编任何一句"它在做什么"。
+      //   ⚠️ **`title` 只从"他自己那份小程序库"里取**（认不出就是 `null`）——
+      //      界面那边认不出会退回一个通用说法；**绝不把 scope 那串内部 id 发给屏幕**。
+      if (path === '/api/working' && req.method === 'GET') {
+        // ⚠️ **事实只有一个出处**：就是桌面上那一格"在做"读的**同一本逐件活账**
+        //    （`world.work.live()`）⇒ 两处不可能给出两个答案。
+        const byScope = new Map();
+        for (const r of liveWorkRows(claim.sub)) {
+          const s = typeof r?.scopeId === 'string' ? r.scopeId.trim() : '';
+          if (s === '') continue;
+          const t = Number(r?.startedAt);
+          const cur = byScope.get(s);
+          if (!cur) {
+            byScope.set(s, { scope: s, since: Number.isFinite(t) ? t : null, count: 1 });
+            continue;
+          }
+          cur.count += 1;
+          if (Number.isFinite(t) && (cur.since === null || t < cur.since)) cur.since = t;
+        }
+        const items = [...byScope.values()].map((x) => {
+          let title = null;
+          try {
+            const a = x.scope === MAIN_SCOPE ? null : appsFor(claim.sub)?.meta?.(x.scope);
+            title = typeof a?.title === 'string' && a.title.trim() !== '' ? a.title.trim() : null;
+          } catch {
+            title = null; // 认不出就是认不出（**不猜一个名字出来**）
+          }
+          return { ...x, title };
+        });
+        // 先干的先列（同一时刻按名字稳定排 —— 免得清单自己跳）
+        items.sort((a, b) => (a.since ?? 0) - (b.since ?? 0) || a.scope.localeCompare(b.scope));
+        return sendJson(res, 200, { ok: true, working: items });
+      }
+
       if (path === '/api/unread/read' && req.method === 'POST') {
         let body;
         try {
@@ -1846,6 +1892,9 @@ const BACKFILL_MAX = 200;
 const TENANT_ROUTES = [
   '/api/say', '/api/health', '/api/export', '/api/trash', '/api/app-ask', '/api/timeline',
   '/api/unread', '/api/unread/read',
+  // ★ **"正在干活的那几间"也在盒子里算**（活账在他盒子里 —— 与 `/api/apps` 的
+  //   `working` 那条同一个道理）⇒ 宿主原样转进去。
+  '/api/working',
   // ★ **V2.0 第一件**：听懂那一层也**在盒子里**算（拿钥匙的那台是盒子）
   '/api/hear',
 ];

@@ -48,6 +48,7 @@ import '../models/trash_words.dart';
 import '../models/voice_try.dart';
 import '../models/voice_record.dart';
 import '../models/wallpaper.dart';
+import '../models/work_list.dart';
 import '../services/api.dart';
 // ★ **录一段（录音 ＋ 回放）**：本机那一套（`services/recorder.dart` 的条件导出）。
 //   ⚠️ 取一个前缀：`canRecord` / `play` 这种名字在这里太容易和其它含义撞。
@@ -78,6 +79,7 @@ import '../widgets/mini_app_frame.dart';
 import '../widgets/notice.dart';
 import '../widgets/queue_strip.dart';
 import '../widgets/process_view.dart';
+import '../widgets/work_list_panel.dart';
 import '../widgets/time_mark.dart';
 import '../widgets/tool_row_view.dart';
 import '../widgets/trash_plan_sheet.dart';
@@ -205,6 +207,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// **我的小程序**（乙-1：`/api/apps` 拿回来的那一批 —— 每个人自己的）。
   /// ⚠️ 空清单就是空清单（问不到也不摆一个假图标）。
   List<MiniApp> _myApps = const [];
+
+  /// ★ **"现在谁在干活"那一张清单**（主人 2026-10-06 要的那一件 ·
+  ///   契约 `docs/dev/198-WORK-LIST.md`）。
+  ///
+  /// 🔴 **`null` = 这一次没问上**（与"一件活都没有"是**两件事** —— 那张浮窗上
+  ///    说错这一句就是假话）。⇒ 只在拿到非 `null` 时覆盖（同 `_myApps` 那条纪律）。
+  /// ⚠️ 它**只在点开那张浮窗时拉**（点一次问一次）：那一张要的是"现在"。
+  List<WorkingRow>? _working;
+
+  /// 那一次问回来了没有（`true` = 还在路上）。
+  bool _workingBusy = false;
 
   /// 打开这一条（带签名的那份 URL）；`null` = 现在开着的不是"我的小程序"。
   MiniApp? _openMine() {
@@ -1028,6 +1041,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               //   🔴 念不出来的设备（`canSpeak` 假）⇒ `onToggleSpeak` 传 `null` ⇒ 不画。
               speakOn: c.autoSpeak,
               onToggleSpeak: canSpeak ? () => unawaited(c.setAutoSpeak(!c.autoSpeak)) : null,
+              // ★ **2026-10-06 主人**：*"我觉得应该在左下角有一个清单按钮，点击会出来浮窗，
+              //   浮窗里有正在干活的聊天的列表。"*
+              //   ⇒ 那颗按钮 ＋ 那张浮窗都由浮窗自己管开关；**内容**在这里给
+              //     （数据和网络都住这一层 —— 浮窗自己不发请求）。
+              //   ⚠️ `onWorkOpen` 是"刚点开"的那一下 ⇒ 那时候才去问一次"现在谁在干活"。
+              workPanel: (ctx, close) => WorkListPanel(
+                rows: _working,
+                busy: _workingBusy,
+                mineNames: _workNames,
+                onClose: close,
+                onPick: (r) {
+                  // 点某一行 = "去看看" ⇒ 先把这张收掉，再去那一间（免得挡着他看）
+                  close();
+                  unawaited(_gotoWorkRoom(r.scope));
+                },
+              ),
+              onWorkOpen: () => unawaited(_loadWorking()),
               child: _sheetBody(c),
             ),
           ),
@@ -1419,6 +1449,84 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       }
       if (dropId != null) _myApps = _myApps.where((a) => a.id != dropId).toList();
     });
+  }
+
+  /// **问一次"现在谁在干活"**（主人 2026-10-06 那张清单 · 契约 `docs/dev/198-WORK-LIST.md`）。
+  ///
+  /// 🔴 **问不上 ⇒ 一个字节都不改**（`_working` 留着上一次那一份），而且那张浮窗
+  ///    会说"没问上"（`busy == false` ＋ `_working == null`）——
+  ///    **不许**把它读成"没有在干的活"（那是假话：看不见 ≠ 没有）。
+  ///
+  /// ⚠️ 它**只在点开那张浮窗时**跑一次（`onWorkOpen`）：那一张要的是"现在"。
+  Future<void> _loadWorking() async {
+    final token = widget.controller.token;
+    if (token == null) return;
+    setState(() => _workingBusy = true);
+    final got = await widget.controller.api.workingOrNull(token);
+    if (!mounted) return;
+    setState(() {
+      _workingBusy = false;
+      if (got != null) _working = got;
+    });
+  }
+
+  /// 那张清单里每一行"叫什么"用的补位表（app id ⇒ 它现在的名字）。
+  ///
+  /// ⚠️ 服务端给的名字是**第一位**（`workRowName`）；它认不出时才轮到这一份。
+  Map<String, String> get _workNames => {
+    for (final a in _myApps) a.id: a.title,
+  };
+
+  /// **点清单上某一行 ⇒ 去看那一间**（主人 2026-10-06 那张清单的用处）。
+  ///
+  /// 三件事，缺一件都不算"去了"：
+  ///   ① **切房间**（那条聊天显示的就是那一间的话）；
+  ///   ② 那一间是**某一屏**（小程序 / 内置那三格）⇒ **把它打开**（不然屏幕上画的是
+  ///      别的 app 的壳，配着这一间的对话 = 两处对不上）；
+  ///   ③ **把聊天拉满**（他点这一行的意思就是"去看看"，收起档下看不见对话）。
+  ///
+  /// 🔴 **还在做的那一格不打开它那一屏**（`building`）：那一屏现在只有一页
+  ///    "这里还空着"，而"在做"这件活正是在**它那一间的对话里** ⇒ 只切房间。
+  /// ⚠️ 认不出的房间（那一格已经不在清单里）⇒ **只切房间**，不猜也别乱开。
+  Future<void> _gotoWorkRoom(String scope) async {
+    final c = widget.controller;
+    if (scope.isEmpty) return;
+    if (scope == mainScope) {
+      // 回主对话：开着别的屏就关掉它（那一条路会把房间切回主线）
+      if (_openApp != null) {
+        _closeApp(c);
+      } else {
+        unawaited(c.setScope(mainScope));
+      }
+    } else {
+      final which = _whichForScope(scope);
+      if (which == null) {
+        unawaited(c.setScope(scope));
+      } else if (which == _openApp) {
+        unawaited(c.setScope(scope));
+      } else {
+        await _openMiniApp(null, which);
+      }
+    }
+    if (!mounted) return;
+    _floaterKey.currentState?.maximize();
+  }
+
+  /// 房间名 ⇒ "哪一屏"（`_openApp` 认得的那种写法）。
+  ///
+  /// * 内置那三格 ⇒ 它自己的 id；
+  /// * 我的小程序 ⇒ `mine:<id>`，**但它还在做时不返回**（见 [_gotoWorkRoom]）；
+  /// * 认不出 ⇒ `null`（只切房间，不开屏）。
+  String? _whichForScope(String scope) {
+    if (scope == builtInSettingsId ||
+        scope == builtInDiscoverId ||
+        scope == builtInHarnessId) {
+      return scope;
+    }
+    for (final a in _myApps) {
+      if (a.id == scope) return a.building ? null : '$_minePrefix${a.id}';
+    }
+    return null;
   }
 
   /// **第二次确认**（契约 `docs/dev/103-APP-DELETE.md` §七.4 · 决策 **D3.11**）。

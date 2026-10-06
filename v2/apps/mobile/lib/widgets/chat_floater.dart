@@ -45,6 +45,7 @@ import '../models/design.dart' as d;
 import '../models/dsh_design.dart';
 import '../models/speak_words.dart';
 import '../models/space_words.dart';
+import '../models/work_words.dart';
 import 'appearance_scope.dart';
 import 'dsh_look.dart';
 
@@ -68,6 +69,12 @@ const Key chatCollapseKey = Key('chat-collapse');
 
 /// **那一行最右那颗「播放语音」**的 key（开启 / 关停；判据用它点它、也用它读状态）。
 const Key chatSpeakKey = Key('chat-speak');
+
+/// ★ **2026-10-06：那一行**最左**那颗「清单」** 的 key（点开"正在干的活"那张浮窗）。
+///
+/// 主人原话：*「我觉得应该在左下角有一个清单按钮，点击会出来浮窗，
+/// 浮窗里有正在干活的聊天的列表。」*
+const Key chatWorkKey = Key('chat-work');
 
 /// 浮窗自己的几条常量（**不散在代码里**）。
 class FloaterMetrics {
@@ -114,6 +121,8 @@ class ChatFloater extends StatefulWidget {
     this.onHeight,
     this.speakOn = false,
     this.onToggleSpeak,
+    this.workPanel,
+    this.onWorkOpen,
   });
 
   /// **父层量好给它的可用高度**（父层是 `LayoutBuilder`）。
@@ -159,12 +168,34 @@ class ChatFloater extends StatefulWidget {
   final bool speakOn;
   final VoidCallback? onToggleSpeak;
 
+  /// ★ **2026-10-06 主人**：*"我觉得应该在左下角有一个清单按钮，点击会出来浮窗，
+  ///   浮窗里有正在干活的聊天的列表。"*
+  ///
+  /// ⇒ 那一行**最左**多一颗「清单」（**图形按钮**，与那三颗同一套面子）；
+  ///    点它 ⇒ 在输入条那一行**上面**长出这张浮窗（收起档也有 —— 那一档本来就
+  ///    只剩底下这一行，长在它上面正好）。
+  ///
+  /// 🔴 **数据不归浮窗管**：它只负责"画出来 ＋ 开关"，内容由上层给（那张清单要问网络，
+  ///    而浮窗从来不发请求）。⇒ 传进来的是**一个 builder**，不是一份数据。
+  /// ⚠️ **不传就一颗按钮都不画**（屏幕上不许出现按不动的东西 —— 与播放语音那颗同一条规矩）：
+  ///    判据里单看浮窗那一块时就是这个样子。
+  final Widget Function(BuildContext context, VoidCallback close)? workPanel;
+
+  /// **刚点开那张浮窗** —— 上层拿它去问一次"现在谁在干活"（点一次问一次，永远是新的）。
+  final VoidCallback? onWorkOpen;
+
   @override
   State<ChatFloater> createState() => ChatFloaterState();
 }
 
 class ChatFloaterState extends State<ChatFloater> {
   late FloaterTier _tier;
+
+  /// 左下角那张「清单」浮窗开着吗。
+  ///
+  /// ⚠️ 它**跟着这一档**走：换档（点抓手 / 点桌面 / 发出去拉满）就关掉它 ——
+  ///    那张清单属于"刚才那一眼"，不该跟着窗口飘到另一档里。
+  bool _workOpen = false;
 
   /// 上一次**自动**换档的时间（防抖：400ms 内合并成一次）。
   int _lastAutoMs = 0;
@@ -187,7 +218,11 @@ class ChatFloaterState extends State<ChatFloater> {
     final now = _nowMs();
     if (auto && now - _lastAutoMs < FloaterMetrics.debounceMs) return;
     if (auto) _lastAutoMs = now;
-    setState(() => _tier = t);
+    // 换档 ⇒ 把那张清单收掉（它属于"刚才那一档"，不跟着窗口飘）
+    setState(() {
+      _tier = t;
+      _workOpen = false;
+    });
     widget.onTier?.call(t);
   }
 
@@ -195,9 +230,38 @@ class ChatFloaterState extends State<ChatFloater> {
   /// ⚠️ **不受防抖限制**：用户主动的动作不该被合并掉。
   void maximize() {
     _lastAutoMs = _nowMs(); // 顺手把防抖窗推后，免得紧接着的状态变化又来动窗口
-    setState(() => _tier = FloaterTier.full);
+    setState(() {
+      _tier = FloaterTier.full;
+      _workOpen = false;
+    });
     widget.onTier?.call(FloaterTier.full);
   }
+
+  /// 左下角那颗「清单」：开 ⇄ 关。
+  ///
+  /// ⚠️ **点开的那一下**才去问一次（`onWorkOpen`）—— 清单要的是"现在"，不是"刚才"。
+  void _toggleWork() {
+    final open = !_workOpen;
+    setState(() => _workOpen = open);
+    if (open) widget.onWorkOpen?.call();
+  }
+
+  /// 那张清单**最多占多高**。
+  ///
+  /// 🔴 两个数取小的那个：
+  ///   · `可用 × design.dart 的 workPanelMaxShare`（它不该把聊天窗口整块吃掉）；
+  ///   · `可用 − 底下那一行 − 它自己那点外留白`（底下那一行不许被顶出去）。
+  ///     ⚠️ 底下那一行的高度按**那一列**算（`2 × voiceAuxH + voiceAuxGap` = 那两颗
+  ///     叠起来那一格）：输入条那一格是**内容算的**（字号一大就更高）⇒ 这个减法是
+  ///     **保守的估算**，真正兜底的另有其人 —— 收起档里它是 `Flexible`，
+  ///     地方不够时**是它自己让位**（不是把底下那一行顶出去）。
+  double _workPanelMax(double max) => math.max(
+    0,
+    math.min(
+      max * d.workPanelMaxShare,
+      max - (2 * d.voiceAuxH + d.voiceAuxGap) - d.gapS,
+    ),
+  );
 
   /// 外面叫它收起（点桌面空白时用）。
   void collapse() => _setTier(FloaterTier.collapsed, auto: false);
@@ -232,6 +296,10 @@ class ChatFloaterState extends State<ChatFloater> {
     final maxH = math.max(widget.maxHeight, FloaterMetrics.dragFloor);
     final h = _heightFor(maxH);
     final collapsed = _collapsed;
+    // ★ 那张「清单」浮窗画不画（`_workOpen` ＋ 上面给了内容 ＋ 地方还够放得下它）。
+    final workMax = _workPanelMax(maxH);
+    final showWork =
+        _workOpen && widget.workPanel != null && workMax >= d.voiceAuxH;
     if (widget.onHeight != null) {
       // 画完再报（收起档的高度只有画完才知道 —— D3.5）
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -287,7 +355,7 @@ class ChatFloaterState extends State<ChatFloater> {
                   sigmaX: 0,
                   sigmaY: 0,
                 ),
-                child: _barSurface(collapsed, p),
+                child: _barSurface(collapsed, p, workMax, showWork),
               ),
             ),
           ),
@@ -297,7 +365,15 @@ class ChatFloaterState extends State<ChatFloater> {
   }
 
   /// 浮窗那一层底 ＋ 它里面那一列（抽出来只因为上面那个 `BackdropFilter` 要包一层）。
-  Widget _barSurface(bool collapsed, DshPalette p) {
+  ///
+  /// ⚠️ 那两个「清单」的入参（[workMax] / [showWork]）**从这里传进来**：它们是在
+  ///    `build` 里按可用高度算好的（这一层只负责画）。
+  Widget _barSurface(
+    bool collapsed,
+    DshPalette p,
+    double workMax,
+    bool showWork,
+  ) {
     return Listener(
                 // 🔴 **点浮窗自己不许漏到下面**（§6.3）：opaque 吃掉所有指针事件。
                 // ⚠️ 这里**不接手势**（没有 onPointerXxx）—— 它只负责"挡住"。
@@ -351,7 +427,15 @@ class ChatFloaterState extends State<ChatFloater> {
                       //     🔴 **2026-10-05：不再有"拖着改高度"**（主人：*"我希望不要有
                       //        移动聊天窗口高度的选项，就是完全展开或者完全收起。"*）
                       //        ⇒ 那两层 `Listener`（以及跟手那一套）整段删了。
-                      if (collapsed) _bottomRow(p, collapsed: true),
+                      if (collapsed) ...[
+                        // ★ 那张「清单」浮窗长在**底下那一行上面**（收起档也有它）。
+                        //   🔴 这一档里它是 `Flexible`：收起档的可用高度是**内容算出来的**
+                        //      （底下那一行多高由输入条那一格决定）⇒ 地方不够时
+                        //      **让它自己让位**（它里面能滚），绝不把底下那一行顶出去。
+                        if (showWork)
+                          Flexible(child: _workPanelBox(context, workMax)),
+                        _bottomRow(p, collapsed: true),
+                      ],
                       // ── 展开态：标题行（**收起态不画它** —— 那一档就是"一格"）──
                       if (!collapsed)
                         Padding(
@@ -412,6 +496,11 @@ class ChatFloaterState extends State<ChatFloater> {
                           color: p.borderL3,
                         ),
                         Expanded(child: widget.child),
+                        // ★ 那张「清单」浮窗（展开档：夹在时间线与底下那一行之间）。
+                        //   ⚠️ 这一档**不用 `Flexible`**：时间线那个 `Expanded`
+                        //      会把它剩下的地方全吃掉，而两个 flex 子一起分，
+                        //      那张清单就会把时间线**白白让掉一半**（它自己还只用一点点）。
+                        if (showWork) _workPanelBox(context, workMax),
                         // ★ **2026-10-05**：展开档那一行**跟收起档同一个形状**
                         //   （圆圈 ＋ 那两颗**占着同一个位置**）—— 见 `_bottomRow` 的注释：
                         //   不然打开聊天窗口那一下，语音那颗会**往右跳 44**，
@@ -424,7 +513,11 @@ class ChatFloaterState extends State<ChatFloater> {
               );
   }
 
-  /// **底下那一行**（两个档**同一个形状**）：`（他说的话 ＋ 圆圈）＋ 右边那一列两颗`。
+  /// **底下那一行**（两个档**同一个形状**）：`清单 ＋（他说的话 ＋ 圆圈）＋ 右边那一列两颗`。
+  ///
+  /// 🔴 **2026-10-06 主人**：*"我觉得应该在左下角有一个清单按钮，点击会出来浮窗，
+  ///   浮窗里有正在干活的聊天的列表。"* ⇒ **最左**多一颗「清单」。
+  ///   ⚠️ 它挂在**这一行**（两个档共用）⇒ 收起/展开**位置不动**（同那三颗的规矩）。
   ///
   /// 🔴 **2026-10-05 晚些时候 · 主人定的最终形状**：*"语音按钮右侧，展开聊天窗口和
   ///   开启关闭语音，是一列的。就是上下关系。展开在上，开启关闭在下。然后他们都要有
@@ -437,6 +530,11 @@ class ChatFloaterState extends State<ChatFloater> {
   ///   ⚠️ 收起来的出口**仍然只有**标题行右端那颗「收起」（不新造第二条路）。
   Widget _bottomRow(DshPalette p, {required bool collapsed}) => Row(
         children: [
+          // ★ 最左那颗「清单」（**上层没给内容就不画** —— 屏幕上不许有按不动的按钮）
+          if (widget.workPanel != null) ...[
+            _workButton(p),
+            const SizedBox(width: d.gapS),
+          ],
           Expanded(child: widget.composer),
           // ★ **那一列：两块合起来正好跟录音那颗圆圈一样高**（主人 2026-10-05：
           //   *"展开关闭，播放语音两个合起来，高度应该和录音按钮是一样的。"*）
@@ -463,6 +561,70 @@ class ChatFloaterState extends State<ChatFloater> {
           const SizedBox(width: d.gapS),
         ],
       );
+
+  /// ★ **最左那颗「清单」**（主人 2026-10-06）。
+  ///
+  /// 面子与右边那三颗**同一套**（`_auxFace`：白底 ＋ 一圈琥珀 ＋ 墨色图形），
+  /// 只是它自己单独一颗（不跟谁叠）。**开着的时候整块变琥珀**（状态一眼看得出 ——
+  /// 与「播放语音」那颗同一个做法）。
+  ///
+  /// ⚠️ 命中区 ≥44（D3.6）：图形只有 18，外面那一格是 44。
+  /// ⚠️ 它没有可见的字 ⇒ 字挂在 `Tooltip` 与无障碍名上（另外三颗同一条规矩）。
+  Widget _workButton(DshPalette p) {
+    final open = _workOpen;
+    return Tooltip(
+      message: workButtonHint,
+      child: Semantics(
+        button: true,
+        toggled: open,
+        // ⚠️ 读屏那句用**主人自己那个词**（"清单"）：这是左下角那颗按钮的名字。
+        label: workButtonLabel,
+        child: TextButton(
+          key: chatWorkKey,
+          onPressed: _toggleWork,
+          style: _auxStyle(),
+          child: SizedBox(
+            // ⚠️ 给一个**确定高度**的盒子（同 [_handle] 那条）：这一行的
+            //    交叉轴是无界的，单摆一个 `Center` 会被框架那层 `Align` 居中。
+            height: d.voiceAuxH,
+            child: Center(
+              child: _auxFace(
+                p,
+                lit: open,
+                child: Icon(
+                  Icons.checklist_rounded,
+                  size: d.voiceAuxIcon,
+                  // 开着的时候是琥珀底 ⇒ 图形反过来用纸的白（同 [._speakButton]）
+                  color: open ? d.card : d.ink,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// **那张「清单」浮窗的那一格**（外面留一点边、高度由上面算好的 [max] 卡住）。
+  ///
+  /// ⚠️ 内容由上层给（[ChatFloater.workPanel]）—— 浮窗不发请求、也不认识那张清单的数据。
+  /// ⚠️ 那个 `close` 是给"点某一行就去看那一间"用的（点完那一张要自己收掉）。
+  Widget _workPanelBox(BuildContext context, double max) => Padding(
+    padding: const EdgeInsets.only(
+      left: d.gapS,
+      right: d.gapS,
+      bottom: d.gapS,
+    ),
+    child: ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: max),
+      child: widget.workPanel!(
+        context,
+        () {
+          if (mounted) setState(() => _workOpen = false);
+        },
+      ),
+    ),
+  );
 
   /// 那一列里每颗按钮的**共同样子**：外面是**透明的一格**（只撑命中区 ≥44），
   /// 里面那块**看得见的长方形**由 [_auxFace] 画（**有底色 ＋ 一圈轮廓**）。
