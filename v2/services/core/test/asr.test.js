@@ -353,20 +353,19 @@ test('★ 配好了：音频一个字节不改地过去，半句/定稿/收尾�
   await s.close();
 });
 
-test('🔴 **说了两句（中间有停顿）⇒ 收尾那条是"整段"，不是最后那一段**（主人 2026-10-06 报的缺陷）', async () => {
-  // 🔴 这一条是照**真读数**写的（2026-10-06 真连豆包 · 6.6 秒 · 两句 · 中间停顿）：
-  //    上游**按句给字**，说第二句时第一句就不在回话里了
-  //    （`result.text` 变成第二句的字、`utterances` 里也只剩那一条）。
-  //    ⇒ 修之前：客户端那条按段替换被**同一段号**顶掉 ⇒ 屏幕上只剩后半段，
-  //      `asr/end` 也只带后半段 ⇒ **发出去的话前半段被砍掉**。
+test('🔴 **说了两句（中间有停顿）⇒ 收尾那条是"整段"**（官方文档那一版：整段替换，段号永远是 0）', async () => {
+  // 🔴 **2026-10-07 换了模型**（主人把豆包协议文档贴过来）：`result.text` 是
+  //    **"整个音频的识别结果文本"**（默认 `result_type: "full"` ＝ 全量）⇒
+  //    上游每一帧给的就是**这条连接到目前为止的整段**（累积）。
+  //    所以这里让上游**按累积**回字（第二帧带着第一帧）——
+  //    这正是真机的形状；判据量两件：**段号永远是 0**、**收尾那条是整段**。
   const stub = await stubUpstream({
     scripts: [
-      { at: 1600, text: '今天天气', start: 0 },                 // 第一句（还没说定）
-      { at: 3200, text: '怎么样', start: 5000 },                 // 换句了 ⇒ 段号该往前走
-      { at: 4800, text: '怎么样', definite: '怎么样', start: 5000 },
+      { at: 1600, text: '今天天气', start: 0 },
+      { at: 3200, text: '今天天气怎么样', start: 0 },
+      { at: 4800, text: '今天天气怎么样', definite: '今天天气怎么样', start: 0 },
     ],
-    // "最后一包"之后上游吐回来的是**最后那一句**的定稿（不是整段）
-    lastReply: { text: '怎么样', definite: '怎么样', start: 5000 },
+    lastReply: { text: '今天天气怎么样', definite: '今天天气怎么样', start: 0 },
   });
   const s = await boot({ asrConfig: asrConfigFromEnv({ HUPO_ASR_URL: stub.url }) });
   const c = await connectAsr(s.wsBase, s.token);
@@ -377,16 +376,17 @@ test('🔴 **说了两句（中间有停顿）⇒ 收尾那条是"整段"，不�
     await sleep(60);
   }
   const partials = c.events.filter((e) => e.type === 'asr/partial');
-  // ★ 两段**各占一个段号**（第二句不许顶掉第一句）
-  assert.deepEqual(partials.map((e) => `${e.index}:${e.text}`), ['0:今天天气', '1:怎么样', '1:怎么样'],
-      '★ 换句了段号必须往前走 —— 同一段号会被客户端按段替换，前半段就没了');
+  // ★ **每一帧都是整段、段号都是 0** ⇒ 客户端按段替换 ⇒ 屏幕上就是这一份、不会越接越长
+  // ⚠️ 第三帧与第二帧**一模一样** ⇒ 一个字都没变 ⇒ **一帧都不发**（帧少一点）
+  assert.deepEqual(partials.map((e) => `${e.index}:${e.text}`),
+      ['0:今天天气', '0:今天天气怎么样'],
+      '★ 累积帧就该整段替换（段号 0）—— 以前按"每句一段"会把它再累加一遍（重复得离谱）');
   const finals = c.events.filter((e) => e.type === 'asr/final');
-  assert.deepEqual(finals.map((e) => `${e.index}:${e.text}`), ['1:怎么样']);
+  assert.deepEqual(finals.map((e) => `${e.index}:${e.text}`), ['0:今天天气怎么样']);
 
   c.ws.send(JSON.stringify({ type: 'asr/stop' }));
   const end = await waitFor(c.events, (e) => e.type === 'asr/end');
-  assert.equal(end.text, '今天天气怎么样',
-      '★ 收尾那条必须是**整段**（前半段 ＋ 后半段），不是最后那一段');
+  assert.equal(end.text, '今天天气怎么样', '★ 收尾那条是整段');
   await stub.close();
   await s.close();
 });
@@ -433,33 +433,30 @@ test('★ 连上之前推的音频不丢（先攒着，握上手就补发）', a
 
 // ── ⑦ 上游回错 ────────────────────────────────────────────
 
-test('★ `index` 要真的传下去（同一段替换全靠它 —— 少了它屏幕上就是一串重复）', async () => {
+test('★ `index` 与 `text` 的契约：**每一帧都是整段、段号都是 0**（客户端按段替换全靠它）', async () => {
+  // 🔴 旧判据量的是"段号要往前走"（那套按句累积的模型已经被官方文档否掉了）。
+  //   现在量的是：**同一段替换**这件事在帧上必须成立 —— 段号恒 0、text 恒整段。
+  //   少了任何一条，客户端那边就会变成"一串重复"或者"只剩最后一句"。
   const stub = await stubUpstream({
     scripts: [
-      { at: 1600, text: '今天', definite: '今天', start: 0 },
-      { at: 3200, text: '今天天气', definite: '今天天气', start: 0 },   // 同一句又准了一点 ⇒ 还是 0 号段
-      { at: 4800, text: '挺好的。', definite: '挺好的。', start: 6000 }, // 换句 ⇒ 1 号段
+      { at: 1600, text: '今天', start: 0 },
+      { at: 3200, text: '今天天气', start: 0 },
+      { at: 4800, text: '今天天气挺好的。', definite: '今天天气挺好的。', start: 0 },
     ],
-    lastReply: { text: '挺好的。', definite: '挺好的。', start: 6000 },
   });
   const s = await boot({ asrConfig: asrConfigFromEnv({ HUPO_ASR_URL: stub.url }) });
   const c = await connectAsr(s.wsBase, s.token);
   c.ws.send(JSON.stringify({ type: 'asr/start' }));
   await waitFor(c.events, (e) => e.type === 'asr/ready');
-  const seen = [];
-  for (let n = 1; n <= 3; n += 1) {
+  for (let n = 0; n < 3; n += 1) {
     c.ws.send(Buffer.alloc(1600, 7));
-    const ev = await waitFor(c.events, (e) => e.type === 'asr/final' && !seen.includes(e.text));
-    seen.push(ev.text);
+    await sleep(60);
   }
-  const finals = c.events.filter((e) => e.type === 'asr/final');
-  // 三条都到了，而且**每一条都带着段号**（同一句里 0、换句之后 1）
-  assert.deepEqual(finals.map((e) => e.text), ['今天', '今天天气', '挺好的。']);
-  assert.deepEqual(finals.map((e) => e.index), [0, 0, 1]);
-  // 收尾那条带上**整段**（两句接起来 —— 不是最后那一段）
-  c.ws.send(JSON.stringify({ type: 'asr/stop' }));
-  const end = await waitFor(c.events, (e) => e.type === 'asr/end');
-  assert.equal(end.text, '今天天气挺好的。');
+  const partials = c.events.filter((e) => e.type === 'asr/partial');
+  assert.deepEqual(partials.map((e) => e.text), ['今天', '今天天气', '今天天气挺好的。'],
+      '★ 每一帧都带着"到目前为止的整段"');
+  assert.equal(partials.every((e) => e.index === 0), true,
+      '★ 段号恒 0（"这条连接的整段"只有一段）—— 多了段号，客户端就会一段段接上去（重复）');
   await stub.close();
   await s.close();
 });

@@ -157,158 +157,84 @@ const said = (text, { definite = false, start = 0, end = start + 1 } = {}) => ({
   utterances: text === '' && !definite ? [] : [{ text, definite, start, end }],
 });
 
-test('★ D8 🔴 换句了（`start_time` 变了）⇒ 上一句攒住、段号自己往前走，整段接得起来', () => {
+test('★ D8 🔴 累积帧（官方文档说的那种）⇒ **整段替换**，段号永远是 0，绝不一遍遍累加', () => {
+  // 🔴 **2026-10-07 换了模型**（主人把豆包协议文档贴过来）：`result.text` 是
+  //   **"整个音频的识别结果文本"**，而 `result_type` 我们没传 ⇒ 默认 `"full"`（全量）
+  //   ⇒ 上游每一帧给的就是**这条连接到目前为止的整段**。
+  //   旧代码按"每一帧只管当前这一句"再累积一遍 ⇒ 同一段在框里一遍两遍三遍……
+  //   （主人：*"还在，更夸张了，文字多的离谱了。"*）
   const t = createSegmentTracker();
-  assert.deepEqual(t.push(said('今天')), { partial: { text: '今天', index: 0 } });
-  // 同一句里字是**累积的** ⇒ 还是 0 号段（替换，不是接一串重复）
-  assert.deepEqual(t.push(said('今天天气')), { partial: { text: '今天天气', index: 0 } });
-  // 🔴 换句（`start_time` 变了）⇒ 段号必须往前走；不然客户端按段替换会把上一句顶掉
-  assert.deepEqual(t.push(said('怎么样', { start: 5000 })), { partial: { text: '怎么样', index: 1 } });
-  assert.equal(t.whole(), '今天天气怎么样', '★ 整段 = 前面几段 ＋ 正在长的这一段');
-  // 第二句说定了 ⇒ 定稿带的是 1 号段；整段照旧
-  assert.deepEqual(t.push(said('怎么样', { definite: true, start: 5000 })),
-      { partial: { text: '怎么样', index: 1 }, final: { text: '怎么样', index: 1 } });
-  assert.equal(t.whole(), '今天天气怎么样');
-  // 第三句 ⇒ 2 号段
-  assert.equal(t.push(said('好的', { start: 9000 })).partial.index, 2);
-  assert.equal(t.whole(), '今天天气怎么样好的');
+  const steps = [
+    '我想知道',
+    '我想知道现在的',
+    '我想知道现在的几句话',
+    '我想知道现在的几句话会是被切割',
+    '我想知道现在的几句话会是被切割还是',
+    '我想知道现在的几句话会是被切割还是不会',
+    '我想知道现在的几句话会是被切割还是不会被切割',
+  ];
+  for (let i = 0; i < steps.length; i += 1) {
+    const out = t.push({ text: steps[i], utterances: [{ text: steps[i], definite: false, start: 0, end: 100 * (i + 1) }] });
+    assert.equal(out.partial.index, 0, '★ 段号永远是 0（"这条连接的整段"只有一段）');
+    assert.equal(out.partial.text, steps[i], '★ 每一帧给的就是整段 ⇒ 照原样用它（不许再加一遍）');
+  }
+  assert.equal(t.whole(), steps[steps.length - 1], '★ 整段就是最后一帧那一份（一个字都不许多）');
+  assert.equal(t.whole().length, steps[steps.length - 1].length, '★ 长度不许滚雪球');
+
+  // 负向对照：**同一帧再来 20 次**（上游重发）⇒ 还是那一份，不许长
+  for (let i = 0; i < 20; i += 1) {
+    assert.deepEqual(t.push({ text: steps[steps.length - 1] }), {}, '★ 一个字都没变 ⇒ 什么都不发');
+  }
+  assert.equal(t.whole(), steps[steps.length - 1], '★ 重发 20 次也不许变长');
 });
 
-test('★ D9 同一句又回一次：一模一样 ⇒ 当回声丢掉；又准了一点 ⇒ 替换（不许接成两遍）', () => {
+test('★ D9 回声 / 迟到的旧帧（比手里那份短、而且是它的尾巴）⇒ 一个字都不动', () => {
   const t = createSegmentTracker();
-  t.push(said('今天', { definite: true }));
-  assert.deepEqual(t.push(said('今天', { definite: true })), {}, '★ 同一段重复回话 ⇒ 什么都不发');
-  assert.equal(t.whole(), '今天', '★ 更不许攒成"今天今天"');
-  // 上游把最后那句又准了一点（标点/字更全）⇒ 替换那一段、再发一次定稿
-  assert.deepEqual(t.push(said('今天天气。', { definite: true })),
-      { final: { text: '今天天气。', index: 0 } });
-  assert.equal(t.whole(), '今天天气。');
+  t.push({ text: '今天天气不错。' });
+  assert.deepEqual(t.push({ text: '今天' }), {}, '★ 旧帧不许把整段缩回去，也不许接成两遍');
+  assert.equal(t.whole(), '今天天气不错。');
+  // 一模一样 ⇒ 也不发
+  assert.deepEqual(t.push({ text: '今天天气不错。' }), {});
+  assert.equal(t.whole(), '今天天气不错。');
 });
 
-test('★ D10 没有 `start_time` 的引擎 ⇒ 退回"共同前缀"那一条（补个句号不算换句）', () => {
+test('★ D10 上游**只给新的一句**（非累积的引擎 / 参数）⇒ 接在后面（不是替换）', () => {
   const t = createSegmentTracker();
-  t.push({ text: '我们出去走走' });
-  // 补了句号 ⇒ 同一句（不许当成新的一句）
-  assert.deepEqual(t.push({ text: '我们出去走走吧。' }), { partial: { text: '我们出去走走吧。', index: 0 } });
-  assert.equal(t.whole(), '我们出去走走吧。');
-  // 完全换了内容 ⇒ 新的一句
-  assert.equal(t.push({ text: '明天见' }).partial.index, 1);
-  assert.equal(t.whole(), '我们出去走走吧。明天见');
+  t.push({ text: '第一句。' });
+  const out = t.push({ text: '第二句。' });
+  assert.equal(out.partial.text, '第一句。第二句。', '★ 不重叠 ⇒ 接上（这一档也要认）');
+  assert.equal(t.whole(), '第一句。第二句。');
 });
 
-test('★ D12 🔴 上游把**同一句重新划一遍**（起点还往前挪了）⇒ 不许接成两遍', () => {
-  // 🔴 真读数原样（2026-10-06 真连豆包，跑第二遍才露出来的那一族）：
-  //      #50 4522-4602 「我们」      ← 先给一小条
-  //      #56 4382-5322 「我们出去」   ← 同一句的修订（起点**往前**挪了、区间叠着）
-  //    ⇒ 照"起点变了就是新句"会接成「我们我们出去…」（把同一段话说两遍）。
+test('★ D12 接缝**去重**：新那份的开头与旧那份的结尾重合 ⇒ 只算一次', () => {
+  // 真形状：上游把最后那一句又吐一遍（"我们出去走走吧。" ⇒ 下一帧从"走走吧"接上）
   const t = createSegmentTracker();
-  assert.deepEqual(t.push(said('我们', { start: 4522, end: 4602 })), { partial: { text: '我们', index: 0 } });
-  assert.deepEqual(t.push(said('我们出去', { start: 4382, end: 5322 })),
-      { partial: { text: '我们出去', index: 0 } }, '★ 叠着 ⇒ 是修订，段号不许往前推');
-  assert.equal(t.whole(), '我们出去', '★ 同一个字不许攒成两遍');
-  // 这一句说定；下一句从它的**终点之后**开始 ⇒ 那才是真的换句
-  assert.deepEqual(t.push(said('我们出去走走吧。', { definite: true, start: 4382, end: 6282 })),
-      { partial: { text: '我们出去走走吧。', index: 0 }, final: { text: '我们出去走走吧。', index: 0 } });
-  assert.deepEqual(t.push(said('明天见', { start: 6282, end: 7000 })), { partial: { text: '明天见', index: 1 } });
-  assert.equal(t.whole(), '我们出去走走吧。明天见');
-  // 负向对照：下一句**和上一句时间叠着、字也不像** ⇒ 绝不并进上一句（那会丢一句）
-  const t2 = createSegmentTracker();
-  t2.push(said('我们出去走走吧。', { definite: true, start: 4382, end: 6282 }));
-  assert.deepEqual(t2.push(said('明天见', { start: 6000, end: 7000 })), { partial: { text: '明天见', index: 1 } });
-  assert.equal(t2.whole(), '我们出去走走吧。明天见', '★ 说定的那一句一个字都不许被顶掉');
+  t.push({ text: '我们出去走走吧。' });
+  t.push({ text: '走走吧。那就不去了。' });
+  assert.equal(t.whole(), '我们出去走走吧。那就不去了。', '★ 接缝那一段不许接成两遍');
 });
 
-test('★ D13 🔴 "起点一样"**不等于**"同一句"：新的一句报出同一个起点 ⇒ 不许把上一句抹掉', () => {
-  // 🔴 2026-10-07 主人：*"我依然会遇到说话断句的问题……说着说着，转文字的早期的那部分
-  //   内容在输入框里没了。"*
-  //   查出来的那条路：上游**重新划句**的时候，**新的一句也可能报出与上一句一样的起点**
-  //   （区间还叠着）⇒ 原来"起点一模一样就当同一句"会把上一段**整段替换掉**
-  //   ⇒ 框里前半句当场没了，收尾拼出来的整段也少了它。
-  //   ⇒ 现在**两样都要**：时间像同一句 **而且** 字像同一句。
+test('★ D13 `definite` ＝ "这一句说定了" ⇒ 带 final（段号还是 0、字还是整段）', () => {
   const t = createSegmentTracker();
-  t.push(said('今天天气不错。', { definite: true, start: 0, end: 1500 }));
-  const out = t.push(said('我想出去走走。', { start: 0, end: 900 }));
-  assert.equal(out.partial.index, 1, '★ 必须另起一段（绝对不许替换 0 号段）');
-  assert.equal(out.final, undefined, '★ 这一句还没说完，不该给"定稿"');
-  assert.equal(t.whole(), '今天天气不错。我想出去走走。', '★ 前半句一个字都不许丢');
-
-  // 负向对照：**同一句又准了一点**（起点一样、字也像）⇒ 照旧替换（不许接成两遍）
-  const t2 = createSegmentTracker();
-  t2.push(said('我们出去', { definite: true, start: 4000, end: 5200 }));
-  assert.deepEqual(t2.push(said('我们出去走走吧。', { start: 4000, end: 6000 })),
-      { final: { text: '我们出去走走吧。', index: 0 } });
-  assert.equal(t2.whole(), '我们出去走走吧。', '★ 同一句的修订照旧替换，不许变两遍');
-
-  // 负向对照 2：**区间根本没叠**（隔开的两句）⇒ 也不许并成一句
-  const t3 = createSegmentTracker();
-  t3.push(said('第一句。', { definite: true, start: 0, end: 900 }));
-  assert.equal(t3.push(said('第二句。', { start: 2000, end: 3000 })).partial.index, 1);
-  assert.equal(t3.whole(), '第一句。第二句。');
-});
-
-test('★ D14 🔴 区间**叠着**但字完全不是同一句 ⇒ 必须算换句（不许把上一句覆盖掉）', () => {
-  // 🔴 2026-10-07 主人：*"前面的句子还是会被清理。"*
-  //   上游**重新划句**的时候，新的一句**会报出与上一句叠着的区间**（真读数那一族：
-  //   「我们」4382-5322 → 「我们出去」4522-4602 是同一句的修订；但**新的一句**同样
-  //   可能落在上一句的区间里）。原来"区间叠着就算同一句在改" ⇒ `cur = text` 把上一句
-  //   **覆盖**掉，而上一句**从来没进过 `done`** ⇒ 客户端收到的段号没变 ⇒ 框里前半句
-  //   当场没了，收尾拼出来的整段也少了它。
-  //   ⇒ 现在**字说了算**：字明显不像同一句就算换句（时间只能"补充说它换了"）。
-  const t = createSegmentTracker();
-  assert.equal(t.push(said('今天天气不错。', { start: 0, end: 1500 })).partial.index, 0);
-  const out = t.push(said('我想出去走走。', { start: 400, end: 1800 }));
-  assert.equal(out.partial.index, 1, '★ 必须另起一段（不许覆盖 0 号段）');
-  assert.equal(t.whole(), '今天天气不错。我想出去走走。', '★ 前半句一个字都不许丢');
-
-  // 负向对照：**同一句又准了一点**（区间叠着、字也像）⇒ 照旧替换（不许接成两遍）
-  const t2 = createSegmentTracker();
-  t2.push(said('我们出去', { start: 4382, end: 5322 }));
-  assert.deepEqual(t2.push(said('我们出去走走吧。', { start: 4522, end: 6000 })),
-      { partial: { text: '我们出去走走吧。', index: 0 } });
-  assert.equal(t2.whole(), '我们出去走走吧。', '★ 同一句的修订照旧替换，不许变两遍');
-
-  // 负向对照 2：**改个错字**（共同前缀够长）⇒ 也算同一句（不许接成两遍）
-  const t3 = createSegmentTracker();
-  t3.push(said('今天天汽不错', { start: 0, end: 900 }));
-  assert.equal(t3.push(said('今天天气不错', { start: 100, end: 950 })).partial.index, 0);
-  assert.equal(t3.whole(), '今天天气不错');
-});
-
-test('★ D15 🔴 同一句按词给**首尾相接（不叠）**的区间 ⇒ 不许变成新的一段（否则会重复 N 遍）', () => {
-  // 🔴 2026-10-07 主人那段真录音（他自己念的）：同一句在框里被接了好多遍 ——
-  //   「…会是被切割还是不会被切割？…」一遍、两遍、三遍……看起来就像"被切割"。
-  //   根子：上游对**同一句**常常按词给**首尾相接、不叠**的区间（0-800 / 800-1500 …），
-  //   而上一版判据里留了时间那一支（不叠 ⇒ 算换句）⇒ **每一帧都成了一段**。
-  //   ⇒ 现在**只有字说了算**：字是同一句在往下长 ⇒ 替换那一帧（段号不动）。
-  const t = createSegmentTracker();
-  assert.equal(t.push(said('我想知道', { start: 0, end: 800 })).partial.index, 0);
-  assert.equal(t.push(said('我想知道现在的', { start: 800, end: 1500 })).partial.index, 0,
-      '★ 首尾相接（不叠）也是同一句 ⇒ 段号不许往前走');
-  assert.equal(t.push(said('我想知道现在的几句话', { start: 1500, end: 2400 })).partial.index, 0);
-  assert.equal(t.whole(), '我想知道现在的几句话', '★ 一个字都不许重复');
-
-  // 负向对照：**真换了一句**（字明显不像）⇒ 照旧另起一段
-  const t2 = createSegmentTracker();
-  t2.push(said('我想知道现在的几句话', { start: 0, end: 2400 }));
-  assert.equal(t2.push(said('然后我们再说别的', { start: 2400, end: 3600 })).partial.index, 1);
-  assert.equal(t2.whole(), '我想知道现在的几句话然后我们再说别的');
-
-  // 负向对照 2：**同一个词说两遍**（语音真重复）⇒ 也合成一遍
-  //   （与既有的"同一句被说了两遍只算一遍"同一条口径）
-  const t3 = createSegmentTracker();
-  t3.push(said('测试测试', { start: 0, end: 1000 }));
-  assert.equal(t3.whole(), '测试测试');
+  const out = t.push({ text: '今天天气不错。', utterances: [{ text: '今天天气不错。', definite: true }] });
+  assert.deepEqual(out, {
+    partial: { text: '今天天气不错。', index: 0 },
+    final: { text: '今天天气不错。', index: 0 },
+  });
+  assert.equal(t.whole(), '今天天气不错。');
 });
 
 test('★ D11 空字不许把已经听到的擦掉（收尾帧不带 result 那一族）', () => {
   const t = createSegmentTracker();
-  t.push(said('今天天气'));
-  assert.deepEqual(t.push(said('')), {}, '空帧 ⇒ 什么都不发');
-  assert.equal(t.whole(), '今天天气', '★ 一个字都不许丢');
-  // 空的定稿 ⇒ 把当前这句收住，不是把它擦掉
-  assert.deepEqual(t.push(said('', { definite: true })),
-      { partial: { text: '今天天气', index: 0 }, final: { text: '今天天气', index: 0 } });
-  assert.equal(t.whole(), '今天天气');
+  t.push({ text: '帮我看看天气' });
+  // 收尾那帧常常不带 result（或者 `utterances` 是空的）⇒ 不许把已经听到的擦掉
+  assert.deepEqual(t.push({ text: '', utterances: [] }), {});
+  assert.equal(t.whole(), '帮我看看天气');
+  // 但"定稿"那一档要往下走（客户端据此知道这一段说完了）
+  assert.deepEqual(t.push({ text: '', utterances: [{ text: '', definite: true }] }),
+      { final: { text: '帮我看看天气', index: 0 } },
+      '★ 空字的定稿：字用我们手里那份，只把"说完了"报出去');
+  assert.equal(t.whole(), '帮我看看天气');
 });
 
 test('D6 🔴 错误帧：两种形状都认得出（并且把它那句原话带出来）', () => {
