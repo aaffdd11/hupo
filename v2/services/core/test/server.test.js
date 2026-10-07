@@ -466,6 +466,28 @@ test('★ 安卓包：200 + 安卓那个 MIME + attachment；**没了就 404**�
     '少了它，有的浏览器会就地打开那一串二进制 —— 而那颗按钮要的是"存下来去装"',
   );
   assert.equal(Buffer.from(await got.arrayBuffer()).length, apkBody.length, '字节数必须一模一样');
+  // ②·补 🔴 **断点续传**（2026-10-07 主人：*"下载速度比较慢，我看是否还不支持断点续传？"*）
+  //   以前这里**根本不看 `Range`** ⇒ 一律 200 ＋ 整个文件 ⇒ 断一下就从头下。
+  const ranged = await fetch(`${s.origin}/hupo.apk`, { headers: { range: 'bytes=2-5' } });
+  assert.equal(ranged.status, 206, '★ 带 Range 必须回 206（回 200 = 不支持续传，断一下从头下）');
+  assert.equal(ranged.headers.get('accept-ranges'), 'bytes');
+  assert.equal(ranged.headers.get('content-range'), `bytes 2-5/${apkBody.length}`);
+  assert.deepEqual(Buffer.from(await ranged.arrayBuffer()), apkBody.subarray(2, 6), '★ 给的必须是**那一段**字节');
+  // 尾巴（`bytes=-3` ＝ 最后 3 个字节）
+  const tail = await fetch(`${s.origin}/hupo.apk`, { headers: { range: 'bytes=-3' } });
+  assert.equal(tail.status, 206);
+  assert.deepEqual(Buffer.from(await tail.arrayBuffer()), apkBody.subarray(apkBody.length - 3));
+  // 越界 ⇒ **416**（而且带 `bytes */总长`）；多段 / 认不出的形状 ⇒ 按标准**回整份 200**
+  const bad = await fetch(`${s.origin}/hupo.apk`, { headers: { range: 'bytes=9999-' } });
+  assert.equal(bad.status, 416, '★ 越界的续传请求要如实回 416（不许回半截当整份）');
+  assert.equal(bad.headers.get('content-range'), `bytes */${apkBody.length}`);
+  const multi = await fetch(`${s.origin}/hupo.apk`, { headers: { range: 'bytes=0-1,3-4' } });
+  assert.equal(multi.status, 200, '多段 Range 按标准忽略 ⇒ 回整份');
+  // ⚠️ `If-Range` 对不上（文件换过一代）⇒ **回整份**（绝不把两代字节拼一起）
+  const stale = await fetch(`${s.origin}/hupo.apk`, {
+    headers: { range: 'bytes=2-5', 'if-range': 'Wed, 01 Jan 2000 00:00:00 GMT' },
+  });
+  assert.equal(stale.status, 200, '★ 文件换过一代还按 Range 回 206 ⇒ 下下来的东西是两代拼的');
   // ③ 负向对照：别的静态文件**不许**被加上 attachment（不然网页自己就下载了）
   const idx = await fetch(`${s.origin}/`);
   assert.equal(idx.headers.get('content-disposition'), null);

@@ -2312,10 +2312,28 @@ const TENANT_ROUTES = [
       return res.end();
     }
 
-    res.writeHead(200, {
+    // ── 🔴 **断点续传**（2026-10-07 · 主人问的那一条）────────────────────
+    //   单段 `Range` ⇒ **206 ＋ `Content-Range`**；所有静态回话都带 `Accept-Ranges`。
+    //   ⚠️ **预压那一份不参与续传**：`Range` 是对**字节**说的，我们却可能发的是 br/gz
+    //      ⇒ 有人要 Range 时**退回原文件**（identity），这样"第几到第几字节"才说得清。
+    const wantRange = parseRange(req.headers.range, stat.size, req.headers['if-range'], lastModified);
+    if (wantRange && wantRange.bad) {
+      res.writeHead(416, { ...baseHeaders, 'accept-ranges': 'bytes', 'content-range': `bytes */${stat.size}` });
+      return res.end();
+    }
+    if (wantRange) {
+      sendFile = file;
+      sendStat = stat;
+      encoding = null;
+    }
+    res.writeHead(wantRange ? 206 : 200, {
       ...baseHeaders,
+      'accept-ranges': 'bytes',
       'content-type': MIME[ext] ?? 'application/octet-stream',
-      'content-length': sendStat.size,
+      'content-length': wantRange ? wantRange.end - wantRange.start + 1 : sendStat.size,
+      ...(wantRange
+        ? { 'content-range': `bytes ${wantRange.start}-${wantRange.end}/${stat.size}` }
+        : {}),
       ...(encoding ? { 'content-encoding': encoding } : {}),
       'x-content-type-options': 'nosniff',
       // 🔴 **安装包一律当附件发**（2026-09-28）：不带这一行的话，有的浏览器会**就地打开**
@@ -2325,7 +2343,52 @@ const TENANT_ROUTES = [
         : {}),
     });
     if (req.method === 'HEAD') return res.end();
-    nodeFs.createReadStream(sendFile).pipe(res);
+    if (wantRange) {
+      nodeFs.createReadStream(sendFile, { start: wantRange.start, end: wantRange.end }).pipe(res);
+    } else {
+      nodeFs.createReadStream(sendFile).pipe(res);
+    }
+  }
+
+  /**
+   * **解析一个 `Range` 请求**（单段）—— 纯函数，判据直接喂它。
+   *
+   * 🔴 2026-10-07（主人：*"下载速度比较慢，我看是否还不支持断点续传？"*）：
+   *    以前这里**根本不看 `Range`** ⇒ 一律 200 ＋ 整个文件 ⇒ 断一下就从头下
+   *    （55 MB 的安装包尤其疼）。
+   *
+   * @param {string|undefined} header `Range` 头（`bytes=a-b` / `bytes=a-` / `bytes=-n`）
+   * @param {number} size 文件真的有多大
+   * @param {string|undefined} ifRange `If-Range` 头（续传前问"还是那一份吗"）
+   * @param {string} validator 我们这边那一份的标识（`last-modified`）
+   * @returns {{start:number,end:number}|{bad:true}|null} `null` = 不认/不给 ⇒ 回 200 整份
+   */
+  function parseRange(header, size, ifRange, validator) {
+    if (typeof header !== 'string') return null;
+    const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+    if (!m) return null; // 多段（含逗号）/ 认不出的形状 ⇒ 按标准忽略它，回整份
+    // ⚠️ `If-Range` 对不上（文件换过一代）⇒ **回整份**，绝不把两代字节拼一起
+    if (typeof ifRange === 'string' && ifRange.trim() !== '' && ifRange.trim() !== validator) return null;
+    const [, a1, b1] = m;
+    const hasStart = a1 !== '';
+    const hasEnd = b1 !== '';
+    if (!hasStart && !hasEnd) return null;
+    let start;
+    let end;
+    if (!hasStart) {
+      // `bytes=-n`：**最后 n 个字节**
+      const n = Number(b1);
+      if (!Number.isFinite(n) || n <= 0) return null;
+      start = Math.max(0, size - n);
+      end = size - 1;
+    } else {
+      start = Number(a1);
+      end = hasEnd ? Number(b1) : size - 1;
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+      if (end > size - 1) end = size - 1;
+    }
+    if (start >= size || start > end) return { bad: true }; // 416
+    return { start, end };
   }
 
   /**
