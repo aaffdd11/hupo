@@ -19,10 +19,15 @@
 
 | 改在哪 | 改动中（窄 · 快） | 收尾（全 · **一件都不许省**） |
 |---|---|---|
-| 服务端 | `cd v2/services/core && node --test test/<那一份>.test.js` | `npm test` ＋ `npm run demo` |
-| 客户端 | `cd v2/apps/mobile && ~/sdk/flutter/bin/flutter test test/unit/<那一份>_test.dart` | `bash scripts/check-client.sh` |
-| 文档 | `node scripts/check-docs.mjs` | 同左（它本来就快） |
+| **任意改动** | `bash scripts/gate-quick.sh <改动的路径…>`（**先 `--list` 只看不跑**）—— 映射**现算**，唯一出处 [`scripts/test-map.mjs`](../scripts/test-map.mjs) | 见下面那张表的分区 |
+| 服务端 | 它自己会挑出该跑的那几份 `node --test` | `cd v2/services/core && npm test` ＋ `npm run demo` |
+| 客户端 | 它自己会挑出 `flutter analyze` ＋ 对应那几份 `flutter test` | `bash scripts/check-client.sh` |
+| 文档 | 它自己会挑出 `node scripts/check-docs.mjs` | 同左（它本来就快） |
 | 碰了界面 | 上面那条窄的 | ⚠️ **另加浏览器那条路**：`HUPO_TOKEN=<现发> node scripts/check-web-browser.mjs --shot <图>` |
+
+> 🔴 **它就是"改哪块跑哪条"的映射本身**：改了哪个文件 ⇒ 只有**够得到它的测试**才跑
+> （依赖图上的可达性，不是"挑几个跑跑看"）。认不出的路径它**当场退回全闸**（退出码 3）。
+> **"改动 → 测试"的完整口径、隔离树、以及它**不**保证什么**：见 [`dev/226-TEST-MAP.md`](dev/226-TEST-MAP.md)。
 
 ⚠️ **窄闸只买"改动中"那段时间，它不替收尾。**
 收尾四件（两边的硬闸 / 能部署的部署掉 / 文档与账对上 / 推上去 ＋ 给主人一份总结）
