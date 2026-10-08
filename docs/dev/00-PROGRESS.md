@@ -434,7 +434,27 @@
 > | **现在攒着什么、还没重建** | **就在这一节下面**（写「无」就是没有） |
 > | 每次重建的留痕（改哪 / 改什么 / 为什么 / 时间 / 动了哪几个文件） | [`PROGRESS-HISTORY.md` §九](PROGRESS-HISTORY.md#s9) |
 
-**现在攒着的：无 —— 2026-10-09 00:18 我重建过一次（见下）。**
+🔴 **现在攒着的（2026-10-09 00:31 起，等主人跑一次重建）：一笔，但它会拦住下一次启动。**
+
+| 改的是哪几份（`strict`） | 为什么 |
+|---|---|
+| `AGENTS.md` | `#344` 切换唯一权威：§二 整节重写成 `handbook-v3` 十份一览 ＋ 顶部提示与 §四/§七/§八 五处指针 ＋ §1.1 把"无根容器被 apparmor 挡"那句错话改对 |
+| `docs/handbook/**` **10 份** | 同上：每份顶上挂"**已降级为只作证据、结论以 `handbook-v3` 为准**"的横幅（文件留着，46 篇 `docs/` 的旧指针不断） |
+| **`docs/handbook-v3/`（新目录 · 10 个文件）** | `src/integrity.js` 把它列进了 `strict`（与旧那份同级保护）—— 而 `/etc/hupo/integrity.json`（00:18 那一版）里**整条都没有它** |
+
+⚠️ **现状（2026-10-09 00:35 实测）**：`node scripts/verify-integrity.mjs` 报 **13 处** ——
+**11 处会拒绝启动**（`AGENTS.md` ＋ 旧手册 10 份）＋ 2 处只报（`src/integrity.js`、`src/prune.js`），
+另加一条 **"清单漏了 1 条"**（`docs/handbook-v3`）。
+⇒ **下一次重启 `serve.js` 会被 `integrity` 拦下（`process.exit(2)`）**。
+⚠️ **服务现在是好的**：`src/serve.js`（pid 2303669）**00:22 就起来了**，在我的改动（00:31）**之前**
+⇒ 现在 8020 与 `w.stalkerai.cn` 都 200 —— **但先重建再重启**，别直接重启。
+命令（`sudo -n true` 实测**要口令** ⇒ 只能主人跑；`node` 只有 nvm 那一个，必须绝对路径）：
+
+```
+sudo /home/deploy/.nvm/versions/node/v24.15.0/bin/node /home/deploy/proj/hupo/scripts/verify-integrity.mjs --build
+```
+
+**上一次重建：2026-10-09 00:18（见下）。**
 
 **这一次重建（2026-10-09 00:18，主人当天明确授权"这一次我跑"）**：攒着的是**三份 `strict`** ——
 `docs/handbook/08-SPEC.md`（接口表补 `/api/ark-check` 那一行）· `docs/handbook/CHANGELOG.md`（**v2.86**）
