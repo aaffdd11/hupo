@@ -170,8 +170,8 @@ DSH 把会话记录落在 `$DSH_HOME/sessions/` 下、**以 root 的绝对路径
   /run/hupo                  ← tmpfs（本地通道那条套接字）
 ```
 
-**为什么是"盒子"而不是"一人一个目录"**：目录分得再干净，**跑的还是同一个 OS、同一个内核、
-同一个 uid**。一个用户手里的 agent 能自己跑命令 ⇒ 它要越界只需要一条绝对路径。
+**为什么是"盒子"而不是"一人一个目录"**：目录分得再干净，**跑的还是同一个内核、
+同一个服务账号**。一个用户手里的 agent 能自己跑命令 ⇒ 它要越界只需要一条绝对路径。
 ⇒ **只有内核能拦它**，而内核拦人的东西叫 uid。这也正是"容器方案的卖点"：
 可以**在盒子里给它完整 root，而外面一点碰不到**。
 
@@ -179,7 +179,7 @@ DSH 把会话记录落在 `$DSH_HOME/sessions/` 下、**以 root 的绝对路径
 
 | 层 | 靠什么分开 | 落点 |
 |---|---|---|
-| **人 ↔ 人** | **OS 用户（uid）**＋各自的 rootless 容器存储 | `scripts/create-tenant-users.sh` · `create-tenant-pool.sh`（每人一份镜像存储，"互不可见"） |
+| **人 ↔ 人** | **OS 用户（uid）**＋各自的 **rootless** 容器存储 | `scripts/create-tenant-users.sh` · `create-tenant-pool.sh`（脚本里每一处 `podman` 都**以它自己的属主身份跑、不以 root**；镜像 `load` 进**每人自己那一份**存储） |
 | **同一个盒子里：服务 ↔ agent** | **换手**：服务是 root，**agent 降到镜像里指定的 uid**（`HUPO_AGENT_UID`/`HUPO_AGENT_GID`） | `config.js` 的 `agentUid` · `agent-runtime.js` spawn 时的 `uid`/`gid` |
 | **同一个盒子里：宿主 ↔ 容器** | 容器只经**可信 UDS** 与宿主的内部口说话（那些口**不验签、不认令牌**，身份就是"你从哪条 UDS 进来的"） | `tenant-channel.mjs` · `apps-box.js` 的 `INTERNAL_PREFIX` |
 
@@ -259,7 +259,7 @@ agent 窗口（`agentKeyFor` 那条注释点名的形状：两个房间的话糊
 
 | 层 | 实体 | 是什么 | 拥有记忆？ |
 |---|---|---|---|
-| 归置 | **workspace** | 一个目录 ＋ 标题 ＋ 该目录下的会话清单 | ❌ **不拥有**（对模型完全不可见，零上下文成本） |
+| 归置 | **workspace** | `<dir>/workspaces/<scope>/` 那一格 ＋ 它自己的清单（`.hupo.json`：id / 名字 / 入口） | ❌ **不拥有**（对模型完全不可见，零上下文成本） |
 | 干活 | **session** | 一次连续对话；**自带 workspace root** | ✅ **记忆在这里** |
 | 落盘 | 那条日志（`main.jsonl`）＋ 事件上的 `scopeId` 标签 | 可见历史 | —— |
 
@@ -399,16 +399,16 @@ A 正在回答（同一条消息，同一个气泡）
 | # | 是什么 | 违反了会怎样 | 判据在哪 |
 |---|---|---|---|
 | **N1** | 执行第三方代码的东西（小程序）**绝不与持有令牌的原点同源** | 制品读得到壳的存储、令牌会被带过去 ⇒ 一个用户的小程序能拿着壳的令牌做事 | `app-serve.js` 顶上那段（第二个端口 ⇒ 对浏览器就是另一个原点）；测试 `apps-route.test.js` · `app-entry-identity.test.js` |
-| **N2** | 制品**不能自授权**：小程序拿不到任何"能指挥 agent"的能力 | 一个别人写的页面就能指挥你的助手 | `apps-consent.js` · `app-grant.test.js` · `app-ask.test.js` |
-| **N3** | **来源分级**：进入 agent 上下文的一切都带来源标签，能力按来源分级 | 网页里的一句话与主人的话等价 ⇒ 提示注入直接变成权限提升 | `sources.js` · `sources.test.js` · `capabilities.test.js` |
-| **N4** | **记忆有出处**：每条带来源与采信度，**无出处不写**；未采信不得作行动依据 | 助手把编造的事实当"记得"讲出来 | `test/unit` 的记忆写闸门那一组（[`08-SPEC.md`](08-SPEC.md) §十二） |
+| **N2** | 制品**不能自授权**：小程序拿不到任何"能指挥 agent"的能力 | 一个别人写的页面就能指挥你的助手 | `app-grant.test.js`（授权）· `app-ask.test.js`（配额与闸）· `apps-consent.js` |
+| **N3** | **来源分级**：进入 agent 上下文的一切都带来源标签，能力按来源分级 | 网页里的一句话与主人的话等价 ⇒ 提示注入直接变成权限提升 | 分级与能力档的落点在 **host 侧**（接口与判据见 [`08-SPEC.md`](08-SPEC.md) §四）；协议那一侧"出处"只有一种（`sources.js`：只认真的查过、工具名与查询词**一个字节都不许进** `sources` —— 因为 `sources` 会画在屏幕上）· `sources.test.js` |
+| **N4** | **记忆有出处**：每条带来源与采信度，**无出处不写**；未采信不得作行动依据 | 助手把编造的事实当"记得"讲出来 | L3 运行契约里那五道记忆写闸门（[`08-SPEC.md`](08-SPEC.md) §十二 · 判据 `ledger.test.js` · `ledger-chain.test.js`） |
 | **N5** | **可回退**：任何系统改动生效前必须有回退点，且**回退不需要 agent** | 出问题时，出问题的那个就是唯一能回退的人 | `scripts/rollback.sh`（用 `git revert`：把这一次**反做一遍**，历史留着；它**不读任何助手产出的文件**） |
 | **N6** | **记忆不是真相源**：事件流才是权威，冲突以事件流为准 | 两处记录打架时无人能判 ⇒ 一定有一处是假话而没人知道 | `store.js` 的 `verifyMonotonic`（盘是权威）· `reconcile.js`（按盘对账） |
-| **N7** | **不拿不真实的状态污染记录**（写进记录前先问"这条一直是假的怎么办"） | 客户端是服务端事件的**投影**：写进一条不真实的状态，页面就会一直替它说那句话，**而且说得理直气壮** | `08-SPEC.md` §一 那三起"页面在说假话"事故；判据 `deliver-failed.test.js` · `reconcile.test.js` |
+| **N7** | **不拿不真实的状态污染记录**（写进记录前先问"这条一直是假的怎么办"） | 客户端是服务端事件的**投影**：写进一条不真实的状态，页面就会一直替它说那句话，**而且说得理直气壮** | [`08-SPEC.md`](08-SPEC.md) §一 那几起"页面在说假话"事故（每一起都点名了它当年的判据）；今天的落点 `deliver-failed.test.js` · `reconcile.test.js` |
 | **N8** | **预算先于任务**：一切会 fan-out 的动作都吃**显式预算** | 一次手滑把额度烧光，而且是在用户看不见的地方烧的 | `session-budget.js` · `shutdown-budget.js` · `session-budget.test.js` |
-| **N9** | **可删除**：任何存储都要能回答"这条怎么删干净" | "删掉了"变成一句假话（盘上还有、或者删的是空的那一份） | `trash.js` · `prune.js` · `app-reclaim.test.js` · `room-reclaim.test.js` |
-| **N10** | **沉默优于编造**；**超时必须伴随资源回收**（**收气泡 ≠ 停 agent**） | 要么编一句话糊过去，要么收了气泡却把进程留在那儿烧钱 | `dispatcher.js` 硬收口那一档 · `src/process-guard.js` · `process-guard.test.js` · `deadline.test.js` |
-| **N11** | **拒绝要给人话**：满 / 超预算 / 上游挂，都必须是一句人话 ＋ 可重试，**不是静默** | 用户只看到"没反应"，而系统其实拒了 —— 那是★3"失败与成功长得一样" | `server.js` 的准入（429 那一档）· `admission.js` · `admission.test.js` |
+| **N9** | **可删除**：任何存储都要能回答"这条怎么删干净" | "删掉了"变成一句假话（盘上还有、或者删的是空的那一份） | `trash.js`（软删墓碑）· `reclaim.js` + `app-reclaim.test.js`（**真回收四样一起走**）· `room-reclaim.test.js` · `prune.js`（只服务"真删"的压实） |
+| **N10** | **沉默优于编造**；**超时必须伴随资源回收**（**收气泡 ≠ 停 agent**） | 要么编一句话糊过去，要么收了气泡却把进程留在那儿烧钱 | 判据 `deadline.test.js`（**N10** 那一条：超时**必须把 agent 卸掉**，"只收气泡不算数"）· `src/process-guard.js` · `process-guard.test.js` |
+| **N11** | **拒绝要给人话**：满 / 超预算 / 上游挂，都必须是一句人话 ＋ 可重试，**不是静默** | 用户只看到"没反应"，而系统其实拒了 —— 那是★3"失败与成功长得一样" | 服务端在**落盘之前**判并回明确的码（`server.js` 的准入 → 429；`admission.js`）；**人话在客户端那一侧按码翻**（`api.dart` 的 `sayOutcomeOf`），判据 `admission.test.js` · `say_outcome_test.dart` |
 
 ### 5.2 N12–N32（这一代）
 
