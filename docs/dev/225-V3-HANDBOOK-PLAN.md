@@ -289,3 +289,27 @@
 
 ⚠️ **同一轮还改了新手册自己的一处错**：`01-PROJECT.md` §二·10（那位平板用户）原来写"**横屏改两栏**"，
 与 `D4.7` 正面打架 ⇒ 已改成"**没做**，那是 `D4.7` 的定案，这一条今天仍然欠着"。
+
+### 8.7 `docs/INDEX.md` 的逐行改动清单（2026-10-09 现量，共 17 处）
+
+> 路由表是**唯一入口** ⇒ 切权威时**只改这一张表**，别处不用追（旧手册文件留着、横幅会把读者引过来）。
+
+| 行 | 现在指 | 改成 |
+|---|---|---|
+| L30 | `handbook/01-PROJECT.md` | `handbook-v3/01-PROJECT.md` |
+| L31 | `handbook/02-ARCHITECTURE.md` | `handbook-v3/02-ARCHITECTURE.md` |
+| L33 | `handbook/03-DEVELOPMENT.md` | `handbook-v3/03-DEVELOPMENT.md` |
+| L34 | `handbook/04-ROADMAP.md` | `handbook-v3/04-ROADMAP.md` |
+| L35 | `handbook/05-DECISIONS.md` | `handbook-v3/05-DECISIONS.md` |
+| L36 | `handbook/06-OPERATIONS.md` | `handbook-v3/06-OPERATIONS.md` |
+| L37 | `handbook/07-APPENDIX.md` | `handbook-v3/07-APPENDIX.md` |
+| L38 / L39 / L40 / L44 | `handbook/08-SPEC.md`（四处） | `handbook-v3/08-SPEC.md` |
+| L84 | `handbook/CHANGELOG.md` | 🔴 **v3 没有 CHANGELOG** ⇒ 改成一句实话：**定档记录 ＝ git tag ＋ `04-ROADMAP.md` §一；变更考古在旧那份 `CHANGELOG`（只作证据）** |
+| L90 / L95 | `handbook/05-DECISIONS.md` | `handbook-v3/05-DECISIONS.md` |
+| L91 | `handbook/03-DEVELOPMENT.md` | `handbook-v3/03-DEVELOPMENT.md` |
+| L105 | `handbook/01`（§一 那一栏） | `handbook-v3/01-PROJECT.md` |
+| L106 | `handbook/05-DECISIONS`（§三 那一栏） | `handbook-v3/05-DECISIONS.md` |
+
+⚠️ **`AGENTS.md` 同一次改**（5 处）：§二 标题与正文（`docs/handbook/` → `docs/handbook-v3/`）·
+§三 的目录树那一行 · §四 里 `05-DECISIONS.md` 的路径 · §5.2 那处 · §八 的 `strict` 清单
+（写成"`docs/handbook/**` **与** `docs/handbook-v3/**`"—— 旧那份继续受保护）。
