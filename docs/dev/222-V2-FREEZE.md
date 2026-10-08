@@ -45,6 +45,12 @@
 `git checkout v2.0` ＋ `cd v2/services/core && npm test` / `bash scripts/check-client.sh` ⇒
 再 `bash scripts/deploy-web-v2.sh` 与 `bash scripts/build-tenant-code.sh [--publish]`。
 
+> ⚠️ **上面那几个号是"定稿那一刻"的读数**（这是**冻结记录**，别当成今天的值）。
+> 想知道**今天线上跑的是哪一份**：现跑 `curl -s 127.0.0.1:8020/api/version` 与
+> `bash scripts/check-tenant-code-drift.sh`；**读数只住 [`00-PROGRESS.md`](00-PROGRESS.md) §〇**。
+> 🔴 实测过一次：网页入口在定稿后几小时就换过（发了 v3.0 那一版）——
+> **这正是"号会过期、命令不会"那条纪律的实例。**
+
 ⚠️ **tag 之后 `main` 上已经有 V3.0 的第一片**（视频钥匙「验一下」，见 [`223`](223-ARK-CHECK.md)）——
 **tag 里没有它**（tag 钉的是 `ee648a0`）。要"纯 V2.0 的代码"就 `checkout v2.0`。
 
