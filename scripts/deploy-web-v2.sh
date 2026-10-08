@@ -181,6 +181,30 @@ if [ -f "$APK_OLD" ]; then
   echo "  ✓ 1.0 那一份也放回来了：web/hupo.apk（$(du -h "$WEB/hupo.apk" | cut -f1) · 原样不动）"
 fi
 
+# ★ **图标原图也放回来**（2026-10-07 主人：*"icon原图发我一下，或者哪里可以下载"*）：
+#   同一句 `rm -rf "$WEB"` 会把它一起删掉 ⇒ 每次部署从仓库那一份拷一次。
+#   ⚠️ 仓库里那一份**就是他 2026-09-29 给的那张原图**（2048×2048 · 右下角带"元宝 AI生成"水印），
+#      **原样存着、一个像素都不动**：图标那几套是 `scripts/make-app-icons.py` 从它裁出来的，
+#      水印靠"裁紧主体"落在框外（见 `docs/dev/130-APP-ICON.md` §二）。
+#   ⚠️ 只发 ASCII 名：中文名在公网那一段会被前头那台 nginx 弄坏（见下面那条）。
+ICON_SRC="$ROOT/docs/dev/130-raw/icon-source-2048.jpg"
+if [ -f "$ICON_SRC" ]; then
+  cp -f "$ICON_SRC" "$WEB/hupo-icon-2048.jpg"
+  echo "  ✓ 图标原图也放回来了：/hupo-icon-2048.jpg（$(du -h "$WEB/hupo-icon-2048.jpg" | cut -f1)）"
+fi
+
+# ★ **源代码压缩包也放回来**（2026-10-07 主人：*"给我一个源代码压缩包，放到下载链接里"*）：
+#   同一句 `rm -rf "$WEB"` 也会把它删掉 ⇒ 每次部署从 `data/` 那一份拷一次。
+#   ⚠️ 包是 `scripts/pack-source.sh` 打的（HEAD 那一份 ＋ 一张清单）；`data/` 不进仓库，
+#      所以**新机器/刚 clone 出来是没有它的** —— 那种时候这里不会有链接，先跑一次那个脚本。
+SOURCE_PKG="$ROOT/v2/services/core/data/hupo-source.tar.gz"
+if [ -f "$SOURCE_PKG" ]; then
+  cp -f "$SOURCE_PKG" "$WEB/hupo-source.tar.gz"
+  echo "  ✓ 源代码包也放回来了：/hupo-source.tar.gz（$(du -h "$WEB/hupo-source.tar.gz" | cut -f1)）"
+else
+  echo "  ⚠️ 没有 $SOURCE_PKG ⇒ 这次那个下载会 404。要发就补一句：bash scripts/pack-source.sh"
+fi
+
 # ★ **参赛文稿（作品设计说明）也放回来**（2026-10-04 主人：*"把文件放在网站上供下载"*）：
 #   上面那句 `rm -rf "$WEB"` 同样会把它删掉 ⇒ 每次部署都从仓库那一份拷一次。
 #   ⚠️ 两个名字指同一份文件（**逐字节相同**）：
@@ -188,12 +212,42 @@ fi
 #     · `琥珀-作品设计说明.pdf` —— 中文名，他（和评委）看着就知道是什么。
 #   ⚠️ 源文件在 `docs/contest/`（**仓库里那一份是权威**：它由 `submission.html` 渲染出来，
 #      改文字改那个 HTML 再重出 PDF，别直接改 PDF）。
+# ★ 2026-10-07：徐汇那套材料里的 **Word 文稿**也放回来（ASCII 名：中文名在 URL 里会被 nginx 弄坏）——
+#   查新报告（文字版）与（以后）查重报告封面。源文件在 `docs/contest/xuhui-2026/`。
+CONTEST_DOCX="$ROOT/docs/contest/xuhui-2026/查新报告（文字版）.docx"
+if [ -f "$CONTEST_DOCX" ]; then
+  cp -f "$CONTEST_DOCX" "$WEB/hupo-chaxin.docx"
+  echo "  ✓ 查新报告（Word）也放回来了：/hupo-chaxin.docx（$(du -h "$WEB/hupo-chaxin.docx" | cut -f1)）"
+fi
+
 CONTEST_PDF="$ROOT/docs/contest/琥珀-作品设计说明.pdf"
 if [ -f "$CONTEST_PDF" ]; then
   cp -f "$CONTEST_PDF" "$WEB/hupo-design-note.pdf"
   echo "  ✓ 参赛文稿也放回来了：/hupo-design-note.pdf（$(du -h "$WEB/hupo-design-note.pdf" | cut -f1)）"
 else
   echo "  ⚠️ 没有 $CONTEST_PDF ⇒ 这次那个下载链接会 404（改完文稿要重出 PDF）"
+fi
+
+# ★ **徐汇「雏鹰杯」那一份作品设计说明也放回来**（2026-10-07 主人：*"设计说明，让我可以公网下载"*）：
+#   两个名字指向**两份不同的稿子**（别混）：
+#     · `/hupo-design-note.pdf`       ← 9 页通用版（上面那一份）；
+#     · `/hupo-design-note-xuhui.pdf` ← 徐汇那一份（模板四段 · 500–3000 字那一档）。
+#   源文件在 `docs/contest/xuhui-2026/作品设计说明.pdf`（由同目录 `作品设计说明.html` 出）。
+XUHUI_PDF="$ROOT/docs/contest/xuhui-2026/作品设计说明.pdf"
+if [ -f "$XUHUI_PDF" ]; then
+  cp -f "$XUHUI_PDF" "$WEB/hupo-design-note-xuhui.pdf"
+  echo "  ✓ 徐汇那份设计说明也放回来了：/hupo-design-note-xuhui.pdf（$(du -h "$WEB/hupo-design-note-xuhui.pdf" | cut -f1)）"
+else
+  echo "  ⚠️ 没有 $XUHUI_PDF ⇒ 这次徐汇那个下载链接会 404（改完要重出 PDF）"
+fi
+
+# ★ **查重报告封面（附件 7 · 打印签字用）也放回来**（2026-10-07）：
+#   那份 Word 是 `node scripts/md-to-docx.mjs` 从同名 `.md` 出的；**读数留空**
+#   （总相似比 / 相似文献篇数只能来自真实查重结果，见 `docs/contest/xuhui-2026/查重报告（封面·待读数）.md`）。
+CHACHONG_DOCX="$ROOT/docs/contest/xuhui-2026/查重报告（封面·待读数）.docx"
+if [ -f "$CHACHONG_DOCX" ]; then
+  cp -f "$CHACHONG_DOCX" "$WEB/hupo-chachong-cover.docx"
+  echo "  ✓ 查重报告封面也放回来了：/hupo-chachong-cover.docx（$(du -h "$WEB/hupo-chachong-cover.docx" | cut -f1)）"
 fi
 # 🔴 **只发 ASCII 那一个名字**（2026-10-04 实测）：中文名在**公网**那一段会坏 ——
 #    前面那台 nginx 把百分号编码的路径弄丢，`/琥珀-….pdf` 拿到的是**页面**（200 + text/html），
