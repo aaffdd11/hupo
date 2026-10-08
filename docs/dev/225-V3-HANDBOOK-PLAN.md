@@ -128,6 +128,7 @@
 | 3 | `AGENTS.md`（`strict`）那句"唯一权威文档是 `docs/handbook/`"**改成 `docs/handbook-v3/`** | 开机读的就是它；不改＝我下次开机还照旧那套做 |
 | 3·补 | 🔴 **顺手把 `AGENTS.md` §1.1 里那几句已经过期的事实改对**（2026-10-09 现核）：**"无根容器 ❌ 被挡（`apparmor_restrict_unprivileged_userns=1`）"是错话** —— 本机**没有那个 sysctl**（`sysctl` 报 No such file or directory），而 `podman info` 报 **`Rootless=true`**；`scripts/check-container.sh` 走的就是无根 podman | 开机读的那一份写着"这条路被挡"，会让我**下次碰到容器就直接绕开** —— 正是"最贵的一句假话"那种形状 |
 | 4 | `src/integrity.js` 的受保护清单**加上 `docs/handbook-v3`** | 新权威必须和旧权威同级（否则谁都能随手改判据） |
+| 4·补 | 🔴 **`test/route-shape.test.js` 读的那一份从 `docs/handbook/08-SPEC.md` 改成 `docs/handbook-v3/08-SPEC.md`**（它今天守的是**基线**那份） | 不改 ⇒ 新手册 §2.1 的接口表**无人守**（那条闸的全部意义就是"加了路由没写表 = 漂"）—— 这是 `08` 前五节那一轮**主动报出来**的 |
 
 ⚠️ **第 4 步要动 `src/integrity.js`，第 3 步要动 `AGENTS.md`，第 1–4 步都要重建开机清单** ⇒
 **攒成一次做，只要主人跑一条 `sudo`**（命令见 [`224`](224-V3-PROJECT.md) §九）。
