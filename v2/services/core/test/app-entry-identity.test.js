@@ -1,4 +1,4 @@
-// **D4.24 · A3 + A3·补**（`docs/handbook/05-DECISIONS.md` · 2026-10-03 定；口径
+// **D4.24 · A3 + A3·补**（`docs/handbook-v3/05-DECISIONS.md` · 2026-10-03 定；口径
 // `docs/dev/90-APP-CONTRACT.md` §9.2·1／§10.1·⑤）——两组判据各自钉死：
 //
 //   A3 —— **制品入口 URL 里不许带明文身份**

@@ -205,8 +205,14 @@ function commandFor(testRel) {
 // **不是代码**的那些路径（文档 / 配置 / 脚本）：它们不进依赖图，但各有各的闸。
 // ⚠️ 这几条是**白名单**：认不出的路径一律 `FULL`（退回全闸），绝不悄悄放过。
 const NON_CODE = [
+  // ⚠️ **这一条必须在通用 `docs/**` 那条前面**（`.find()` 取第一条命中）——
+  //    2026-10-09 实测：写在后面等于**死代码**，改 `08-SPEC.md` 只挑出文档闸，
+  //    "手册 ←→ 代码"那五条形状闸**一条都不跑**（"闸没打在改动上"）。
+  [/^docs\/handbook(-v3)?\/08-SPEC\.md$/, () => [
+    'node scripts/check-docs.mjs',
+    'cd v2/services/core && node --test test/route-shape.test.js test/disk-grade.test.js test/disk-watch.test.js test/health-shape.test.js test/reverse-drift.test.js',
+  ]],
   [/^docs\/.*\.md$/, () => ['node scripts/check-docs.mjs']],
-  [/^docs\/handbook(-v3)?\/08-SPEC\.md$/, () => ['node scripts/check-docs.mjs', 'cd v2/services/core && node --test test/route-shape.test.js']],
   [/^[A-Za-z-]+\.md$|^docs\/.*\.md$/, () => ['node scripts/check-docs.mjs']],
   [/^v2\/services\/core\/hupo-persona\.yml$/, () => ['bash scripts/check-persona.sh', 'cd v2/services/core && node --test test/persona.test.js']],
   [/^v2\/services\/core\/hupo-.*\.yml$/, () => ['cd v2/services/core && npm test']],

@@ -11,7 +11,7 @@ import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
 const ROOT = nodePath.resolve(import.meta.dirname, '../../../..');
-const SPEC = nodePath.join(ROOT, 'docs/handbook/08-SPEC.md');
+const SPEC = nodePath.join(ROOT, 'docs/handbook-v3/08-SPEC.md');
 const SRC = nodePath.join(ROOT, 'v2/services/core/src/server.js');
 
 test('★ P1-12：手册 /api/health 那一行 = 代码真的回的那几个字段', () => {

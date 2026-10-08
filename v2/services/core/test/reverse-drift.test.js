@@ -113,8 +113,8 @@ test('🔴 负向对照：扫到的东西不能是空的（不然这条闸是摆
 
 test('⚠️ 为什么必须排除 `docs/` 与 `test/`：不排除，这条闸**永远绿不了**', () => {
   // 把理由跑出来：规则的定义与断言本身**必然**含有这些词。
-  const spec = nodeFs.readFileSync(nodePath.join(REPO, 'docs/handbook/08-SPEC.md'), 'utf8');
-  assert.ok(spec.includes('usermod'), '手册 §13.2 自己就写着 usermod —— 扫它必然命中');
+  const spec = nodeFs.readFileSync(nodePath.join(REPO, 'docs/handbook-v3/08-SPEC.md'), 'utf8');
+  assert.ok(spec.includes('usermod'), '手册 §13.3 自己就写着 usermod —— 扫它必然命中');
   assert.ok(spec.includes('HEAD~1'), '同一条规则自己就写着 HEAD~1');
   const self = nodeFs.readFileSync(nodePath.join(import.meta.dirname, 'reverse-drift.test.js'), 'utf8');
   assert.ok(self.includes('HEAD~1'), '这条断言自己必须写出那个字符串，不然它拿什么去搜');

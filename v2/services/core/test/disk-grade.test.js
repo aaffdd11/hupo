@@ -13,17 +13,26 @@ import nodePath from 'node:path';
 
 import { DISK_STEPS, DISK_WORDS, diskGrade, usedPercentOf } from '../src/disk-grade.js';
 
-const SPEC = nodePath.resolve(import.meta.dirname, '../../../..', 'docs/handbook/08-SPEC.md');
+const SPEC = nodePath.resolve(import.meta.dirname, '../../../..', 'docs/handbook-v3/08-SPEC.md');
 
 test('① 🔴 阈值与手册那张表**逐条对得上**（手册改了这条就红）', () => {
   const spec = nodeFs.readFileSync(SPEC, 'utf8');
-  const line = spec.split('\n').find((l) => /\|\s*\*\*磁盘分级\*\*\s*\|/.test(l));
+  const line = spec.split('\n').find((l) => /\|\s*\*\*磁盘分级/.test(l));
   assert.ok(line, '手册里找不到「磁盘分级」那一行 —— 表改名了就要回来改这条闸');
-  // 手册那一行写的是：**80 告警 / 88 清 / 92 拒新重活 / 95 优雅拒绝新会话**
-  for (const [n, word] of [[80, '告警'], [88, '清'], [92, '拒新重活'], [95, '优雅拒绝新会话']]) {
+  // 手册 §10.4 那一行写的是：**`95` 拒绝新话 / `92` 拒新重活 / `88` 自动清 / `80` 告警**
+  // ⚠️ 逐条对的是**代码那张表**（`DISK_STEPS` 的 `at` ＋ `grade`）——
+  //    手册那个数字与那一档的**分级名**任一改动都会红（不是照抄一句文案）。
+  for (const [n, grade, word] of [
+    [80, 'warn', '告警'],
+    [88, 'clean', '自动清'],
+    [92, 'refuse-heavy', '拒新重活'],
+    [95, 'refuse-new', '拒绝新话'],
+  ]) {
     assert.ok(line.includes(String(n)), `手册那一行里没有 ${n}：${line.trim()}`);
     assert.ok(line.includes(word), `手册那一行里没有「${word}」：${line.trim()}`);
-    assert.ok(DISK_STEPS.some((s) => s.at === n), `代码少了一档 ${n}（手册有）`);
+    const step = DISK_STEPS.find((s) => s.at === n);
+    assert.ok(step, `代码少了一档 ${n}（手册有）`);
+    assert.equal(step.grade, grade, `代码 ${n} 那一档的分级不是 ${grade}`);
   }
   // 负向对照：反过来也不许多（手册只列了四档）
   assert.equal(DISK_STEPS.length, 4, `手册四档、代码也是四档（现在是 ${DISK_STEPS.length}）`);

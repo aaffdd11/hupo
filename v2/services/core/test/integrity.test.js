@@ -469,7 +469,8 @@ test('清单要**完整**：三类"开机自动读"的东西一个都不能漏',
     '/home/u/.dsh/profiles',
     '/home/u/.dsh/settings.yaml',
     '/home/u/.dsh/.credentials.yaml',
-    '/repo/docs/handbook', // ③ 判据本身
+    '/repo/docs/handbook', // ③ 判据本身（旧基线：只作证据）
+    '/repo/docs/handbook-v3', // ③ 判据本身（**唯一权威那一套** —— 漏了它就等于没有闸）
   ];
   for (const m of must) {
     assert.ok(paths.includes(m), `清单漏了：${m}（P1.2 的判据是"一条路径都不许剩"）`);
@@ -591,7 +592,8 @@ test('🔴 主人定的那一档（2026-09-21）：**人格 / 说明书 / DSH �
     '/repo/v2/services/core/hupo-persona.yml', // 它是谁
     '/repo/AGENTS.md', // 它给自己的说明书
     '/home/u/.dsh/profiles', // 每轮开机读到的 profile / 补丁
-    '/repo/docs/handbook', // 判据本身
+    '/repo/docs/handbook', // 判据本身（旧基线）
+    '/repo/docs/handbook-v3', // 判据本身（**唯一权威那一套**）
   ];
   for (const p of strict) assert.equal(modeOf(p), 'strict', `${p} 必须是 strict`);
   // ⚠️ 这两条**刻意**只报：它们会被正常运行改写（记住"提示看过了" / 令牌续期），

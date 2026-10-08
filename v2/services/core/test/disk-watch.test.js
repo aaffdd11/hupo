@@ -24,13 +24,17 @@ import {
   startDiskWatch,
 } from '../src/disk-watch.js';
 
-const SPEC = nodePath.resolve(import.meta.dirname, '../../../..', 'docs/handbook/08-SPEC.md');
+const SPEC = nodePath.resolve(import.meta.dirname, '../../../..', 'docs/handbook-v3/08-SPEC.md');
 
 test('① 🔴 周期与手册对表：手册写"5 分钟一次" ⇒ 常量就是它（手册改了这条就红）', () => {
   const spec = nodeFs.readFileSync(SPEC, 'utf8');
-  const line = spec.split('\n').find((l) => /\|\s*\*\*磁盘守护\*\*\s*\|/.test(l));
-  assert.ok(line, '手册里找不到「磁盘守护」那一行 —— 表改名了就要回来改这条闸');
-  assert.ok(line.includes('5 分钟'), `手册那一行说的周期不是 5 分钟：${line.trim()}`);
+  // ⚠️ 旧手册把"分级"与"周期"写在**同一行**（标题叫「磁盘守护」）；
+  //    v3 拆成 §10.4 的两行（「磁盘分级」＋「巡检周期」）⇒ 这条闸找的是**周期**那一行。
+  const line = spec.split('\n').find((l) => /\|\s*\*{0,2}巡检周期\*{0,2}\s*\|/.test(l));
+  assert.ok(line, '手册里找不到「巡检周期」那一行 —— 表改名了就要回来改这条闸');
+  // 手册写的是 `300000` ms（`5` 分钟）⇒ 去掉反引号再比，免得被记号呛住
+  const plain = line.replace(/`/g, '');
+  assert.ok(plain.includes('5 分钟'), `手册那一行说的周期不是 5 分钟：${line.trim()}`);
   assert.equal(SAMPLE_INTERVAL_MS, 5 * 60 * 1000, '★ 周期住代码，而且是手册那一个数');
 });
 
