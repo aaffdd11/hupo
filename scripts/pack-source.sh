@@ -75,7 +75,7 @@ COUNT="$(find "$STAGE" -type f ! -name SOURCE-MANIFEST.txt | wc -l | tr -d ' ')"
   echo "文件数：$COUNT"
   echo
   echo "目录：v2/services/core/ 是调度器（服务端，Node），v2/apps/mobile/ 是客户端（Flutter）；"
-  echo "      docs/handbook/ 是权威文档，docs/INDEX.md 是「要问什么读哪一份」的路由；"
+  echo "      docs/handbook-v3/ 是权威文档（旧 docs/handbook/ 只作证据），docs/INDEX.md 是「要问什么读哪一份」的路由；"
   echo "      AGENTS.md 是接手须知（怎么跑闸、怎么部署）。"
   echo
   echo "怎么跑（硬闸）："

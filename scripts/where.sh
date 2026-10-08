@@ -13,7 +13,7 @@
 # 而这就是"小需求也要长时间分析阅读"的一个大头。
 #
 # ⇒ 把考古变成**一条命令**。它**只列落点、不下结论**：
-#    · 结论（字段语义、为什么冻结）在 `docs/handbook/03-DEVELOPMENT.md` §三 与 `08-SPEC.md`；
+#    · 结论（字段语义、为什么冻结）在 `docs/handbook-v3/03-DEVELOPMENT.md` §三 与 `08-SPEC.md`；
 #    · "改完跑哪条闸"在 `docs/CHANGE-MAP.md`。
 #
 # ⚠️ 协议字段**一旦上线就冻结**（`AGENTS.md` §六 第 2 条）——
@@ -119,4 +119,4 @@ done
 
 echo
 echo "⚠️ 落点多 ≠ 可以随便改：**协议字段一旦上线就冻结**（`AGENTS.md` §六 第 2 条）。"
-echo "   改之前读 `docs/handbook/03-DEVELOPMENT.md` §三；改完跑哪条闸看 `docs/CHANGE-MAP.md`。"
+echo "   改之前读 `docs/handbook-v3/03-DEVELOPMENT.md` §三；改完跑哪条闸看 `docs/CHANGE-MAP.md`。"
