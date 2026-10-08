@@ -75,20 +75,26 @@ cat /proc/$(pgrep -f src/serve.js | head -1)/cgroup   # 它的 cgroup 指向 …
 | 改了什么 | 怎么生效 | 要不要重启服务 |
 |---|---|---|
 | **服务端**（`v2/services/core/`） | `scripts/restart-core.sh` | **要** |
-| **客户端 / 界面**（`v2/apps/mobile/`） | 重新构建 + 上传：`bash scripts/deploy-web-v2.sh` | 🚨 **千万不要重启服务** |
+| **客户端 / 界面**（`v2/apps/mobile/`） | 重新构建 + 上传：`bash scripts/deploy-web-v2.sh` | **你自己不用为它去重启** —— ⚠️ **但那个脚本最后会自己重启一次**（见 §2.1） |
 | **`strict` 文件**（手册那一层 · `AGENTS.md` · 人格 · `~/.dsh/profiles`） | **重建开机清单**（一条 `sudo`）；重建**之后**再重启 | 要（重建之后） |
 
-### 2.1 🚨 改客户端为什么**不许**重启服务
+### 2.1 改客户端：**你不用为它重启**，但部署那一下会重启
 
-两条理由，都踩过：
+🔴 **先把事实说准**（2026-10-09 现核 `deploy-web-v2.sh`）：那个脚本**自己会重启核心服务**
+（`HUPO_BUILD_ID=<新指纹> bash scripts/restart-core.sh`，而且**查它的退出码** ——
+`strict` 文件对不上时这一步就会失败并停下，线上仍是上一版）。
+⇒ **"部署"这个动作里确实含一次重启**，它是**脚本的动作**，不是"让界面生效"的路径。
+
+那为什么还要强调"别自己重启"？两条理由，都踩过：
 
 1. **重启对客户端改动毫无作用**。界面跑在浏览器 / 手机里，只有**重新构建上传**才会变。
-2. **重启会把正在回答的助手杀掉**。助手是那个服务的**子进程**。在"改了界面、还没部署、
+2. **手动重启会把正在回答的助手杀掉**。助手是那个服务的**子进程**。在"改了界面、还没部署、
    还没验证"的时候重启它，**等于在任务中间自杀**：文件改了，用户屏幕上什么都没变，
    而他**再也等不到回话**。
 
-⇒ 客户端那一条的完整动作是：跑闸（§四）→ `deploy-web-v2.sh` → 公网核一眼 → **浏览器那条路的检查**。
-**全程不碰服务**。
+⇒ 客户端那一条的完整动作是：跑闸（§四）→ `deploy-web-v2.sh`（它自己会重启一次、并核指纹）
+→ 公网核一眼 → **浏览器那条路的检查**。
+⇒ **除此之外不要再单独重启**；服务端改动才走 `restart-core.sh`（§三）。
 
 ### 2.2 `strict` 那一条为什么是这个动作
 
@@ -1047,7 +1053,7 @@ bash scripts/check-tenant-code-drift.sh
 
 | 我要…… | 去哪 |
 |---|---|
-| 改客户端后 | `bash scripts/check-client.sh` → `bash scripts/deploy-web-v2.sh` → **浏览器那条路的检查**看一眼。**不重启服务** |
+| 改客户端后 | `bash scripts/check-client.sh` → `bash scripts/deploy-web-v2.sh` → **浏览器那条路的检查**看一眼。**你自己不用再单独重启**（那个脚本自己会带新指纹重启一次；见 §2.1） |
 | 改服务端后 | `scripts/restart-core.sh` → 看退出码与横幅 → 确认存活 |
 | 改手册 / `AGENTS.md` / 人格后 | **重建开机清单**（`verify-integrity.mjs --build`，命令照它打印的那条粘），否则**下次重启拒绝启动**；并在 [`../dev/00-PROGRESS.md`](../dev/00-PROGRESS.md) §九 留一行痕 |
 | 跑闸 | 服务端 `bash scripts/gate-server.sh` · 客户端 `bash scripts/check-client.sh` · 文档 `"$(command -v node)" scripts/check-docs.mjs` · 迭代期窄闸 `bash scripts/gate-quick.sh <改动的路径…>` |
