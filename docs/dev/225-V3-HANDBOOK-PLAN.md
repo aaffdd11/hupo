@@ -126,6 +126,7 @@
 | 1 | `docs/handbook/` **每份顶上挂一条横幅**：*这是基线 v1.0–v2.x，已由 `handbook-v3` 取代，只作证据* | 让"两个家"只剩一个**入口**（文件留着是为了 226 篇 dev 的旧指针不断） |
 | 2 | `docs/INDEX.md`（L0 路由）的"要什么"那一栏**改指新的一套** | 路由是唯一入口，它指哪边哪边就是家 |
 | 3 | `AGENTS.md`（`strict`）那句"唯一权威文档是 `docs/handbook/`"**改成 `docs/handbook-v3/`** | 开机读的就是它；不改＝我下次开机还照旧那套做 |
+| 3·补 | 🔴 **顺手把 `AGENTS.md` §1.1 里那几句已经过期的事实改对**（2026-10-09 现核）：**"无根容器 ❌ 被挡（`apparmor_restrict_unprivileged_userns=1`）"是错话** —— 本机**没有那个 sysctl**（`sysctl` 报 No such file or directory），而 `podman info` 报 **`Rootless=true`**；`scripts/check-container.sh` 走的就是无根 podman | 开机读的那一份写着"这条路被挡"，会让我**下次碰到容器就直接绕开** —— 正是"最贵的一句假话"那种形状 |
 | 4 | `src/integrity.js` 的受保护清单**加上 `docs/handbook-v3`** | 新权威必须和旧权威同级（否则谁都能随手改判据） |
 
 ⚠️ **第 4 步要动 `src/integrity.js`，第 3 步要动 `AGENTS.md`，第 1–4 步都要重建开机清单** ⇒
