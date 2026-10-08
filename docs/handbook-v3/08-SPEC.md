@@ -1750,4 +1750,145 @@ spawn 时没有任何"按来源切权限模式"的入口（全仓没有 `DSH_PER
 
 ---
 
-<!-- PART-C2: 十三、容器与上线可执行验收 / 十五、L2 实现约束 -->
+## 十三、容器与上线可执行验收 V\*
+
+> **每条写三样**：判据（脚本 / 测试 ＋ 命令）· **负向对照**（"闸不是空转"）· **今天跑没跑过**。
+> 🔴 **要 root 才跑得动的，如实标"没跑"** —— 不许把"设计上应该过"写成"已验证"。
+
+### 13.1 容器隔离：`bash scripts/check-container.sh`（**不需要 root**）
+
+| # | 判据 | 负向对照 / 正对照 | 今天 |
+|---|---|---|---|
+| 前提 | podman 是**无根**模式 · busybox 静态链接 | —— | ✅ |
+| **V1b** | 容器里写 `/tmp` **必须成功** | 🔴 **这条不能省**：它证明下面 V1 的"失败"不是"容器根本没起来" | ✅ |
+| **V1** | 读宿主凭据（`/proc/1/root/…`）**必须失败** | —— | ✅ 读不到；`/proc/1/root` 看到的是容器自己的根 |
+| **V3** | `169.254.169.254`（云元数据）**必须不通** | **正对照**：容器**确实有**对外网络（连上 `registry.npmjs.org:443`）⇒ 否则这一条是空跑 | ✅ |
+| **V4（环境那半）** | agent 的 env 里密钥类**必须 0 个** | —— | ✅ 命中 0 |
+| ⚠️ **V4（挂载那半）** | 真实挂载下再验一遍 | —— | ❌ **今天验不了**：镜像里没有 `/data` 与 `/home`（**脚本自己写"空跑不算通过"**） |
+
+**没验的**（脚本自己在结尾列的）：**用户之间** · **资源上限** · **真实挂载下的 V4**。
+
+### 13.2 特权侧那两条：**要 root**
+
+| 判据 | 命令 | 今天 |
+|---|---|---|
+| 拒的那一半 | `sudo bash scripts/check-provision-refusals.sh` | ❌ **没跑**（要 root，`sudo` 要密码） |
+| 删租户那一条 | `sudo bash scripts/check-tenant-removal.sh`（加 `--throwaway <名字>` 才真删一台） | ❌ **没跑**（同上） |
+
+⚠️ 它们验的是"**特权侧只读文件名里那个整数、拒得干净、删得干净**"那一族（§四 A1–A9）。
+⇒ **判据在、今天没读数** —— 这一格不算"已验证"。
+
+### 13.3 防回潮：`test/reverse-drift.test.js`（**今天在跑**，属 `npm test`）
+
+- **它扫什么**：① **会被执行的**（`scripts/`、`v2/**/src/`）② **开机喂给 agent 的**（人格 · `AGENTS.md`）。
+- **它不扫什么**：`docs/`（**规则的定义**住在那里）与 `**/test/`（**断言自己**必须写出那些词）。
+- 🔴 **为什么要写这么细**：手册里那几条"`grep` 出来必须是 0"**照字面写永远绿不了** ——
+  那些词就写在定义它们的文档里。**一条匹配到自己定义的闸不是闸，是一句口号**
+  （而"永远绿的闸"比没有闸更坏：它给人"已经守住了"的错觉）。这条理由写在那个文件头上。
+
+### 13.4 spawn 出去的那份 env：`test/agent-bin.test.js` · `test/agent.test.js`
+
+- **判据**：孩子的 env **由一处拼**（`agent-runtime.js` 的 `childEnv` / `agentEnv`）；
+  别的模块**不许自己拼** —— `test/dev-mode.test.js` 里有一条负向断言（"这里不许出现 `childEnv(`"）。
+- **这条规矩的来由**（踩过）：服务归 systemd 之后它自己的 `PATH` **很短**，
+  于是 ① `dsh` 裸名 ⇒ `ENOENT`；② 改成绝对路径后，`dsh` 的 shebang 要的 `node` **还是找不到**
+  ⇒ 两层症状一模一样（用户只看到"接不上活"）。⇒ 开机 `preflight` 找不到 `dsh` 就**拒绝启动**。
+
+### 13.5 淘汰顺序 == LRU 顺序：`test/agent.test.js`
+
+- **判据**（测试原话）：*"★ LRU 淘汰：只淘汰空闲的，而且**先收口再卸**"* ·
+  *"该淘汰**最久没用**的那个（LRU 那一头）"*。
+- **负向对照**：**跑着的不许卸**；⚠️ 而且"跳过一次"**不等于**"永久不淘汰"（下一轮还会看它）。
+
+### 13.6 安卓包：`test/unit/android_manifest_test.dart`
+
+- **必须有**：`INTERNET` · `RECORD_AUDIO`。
+- 🔴 **不许有**：后台录音（**一票否决**）。
+- `uses-feature` **不许**写 `required="true"`（那会把"能装"变成"必须"）。
+- ⚠️ **iOS 恒假**（没有工程、没有图标、商店版没有）—— 别把"两端一致"读成"两端都有"。
+
+### 13.7 🔴 V13：**客户端自己算出来的东西，闸必须打在客户端这一侧**
+
+- **那起事故**：客户端把流的地址算成了 `ws://`，在 https 页面上被浏览器按**混合内容**拦掉 ——
+  而**当时所有闸都是绿的**：验收用的是 node 探针，探针把 `wss://` **写死了**，**绕过了被测的那一行代码**。
+  ⇒ **绿的是工具，不是产品。**
+- **今天的判据**：`HUPO_TOKEN=<现发令牌> node scripts/check-web-browser.mjs --shot <图>`。
+  它验两件，**一件都不能省**：① **页面自己**建的那条 WebSocket 通没通（`ws://` 那类 bug 的唯一可观察信号）
+  ② 截一张图 —— **Flutter web 把字画在 canvas 上，查 DOM 查不到文本**，所以"屏幕上到底长什么样"**只能看一眼**。
+  令牌用 `Auth.issue()` **现发**，**不许写进任何文件**。
+- **真跑过**：页面自己那条 WS 通（帧数与事件类别记在 `docs/dev/00-PROGRESS.md` 最新那一格）· 截图看过。
+- **同一条纪律的另外两处落点**：`test/unit/import_rules_test.dart`（楼层闸：**静态扫整个 lib 树**，
+  所以任何 lib 改动它都跟着跑）· `test/server-wiring.test.js`
+  （`serve.js` 传给 `createServer` 的**每个键**，`createServer` 都得真认 —— 它守的是"名字对不上、四道闸全绿"那种形状）。
+
+---
+
+## 十五、L2 实现约束
+
+### 15.1 顺序不能反的几处（每条：反了会怎样）
+
+| 顺序 | 反了会怎样 | 判据 |
+|---|---|---|
+| **先落盘，再推订阅者** | 屏幕上有一条、**盘上没有** ⇒ 重启之后它不见了 | `test/store-append.test.js` |
+| **先收口，再卸**（淘汰 / 收工） | 话没说完人没了（用户等不到回话） | `test/agent.test.js`（"先收口再卸"那条）· `test/shutdown-budget.test.js` |
+| **先记额度，再投递**（续做） | 一个"每次投递都失败"的活会被**无限重试** | `test/resume-plan.test.js` |
+| **先写启动标记，再对账** | 会把"这一次启动"算到**下一轮**头上（崩溃环读错） | `test/process-guard.test.js` |
+
+### 15.2 准入接口的语义
+
+- **判不出来就别装**：算得出上限 ⇒ 按比值判（值住 §十）；**算不出**（本机每层 `memory.max` 都是 `max`）
+  ⇒ **放行**，并在**横幅如实说"算不出判据"**。🔴 **"放行" ≠ "没超"。**
+- **拒绝三件**：一句**人话** · **可重试** · **不许建空文件**（拒绝也要留痕，但不许留下垃圾）。
+- **判在落盘之前**（别先写了再拒）。
+- 判据：`test/admission.test.js`。
+
+### 15.3 对账与续做
+
+- **对账窗口 / 续做额度**（次数 · 最小间隔 · 窗口）**值住 §十**。
+- 🔴 **上游失败与被 OOM 杀掉的，不计入续做额度**（那不是"这个活不行"，是环境的事）。
+- **续做只做只读的活**（决策 `D10.1`/`D10.2`：只读白名单在 `tools.js` 的 `READ_ONLY_TOOLS`，
+  ⚠️ **`bash` 不在名单里**）。
+- 判据：`test/reconcile.test.js` · `test/resume.test.js` · `test/resume-plan.test.js`。
+
+### 15.4 上游熔断：**今天还没建**
+
+`src/resume-plan.js` 顶上自己写着这一句。⇒ 今天**没有**"上游连续失败就熔断/降级"那一层；
+上游不通时的表现是**逐个调用各自超时并如实说**，不是一条统一闸。
+
+### 15.5 鉴权九条（`src/auth.js` 头上那段，逐条）
+
+| # | 规矩 |
+|---|---|
+| 1 | **fail-closed**：没设口令 ⇒ 除公开路由外**一律 503**（不是放行、也不是跳登录页） |
+| 2 | **`XFF` 取最后一跳**（不是第一跳） |
+| 3 | **登录失败计数落盘**（重启不清零） |
+| 4 | 令牌带主体标识；**撤销表独立落盘** |
+| 5 | ⚠️ 访问别人的资源返回 **404，不是 403**（403 泄露"它存在"） |
+| 6 | **令牌不许放 URL**（只走 `Authorization` 头） |
+| 7 | **限速** |
+| 8 | **登录审计** `{at, result, ip}` |
+| 9 | **公开路由只有那几条**，其余全要令牌 |
+
+**为什么第 1 条是硬要求**：默认放行的话，一次"忘了设口令"的部署就等于**把整台机器（含 shell）
+公开发布出去** —— 而部署者不会察觉，因为**一切看起来都在正常工作**。
+判据：`test/auth.test.js` · `test/auth-failure.test.js` · `test/reauth.test.js`。
+
+### 15.6 配置项：**只写名字，值与默认值住 §十 或代码**
+
+配置只从环境读，名字以 `src/config.js` 为唯一出处。分组记（**不逐个抄值**）：
+
+- **身份与角色**：`HUPO_ROLE` · `HUPO_OWNER_PHONE` · `HUPO_TENANT_MAP` · `HUPO_SESSION_MAP` · `HUPO_TRUSTED_SOCKET`
+- **数据与端口**：`HUPO_DATA` · `HUPO_WEB` · `HUPO_HOST` · `HUPO_PORT` · `HUPO_CHANNEL_DIR`
+- **agent 那一层**：`HUPO_DSH_BIN` · `HUPO_AGENT_PROFILE` · `HUPO_AGENT_MODEL` · `HUPO_AGENT_PROVIDER` ·
+  `HUPO_AGENT_EFFORT` · `HUPO_AGENT_CWD` · `HUPO_AGENT_UID` / `HUPO_AGENT_GID` ·
+  `HUPO_AGENT_MAX_PROCESSES` · `HUPO_AGENT_IDLE_MS` · `HUPO_AGENT_BOOT_TIMEOUT_MS` · `HUPO_AGENT_MAX_TOKENS`
+- **几条 patch / 人格 / 能力**：`HUPO_PERSONA` · `HUPO_CAPABILITIES` · `HUPO_MODEL_PATCH` · `HUPO_SDK_PATCH`
+- **小程序那两个原点**：`HUPO_APPS_HOST` · `HUPO_APPS_PORT` · `HUPO_APPS_PUBLIC_BASE` ·
+  `HUPO_APPS_FRAME_ANCESTORS` · `HUPO_APPS_SIGN_KEY_PATH` · `HUPO_APPS_SOCKET` · `HUPO_APPS_SERVER`
+- **开发模式 / 别的**：`HUPO_DEV_BASE` · `HUPO_DEV_SCHEME` · `HUPO_DEV_CODE`（§七 说过它的终局）·
+  `HUPO_BUILD_ID` · `HUPO_PROVISION_DIR` · `HUPO_PROVISION_FAILED_DIR` · `HUPO_OPERATOR_REVIEW` ·
+  `HUPO_REVIEW_TIMEOUT_MS` · `HUPO_TURN_DEADLINE_MS`（§一 例外二）· `HUPO_RECAP_MAX_*` ·
+  `HUPO_IMAGE_SERVER` · `HUPO_VIDEO_SERVER` · `HUPO_LEDGER_SERVER` / `HUPO_LEDGER_SOCKET`
+
+⚠️ **改这些之前先读** [`06-OPERATIONS.md`](06-OPERATIONS.md)：其中几个会**改运行时行为**（准入、收口、
+淘汰），而**单元文件里的值与代码默认值可能不是一回事**。
