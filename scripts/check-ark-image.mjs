@@ -23,6 +23,10 @@
 
 import nodeProcess from 'node:process';
 
+// 🔴 **鉴权那三句的规则住服务端那一份**（`src/ark-check.js` 的 `authClassOf()`）——
+//    这里**只负责翻成给开发者看的话**。抄两遍正则 = 迟早有一处漂（2026-10-07 收的）。
+import { PREFLIGHT_MODEL, authClassOf } from '../v2/services/core/src/ark-check.js';
+
 const args = nodeProcess.argv.slice(2);
 const has = (f) => args.includes(f);
 const val = (f, d = null) => {
@@ -47,7 +51,7 @@ const PREFLIGHT = has('--preflight');
 /** 假钥匙：**明摆着是假的**（形状也不对），且永不出现在真配置里。 */
 const FAKE_KEY = 'hupo-probe-not-a-real-key';
 /** 编出来的模型名：它**不可能**画出东西 ⇒ `--preflight` 不花钱。 */
-const BOGUS_MODEL = 'hupo-preflight-definitely-not-a-real-model';
+const BOGUS_MODEL = PREFLIGHT_MODEL;
 
 if (!KEY && !FAKE && (SPEND || PREFLIGHT)) {
   console.error('✗ 没给钥匙：ARK_API_KEY=<火山方舟 API Key>（或 HUPO_IMAGE_KEY=…）；只想看鉴权那一层怎么回 ⇒ 加 `--fake`');
@@ -55,12 +59,16 @@ if (!KEY && !FAKE && (SPEND || PREFLIGHT)) {
 }
 
 /** 火山方舟那三种"还没到业务"的回话，翻成人话（**实测**，见 `79-CREDS-TABS.md` §九·补）。 */
+/** 那三种"还没走到业务"的回话**翻成人话**（规则在 `src/ark-check.js`，这里只说给人听）。 */
+const AUTH_WORDS = {
+  missing: '**没带钥匙**（请求里没有 Authorization）',
+  'bad-shape': '**钥匙形状不对**（实测：UUID 形状 8-4-4-4-12 它认；`sk-…` 和随机长串都判格式不对）',
+  'not-exist': '**形状对、但这把钥匙不存在**（拼错/删了/不是这个账号的）',
+};
+
 function explainAuth(text) {
-  const t = String(text);
-  if (/API key or AK\/SK in the request is missing or invalid/i.test(t)) return '**没带钥匙**（请求里没有 Authorization）';
-  if (/API key format is incorrect/i.test(t)) return '**钥匙形状不对**（实测：UUID 形状 8-4-4-4-12 它认；`sk-…` 和随机长串都判格式不对）';
-  if (/API key doesn[’\']?t exist/i.test(t)) return '**形状对、但这把钥匙不存在**（拼错/删了/不是这个账号的）';
-  return null;
+  const cls = authClassOf(text);
+  return cls ? AUTH_WORDS[cls] : null;
 }
 
 const useKey = FAKE ? FAKE_KEY : KEY;

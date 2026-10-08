@@ -6,6 +6,7 @@
 // ⚠️ 令牌**只走 `Authorization` 头**，绝不进 URL。
 //    服务端也会忽略 URL 里的令牌（两边都守同一条规矩）。
 
+import 'package:hupo_app/models/ark_check_outcome.dart';
 import 'package:hupo_app/models/image_outcome.dart';
 import 'package:hupo_app/models/key_outcome.dart';
 
@@ -730,6 +731,32 @@ class Api {
       return ImageOutcome(ok: false, words: out.words ?? '这次没画成，等会儿再试。');
     } catch (_) {
       return const ImageOutcome(ok: false, words: '这会儿连不上，等会儿再试。');
+    }
+  }
+
+  /// ★ **验一下钥匙**（v3.0 · 主人 2026-10-07 选的那一档：**不花钱**）。
+  ///
+  /// 🔴 它**不生成任何东西**：服务端拿一个编出来的名字，把画图那条路与做视频那条路各问一趟
+  ///    ⇒ 只回答"那边认不认这把钥匙"。
+  /// ⚠️ 结果那句话**由服务端给**（他知道那边到底怎么回的）—— 这里**不编**。
+  Future<ArkCheckOutcome> checkArkKey(String token) async {
+    try {
+      final r = await _c
+          .post(
+            _u('/api/ark-check'),
+            headers: {'content-type': 'application/json', 'authorization': 'Bearer $token'},
+            body: '{}',
+          )
+          // 自检是**快**的（两趟一句话的请求）；服务端那边也有上限，这里留宽一点
+          .timeout(const Duration(seconds: 45));
+      final j = jsonDecode(r.body);
+      // 200 ＝ 验完（`ok:false` 也是验完了，只是那边不认）—— 所以 200 直接用它那句话
+      if (r.statusCode == 200) return ArkCheckOutcome.fromJson(j);
+      // 409（没填）/ 502（没连上）：服务端都带一句人话 ⇒ 原样显示
+      final out = ArkCheckOutcome.fromJson(j);
+      return ArkCheckOutcome(ok: false, words: out.words ?? '这次没验成，等会儿再试。');
+    } catch (_) {
+      return const ArkCheckOutcome(ok: false, words: '这会儿连不上，等会儿再试。');
     }
   }
 

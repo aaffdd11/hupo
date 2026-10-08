@@ -102,7 +102,8 @@ const LOOKS_LIKE_ASSET =
   //    ★ 2026-10-04 补 `pdf`（参赛文稿那个下载）：不补的话，一个**不存在的**
   //      `xxx.pdf` 会掉进 SPA 回退拿回一段 HTML（200）—— 正是 P1-14 要修的
   //      "把缺文件变成白屏/假页面"那种形状。
-  /\.(js|mjs|css|json|wasm|map|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|txt|webmanifest|apk|pdf)$/i;
+  //    ★ 2026-10-07 补 `docx`（查新报告那种 Word 文稿要下载）：同一个理由。
+  /\.(js|mjs|css|json|wasm|map|png|jpe?g|gif|svg|ico|woff2?|ttf|otf|txt|webmanifest|apk|pdf|docx?)$/i;
 
 /**
  * 内部写入口**一条请求最大多少字节**（B15 迁移那条）。
@@ -138,6 +139,9 @@ const MIME = {
   //   ⚠️ 不写这一条就会落到 `application/octet-stream`：能下，但浏览器一律"另存为"，
   //      不会当场打开读（那几个字是"作品设计说明"，本来就该点开就能读）。
   '.pdf': 'application/pdf',
+  // ★ 2026-10-07：Word 文稿（查新报告那种）—— 不给对 MIME 的话，有的浏览器会就地打开一串二进制
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.doc': 'application/msword',
 };
 
 // ── 过程档位（决策 D7 / 契约 `docs/dev/122-TWO-PROCESS-LEVELS.md`）────────
@@ -515,6 +519,14 @@ export function createServer({
    * ⚠️ 约定：**密钥不许出现在返回值里**；这里是"用他自己的钥匙去要一张图"的唯一入口。
    */
   drawImage = null,
+  /**
+   * **验一次钥匙**（v3.0）：`checkArkKey(userId)` ⇒ `{ok, image, video, why, text, ms}`。
+   *
+   * ⚠️ 它**不花钱、也不生成任何东西**（拿一个编出来的名字去问）——
+   *    主人 2026-10-07 为视频那一屏选的正是这一档（`docs/dev/219-V3-IMAGE-VIDEO.md` §一）。
+   * ⚠️ 同 `drawImage`：**密钥不许出现在返回值里**。
+   */
+  checkArkKey = null,
 }) {
   /**
    * 🔴 **这一个函数是"我是谁"与服务对象之间唯一的接缝。**
@@ -1586,6 +1598,27 @@ export function createServer({
         }
         // ⚠️ 只回"画好了 + 图在哪"（**没有钥匙**；上游原话也不回显 —— 里面可能有带签名的地址）
         return sendJson(res, 200, { ok: true, urls: r.urls ?? [], ms: r.ms ?? null });
+      }
+
+      // ── **验一下钥匙**（v3.0 · 主人 2026-10-07 选的"不花钱"那一档）──────────
+      //
+      // ⚠️ 它**只验**"这把钥匙那边认不认"：**不生成任何东西、不花钱**
+      //    （拿一个编出来的名字，把画图那条路与做视频那条路各问一趟）。
+      // ⚠️ 同 `/api/image`：用的**不是**请求里带的东西，而是他验过签的身份名下那一把。
+      // ⚠️ "验出来不行"**也是验成功了** ⇒ 回 200 ＋ `ok:false` ＋ 那句人话；
+      //    只有"没填钥匙"（409）与"没连上"（502）才是 HTTP 层的错
+      //    —— 🔴 "没连上"与"钥匙不行"必须分得开（`219` §五 第 1 条那条纪律）。
+      if (path === '/api/ark-check' && req.method === 'POST') {
+        if (!checkArkKey) return sendJson(res, 404, { error: 'not-found' });
+        const r = await checkArkKey(claim.sub);
+        if (r?.why === 'no-key') return sendJson(res, 409, { error: 'no-key', text: r.text ?? null });
+        if (r?.why === 'unreachable') return sendJson(res, 502, { error: 'unreachable', text: r.text ?? null });
+        return sendJson(res, 200, {
+          ok: r?.ok === true,
+          image: r?.image ?? 'no',
+          video: r?.video ?? 'no',
+          text: r?.text ?? null,
+        });
       }
 
       if (path === '/api/creds' && req.method === 'POST') {

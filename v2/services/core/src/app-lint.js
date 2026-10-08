@@ -182,7 +182,7 @@ export function lintApp({ files = {}, permissions = [], net = [], tasks = [], ti
    *    而且判出来就是真毛病**的，不是口味问题：
    *      · 手机上看，没有 `viewport` ⇒ 整页按桌面宽渲染，字小到看不清；
    *      · `outline: none` 却没有替代的焦点样式 ⇒ 键盘/读屏用户不知道焦点在哪；
-   *      · 字号小到 12px 以下 ⇒ 与"3 倍字号不破版"那条服务的人直接冲突；
+   *      · 字号小到 12px 以下 ⇒ 与"字号放到最大那几档也不破版"那条服务的人直接冲突；
    *      · `background-clip: text` 那种渐变字 ⇒ 对比度随底色变，读不清。
    *    ⚠️ **只报不拦**（warnings），而且**说清怎么改**。
    */
@@ -201,7 +201,7 @@ export function lintApp({ files = {}, permissions = [], net = [], tasks = [], ti
     const sizes = [...text.matchAll(/font-size\s*:\s*([0-9]+(?:\.[0-9]+)?)px/gi)].map((m) => Number(m[1]));
     const tiny = sizes.filter((n) => n < 12);
     if (tiny.length > 0) {
-      W('tiny-text', `有 ${tiny.length} 处字号小于 12px（最小 ${Math.min(...tiny)}px）—— 这一份是给"看不清小字"的人也用的（界面那条线是"3 倍字号不破版"）。改法：正文 ≥15px、小字 ≥12px，靠字重和颜色分层，别靠缩小。`);
+      W('tiny-text', `有 ${tiny.length} 处字号小于 12px（最小 ${Math.min(...tiny)}px）—— 这一份是给"看不清小字"的人也用的（界面那条线是"系统字号放到最大那几档也不破版"）。改法：正文 ≥15px、小字 ≥12px，靠字重和颜色分层，别靠缩小。`);
     }
     if (/background-clip\s*:\s*text/i.test(text) || /-webkit-background-clip\s*:\s*text/i.test(text)) {
       W('gradient-text', '用了渐变字（`background-clip: text`）—— 它的对比度跟着底色变，常常读不清，而且是一眼认得出的"模板感"。改法：要点靠**字重或字号**。');

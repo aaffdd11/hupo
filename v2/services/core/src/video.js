@@ -56,6 +56,18 @@ export function safeVideoTaskId(raw) {
   return /^[A-Za-z0-9._-]+$/.test(t) ? t : null;
 }
 
+/**
+ * 那条路的地址（**只住这一处**）：建任务是它本身，查任务是它 ＋ `/<id>`。
+ *
+ * ⚠️ 2026-10-07 收成一处的理由：v3.0 的钥匙自检（`ark-check.js`）也要打**同一条路**
+ *    —— 各写一份路径 = 迟早有一处漂，而漂了以后"自检说通、真跑说不通"最难查。
+ */
+export function videoTasksUrl(base = DEFAULT_VIDEO_BASE, id = '') {
+  const b = typeof base === 'string' && base.trim() ? base.trim().replace(/\/+$/, '') : DEFAULT_VIDEO_BASE;
+  const tail = typeof id === 'string' && id ? `/${id}` : '';
+  return `${b}/contents/generations/tasks${tail}`;
+}
+
 /** 认得出是 Seedance 出来的视频地址吗（纯函数；查任务那条回执里用）。 */
 export function videoUrlOf(raw) {
   if (typeof raw !== 'string') return null;
@@ -140,11 +152,10 @@ export async function createVideoTask({
   if (typeof key !== 'string' || key.trim().length === 0) return { ok: false, why: 'no-key' };
   const built = buildVideoRequest({ prompt, model, ratio, duration });
   if (!built.ok) return { ok: false, why: built.why };
-  const baseUrl = typeof base === 'string' && base.trim() ? base.trim().replace(/\/+$/, '') : DEFAULT_VIDEO_BASE;
   const started = now();
   let res;
   try {
-    res = await fetch(`${baseUrl}/contents/generations/tasks`, {
+    res = await fetch(videoTasksUrl(base), {
       method: 'POST',
       headers: {
         // ⚠️ 钥匙只在这一行（这个对象**不许**被日志打出来）
@@ -205,11 +216,10 @@ export async function queryVideoTask({
   const id = safeVideoTaskId(taskId);
   // 🔴 形状不认 ⇒ **连请求都不发**（别把一个能改地址的 id 拼进 URL）
   if (!id) return { ok: false, why: 'bad-task-id' };
-  const baseUrl = typeof base === 'string' && base.trim() ? base.trim().replace(/\/+$/, '') : DEFAULT_VIDEO_BASE;
   const started = now();
   let res;
   try {
-    res = await fetch(`${baseUrl}/contents/generations/tasks/${id}`, {
+    res = await fetch(videoTasksUrl(base, id), {
       method: 'GET',
       headers: { authorization: `Bearer ${key.trim()}` },
       signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'

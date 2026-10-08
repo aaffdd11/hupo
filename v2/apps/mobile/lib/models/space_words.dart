@@ -496,6 +496,20 @@ const String imagePromptBlank = '先写一句想要什么图。';
 const String imageTryFailed = '这次没画成，等会儿再试。';
 const String imageLoadFailed = '图取不回来（地址可能已经过期了）。';
 const String imageTempLink = '图是那边临时给的，想要就存下来。';
+
+// ── 「验一下」那几句（视频那一屏里 · v3.0 · 主人 2026-10-07 选的那一档）──────
+//
+// 🔴 这一档**不花钱、也不生成东西**：只拿一个编出来的名字去问那边认不认这把钥匙
+//    （视频又慢又贵，不该让他为了"看看钥匙对不对"先花一笔）。
+// ⚠️ 所以 🔴 **一句话都不许承诺"能出片"** —— 名字与参数对不对，只有真做一次才知道。
+// ⚠️ 那一屏还是"一屏两句"的样子（主人 2026-10-01：*"就直白一点填入什么就好了"*）。
+// ⚠️ 标题与按钮**不许是同一句**（判据里 `find.text` 会撞上两个 ⇒ 量错地方）——
+//    标题说"验什么"，按钮说"点它做什么"。
+const String videoCheckLabel = '验一下这把钥匙';
+const String videoCheckHint = '不花钱、几秒钟：只看看这把钥匙那边认不认（不会真的画、也不会真的做）。';
+const String videoCheckSubmit = '验一下';
+const String videoChecking = '正在验…';
+const String videoCheckFailed = '这次没验成，等会儿再试。';
 /// ★ **语音那一把 API Key**（★ 2026-10-01 晚定的：主人贴的官方文档写明
 /// 实时语音识别的请求头就是 **`X-Api-Key`**，从**控制台 >「API Key 管理」**拿）
 /// —— 所以那一屏**只问一把**（原话：*"我看使用apikey来做的"*）。

@@ -24,6 +24,7 @@ import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/services.dart';
 
 import '../models/appearance.dart';
+import '../models/ark_check_outcome.dart';
 import '../models/image_outcome.dart';
 import '../models/chat_time.dart';
 import '../models/conn_state.dart';
@@ -111,6 +112,7 @@ class ChatScreen extends StatefulWidget {
     this.onSendKey,
     this.onSendCreds,
     this.onDrawImage,
+    this.onCheckArk,
     this.onCancelMe,
     this.onKeyChanged,
     this.initialTier = FloaterTier.collapsed,
@@ -128,6 +130,10 @@ class ChatScreen extends StatefulWidget {
 
   /// **画一张图**（P1-27）：配置页「图片」那一屏的「试一张」用它。
   final Future<ImageOutcome> Function(String prompt)? onDrawImage;
+
+  /// ★ **验一下钥匙**（v3.0 · 主人 2026-10-07）：配置页「视频」那一屏的「验一下」用它。
+  /// 🔴 它**不生成、不花钱**（服务端拿一个编出来的名字去打两趟）。
+  final Future<ArkCheckOutcome> Function()? onCheckArk;
 
   /// **配置页那四样**（主人 2026-09-24）：某一屏填好了 ⇒ 一次送出去。
   /// ⚠️ `tab` 就是那四个 tab 的名字（`space_words.dart` 里那四个常量）。
@@ -1156,6 +1162,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           voiceReady: widget.space.voiceReady,
           onSubmitCreds: widget.onSendCreds,
           onDrawImage: widget.onDrawImage,
+          // ★ **验一下**（v3.0）：视频那一屏 —— 不花钱、不生成，只问那边认不认这把钥匙。
+          onCheckArk: widget.onCheckArk,
           // ★ 批 7：**语音那一屏的「试一下」**（主人 2026-09-26）——
           //   开麦/收手与聊天那颗话筒**共用同两个函数**（`services/hearing.dart`），
           //   地址也共用 `stream_uri.dart` 那一个；这里只是把控制器那两个动作接上。

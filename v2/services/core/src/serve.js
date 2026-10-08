@@ -42,6 +42,7 @@ import { createDevWebRelay } from './dev-mode.js';
 import { readUserCreds, tenantCredsPack, writeUserCreds } from './creds-store.js';
 import { readUserPrefs, writeUserPrefs } from './prefs-store.js';
 import { makeDrawImage } from './image-use.js';
+import { makeCheckKey } from './ark-check-use.js';
 import { OWNER_KEY_REF, writeOwnerKey } from './owner-creds.js';
 import { describeVoiceCreds, resolveVoiceCreds, voiceCredsFor } from './asr-creds.js';
 import { createServer } from './server.js';
@@ -644,6 +645,18 @@ const drawImage = makeDrawImage({
 });
 
 /**
+ * ★ **验一次钥匙**（v3.0 · 主人 2026-10-07 选的"不花钱"那一档）。
+ *
+ * ⚠️ 规则**只住一处**（`ark-check-use.js`）：这里只是把它造出来，
+ *    配置页「视频」那一屏的「验一下」用它 —— `/api/ark-check`。
+ * 🔴 它**同一个借用规则**（视频那栏空着就借图片那把），而且**一个字节都不发**给真生成那条路。
+ */
+const checkKey = makeCheckKey({
+  dataDir: cfg.dataDir,
+  log: (m) => console.log(`  ${m}`),
+});
+
+/**
  * ★ **视频那一支**（Seedance · 2026-10-01）：两个动作分开 —— `start`（交出去）与
  *   `check`（查一次）。⚠️ **它们与小程序通道里那个 `startVideo` 是同一份实现**
  *   （都住 `video-use.js`），只是**数据目录可能不同**（一个人一格）。
@@ -1116,6 +1129,10 @@ const { listen, listenTrusted, close, askApp, agentAsk, agentPoll, deliverAppTas
   // ★ 语音"现在能不能用"（他自己的两样 或 部署默认那份）——只读，见 `server.js` 那个参数
   voiceReadyOf,
   drawImage,
+  // 🔴 **键名必须与 `createServer` 解构的那个名字逐字一致**（`server.js` 里是 `checkArkKey`）。
+  //    写错一个词的下场：这个口**恒 404**，而四道闸照样全绿（2026-10-08 真栽过一次）
+  //    ⇒ 现在有 `test/server-wiring.test.js` 当场盯着这一层。
+  checkArkKey: checkKey,
   tenantOf,
   // ★ **新号登录时替他申请一台**（除了改状态，这是登录路径上唯一新增的动作）
   ensureTenant,

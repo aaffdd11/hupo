@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 
 import '../models/app_spec.dart';
 import '../models/appearance.dart';
+import '../models/ark_check_outcome.dart';
 import '../models/design.dart' as d;
 import '../models/dsh_design.dart';
 import '../models/image_outcome.dart';
@@ -41,6 +42,7 @@ import '../widgets/image_try.dart';
 import '../widgets/key_form.dart';
 import '../widgets/voice_record.dart';
 import '../widgets/voice_try.dart';
+import '../widgets/video_try.dart';
 import '../widgets/wallpaper_picker.dart';
 import 'about_screen.dart';
 
@@ -63,6 +65,7 @@ class SettingsScreen extends StatelessWidget {
     this.voiceReady = false,
     this.onSubmitCreds,
     this.onDrawImage,
+    this.onCheckArk,
     this.voiceTry,
     this.voiceRecord,
     this.canHear = false,
@@ -112,6 +115,12 @@ class SettingsScreen extends StatelessWidget {
   /// **画一张图**（P1-27）：图片那一屏下面的「试一张」用它。
   /// ⚠️ `null` ⇒ 不画那一块（这条路没接上时**不给假按钮**）。
   final Future<ImageOutcome> Function(String prompt)? onDrawImage;
+
+  /// ★ **验一下钥匙**（v3.0 · 主人 2026-10-07 选的"不花钱"那一档）：视频那一屏用它。
+  ///
+  /// ⚠️ `null` ⇒ 不画那一块（这条路没接上时**不给假按钮**）。
+  /// 🔴 它**不生成任何东西、不花钱** —— 只问那边"认不认这把钥匙"（见 `video_try.dart`）。
+  final Future<ArkCheckOutcome> Function()? onCheckArk;
 
   /// ★ **试一下语音**（批 7 · 主人 2026-09-26）：语音那一屏那颗按钮用它。
   ///
@@ -641,11 +650,18 @@ class SettingsScreen extends StatelessWidget {
   ///    （而且它们本来就不碰钥匙 —— 见各自文件顶上那段）。
   List<Widget> _extrasFor(BuildContext context, String tab) {
     final draw = onDrawImage;
+    final chk = onCheckArk;
     final vt = voiceTry;
     final vr = voiceRecord;
     return [
       if (tab == credTabImage && draw != null && credsFor(tab))
         ImageTry(onDraw: (prompt) => draw(prompt)),
+      // ★ **验一下**（v3.0 · 主人 2026-10-07）：视频那一屏。
+      //   🔴 与「试一张」**刻意不一样**：图片那一档真画一张（花钱），
+      //      视频那一档**只验钥匙和路、不花钱**（视频又慢又贵 —— 他当场这么选的）。
+      //   ⚠️ 和上面那个表单**同一把钥匙**（服务端按他验过签的身份现取；这里不传钥匙进去）。
+      //   ⚠️ 没接线就不画；没填钥匙也不画（与「试一张」同一个口径：那就是要他填的地方）。
+      if (tab == credTabVideo && chk != null && credsFor(tab)) VideoTry(onCheck: () => chk()),
       // ★ **试一下语音**（批 7 · 主人 2026-09-26）：只有"语音"那一屏、而且接线了才给。
       //   🔴 **和上面那个表单是同一份钥匙**：这里不传任何钥匙进这一块 ——
       //      音频走 `/api/asr`，服务端按他验过签的身份现取（见本类顶上那段）。

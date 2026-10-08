@@ -18,6 +18,7 @@ import 'models/forbidden_words.dart';
 import 'screens/chat_screen.dart';
 import 'screens/app_theme.dart';
 import 'services/api.dart';
+import 'models/ark_check_outcome.dart';
 import 'models/image_outcome.dart';
 import 'models/landing_words.dart';
 import 'models/space.dart';
@@ -193,6 +194,13 @@ class _HupoAppState extends State<HupoApp> {
     return _api.drawImage(token, prompt);
   }
 
+  /// ★ **验一下钥匙**（v3.0 · 主人 2026-10-07）：只问那边认不认这把钥匙 —— **不花钱、不生成**。
+  Future<ArkCheckOutcome> _checkArk() async {
+    final token = await _tokens.read();
+    if (token == null) return const ArkCheckOutcome(ok: false, words: '先登录一下再试。');
+    return _api.checkArkKey(token);
+  }
+
   Future<KeySend> _sendKey(String key) async {
     final token = await _tokens.read();
     if (token == null) return KeySend.failed;
@@ -301,6 +309,8 @@ class _HupoAppState extends State<HupoApp> {
                   onSendKey: _sendKey,
                   onSendCreds: _sendCreds,
                   onDrawImage: _drawImage,
+                  // ★ **验一下**（v3.0）：配置页「视频」那一屏 —— 不花钱、不生成
+                  onCheckArk: _checkArk,
                   onCancelMe: _cancelMe,
                   onKeyChanged: () async {
                     final t = await _tokens.read();
