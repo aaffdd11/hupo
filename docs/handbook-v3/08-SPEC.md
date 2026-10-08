@@ -660,7 +660,7 @@ spawn 时没有任何"按来源切权限模式"的入口（全仓没有 `DSH_PER
 | **服务锁** | `<DATA>/serve.lock`（0600；`serve-lock.js`） | 权威（"有没有另一个服务在跑"） | 每次启动重写 | 收工 `clearServeLock()` | `test/merge-boot.test.js` |
 | **心跳** | `<DATA>/status.json`（`turn-status.js`） | 权威（"手上还有没有没说完的话"，供重启脚本读） | 每次启动 / 每个心跳重写 | 进程退出即陈旧；收工有清理路径 | `test/busy.test.js` ·`test/turn-status.test.js` |
 | **崩溃环标记** | `<world>/.crashloop.json`（`boot-marker.js`） | 权威（"上次是不是善终"） | 判定窗 `CRASH_WINDOW_MS` ＋ 门限 `CRASH_THRESHOLD`；文件长期在 | 优雅退出写"好好走的"标记 | `scripts/check-crash-recovery.sh` ·`test/notice.test.js` |
-| **域套接字**（能力口） | `<world>/ledger.sock` ·`<world>/apps.sock`（`ledger-socket.js` ·`apps-socket.js`） | 权威（本地能力通道；**准入靠 0600 文件权限，不靠令牌**） | 进程生命周期 | `worlds.closeSockets()` 关闭**并删掉套接字文件** | `scripts/check-capabilities.mjs` ·`test/apps-consent.test.js` ·`test/outbound-*.test.js` |
+| **域套接字**（能力口） | `<world>/ledger.sock` ·`<world>/apps.sock`（`ledger-socket.js` ·`apps-socket.js`） | 权威（本地能力通道；**准入靠 0600 文件权限，不靠令牌**） | 进程生命周期 | `worlds.closeSockets()` 关闭**并删掉套接字文件** | `v2/services/core/scripts/check-capabilities.mjs` ·`test/apps-consent.test.js` ·`test/outbound-*.test.js` |
 | **磁盘巡检** | **不写任何文件**（只读 `/proc` 与 `statfs`） | 只报事实、不下结论 | 采样间隔 `SAMPLE_INTERVAL_MS` | 无需删 | `test/disk-watch.test.js`（反例：塞一个"一删就抛"的 `rmSync`，跑完一次都不许碰） |
 | **钥匙文件的写入前备份** | `<dsh>/.credentials.yaml.bak.<时间戳>`（0600；`owner-creds.js`） | 副本（回退用） | 无 TTL、无清理 | 无删除入口 | `test/put-key.test.js` |
 | **装 / 升级前的工作区快照** | 落进 `<appDir>/versions/<n>/`（`workspace.js` `snapshotBeforeInstall`；**不新造第二套存储**） | 副本（覆盖发生之前留档，可逐字节回退） | 受 `MAX_VERSIONS` 兜着；相同 hash 复用同一版 | 随 appDir 进回收处 | `test/app-upgrade.test.js` ·`test/app-drift.test.js` |
