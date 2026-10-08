@@ -21,7 +21,8 @@ import nodeFs from 'node:fs';
 import nodePath from 'node:path';
 
 const REPO = nodePath.resolve(import.meta.dirname, '../../../..');
-const SPEC = nodePath.join(REPO, 'docs/handbook/08-SPEC.md');
+// ★ 2026-10-09 切换权威：接口表的**唯一权威**已经是 `handbook-v3`（旧那份降级为证据）。
+const SPEC = nodePath.join(REPO, 'docs/handbook-v3/08-SPEC.md');
 const SERVER = nodePath.join(REPO, 'v2/services/core/src/server.js');
 const ASR = nodePath.join(REPO, 'v2/services/core/src/asr.js');
 const DEV_MODE = nodePath.join(REPO, 'v2/services/core/src/dev-mode.js');
@@ -155,6 +156,20 @@ test('负向对照：这三条真的读得到东西（不是空转）', () => {
   assert.ok(section.length > 20, `§2.1 那一节太小了（${section.length} 行）—— 多半是标题改了`);
   const rows = rowsOf(section);
   assert.ok(rows.length >= 15, `表里只认出 ${rows.length} 条路 —— 抽取规则多半不对了`);
-  assert.ok(rows.some((r) => r.absent), '手册里那几条"⏳ 不存在"要认出来（不然第三方向就是空转）');
+  // ⚠️ 2026-10-09（切换权威）：v3 的 §2.1 **故意不搬** "⏳ 不存在" 那种沉积
+  //   （那些路由的下落写在 `08-SPEC.md` §7.4），所以这一条**不能再去 §2.1 里找 absent 行**。
+  //   ⇒ 改成**直接喂一段合成的给抽取器**：它验的是"抽取逻辑认不认得出'不存在'"
+  //      （这本来就是"不是空转"的意思），而不是"手册里有没有那几个字"——更准，也不会逼文档留沉积。
+  const synthetic = [
+    '| `/api/does-not-exist` | GET | 需令牌 | ⏳ **不存在**（留着提醒） |',
+    '| ~~`/api/also-gone`~~ | GET | 需令牌 | 曾经有过 |',
+    '| `/api/real` | GET | 需令牌 | 在的 |',
+  ];
+  const gone = rowsOf(synthetic).filter((r) => r.absent).map((r) => r.path).sort();
+  assert.deepEqual(
+    gone,
+    ['/api/also-gone', '/api/does-not-exist'],
+    '抽取器必须认得出**两种**"不存在"的写法（⏳ 与 ~~划线~~）——不然第三方向就是空转',
+  );
   assert.ok(routesInCode().size >= 20, '代码里的路由也认得出来才行');
 });

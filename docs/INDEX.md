@@ -27,21 +27,21 @@
 | **要跟人讲「为什么做这个 · 它跟豆包 / 腾讯 Buddy 那一类比好在哪」** | [`dev/221-WHY-VS-DOUBAO-BUDDY.md`](dev/221-WHY-VS-DOUBAO-BUDDY.md)（**主人自己那套道理**（记忆有限 · 开箱即用 · 自己付算力 · 电力那个类比）＋ 四方对表：AI 住在哪 · 交出来什么 · 记忆能不能查 · 门槛给谁 · 算力谁付内容归谁 · 边界能不能查 · 能不能改 ＋ 三个由来 ＋ 按人群说的好处 ＋ 如实说） | 写材料 / 答辩 / 跟人解释之前 |
 | **为什么当时那么做 · 读数是多少**（要"凭什么"） | [`dev/PROGRESS-HISTORY.md`](dev/PROGRESS-HISTORY.md) | **只在有人问"这条结论凭什么"时** |
 | **某一批具体怎么实现、怎么验的** | `dev/NN-*.md`（按编号找那一篇） | 动那一块之前 |
-| **这是个什么东西 · 给谁 · 为什么这样** | [`handbook/01-PROJECT.md`](handbook/01-PROJECT.md) | 第一次接触这个项目 |
-| **系统由什么组成 · 边界在哪 · 不变量** | [`handbook/02-ARCHITECTURE.md`](handbook/02-ARCHITECTURE.md) | 要把东西加进去之前 |
+| **这是个什么东西 · 给谁 · 为什么这样** | [`handbook-v3/01-PROJECT.md`](handbook-v3/01-PROJECT.md) | 第一次接触这个项目 |
+| **系统由什么组成 · 边界在哪 · 不变量** | [`handbook-v3/02-ARCHITECTURE.md`](handbook-v3/02-ARCHITECTURE.md) | 要把东西加进去之前 |
 | **一眼看懂"聊天长什么样"和"它跟 DSH 怎么接"**（两张图） | [`dev/196-CHAT-AND-DSH.md`](dev/196-CHAT-AND-DSH.md) | 要跟人说清结构 / 自己先捋一遍时 |
-| **代码长什么样 · 往哪改 · 协议与状态机** | [`handbook/03-DEVELOPMENT.md`](handbook/03-DEVELOPMENT.md) | 写代码之前 |
-| **先做什么后做什么 · 怎么算做完** | [`handbook/04-ROADMAP.md`](handbook/04-ROADMAP.md) | 排期 / 验收时 |
-| **为什么不能那样做**（已拍板） | [`handbook/05-DECISIONS.md`](handbook/05-DECISIONS.md) | 想改一处**看起来该改**的地方时 |
-| **怎么跑起来 · 怎么不出事**（部署 / 完整性 / 备份 / 供给） | [`handbook/06-OPERATIONS.md`](handbook/06-OPERATIONS.md) | 碰线上之前 |
-| **现状有哪些坑 · 术语 · 评审史** | [`handbook/07-APPENDIX.md`](handbook/07-APPENDIX.md) | 觉得"这地方怎么这么怪"时 |
-| **规范与判据**（不变量 / 接口 / 安全模型 / 阈值 / 容器与上线验收 / 小程序沙箱） | [`handbook/08-SPEC.md`](handbook/08-SPEC.md) | **判"做完了没有"之前** |
-| **想给界面加动效 / 加动态背景** | [`handbook/08-SPEC.md`](handbook/08-SPEC.md)（`Z5` + `M1`–`M7`：永不结束的动画要有总开关；**结构判据全绿也会整层看不见**）+ [`dev/60-WATER-BG.md`](dev/60-WATER-BG.md)（那次的形状与两次事故） | **动手加之前**（手册里点名"将来加任何动效都得先读"）|
-| **小程序怎么造、怎么发、怎么装、"用谁的钥匙"** | [`dev/59-USER-APPS.md`](dev/59-USER-APPS.md)（契约）+ [`handbook/08-SPEC.md`](handbook/08-SPEC.md) §7.3 / §十四 | 动小程序那一块之前 |
+| **代码长什么样 · 往哪改 · 协议与状态机** | [`handbook-v3/03-DEVELOPMENT.md`](handbook-v3/03-DEVELOPMENT.md) | 写代码之前 |
+| **先做什么后做什么 · 怎么算做完** | [`handbook-v3/04-ROADMAP.md`](handbook-v3/04-ROADMAP.md) | 排期 / 验收时 |
+| **为什么不能那样做**（已拍板） | [`handbook-v3/05-DECISIONS.md`](handbook-v3/05-DECISIONS.md) | 想改一处**看起来该改**的地方时 |
+| **怎么跑起来 · 怎么不出事**（部署 / 完整性 / 备份 / 供给） | [`handbook-v3/06-OPERATIONS.md`](handbook-v3/06-OPERATIONS.md) | 碰线上之前 |
+| **现状有哪些坑 · 术语 · 评审史** | [`handbook-v3/07-APPENDIX.md`](handbook-v3/07-APPENDIX.md) | 觉得"这地方怎么这么怪"时 |
+| **规范与判据**（不变量 / 接口 / 安全模型 / 阈值 / 容器与上线验收 / 小程序沙箱） | [`handbook-v3/08-SPEC.md`](handbook-v3/08-SPEC.md) | **判"做完了没有"之前** |
+| **想给界面加动效 / 加动态背景** | [`handbook-v3/08-SPEC.md`](handbook-v3/08-SPEC.md)（`Z5` + `M1`–`M7`：永不结束的动画要有总开关；**结构判据全绿也会整层看不见**）+ [`dev/60-WATER-BG.md`](dev/60-WATER-BG.md)（那次的形状与两次事故） | **动手加之前**（手册里点名"将来加任何动效都得先读"）|
+| **小程序怎么造、怎么发、怎么装、"用谁的钥匙"** | [`dev/59-USER-APPS.md`](dev/59-USER-APPS.md)（契约）+ [`handbook-v3/08-SPEC.md`](handbook-v3/08-SPEC.md) §7.3 / §十四 | 动小程序那一块之前 |
 | **用户创造小程序这件事当初为什么这么做** | [`dev/58-CREATE-APP.md`](dev/58-CREATE-APP.md) | 想改小程序的形状之前 |
 | **小程序（制品）更新了 —— 为什么正开着它的那一屏会自己换上、为什么那一帧里不带签名** | [`dev/111-APP-LIVE-UPDATE.md`](dev/111-APP-LIVE-UPDATE.md)（契约 ＋ 判据 ＋ 真机读数；"没做成要有一条人话"也在那一份里）| 动"小程序更新 / 制品版本 / 那个 iframe"之前 |
 | **桌面那一格打开的是"他正在改的那一份"（用户端没有版本快照）** | [`dev/112-OWN-APP-IS-LIVE.md`](dev/112-OWN-APP-IS-LIVE.md)（活地址 `/w/` ＋ 白名单 ＋ "内容变了"那条通知 ＋ 判据 V1–V6 ＋ 真机读数）＋ [`dev/113-APP-SHAPE-LIVE.md`](dev/113-APP-SHAPE-LIVE.md)（主人原话与形状）| 动"桌面点开哪个文件 / 活地址 / 小程序变了的通知"之前 |
-| **"他自己那一份没有大小上限 / 不用压缩、不用发布"怎么落的（用户端 vs 包）** | [`dev/114-APP-USER-SIDE-NO-LIMIT.md`](dev/114-APP-USER-SIDE-NO-LIMIT.md)（形状 · 改了哪几个字节 · 判据 V1–V5 ＋ 四刀变异 · 真机读数 · 还欠什么）＋ [`dev/113-APP-SHAPE-LIVE.md`](dev/113-APP-SHAPE-LIVE.md)（主人原话）· 规范在 [`handbook/08-SPEC.md`](handbook/08-SPEC.md) §14.6 | 动"小程序的大小/文件数上限 / 造·改名·复制·删·发布"之前 |
+| **"他自己那一份没有大小上限 / 不用压缩、不用发布"怎么落的（用户端 vs 包）** | [`dev/114-APP-USER-SIDE-NO-LIMIT.md`](dev/114-APP-USER-SIDE-NO-LIMIT.md)（形状 · 改了哪几个字节 · 判据 V1–V5 ＋ 四刀变异 · 真机读数 · 还欠什么）＋ [`dev/113-APP-SHAPE-LIVE.md`](dev/113-APP-SHAPE-LIVE.md)（主人原话）· 规范在 [`handbook-v3/08-SPEC.md`](handbook-v3/08-SPEC.md) §14.6 | 动"小程序的大小/文件数上限 / 造·改名·复制·删·发布"之前 |
 | **聊天窗口要不要、能不能做得跟 DSH 的窗口一样**（DSH 的窗口有什么 · 我们差在哪 · 三条路与代价） | [`dev/115-DSH-WINDOW-PARITY.md`](dev/115-DSH-WINDOW-PARITY.md)（研究：区域/transcript 的各式行/输入区/设置/视觉 · 信息处理的那些规矩 · 前后端分离的实际形态 · 差距表 · **甲直接用它的窗口 / 乙重写前端 / 丙只对齐信息** · 真机截图与读数）· 原始证据在 `dev/115-raw/` | 想动"聊天窗口的形状 / 信息量 / 过程可见性 / 输入区语义"之前 |
 | **聊天窗口「信息全部开放」＋ 按 DSH 重做（第一批：工具行/过程折叠）** | [`dev/116-CHAT-OPEN-AND-REDESIGN.md`](dev/116-CHAT-OPEN-AND-REDESIGN.md)（契约：三条已签的形状 · 「全部开放」的可执行定义 · 四条新事件与四条规矩 · 客户端落点 · 判据）＋ 研究在 [`dev/115-DSH-WINDOW-PARITY.md`](dev/115-DSH-WINDOW-PARITY.md) | 动「聊天窗口显示什么 / 工具行 / 过程折叠 / 系统提示词 / 用量」之前 |
 | **聊天窗口重做（第二批：排队看得见、撤得掉）** | [`dev/117-QUEUE-VISIBLE.md`](dev/117-QUEUE-VISIBLE.md)（契约：DSH 的 QueueDock 形状 · 那条瞬态帧与连上时的快照 · 客户端那一帧回程 · 两边的判据 · 如实说）＋ 上一批 [`dev/116-CHAT-OPEN-AND-REDESIGN.md`](dev/116-CHAT-OPEN-AND-REDESIGN.md) | 动「运行中再发一句 / 排队 / 撤掉还没轮到它的那句」之前 |
@@ -81,18 +81,18 @@
 | **语音识别换成豆包：上游那一跳的协议（二进制帧）· 两样凭据 · 已经切过去上线了 · 还差"填那两样"** | [`dev/152-VOICE-DOUBAO.md`](dev/152-VOICE-DOUBAO.md)（🔴 面向浏览器那一套**一个字没改**，换的只是上游那一跳（腾讯的签名 URL ⇒ 豆包的二进制帧）· 凭据从**三样**变**两样**（App ID ＋ Access Token）· 老 `asr-sign.js` 与腾讯那个探针**删掉** · 判据在哪 · ✅ **2026-10-01 晚已完全切换并部署**（线上 `/api/asr` 真读数 = `asr/unavailable{not-configured}`）· ⚠️ **还差主人把那两样填进配置页**才出声） | 动「语音 / `/api/asr` 那一跳 / 语音凭据」之前 |
 | **视频生成（Seedance）：它与图片为什么不是同一条形状（异步）· 那个巡场 · 限额 · 判据** | [`dev/151-APP-VIDEO.md`](dev/151-APP-VIDEO.md)（🔴 工具只"交出去"拿任务号，成品由壳那一侧的**巡场**收回来、**说进他问的那一间**；**一次只许一条在飞**；任务号是**安全边界**（会拼进 URL）；"他明说才许生成"那条闸；界面上是**能点的框**、不自动播；真跑一次还缺主人那把钥匙） | 动「视频 / 那条 `video` op / 那个巡场」之前 |
 | **做小程序的 agent 的作业指导书（开发方案六步 ＋ 制品/能力/交付三套标准 ＋ 自查清单 ＋ 反模式）** | [`dev/149-APP-DEV-STANDARD.md`](dev/149-APP-DEV-STANDARD.md)（🔴 给"制作小程序那个 agent"：**从需求到上桌六步** · **制品标准**（一份自包含 HTML、不许引外部资源、不许碰 `localStorage`、不许假设有原生桥）· **能力标准**（五样各自"什么时候用/怎么调/上限/被拒怎么说"）· **交付话术模板** ＋ 不许承诺的四句 · **自查清单**（写完当场报，有报必改）· **反模式八条**；判据在 `src/app-lint.js` 与 `test/app-lint.test.js`） | 动「小程序怎么写 / 声明与用途 / 交付话术」之前 |
-| **手册改过什么 · 现在是什么版本** | [`handbook/CHANGELOG.md`](handbook/CHANGELOG.md) | 要改手册之前 |
+| **手册现在是什么版本 · 定档记录在哪** | 定档 ＝ **git tag** ＋ [`handbook-v3/04-ROADMAP.md`](handbook-v3/04-ROADMAP.md) §一（**v3 不建 CHANGELOG**）；变更考古在旧那份 [`handbook/CHANGELOG.md`](handbook/CHANGELOG.md)（**只作证据**） | 想知道"现在是什么版本"时 |
 | **要拆文件了 —— 先拆哪个、接缝在哪**（按"改动次数 × 体量"排，**不是按行数**） | [`dev/153-CHURN-ORDER.md`](dev/153-CHURN-ORDER.md)（一次实测的排名 ＋ 每个文件往哪切 ＋ 为什么"长但没人动"的不咬人） | **要动结构之前** |
 | **还有哪些账没还 · 哪几条卡在主人身上** | [`dev/00-PROGRESS.md`](dev/00-PROGRESS.md) §六（还开着的都在那一节；§6.1 是**不是待办**的两条）+ [`dev/63-OWNER-DECISIONS.md`](dev/63-OWNER-DECISIONS.md)（**要主人拍板的那几条**，一句话版） | 想接手 / 想知道"还欠什么"时 |
 | **他说完一句话之后、屏幕上多久才出字 —— 慢在哪一段、怎么量的 · 语义检查为什么关着 · 那条连接为什么要预热 · 会话太长为什么要翻页** | [`dev/218-ASR-DOC-COMPARE.md`](dev/218-ASR-DOC-COMPARE.md)（📋 **拿豆包官方文档逐条对表**：端点该用"优化版"（真读数：帧少了一大截）· 单包该多大 · `result.text` 是整个音频 · 还剩哪几条要问他）· [`dev/217-FRAME-SHAPE.md`](dev/217-FRAME-SHAPE.md)（临时诊断：真帧长什么样，已撤）· [`dev/216-SENTENCE-SPLIT-LOSS.md`](dev/216-SENTENCE-SPLIT-LOSS.md)（🔴 **"说着说着早期那半句没了"**：这条链子怎么实现的（逐段）＋ 两处丢字的堵法）· [`dev/215-FIRST-PRESS-AND-RIPPLE.md`](dev/215-FIRST-PRESS-AND-RIPPLE.md)（🔴 **第一次按会失败**（死在"那条预先热着的连接"上）修法与读数 ＋ **在听的那圈涟漪**）· [`dev/214-VOICE-REBUILD.md`](dev/214-VOICE-REBUILD.md)（🔴 **2026-10-07 晚推倒重来**：语音那一格现在是一个**真输入框**（stream 回来的字直接长在里面、他也能改）、**按停就发**；原来那台演练状态机与设置里那一屏**都删了**）· [`dev/213-VOICE-DIRECT-SEND.md`](dev/213-VOICE-DIRECT-SEND.md)（🔴 **那一层"抽离"已经删掉**：语音 → 文字 → 发，中间没有第二个 AI；服务端那条老口留着给老包 ＋ **"前面那句话没了"的根子**：发完一场之后掉回"非连贯"那一档）· [`dev/210-VOICE-CONTINUOUS.md`](dev/210-VOICE-CONTINUOUS.md)（🔴 **录音那条链**：那条「一分钟」的上限到点改成**接着开下一轮**、只有他按停才算说完；收尾那份整段被截尾那一处）· [`dev/208-TURN-LATENCY.md`](dev/208-TURN-LATENCY.md)（那一问的逐段真读数：等 agent 就绪 ＋ 第一次模型调用 ＋ 整条会话每轮重发）· [`dev/209-SESSION-ROTATE.md`](dev/209-SESSION-ROTATE.md)（两刀：**会话翻页** ＋ **agent 预热**）· [`dev/205-ASR-WARM.md`](dev/205-ASR-WARM.md)（语音那条连接的预热）· [`dev/202-PAUSE-SEMANTIC.md`](dev/202-PAUSE-SEMANTIC.md)（语义检查为什么先关着、开关在哪）· [`dev/199-ASR-HEAD.md`](dev/199-ASR-HEAD.md)（开头几个字与「等连接」那两处） | **动语音那条路 / 会话与记忆 / agent 进程 / 觉得「它怎么又慢了」之前** |
 | **麦克风（真接）走哪条路 · 为什么还没做** | [`dev/69-ASR-ROUTES.md`](dev/69-ASR-ROUTES.md)（那两分钟怎么验 · 判据 · 三条路各自要动什么 · `D5.10` 的语料硬闸）| 动语音输入之前 |
 | **小程序的图标是哪来的 · 怎么加一个** | [`dev/70-APP-ICONS.md`](dev/70-APP-ICONS.md)（**唯一出处** · 挑图标的规矩 · 加一个要动哪两处 · 判据）| 动图标 / 加一个小程序类型之前 |
-| **"读出来"（把它说的话念出来）** | [`dev/68-SPEAK.md`](dev/68-SPEAK.md)（形状 + 三条边界 + 判据 + 没做的）· 决策 [`handbook/05-DECISIONS.md`](handbook/05-DECISIONS.md) `D5.16` | 动朗读 / 语音输出之前 |
-| **它说的那句是哪来的（出处）** | [`dev/67-SOURCES.md`](dev/67-SOURCES.md)（形状 + 判据 + 怎么接上游的）· 字段语义在 [`handbook/03-DEVELOPMENT.md`](handbook/03-DEVELOPMENT.md) §五 | 动"出处 / 引用"之前 |
+| **"读出来"（把它说的话念出来）** | [`dev/68-SPEAK.md`](dev/68-SPEAK.md)（形状 + 三条边界 + 判据 + 没做的）· 决策 [`handbook-v3/05-DECISIONS.md`](handbook-v3/05-DECISIONS.md) `D5.16` | 动朗读 / 语音输出之前 |
+| **它说的那句是哪来的（出处）** | [`dev/67-SOURCES.md`](dev/67-SOURCES.md)（形状 + 判据 + 怎么接上游的）· 字段语义在 [`handbook-v3/03-DEVELOPMENT.md`](handbook-v3/03-DEVELOPMENT.md) §五 | 动"出处 / 引用"之前 |
 | **它是谁 · 说话的样子是哪来的 · 哪些是"绝不动"的核心** | [`dev/09-PERSONA.md`](dev/09-PERSONA.md)（人格怎么落地、硬规则、那两条闸）· [`dev/97-PERSONA-V0.md`](dev/97-PERSONA-V0.md)（**人格「绝不动」那一层的草案**：七个社会角色各自提案与收敛、每条带"反着验"的判据 —— 那一套层名见该页）· 本体在 `v2/services/core/hupo-persona.yml`（**strict**：改它要主人补一条重建命令）| 改人格 / 加一条"必须"之前 |
 | **聊天窗口为什么长这样**（输入条的发送钮与听筒 / 上方那条计划条 / 老消息往上翻着加载） | `dev/64-CHAT-REDESIGN.md`（方案 + **主人逐条定案** + 三批的状态）· 判据在 `test/` 各份 | 动聊天界面之前 |
 | **接下来先做哪一件 · 三位工程师讨论出什么** | [`dev/66-NEXT-STEPS.md`](dev/66-NEXT-STEPS.md)（三份方案 + 一致与分歧 + **带取舍的合成建议**：我做什么 / 你签什么 / 建议砍什么） | 要开工之前 |
-| **失败了该跟用户说哪句话 / 想加一类失败** | [`dev/62-FAILURE-CLASSES.md`](dev/62-FAILURE-CLASSES.md)（五类里**哪两档有判据、凭什么认**，以及**还没有信号**的那三档）+ [`handbook/05-DECISIONS.md`](handbook/05-DECISIONS.md) `D10.3` | 改失败文案 / 加分类器之前 |
+| **失败了该跟用户说哪句话 / 想加一类失败** | [`dev/62-FAILURE-CLASSES.md`](dev/62-FAILURE-CLASSES.md)（五类里**哪两档有判据、凭什么认**，以及**还没有信号**的那三档）+ [`handbook-v3/05-DECISIONS.md`](handbook-v3/05-DECISIONS.md) `D10.3` | 改失败文案 / 加分类器之前 |
 | **已经删掉的旧实现 / 旧文档原文** | `git show f93f296:<路径>` | 手册确实没写到，而你又非要原文时 |
 
 ---
@@ -102,8 +102,8 @@
 | 层 | 家在 | 只放什么 | 硬规矩 |
 |---|---|---|---|
 | **L0 路由** | **本页** | **问题 → 文件 §节** | **零事实、零数值、零状态** |
-| **L1 介绍** | `handbook/01` · `02` · `README` | 是什么 / 给谁 / 为什么 / 边界 | 每节一屏以内；要证据的断言**只许带指针，不许复述证据** |
-| **L2 决策与判据** | `handbook/05-DECISIONS` · `08-SPEC` | 已拍板 + 判据（带 ID：`D*` / `N*` / `V*`） | **唯一有约束力的一层**；ID 全局唯一、可 grep |
+| **L1 介绍** | `handbook-v3/01` · `02` · `README` | 是什么 / 给谁 / 为什么 / 边界 | 每节一屏以内；要证据的断言**只许带指针，不许复述证据** |
+| **L2 决策与判据** | `handbook-v3/05-DECISIONS` · `08-SPEC` | 已拍板 + 判据（带 ID：`D*` / `N*` / `V*`） | **唯一有约束力的一层**；ID 全局唯一、可 grep |
 | **L3 证据** | `dev/**` · `test/**` · git 历史 | 文件:行 · 测试名 · 实测读数 · 当时的坑 | **允许大、允许冷**；由上层指针指过来才读 |
 | **L4 代码与产物** | `v2/**` | **唯一真相** | 文档只引用路径与符号，**不抄代码** |
 

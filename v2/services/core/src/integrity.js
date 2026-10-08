@@ -112,6 +112,8 @@ export function protectedPaths({ repo, home = nodeOs.homedir() }) {
     { path: d('.credentials.yaml'), mode: 'report', why: '密钥：令牌会自己续期 ⇒ 只报不拦，但被换掉必须看得见' },
     // ③ 判据本身
     { path: p('docs/handbook'), kind: 'dir', mode: 'strict', why: '手册就是判据：能随手改判据，任何闸都白设' },
+    // ★ 2026-10-09 切换权威：`docs/handbook-v3` 是**新的唯一权威**，必须与旧那份同级保护。
+    { path: p('docs/handbook-v3'), kind: 'dir', mode: 'strict', why: '手册就是判据（3.0 版，唯一权威）：能随手改判据，任何闸都白设' },
     // 本来就该变的安全数据：只报不拦
     { path: p('v2/services/core/data/auth.json'), mode: 'report', why: '口令与撤销表（主人换口令是正常动作，不该因此起不来，但要知道它动过）' },
     // ⚠️ `~/.dsh/storages/**` **故意不在清单里**（这是一个取舍，写下来免得下一个人以为是漏了）：
