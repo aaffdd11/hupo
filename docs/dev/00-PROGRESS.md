@@ -447,12 +447,39 @@
 另加一条 **"清单漏了 1 条"**（`docs/handbook-v3`）。
 ⇒ **下一次重启 `serve.js` 会被 `integrity` 拦下（`process.exit(2)`）**。
 ⚠️ **服务现在是好的**：`src/serve.js`（pid 2303669）**00:22 就起来了**，在我的改动（00:31）**之前**
-⇒ 现在 8020 与 `w.stalkerai.cn` 都 200 —— **但先重建再重启**，别直接重启。
-命令（`sudo -n true` 实测**要口令** ⇒ 只能主人跑；`node` 只有 nvm 那一个，必须绝对路径）：
+⇒ 现在 8020 与 `w.stalkerai.cn` 都 200。
+🔴 **但这一条不是"重启时才要小心"**：单元是 `Restart=always` ⇒ **它自己崩一次，systemd 拉起的就是个起不来的进程**
+（不是"下次开机"，是"下一次崩"）。
+**实测（2026-10-09 00:45，不是推断）**：拿**另一个端口 ＋ 临时数据目录**空跑同一个 `serve.js`
+（`HUPO_PORT=18020 HUPO_DATA=/tmp/… node src/serve.js`）⇒ 它在 `listen()` **之前**就：
+
+```
+✗ 起不来：
+  · 开机清单对不上：/home/deploy/proj/hupo/AGENTS.md（内容变了；…）
+  · 开机清单对不上：/home/deploy/proj/hupo/docs/handbook/01-PROJECT.md（内容变了；…）
+  …（共 11 条）
+退出码 = 2
+```
+
+（拿临时端口跑是安全的：那条闸在 `serve.js` 第 98–111 行，**排在监听与一切落盘之前**。）
+
+⇒ **只能主人跑**（`sudo -n true` 实测**要口令**；`/etc/hupo/` 是 `root:root 0755`、清单是 `root:root 0444`
+⇒ 不写 root 就写不进去。`node` 只有 nvm 那一个，必须绝对路径）：
 
 ```
 sudo /home/deploy/.nvm/versions/node/v24.15.0/bin/node /home/deploy/proj/hupo/scripts/verify-integrity.mjs --build
 ```
+
+**跑完怎么核（两条，别只看第一条）**：
+① `node /home/deploy/proj/hupo/scripts/verify-integrity.mjs` ⇒ **✅ 对上了**（0 处会拒绝启动、0 处漏条）；
+② `bash scripts/restart-core.sh` **必须查退出码** —— 它有只读预检，清单对不上时**故意不停旧服务**
+（⚠️ 把它的输出 `grep` 成几行会把原因滤掉，只剩症状，见 `handbook-v3/08-SPEC.md` §13.2 ⑨），
+起来后核 8020 与 `w.stalkerai.cn` 都是 200、开机横幅写「完整性 对上了」。
+
+**顺带（同一次重启一起做，不用多跑一次）**：开发登录码换值 ——
+`v2/services/core/data/tenants.env` 第 2 行（`HUPO_DEV_CODE`，值以字面量进过 `41`/`74` 与两个提交；
+⚠️ 那个文件在 `.gitignore` 里、**不属 `strict`**）。换法：把那一行的值改掉即可（**新值不许写进任何文件/日志/对话**），
+重启后开机横幅会照旧如实喊"临时验证码**开着**"。
 
 **上一次重建：2026-10-09 00:18（见下）。**
 
