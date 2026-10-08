@@ -53,7 +53,7 @@
 | `sudo` | ⚠️ **要密码**（`sudo -n true` 会失败） |
 | `node` | ⚠️ **只有 nvm 里那一个**（`/usr/bin/node` **不存在**）⇒ 让主人跑的命令**必须写绝对路径**，`sudo node …` 会撞「找不到命令」 |
 | `deploy` 在 docker 组？ | ❌ 不在（**而且永久不加**） |
-| 无根容器 | ❌ 被挡（`apparmor_restrict_unprivileged_userns=1`） |
+| 无根容器 | ✅ **能跑**（2026-10-09 现核）—— 原写"❌ 被挡（`apparmor_restrict_unprivileged_userns=1`）"**是错话**：本机**没有那个 sysctl**（`sysctl` 报 No such file or directory），而 `podman info` 报 **`Rootless=true`**；`scripts/check-container.sh` 走的就是无根 podman |
 | **内存上限** | ⚠️ **每一层都是 `max`**（从 `dsh-subprocess-*.scope` 一路到 `/user.slice`） ⇒ 容量/准入那类判据**算不出来**，只能**如实说"算不出判据"** |
 
 > ⚠️ **`sudo` 要密码这一条很重要**：有一版手册写着"你 `sudo` 免密，可以直接改自己"——
