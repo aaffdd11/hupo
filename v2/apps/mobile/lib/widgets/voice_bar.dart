@@ -34,6 +34,8 @@ class VoiceBar extends StatefulWidget {
     required this.onChanged,
     required this.onMic,
     required this.onSend,
+    this.typingOpen = false,
+    this.onKeyboardWanted,
     this.note = '',
     this.leading,
     this.hintAbove,
@@ -65,6 +67,19 @@ class VoiceBar extends StatefulWidget {
   /// **如实说的那一句**（没听清 / 麦没打开…；空 = 没有）。
   final String note;
 
+  /// 🔴 **外面那颗「键盘」（左下角）现在是不是把这一格摊开着**（主人 2026-10-09）。
+  ///
+  /// ⚠️ **单一出处在上层**（`chat_screen` 那颗按钮）：这一格不再自己决定"打字那条路"
+  ///    开不开 —— 它只是**照着这个数**把框画出来 / 收回去（与那一颗的亮灯同一个来源）。
+  final bool typingOpen;
+
+  /// 这一格想让上层那颗「键盘」**开（`true`）/ 收（`false`）**。
+  ///
+  /// ⚠️ 三个地方会用到它：那颗「打字」、说话时那张卡片（"我要改"）、以及
+  ///   **那一句发出去之后**（原来是"这一格自己收起来"，现在得请上层把按钮也熄掉 ——
+  ///   不然屏幕上会留下"框收起来了、按钮还亮着"这种不一致）。
+  final ValueChanged<bool>? onKeyboardWanted;
+
   /// 那一行最前面那颗（今天还是那颗 home）。
   final Widget? leading;
 
@@ -78,8 +93,19 @@ class VoiceBar extends StatefulWidget {
 class _VoiceBarState extends State<VoiceBar> {
   final _type = TextEditingController();
 
-  /// **打字那条退路**要不要摊开（默认不摊 —— 空白时屏幕上一个字都不许有）。
-  bool _typing = false;
+  /// 🔴 **那个真输入框的焦点**（2026-10-09）：那颗「键盘」按下去要**把键盘叫出来**
+  ///    （不是只把框画出来）—— 而"收起"那一下要**把键盘收回去**（`unfocus`）。
+  final _focus = FocusNode(debugLabel: 'voice-bar-type');
+
+  /// 🔴 **他刚用那颗「键盘」把这一格收起了**（草稿还在，只是先不摆）。
+  ///
+  /// ⚠️ 为什么还要这一档：框的画不画原来只由"录着 / 摊着 / 有字"决定
+  ///    ⇒ **有草稿时"收起"会收不掉**（框还赖在那儿）。这一档只由那颗按钮置位，
+  ///    下一次"摊开"、开录、或来了新字就清掉。
+  bool _collapsed = false;
+
+  /// **打字那条路**要不要摊开 —— 🔴 **2026-10-09 起它就是上层那个数**（那颗「键盘」）。
+  bool get _typing => widget.typingOpen;
 
   /// 🔴 **现在这一格是"看"还是"改"**（2026-10-07 主人：*"所谓断句就是说着说着，
   ///   转文字的早期的那部分内容在输入框里没了。"*）。
@@ -94,24 +120,61 @@ class _VoiceBarState extends State<VoiceBar> {
   void initState() {
     super.initState();
     if (widget.text.isNotEmpty) _put(widget.text);
+    // 一上来就摊着（比如上层记着它是开的）⇒ 把键盘也叫出来。
+    if (widget.typingOpen) {
+      _editing = true;
+      _focusNow();
+    }
   }
 
   @override
   void didUpdateWidget(covariant VoiceBar old) {
     super.didUpdateWidget(old);
-    // 每一场**从"看"那一档开始**（说的时候不用他先点一下）
-    if (widget.recording && !old.recording) _editing = false;
+    // 每一场**从"看"那一档开始**（说的时候不用他先点一下）；开录 ⇒ 收起那一档清掉
+    if (widget.recording && !old.recording) {
+      _editing = false;
+      _collapsed = false;
+    }
     // 那一份字发出去（清空）之后 ⇒ **回到"什么都没画"**（不许留一个空框在那儿）；
     // ⚠️ 只在"原来有字"的时候收：他按「打字」摊开的那一格（本来就没字）不许被收掉。
     if (!widget.recording && widget.text.isEmpty && old.text.isNotEmpty) {
       _editing = false;
-      _typing = false;
+      _collapsed = false;
+      // 🔴 那一句已经发出去了 ⇒ 请上层**把那颗「键盘」也熄掉**（这一格原来自己收，
+      //    现在开关住上层 ⇒ 不请它熄，屏幕上就留下"框没了、按钮还亮着"）。
+      //    ⚠️ **排到下一帧**：这几句跑在 `didUpdateWidget` 里（build 中间），
+      //    当场喊一声会变成"build 期间 setState"。
+      _wantedSoon(false);
     }
     // 🔴 外面那份字变了（语音在长字 / 那份草稿异步读回来了）⇒ 写进框里。
     //    ⚠️ **只在与框里真的不一样时才写**：他每敲一下，控制器都会把同一个字
     //       再送回来一次 —— 无脑写会把光标每一下都推到末尾（打字就没法打了）。
-    if (widget.text != old.text && widget.text != _type.text) _put(widget.text);
+    if (widget.text != old.text && widget.text != _type.text) {
+      _put(widget.text);
+      _collapsed = false; // 来了新字 ⇒ 一律摆出来（收起那一档只压得住"刚才那一份"）
+    }
+    // 🔴 **那颗「键盘」被按了**（主人 2026-10-09）：摊开 ⇒ 画框 ＋ 叫出键盘；收起 ⇒ 反过来。
+    if (widget.typingOpen != old.typingOpen) {
+      if (widget.typingOpen) {
+        _collapsed = false;
+        _editing = true;
+        _focusNow();
+      } else {
+        _collapsed = true;
+        _focus.unfocus();
+      }
+    }
   }
+
+  /// 把焦点（＝键盘）叫出来。⚠️ 排在**下一帧**：这一帧那颗按钮自己还在树上。
+  void _focusNow() => WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (mounted) _focus.requestFocus();
+  });
+
+  /// 请上层把那一颗开 / 收 —— ⚠️ 也排在**下一帧**（调用点可能正在 build 中间）。
+  void _wantedSoon(bool open) => WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (mounted) widget.onKeyboardWanted?.call(open);
+  });
 
   /// 把 [text] 写进框里，光标放到末尾。
   void _put(String text) {
@@ -123,6 +186,7 @@ class _VoiceBarState extends State<VoiceBar> {
 
   @override
   void dispose() {
+    _focus.dispose();
     _type.dispose();
     super.dispose();
   }
@@ -131,17 +195,22 @@ class _VoiceBarState extends State<VoiceBar> {
   bool get _listening => widget.recording && !widget.wrapping;
 
   /// 这一格要不要画出来（空 ⇒ 什么都不画）。
-  bool get _showField => widget.recording || _typing || widget.text.isNotEmpty;
+  ///
+  /// ⚠️ `_collapsed` 压的是"摊着 / 有草稿"那两档 —— **录着那一档不受它影响**
+  ///   （正说着的时候不许被一个收起动作把字藏起来）。
+  bool get _showField =>
+      widget.recording || ((_typing || widget.text.isNotEmpty) && !_collapsed);
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context);
     final look = DshLook.of(context);
     // 没有字的时候框里那句提示：正在录 ⇒ 说清它在听（或正在收尾）；
-    // 其余（开不了麦那条退路）⇒ 说清这台为什么在这儿摆一个框。
+    // 其余 ⇒ **开得了麦的那一台**说"打一句吧"（他是按了那颗「键盘」才摆出这个框的），
+    //        开不了麦的那一台才说"这台开不了麦……"（⚠️ 反过来就是屏幕在说假话）。
     final hint = widget.recording
         ? (widget.wrapping ? voiceWrappingLead : voiceListeningLead)
-        : voiceTypeInstead;
+        : (widget.canHear ? voiceTypeHereLead : voiceTypeInstead);
     return Padding(
       padding: const EdgeInsets.fromLTRB(d.gapM, d.gapS, d.gapM, d.gapS),
       child: Stack(
@@ -201,11 +270,16 @@ class _VoiceBarState extends State<VoiceBar> {
     //    自己写的点击区必须**被"命中区 ≥44"那条扫描覆盖**）⇒ `TextButton` ＋ 最小 44 高。
     return TextButton(
       // 点它 = "我要改" ⇒ 换成真输入框（光标放到末尾，好接着打）
-      onPressed: () => setState(() {
-        _editing = true;
-        _typing = true;
-        _put(widget.text);
-      }),
+      onPressed: () {
+        setState(() {
+          _editing = true;
+          _collapsed = false;
+          _put(widget.text);
+        });
+        // 🔴 这一下也是"把键盘叫出来"（那颗按钮的状态**只有上层一处**）
+        if (!widget.typingOpen) widget.onKeyboardWanted?.call(true);
+        _focusNow();
+      },
       style: TextButton.styleFrom(
         padding: EdgeInsets.zero,
         minimumSize: const Size(0, 44),
@@ -265,6 +339,8 @@ class _VoiceBarState extends State<VoiceBar> {
             child: TextField(
               key: voiceBarTypeKey,
               controller: _type,
+              // ★ 2026-10-09：那颗「键盘」要能把键盘叫出来 / 收回去 ⇒ 焦点得握在这儿。
+              focusNode: _focus,
               minLines: 1,
               maxLines: 4,
               // ★ 这一格的字**跟用户那条字号轴**（与时间线正文同一档）——
@@ -272,8 +348,10 @@ class _VoiceBarState extends State<VoiceBar> {
               style: dshTextStyle(look.content, d.ink),
               decoration: InputDecoration(hintText: hint),
               onChanged: (v) {
-                // ⚠️ **他动手了**：这一格从此归他（控制器那边不再让语音往这儿写）
-                if (!_typing) setState(() => _typing = true);
+                // ⚠️ **他动手了**：这一格从此归他（控制器那边不再让语音往这儿写）；
+                //    而且如果刚才它是"因为有草稿才画出来的"，请上层把那颗键盘点亮
+                //    （不然屏幕上会出现"框开着、按钮却写着「打开键盘」"这种不一致）。
+                if (!_typing) widget.onKeyboardWanted?.call(true);
                 widget.onChanged(v);
               },
             ),
@@ -345,10 +423,10 @@ class _VoiceBarState extends State<VoiceBar> {
         ),
       );
 
-  /// **开不了麦**时，圆圈那个位置那颗「打字」（按一下才摊开输入格）。
+  /// **开不了麦**时，圆圈那个位置那颗「打字」（按一下 ⇒ 请上层把那颗「键盘」打开）。
   Widget _typeChip(ThemeData t) => TextButton(
         key: voiceBarTypeChipKey,
-        onPressed: () => setState(() => _typing = true),
+        onPressed: widget.onKeyboardWanted == null ? null : () => widget.onKeyboardWanted!(true),
         child: const Text('打字'),
       );
 }

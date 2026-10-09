@@ -199,6 +199,11 @@ void main() {
       voiceWrappingLead,
       voiceSendWords,
       voiceTypeInstead,
+      // ★ 2026-10-09：那颗「键盘」摊开时框里那句（能开麦的那一台）＋ 它的两个读屏名
+      voiceTypeHereLead,
+      keyboardOpenLabel,
+      keyboardCloseLabel,
+      keyboardButtonHint,
       voiceFailedLead,
       voiceTalkLabel,
       voiceStopLabel,

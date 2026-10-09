@@ -202,6 +202,24 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// 那一次问回来了没有（`true` = 还在路上）。
   bool _workingBusy = false;
 
+  /// 🔴 **左下角那颗「键盘」现在是不是把输入框摊开着**（主人 2026-10-09）。
+  ///
+  /// ⚠️ **单一出处就是这儿**：那颗按钮的亮灯、输入条画不画框、键盘弹不弹，
+  ///    全看这一个数 —— 输入条那边（`VoiceBar`）不再自己存一份
+  ///    （两份状态一定会出现"框开着、按钮却写着「打开键盘」"）。
+  /// ⚠️ 换档 / 换房间**不重置它**：那是他自己按的开关，不是"刚才那一眼"。
+  bool _keyboardOpen = false;
+
+  /// 那颗「键盘」：摊开 ⇄ 收起（同一个入口 —— 同「清单」「展开」那几颗的规矩）。
+  void _toggleKeyboard() => setState(() => _keyboardOpen = !_keyboardOpen);
+
+  /// **请把输入框摊开 / 收起**（`VoiceBar` 那边三个入口：那颗「打字」、说话时那张卡片
+  /// "我要改"、以及**那一句发出去之后**要收）——
+  /// ⚠️ 它只**照着要**设一次（不翻转：翻转是那颗按钮自己的事，两条路各管各的）。
+  void _wantKeyboard(bool open) {
+    if (_keyboardOpen != open) setState(() => _keyboardOpen = open);
+  }
+
   /// 打开这一条（带签名的那份 URL）；`null` = 现在开着的不是"我的小程序"。
   MiniApp? _openMine() {
     final id = _openApp;
@@ -1036,6 +1054,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 },
               ),
               onWorkOpen: () => unawaited(_loadWorking()),
+              // ★ **2026-10-09 主人**：*"左下角有个在办的事务的按钮，这个按钮下面放一个
+              //   键盘按钮。点击会打开输入框和键盘。再次点击会收起。"*
+              //   ⇒ 那颗按钮由浮窗画（它跟「清单」同一个样子），**状态与它开的是什么在这里**
+              //     （输入条是这个文件给的 widget —— 浮窗不认得它里面那个框）。
+              keyboardOpen: _keyboardOpen,
+              onToggleKeyboard: _toggleKeyboard,
               child: _sheetBody(c),
             ),
           ),
@@ -2016,6 +2040,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               onChanged: c.voiceEdited,
               // 打字那条兜底（开不了麦的机器）：按「发送」。
               onSend: (text) => unawaited(c.sendComposeLine(text)),
+              // ★ **2026-10-09**：那颗「键盘」开的正是这一格 —— 状态住上面那一个数，
+              //   这一格只照着它画；它自己那颗「打字」/那张卡片也让上面去点亮那颗按钮。
+              typingOpen: _keyboardOpen,
+              onKeyboardWanted: _wantKeyboard,
             ),
           ],
         ),

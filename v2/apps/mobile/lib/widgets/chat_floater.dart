@@ -45,6 +45,7 @@ import '../models/design.dart' as d;
 import '../models/dsh_design.dart';
 import '../models/speak_words.dart';
 import '../models/space_words.dart';
+import '../models/voice_words.dart';
 import '../models/work_words.dart';
 import 'appearance_scope.dart';
 import 'dsh_look.dart';
@@ -75,6 +76,9 @@ const Key chatSpeakKey = Key('chat-speak');
 /// 主人原话：*「我觉得应该在左下角有一个清单按钮，点击会出来浮窗，
 /// 浮窗里有正在干活的聊天的列表。」*
 const Key chatWorkKey = Key('chat-work');
+
+/// 🔴 **2026-10-09：「清单」下面那颗「键盘」** 的 key（点一下摊开输入框＋键盘，再点收起）。
+const Key chatKeyboardKey = Key('chat-keyboard');
 
 /// 浮窗自己的几条常量（**不散在代码里**）。
 class FloaterMetrics {
@@ -123,6 +127,8 @@ class ChatFloater extends StatefulWidget {
     this.onToggleSpeak,
     this.workPanel,
     this.onWorkOpen,
+    this.keyboardOpen = false,
+    this.onToggleKeyboard,
   });
 
   /// **父层量好给它的可用高度**（父层是 `LayoutBuilder`）。
@@ -183,6 +189,15 @@ class ChatFloater extends StatefulWidget {
 
   /// **刚点开那张浮窗** —— 上层拿它去问一次"现在谁在干活"（点一次问一次，永远是新的）。
   final VoidCallback? onWorkOpen;
+
+  /// 🔴 **左下角那颗「键盘」**（主人 2026-10-09）—— 它挂在**「清单」那一颗下面**。
+  ///
+  /// ⚠️ 那两个数**住上层**（`chat_screen`）：这一颗要开的是**输入条**（`composer`），
+  ///    而输入条是上层给的 widget —— 浮窗自己不认得它里面那个框（同 `workPanel` 那条规矩：
+  ///    浮窗只管画与开关，状态与内容都在上层）。
+  /// ⚠️ **不传 `onToggleKeyboard` 就一颗都不画**（屏幕上不许出现按不动的东西）。
+  final bool keyboardOpen;
+  final VoidCallback? onToggleKeyboard;
 
   @override
   State<ChatFloater> createState() => ChatFloaterState();
@@ -530,9 +545,24 @@ class ChatFloaterState extends State<ChatFloater> {
   ///   ⚠️ 收起来的出口**仍然只有**标题行右端那颗「收起」（不新造第二条路）。
   Widget _bottomRow(DshPalette p, {required bool collapsed}) => Row(
         children: [
-          // ★ 最左那颗「清单」（**上层没给内容就不画** —— 屏幕上不许有按不动的按钮）
-          if (widget.workPanel != null) ...[
-            _workButton(p),
+          // ★ 最左那一列：上面「清单」、下面「键盘」（**上层没给就不画** ——
+          //   屏幕上不许有按不动的按钮）。
+          //
+          // 🔴 **2026-10-09 主人**：*"左下角有个在办的事务的按钮，这个按钮下面放一个
+          //   键盘按钮。点击会打开输入框和键盘。再次点击会收起。"*
+          //   ⚠️ 两颗各 44 高（D3.6）＋ 中间那条缝 = **92**，与右边那一列（展开/播放）
+          //      一模一样高 ⇒ 底下那一行的高度**一个像素都不变**（输入条与圆圈不动）。
+          //   ⚠️ 它们**同时**也是两个档共用的（收起档也画）—— 与那三颗同一条规矩。
+          if (widget.workPanel != null || widget.onToggleKeyboard != null) ...[
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (widget.workPanel != null) _workButton(p),
+                if (widget.workPanel != null && widget.onToggleKeyboard != null)
+                  const SizedBox(height: d.voiceAuxGap),
+                if (widget.onToggleKeyboard != null) _keyboardButton(p),
+              ],
+            ),
             const SizedBox(width: d.gapS),
           ],
           Expanded(child: widget.composer),
@@ -605,8 +635,49 @@ class ChatFloaterState extends State<ChatFloater> {
     );
   }
 
-  /// **那张「清单」浮窗的那一格**（外面留一点边、高度由上面算好的 [max] 卡住）。
+  /// ★ **「清单」下面那一颗「键盘」**（主人 2026-10-09）。
   ///
+  /// 面子与另外几颗**同一套**（`_auxFace`：白底 ＋ 一圈琥珀 ＋ 墨色图形）；
+  /// **开着的时候整块变琥珀**（一眼看得出那格正摊着 —— 同「清单」「播放语音」）。
+  ///
+  /// ⚠️ 命中的仍是 44×44 那一格（D3.6），看得见的面只有 40×30（`_auxFace`）。
+  /// ⚠️ 图形翻面（开着 = 「收起键盘」那颗收起样）：位置不动 —— 同「展开」那颗的规矩。
+  Widget _keyboardButton(DshPalette p) {
+    final open = widget.keyboardOpen;
+    return Tooltip(
+      message: keyboardButtonHint,
+      child: Semantics(
+        button: true,
+        toggled: open,
+        // 读屏那句跟着这一档换（与"说一句 / 说完了"同一个做法）。
+        label: open ? keyboardCloseLabel : keyboardOpenLabel,
+        child: TextButton(
+          key: chatKeyboardKey,
+          onPressed: widget.onToggleKeyboard,
+          style: _auxStyle(),
+          child: SizedBox(
+            // ⚠️ 给一个**确定高度**的盒子（同 [_workButton]）：这一行的交叉轴是无界的，
+            //    单摆一个 `Center` 会被框架那层 `Align` 居中。
+            height: d.voiceAuxH,
+            child: Center(
+              child: _auxFace(
+                p,
+                lit: open,
+                child: Icon(
+                  open ? Icons.keyboard_hide_outlined : Icons.keyboard_alt_outlined,
+                  size: d.voiceAuxIcon,
+                  // 开着的时候是琥珀底 ⇒ 图形反过来用纸的白（同其余几颗）
+                  color: open ? d.card : d.ink,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// **那张「清单」浮窗的那一格**（外面留一点边、高度由上面算好的 [max] 卡住）。
   /// ⚠️ 内容由上层给（[ChatFloater.workPanel]）—— 浮窗不发请求、也不认识那张清单的数据。
   /// ⚠️ 那个 `close` 是给"点某一行就去看那一间"用的（点完那一张要自己收掉）。
   Widget _workPanelBox(BuildContext context, double max) => Padding(
