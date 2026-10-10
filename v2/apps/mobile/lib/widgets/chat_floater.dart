@@ -80,6 +80,12 @@ const Key chatWorkKey = Key('chat-work');
 /// 🔴 **2026-10-09：「清单」下面那颗「键盘」** 的 key（点一下摊开输入框＋键盘，再点收起）。
 const Key chatKeyboardKey = Key('chat-keyboard');
 
+/// 🔴 **2026-10-10：最左那颗窄按钮**（收起 ⇄ 展开底下这条）的 key。
+///
+/// ⚠️ 判据要按它：它是**图形按钮**（没有可见的字），而且收起之后
+///    **底下那一整行都不在屏幕上**了 —— 只有它还留在原地。
+const Key chatBarToggleKey = Key('chat-bar-toggle');
+
 /// 浮窗自己的几条常量（**不散在代码里**）。
 class FloaterMetrics {
   const FloaterMetrics._();
@@ -129,6 +135,7 @@ class ChatFloater extends StatefulWidget {
     this.onWorkOpen,
     this.keyboardOpen = false,
     this.onToggleKeyboard,
+    this.onBarHidden,
   });
 
   /// **父层量好给它的可用高度**（父层是 `LayoutBuilder`）。
@@ -199,11 +206,20 @@ class ChatFloater extends StatefulWidget {
   final bool keyboardOpen;
   final VoidCallback? onToggleKeyboard;
 
+  /// 🔴 **2026-10-10 主人**：*"隐藏时应左移，左移后，出现一个按钮，贴着边显示，
+  ///   是一个向右的箭头。"*
+  ///
+  /// ⇒ 那颗窄按钮把底下这一整行收起来之后，**浮窗自己也要挪到屏幕左边缘**
+  ///   （连它那 `FloaterMetrics.margin` 一起吃掉）—— 而那个位置**住上层**
+  ///   （`chat_screen` 的 `Positioned`，浮窗自己不碰外边距）。
+  ///   这一条只报"收起来了没有"，上层照着挪。
+  final ValueChanged<bool>? onBarHidden;
+
   @override
   State<ChatFloater> createState() => ChatFloaterState();
 }
 
-class ChatFloaterState extends State<ChatFloater> {
+class ChatFloaterState extends State<ChatFloater> with SingleTickerProviderStateMixin {
   late FloaterTier _tier;
 
   /// 左下角那张「清单」浮窗开着吗。
@@ -211,6 +227,28 @@ class ChatFloaterState extends State<ChatFloater> {
   /// ⚠️ 它**跟着这一档**走：换档（点抓手 / 点桌面 / 发出去拉满）就关掉它 ——
   ///    那张清单属于"刚才那一眼"，不该跟着窗口飘到另一档里。
   bool _workOpen = false;
+
+  /// 🔴 **底下这一整行收起来了没有**（最左那颗窄按钮 · 主人 2026-10-10）。
+  ///
+  /// ⚠️ 收起来时**只影响"看不看得见"**：那一行**仍然在树上**（`Transform.translate`
+  ///    把它移出左边）⇒ 他打字打了一半的字、那些按钮的状态**一个都不丢**
+  ///    （这条同 `ChatFloater.composer` 那条"两档用同一个实例"的规矩）。
+  bool _barHidden = false;
+
+  /// **那一行"左移出去 / 滑回来"那一段**（0 = 完全看得见，1 = 完全收起来）。
+  ///
+  /// ⚠️ 它的**值**驱动那一行的位移；它还被用来回答一个问题：
+  ///    **"现在是不是正在滑"** —— 因为那一行必须按"整条"那么宽来排，而这一格在
+  ///    滑动过程中宽度是从「整条」变到「一颗窄按钮」，**每一帧都不同**。
+  ///    不冻住宽度的话：每帧重排（抖），而且放回来那一下会被挤爆
+  ///    （`RenderFlex` 溢出 —— 两列小按钮加起来就 156 宽，44 宽的一格装不下）。
+  late final AnimationController _barAnim = AnimationController(
+    vsync: this,
+    duration: d.motionBarSlide,
+  );
+
+  /// **"整条"上一次有多宽**（只在完全看得见、且没在滑动时更新）。
+  double _barW = 0;
 
   /// 上一次**自动**换档的时间（防抖：400ms 内合并成一次）。
   int _lastAutoMs = 0;
@@ -259,6 +297,44 @@ class ChatFloaterState extends State<ChatFloater> {
     final open = !_workOpen;
     setState(() => _workOpen = open);
     if (open) widget.onWorkOpen?.call();
+  }
+
+  /// 🔴 **最左那颗窄按钮**：把底下这一整行收起来 ⇄ 放回来（主人 2026-10-10）。
+  ///
+  /// ⚠️ **展开着的时候按它 = 把聊天整个收起来**：一个"只剩时间线、没有输入条"的
+  ///    窗口不是一种该存在的状态 —— 他按这一颗要的就是"把这一条让开"。
+  ///    （那颗「抓手」仍然是另一条路：它收起来之后**这一格还在**。）
+  /// ⚠️ 收起来**顺带把「清单」那张浮窗关掉**：它挂在这一行上，跟着一起滑走
+  ///    会变成"开着的浮窗不见了"（下次展开时它还亮着灯）。
+  void toggleBar() {
+    final hide = !_barHidden;
+    if (hide && _tier == FloaterTier.full) {
+      _setTier(FloaterTier.collapsed, auto: false);
+    }
+    setState(() {
+      _barHidden = hide;
+      if (hide) _workOpen = false;
+    });
+    // ⚠️ **收起来的时候顺便把键盘放回去**：不然屏幕上会浮着一个"没处可打"的软键盘
+    //    （这一条只那一颗按钮有 —— 它是"把这一条让开"，不是"先收框"）。
+    if (hide && widget.keyboardOpen) widget.onToggleKeyboard?.call();
+    // ⚠️ **那一段动画由控制器驱动**（不是 `AnimatedSlide`）：这一格在滑动过程中
+    //    宽度是在变的，而那一行的排版宽度要**冻住**（见 `_barAnim` 那段注释）。
+    if (hide) {
+      _barAnim.forward();
+    } else {
+      _barAnim.reverse();
+    }
+    widget.onBarHidden?.call(hide);
+  }
+
+  /// 底下这一行现在收起来了没有（闸用）。
+  bool get barHidden => _barHidden;
+
+  @override
+  void dispose() {
+    _barAnim.dispose();
+    super.dispose();
   }
 
   /// 那张清单**最多占多高**。
@@ -395,7 +471,16 @@ class ChatFloaterState extends State<ChatFloater> {
                 //    手势绑在抓手那一行（见下），否则会把**时间线的滚动**吃掉：
                 //    2026-09-22 实测，第一版把 `_onMove` 挂在整块浮窗上，
                 //    于是"往上拖时间线"被当成"把窗口拉高"，`重发`那条判据当场红。
-                behavior: HitTestBehavior.opaque,
+                //
+                // 🔴 **2026-10-10：收起那一档改成 `deferToChild`**（主人要的"把底下这条
+                //    收起来"）：那一行现在**滑到屏幕左边外面**去了，可**这一格的宽度
+                //    还是整条**（不然那两颗「清单/键盘」会被挤成一团）⇒ 若还用 `opaque`，
+                //    屏幕底下就留下一条**看不见却点不动**的地带（"屏幕上不许出现按不动
+                //    的东西"的另一种形状：这次是**看不见却挡着**）。
+                //    ⇒ 收起来时**只有真的画在那儿的那些孩子**（那颗窄按钮）吃指针。
+                behavior: _barHidden
+                    ? HitTestBehavior.deferToChild
+                    : HitTestBehavior.opaque,
                 child: Material(
                   // ★ 窗口的底 = DSH 的 `bg-layer-1`（亮色就是纯白，暗色 #232324）。
                   // ★ 2026-09-29 主人：*"底部的聊天组件我想要首先一个半透明的bar……
@@ -552,32 +637,44 @@ class ChatFloaterState extends State<ChatFloater> {
   ///        紧贴着这一行的左端**（看得见的面离浮窗边只有 2px，右边是 10px）——
   ///        现在**两端各留同一个数**；
   ///     ② **四颗的上下位一致**：交给 [_auxButton] 那一个出处（见它的注释）。
-  Widget _bottomRow(DshPalette p, {required bool collapsed}) => Row(
-        children: [
-          // ★ 最左那一列：上面「清单」、下面「键盘」（**上层没给就不画** ——
-          //   屏幕上不许有按不动的按钮）。
-          //
-          // 🔴 **2026-10-09 主人**：*"左下角有个在办的事务的按钮，这个按钮下面放一个
-          //   键盘按钮。点击会打开输入框和键盘。再次点击会收起。"*
-          //   ⚠️ 两颗各 44 高（D3.6）＋ 中间那条缝 = **92**，与右边那一列（展开/播放）
-          //      一模一样高 ⇒ 底下那一行的高度**一个像素都不变**（输入条与圆圈不动）。
-          //   ⚠️ 它们**同时**也是两个档共用的（收起档也画）—— 与那三颗同一条规矩。
-          if (widget.workPanel != null || widget.onToggleKeyboard != null) ...[
-            // 🔴 左端这一格留白 = 右端那一格（`④ 左右留空一致`）：
-            //    左右各 `d.gapS`，再加上面那块面在自己那一格里的 2px ⇒ 两端**都是 10**。
-            const SizedBox(width: d.gapS),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (widget.workPanel != null) _workButton(p),
-                if (widget.workPanel != null && widget.onToggleKeyboard != null)
-                  const SizedBox(height: d.voiceAuxGap),
-                if (widget.onToggleKeyboard != null) _keyboardButton(p),
-              ],
-            ),
-            const SizedBox(width: d.gapS),
-          ],
-          Expanded(child: widget.composer),
+  ///
+  /// 🔴 **2026-10-10 同一天的第二件**：*"帮我在左下角的两个按钮左边，放一个高度等于
+  ///   语音按钮高度，宽度非常窄的按钮，icon是一个向左的箭头，用来展开和隐藏底下的
+  ///   聊天工具栏。隐藏时应左移，左移后，出现一个按钮，贴着边显示，是一个向右的箭头。"*
+  ///   ⇒ 这一行现在分成两层（`Stack`）：
+  ///     · **最左那颗窄按钮**（[_barTab]）**不在会滑走的那一层里** —— 它是"留下来的那一颗"；
+  ///     · **其余整行**（两列小按钮 ＋ 输入条＋圆圈）收起时**整体左移出屏**
+  ///       （`AnimatedSlide` 的 `-1` = 它自己那么宽，正好移出去）；
+  ///     · 最左那一格**一直占着** `d.voiceAuxW`（那 44 是"手势能打到的一格"，
+  ///       看得见的面只有 `d.voiceAuxTabW` 那么窄）—— 那两颗「清单/键盘」不许钻到它下面。
+  Widget _bottomRow(DshPalette p, {required bool collapsed}) {
+    // ── ① 会滑走的那一整行（**不含**最左那颗窄按钮）────────────────
+    final rest = Row(
+      children: [        // 🔴 给最左那颗窄按钮**让出它那一格**（它住在下面 `Stack` 的兄弟层里 ⇒
+        //    收起时它不跟着滑走，而这一行要**当它一直在**才排得对）。
+        const SizedBox(width: d.voiceAuxW),
+        // ★ 最左那一列：上面「清单」、下面「键盘」（**上层没给就不画** ——
+        //   屏幕上不许有按不动的按钮）。
+        //
+        // 🔴 **2026-10-09 主人**：*"左下角有个在办的事务的按钮，这个按钮下面放一个
+        //   键盘按钮。点击会打开输入框和键盘。再次点击会收起。"*
+        //   ⚠️ 两颗各 44 高（D3.6）＋ 中间那条缝 = **92**，与右边那一列（展开/播放）
+        //      一模一样高 ⇒ 底下那一行的高度**一个像素都不变**（输入条与圆圈不动）。
+        //   ⚠️ 它们**同时**也是两个档共用的（收起档也画）—— 与那三颗同一条规矩。
+        if (widget.workPanel != null || widget.onToggleKeyboard != null) ...[
+          const SizedBox(width: d.gapS),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.workPanel != null) _workButton(p),
+              if (widget.workPanel != null && widget.onToggleKeyboard != null)
+                const SizedBox(height: d.voiceAuxGap),
+              if (widget.onToggleKeyboard != null) _keyboardButton(p),
+            ],
+          ),
+          const SizedBox(width: d.gapS),
+        ],
+        Expanded(child: widget.composer),
           // ★ **那一列：两块合起来正好跟录音那颗圆圈一样高**（主人 2026-10-05：
           //   *"展开关闭，播放语音两个合起来，高度应该和录音按钮是一样的。"*）
           //   做法：外面那两格仍是 44 高（手指打得到，D3.6），但**看得见的面**贴着
@@ -603,6 +700,120 @@ class ChatFloaterState extends State<ChatFloater> {
           const SizedBox(width: d.gapS),
         ],
       );
+
+    // ── ② 两层：会滑走的那一行 ＋ **留下来的那一颗** ────────────────
+    //
+    // 🔴 **这一格里两样东西宽度不一样**（这是这一段最绕的地方，写清楚）：
+    //    · **这一格本身**：收起来时只剩那颗窄按钮那么宽（上层把浮窗也挪到屏幕左沿
+    //      ⇒ 收起来之后**屏幕上没有任何看不见却挡着的地方**）；
+    //    · **那一行**：它是**整条**那么宽的（两列小按钮 ＋ 输入条＋圆圈），
+    //      被挤到 44 宽会当场挤成一团（`RenderFlex` 溢出）⇒ 它按 [_barW] 那个
+    //      "上一次整条有多宽"来排，**超出的部分靠 `ClipRect` 裁掉**。
+    //      ⚠️ 所以**滑动动画期间那一行的宽度是冻住的**（不然每一帧都要重排、
+    //        放回来那一下还会挤爆）—— 见 [_barAnim]。
+    return LayoutBuilder(
+      builder: (context, cons) {
+        // "整条"有多宽：**只在完全看得见、而且没在滑动的时候**更新
+        // （换设备/转屏/拉窗口都要跟着变；滑动到一半不许变）。
+        final settled = !_barHidden && !_barAnim.isAnimating;
+        if (settled && cons.maxWidth.isFinite) _barW = cons.maxWidth;
+        final double rowW = settled && cons.maxWidth.isFinite
+            ? cons.maxWidth
+            : math.max(_barW, cons.maxWidth.isFinite ? cons.maxWidth : 0.0);
+        return ClipRect(
+          child: Stack(
+            children: [
+              // 那一行：按"整条"那么宽排，收起时**整条左移出这一格**
+              // （`v = 1` ⇒ 移它自己那么宽 ⇒ 右沿正好落在这一格的左沿上）。
+              UnconstrainedBox(
+                // ⚠️ **只放开横向**：纵向还是要跟着这一格（不然高度会塌成 0）。
+                constrainedAxis: Axis.vertical,
+                alignment: Alignment.centerLeft,
+                // 🔴 **必须裁**：那一行比这一格宽是**故意的**（44 宽的一格要装下整条）
+                //    —— 不裁的话框架会把它当"内容放不下"报错（黄黑条纹 ＋ 测试当场红）。
+                clipBehavior: Clip.hardEdge,
+                child: SizedBox(
+                  width: rowW,
+                  child: AnimatedBuilder(
+                    animation: _barAnim,
+                    builder: (context, child) => Transform.translate(
+                      offset: Offset(-_barAnim.value * rowW, 0),
+                      child: child,
+                    ),
+                    child: rest,
+                  ),
+                ),
+              ),
+              // 那颗窄按钮**钉在这一格的左沿**：面平时**居中**（两端留白与另外四颗一致）、
+              // 收起后**贴左**（＝屏幕左边缘）。它**不在会滑走的那一层里** ——
+              // 它就是主人说的"左移后，出现一个按钮，贴着边显示，是一个向右的箭头"。
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                child: Center(child: _barTab(p)),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// ★ **最左那颗窄按钮**：收起 ⇄ 展开底下这条（主人 2026-10-10）。
+  ///
+  /// * **看得见的那一块很窄**（[d.voiceAuxTabW] × [d.voiceCircleBox]），面子与另外
+  ///   四颗**同一套**（白底 ＋ 一圈琥珀 ＋ 墨色图形）—— "风格统一"的延续；
+  /// * 高 = 那颗圆圈的直径 ⇒ 它与四颗小按钮、那颗圆圈**同一条中线**，
+  ///   收起 / 展开时**一个像素都不上下动**（只左右滑）；
+  /// * 🔴 **手势那一格仍是 44 × 64**（D3.6 硬闸量的就是布局盒子）；
+  /// * 🔴 **面贴在那一格里的哪一侧，跟着这一档走**：平时**居中**（两端留白与右边那颗
+  ///   一样），收起后**贴左** —— 加上上层把浮窗也挪到屏幕左边缘（`chat_screen`），
+  ///   合起来就是主人要的*"隐藏时应左移，左移后……贴着边显示"*；
+  /// * 箭头翻面（◀ ⇄ ▶）**位置不动**（同「展开/收起」那颗的规矩）。
+  Widget _barTab(DshPalette p) {
+    final hidden = _barHidden;
+    final words = hidden ? barShowHint : barHideHint;
+    return Tooltip(
+      message: words,
+      child: Semantics(
+        button: true,
+        toggled: hidden,
+        label: words,
+        child: TextButton(
+          key: chatBarToggleKey,
+          onPressed: toggleBar,
+          style: TextButton.styleFrom(
+            // ⚠️ 命中区 ≥44（D3.6 硬闸量的就是这一格）：宽 44、高 64。
+            minimumSize: const Size(d.voiceAuxW, d.voiceCircleBox),
+            padding: EdgeInsets.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: SizedBox(
+            width: d.voiceAuxW,
+            height: d.voiceCircleBox,
+            child: AnimatedAlign(
+              duration: d.motionBarSlide,
+              curve: Curves.easeOutCubic,
+              alignment: hidden ? Alignment.centerLeft : Alignment.center,
+              child: _auxFace(
+                p,
+                lit: false,
+                w: d.voiceAuxTabW,
+                h: d.voiceCircleBox,
+                child: Icon(
+                  hidden ? Icons.chevron_right_rounded : Icons.chevron_left_rounded,
+                  size: d.voiceAuxIcon,
+                  // 同另外四颗：白底之上墨色最清楚
+                  color: d.ink,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   /// 🔴 **那四颗按钮共同的那一层**（2026-10-10 主人：*"我需要它们风格统一……
   ///   四个按钮一致。包括左侧的上下位，右侧两个按钮的上下位。"*）。
@@ -761,9 +972,18 @@ class ChatFloaterState extends State<ChatFloater> {
   /// 🔴 它必须**小于**外面那一格 —— 这是 D3.6 那条"视觉仍小、命中区撑够"的落点。
   /// 🔴 **四颗的面是同一个尺寸**（`voiceAuxFaceW` × `voiceAuxFaceH`）——
   ///    2026-10-10 主人：*"四个按钮一致"*（谁也不再有自己的宽高）。
-  Widget _auxFace(DshPalette p, {required bool lit, required Widget child}) => Container(
-        width: d.voiceAuxFaceW,
-        height: d.voiceAuxFaceH,
+  /// ⚠️ **最左那颗窄按钮是唯一一个不走默认尺寸的**（`w`/`h` 传
+  ///    `voiceAuxTabW` × `voiceCircleBox`）：主人点名要它"宽度非常窄、
+  ///    高度等于语音按钮高度" ⇒ 尺寸从调用处来，形状 / 底色 / 那一圈**还是这一处**。
+  Widget _auxFace(
+    DshPalette p, {
+    required bool lit,
+    required Widget child,
+    double? w,
+    double? h,
+  }) => Container(
+        width: w ?? d.voiceAuxFaceW,
+        height: h ?? d.voiceAuxFaceH,
         decoration: BoxDecoration(
           // ★ **白底**（主人 2026-10-06 当天最后定的：*"现在把白色底加上"*）：
           //   平时就是那张纸的白（与录音那颗圆圈同一个底）；开着时整块变琥珀（状态一眼看得出）。

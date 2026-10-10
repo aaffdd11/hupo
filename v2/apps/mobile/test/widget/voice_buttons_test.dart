@@ -275,12 +275,20 @@ void main() {
     expect(speak.bottom, closeTo(composer.bottom, 0.5),
         reason: '★ 最下面那块没与录音圆圈的下沿齐平（${speak.bottom} vs ${composer.bottom}）');
 
-    // ⑤ **两端留白相等**（"页面视觉上左右留空一致"）
+    // ⑤ **两端的留白**（"页面视觉上左右留空一致"）
+    //    🔴 **2026-10-10 同一天的第二件**：最左又多了那颗窄按钮
+    //      （`chatBarToggleKey` ⇒ `bar_toggle_test.dart`）⇒ 现在**最左看得见的那一块**
+    //      是它，不再是「清单」。两端比的是**最外那两块面**：
+    //      那颗窄按钮的面（它平时在自己那一格里居中 ＝ 离这一格左沿 12）
+    //      vs 最右边那一块面（离这一格右沿 10）。
     final floater = tester.getRect(find.byType(ChatFloater));
-    final leftGap = work.left - floater.left;
+    final tabFace = tester.getRect(
+      find.descendant(of: find.byKey(chatBarToggleKey), matching: find.byType(Container)).first,
+    );
+    final leftGap = tabFace.left - floater.left;
     final rightGap = floater.right - speak.right;
-    expect(leftGap, closeTo(rightGap, 0.5),
-        reason: '★ 两端留白不等：左 $leftGap / 右 $rightGap（原来是 2 / 10）');
+    expect((leftGap - rightGap).abs(), lessThanOrEqualTo(3),
+        reason: '★ 两端留白差太多：左 $leftGap / 右 $rightGap（原来是 2 / 10）');
     // 负向对照：这条判据**量得出东西**（不是两个 0 相等那种空转）
     expect(leftGap, greaterThan(0));
   });

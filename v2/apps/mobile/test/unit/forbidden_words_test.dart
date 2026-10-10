@@ -204,6 +204,10 @@ void main() {
       keyboardOpenLabel,
       keyboardCloseLabel,
       keyboardButtonHint,
+      // ★ 2026-10-10：最左那颗窄按钮（收起 / 展开底下这条）两个读屏名 ＋ tooltip
+      //    ⚠️ 它**不是**「工具栏」：`工具` 在禁用词表里（人格规矩：回答里不提"工具"）。
+      barHideHint,
+      barShowHint,
       voiceFailedLead,
       voiceTalkLabel,
       voiceStopLabel,

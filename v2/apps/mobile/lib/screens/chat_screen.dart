@@ -213,6 +213,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   /// 那颗「键盘」：摊开 ⇄ 收起（同一个入口 —— 同「清单」「展开」那几颗的规矩）。
   void _toggleKeyboard() => setState(() => _keyboardOpen = !_keyboardOpen);
 
+  /// 🔴 **底下那一条收起来了没有**（最左那颗窄按钮 · 主人 2026-10-10）。
+  ///
+  /// ⚠️ **那颗按钮的状态出处是浮窗自己**（它按的、它画的）；这里只**镜像一份** ——
+  ///    因为要挪的是**浮窗自己的位置**（收起后贴到屏幕左边缘），而那个 `Positioned`
+  ///    住在这个文件里（浮窗不碰外边距，`FloaterMetrics.margin` 一直是上层给的）。
+  ///    与 `_floaterExpanded` 同一个做法。
+  bool _barHidden = false;
+
   /// **请把输入框摊开 / 收起**（`VoiceBar` 那边三个入口：那颗「打字」、说话时那张卡片
   /// "我要改"、以及**那一句发出去之后**要收）——
   /// ⚠️ 它只**照着要**设一次（不翻转：翻转是那颗按钮自己的事，两条路各管各的）。
@@ -985,9 +993,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             child: SafeArea(bottom: false, child: PlanStrip(plan: c.plan)),
           ),
           // ② 聊天浮窗（贴底、四边 `FloaterMetrics.margin`、永远在最上 —— Z1/Z3/Z4）
-          Positioned(
-            left: FloaterMetrics.margin,
-            right: FloaterMetrics.margin,
+          //
+          // 🔴 **2026-10-10**：底下那一条被那颗窄按钮收起来时：
+          //    · `left` 变 **0**（主人原话：*"贴着边显示"*）；
+          //    · **宽度缩到那一颗**（`right` 变 `屏宽 − 那颗按钮的一格`）—— 收起来之后
+          //      屏幕上**一个看不见的遮挡都不留**（浮窗那层 `Material` 是吃点击的）。
+          //    用 `AnimatedPositioned` 让这两样**滑过去**（与那一行的左移同一个时长）。
+          AnimatedPositioned(
+            duration: d.motionBarSlide,
+            curve: Curves.easeOutCubic,
+            left: _barHidden ? 0 : FloaterMetrics.margin,
+            right: _barHidden
+                ? math.max(FloaterMetrics.margin, mq.size.width - d.voiceAuxW)
+                : FloaterMetrics.margin,
             // ⚠️ 底下那个值见上面 `bottomGap` 那段（**系统那条比我们的留白大时听系统的**）。
             bottom: bottomGap,
             // ⚠️ **不给 `height`**：收起档的高度要**由内容算**（D3.5）；
@@ -1060,6 +1078,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               //     （输入条是这个文件给的 widget —— 浮窗不认得它里面那个框）。
               keyboardOpen: _keyboardOpen,
               onToggleKeyboard: _toggleKeyboard,
+              // ★ **2026-10-10 主人**：*"隐藏时应左移，左移后，出现一个按钮，
+              //   贴着边显示，是一个向右的箭头。"*
+              //   ⇒ 底下那一条收起来时，浮窗**自己缩到那颗窄按钮那么宽、挪到屏幕左边缘**
+              //     （连 `FloaterMetrics.margin` 那 10 一起吃掉）。
+              //   🔴 **宽度也必须真的缩**（不只是"看不见"）：浮窗那层 `Material` 是
+              //     **吃点击**的（`_RenderInkFeatures.hitTestSelf`）⇒ 留着整条宽的格子，
+              //     屏幕底下就会多一条"看不见却挡着"的地带（点不动桌面）。
+              //   🔴 `AnimatedPositioned` 把 `left`/`right` 一起滑过去：看起来就是
+              //     **这条从左边收起来 / 从左边放出来**（与那一行的滑动同一个时长）。
+              onBarHidden: (v) {
+                if (v != _barHidden) setState(() => _barHidden = v);
+              },
               child: _sheetBody(c),
             ),
           ),
