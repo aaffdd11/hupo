@@ -2,11 +2,13 @@
 //   一个是展开聊天，一个是播放语音。所谓播放语音，就是开启和关停的状态，如果开启，
 //   会将对 agent 的回复进行语音转换和实时播报。如果关闭，则不播报。"*）。
 //
-// 这一份钉四件（每件都带反例）：
+// 这一份钉五件（每件都带反例）：
 //   ① 🔴 收起档那一行**从左边数**是：（他的话 ＋ 圆圈）→ **展开** → **播放语音**；
 //   ② 🔴 播放那颗**看得出开 / 关**，点一下就翻过去；
 //   ③ 🔴 这台**念不出来** ⇒ 那颗**一个像素都不许画**（`canSpeak` 假时调用处传 `null`）；
-//   ④ 🔴 两颗的命中区都 ≥44（D3.6 硬闸）。
+//   ④ 🔴 两颗的命中区都 ≥44（D3.6 硬闸）；
+//   ⑤ 🔴 **四颗一致**（2026-10-10 主人：*"我需要它们风格统一，页面视觉上左右留空一致。
+//      四个按钮一致。包括左侧的上下位，右侧两个按钮的上下位。"*）。
 
 import 'dart:io';
 
@@ -23,6 +25,8 @@ Future<void> _pumpFloater(
   bool speakOn = false,
   VoidCallback? onToggleSpeak = _noop,
   FloaterTier tier = FloaterTier.collapsed,
+  // ★ 2026-10-10：把**左端那一列**也摆出来（判据 ⑥ 要四颗同时在屏幕上）。
+  bool withAuxLeft = false,
 }) async {
   // ⚠️ **先清一次**：同一个 `ChatFloater` 连着泵两次会**复用同一个 State**
   //    （`initialTier` 只在 `initState` 读一次）⇒ 第二次那一档根本没换。
@@ -41,6 +45,9 @@ Future<void> _pumpFloater(
               title: '琥珀聊天',
               speakOn: speakOn,
               onToggleSpeak: onToggleSpeak,
+              workPanel: withAuxLeft ? (ctx, close) => const SizedBox(height: 100) : null,
+              onWorkOpen: withAuxLeft ? _noop : null,
+              onToggleKeyboard: withAuxLeft ? _noop : null,
               // ⚠️ 一个"假输入条"：这一份判据只管那两颗按钮摆对了没有
               composer: const SizedBox(key: _fakeComposerKey, width: 300, height: d.voiceCircleBox),
               child: const SizedBox.shrink(),
@@ -219,5 +226,62 @@ void main() {
       find.descendant(of: find.byKey(chatSpeakKey), matching: find.byType(Icon)).first,
     );
     expect(speaker.color, d.ink, reason: '★ 那颗喇叭的图形色不是墨色（关着也是墨色）');
+  });
+
+  testWidgets('⑥ 🔴 四颗一致：左右两列的上下位逐像素对齐、两端留白相等', (tester) async {
+    // 🔴 2026-10-10 主人：*"我需要它们风格统一，页面视觉上左右留空一致。四个按钮一致。
+    //   包括左侧的上下位，右侧两个按钮的上下位。录音按钮还是最大的保持原样。"*
+    //   ⚠️ 改之前实测（390 宽那一版）：左列两块的面**居中**摆（缝 18、合起来 78 高），
+    //      右列两块**贴内沿**（缝 4、合起来 64 = 那颗圆圈）⇒ 四颗的上下位全对不上；
+    //      两端留白 **左 2 / 右 10**。
+    await _pumpFloater(tester, withAuxLeft: true);
+    Rect face(Key k) => tester.getRect(
+          find.descendant(of: find.byKey(k), matching: find.byType(Container)).first,
+        );
+    final work = face(chatWorkKey); // 左列上
+    final kb = face(chatKeyboardKey); // 左列下
+    final handle = face(chatHandleKey); // 右列上
+    final speak = face(chatSpeakKey); // 右列下
+
+    // ① **四块同一个尺寸**（"四个按钮一致"最直白那一半）
+    for (final (name, r) in [('清单', work), ('键盘', kb), ('展开', handle), ('播放', speak)]) {
+      expect(r.size, const Size(d.voiceAuxFaceW, d.voiceAuxFaceH),
+          reason: '★ $name 那块面不是 ${d.voiceAuxFaceW}×${d.voiceAuxFaceH}（$r）');
+    }
+
+    // ② **左列的上下位 = 右列的上下位**（"包括左侧的上下位，右侧两个按钮的上下位"）
+    //    ⚠️ 逐像素比（不是"差不多"）：四颗是**一体的**，差一个像素就是没对齐。
+    expect(work.top, closeTo(handle.top, 0.5),
+        reason: '★ 上排两颗的上沿没对齐（${work.top} vs ${handle.top}）');
+    expect(work.bottom, closeTo(handle.bottom, 0.5),
+        reason: '★ 上排两颗的下沿没对齐（${work.bottom} vs ${handle.bottom}）');
+    expect(kb.top, closeTo(speak.top, 0.5),
+        reason: '★ 下排两颗的上沿没对齐（${kb.top} vs ${speak.top}）');
+    expect(kb.bottom, closeTo(speak.bottom, 0.5),
+        reason: '★ 下排两颗的下沿没对齐（${kb.bottom} vs ${speak.bottom}）');
+
+    // ③ **两列各自一条缝、而且都是 `voiceAuxGap`**（原来左边那条缝是 18）
+    //    ⚠️ 一列是**上下**两颗：左边是（清单 / 键盘）、右边是（展开 / 播放）。
+    expect(kb.top - work.bottom, closeTo(d.voiceAuxGap, 0.5),
+        reason: '★ 左边那一列的缝不是 ${d.voiceAuxGap}（${kb.top - work.bottom}）');
+    expect(speak.top - handle.bottom, closeTo(d.voiceAuxGap, 0.5),
+        reason: '★ 右边那一列的缝不是 ${d.voiceAuxGap}（${speak.top - handle.bottom}）');
+
+    // ④ **四块合起来的那一格与录音那颗圆圈齐平**（上下沿都对上）
+    //    —— 收缩档那颗圆圈就是那 64 高（`voiceCircleBox`），这里用假输入条顶它。
+    final composer = tester.getRect(find.byKey(_fakeComposerKey));
+    expect(work.top, closeTo(composer.top, 0.5),
+        reason: '★ 最上面那块没与录音圆圈的上沿齐平（${work.top} vs ${composer.top}）');
+    expect(speak.bottom, closeTo(composer.bottom, 0.5),
+        reason: '★ 最下面那块没与录音圆圈的下沿齐平（${speak.bottom} vs ${composer.bottom}）');
+
+    // ⑤ **两端留白相等**（"页面视觉上左右留空一致"）
+    final floater = tester.getRect(find.byType(ChatFloater));
+    final leftGap = work.left - floater.left;
+    final rightGap = floater.right - speak.right;
+    expect(leftGap, closeTo(rightGap, 0.5),
+        reason: '★ 两端留白不等：左 $leftGap / 右 $rightGap（原来是 2 / 10）');
+    // 负向对照：这条判据**量得出东西**（不是两个 0 相等那种空转）
+    expect(leftGap, greaterThan(0));
   });
 }

@@ -55,7 +55,7 @@ import 'dsh_look.dart';
 /// 🔴 **2026-10-05 主人**：*"展开聊天我希望不要有移动聊天窗口高度的选项，
 ///   就是完全展开或者完全收起。"* ⇒ 原来的「半开」那一档与"拖着改高度"**一起砍了**。
 enum FloaterTier {
-  /// 收起：只剩底下那一格（圆圈 ＋ 两颗按钮）。
+  /// 收起：只剩底下那一格（他说的话 ＋ 录音圆圈 ＋ 左右各两颗小按钮）。
   collapsed,
 
   /// 完全展开（时间线 ＋ 输入条）。
@@ -543,6 +543,15 @@ class ChatFloaterState extends State<ChatFloater> {
   ///   那一列**一直在**，展开那颗只在收起档**画**（展开档留一个等大的空格）
   ///   ⇒ 语音圆圈与它左边那句字**一个像素都不动**。
   ///   ⚠️ 收起来的出口**仍然只有**标题行右端那颗「收起」（不新造第二条路）。
+  ///
+  /// 🔴 **2026-10-10 主人**：*"现在一共有5个按钮。一个是语音。左侧是两个，右侧是两个。
+  ///   我需要它们风格统一，页面视觉上左右留空一致。四个按钮一致。包括左侧的上下位，
+  ///   右侧两个按钮的上下位。录音按钮还是最大的保持原样。"*
+  ///   ⇒ 两条落到这一行上：
+  ///     ① **左右留空一致**：右边那一列后面一直有这个 `d.gapS`，而左边那列**原来
+  ///        紧贴着这一行的左端**（看得见的面离浮窗边只有 2px，右边是 10px）——
+  ///        现在**两端各留同一个数**；
+  ///     ② **四颗的上下位一致**：交给 [_auxButton] 那一个出处（见它的注释）。
   Widget _bottomRow(DshPalette p, {required bool collapsed}) => Row(
         children: [
           // ★ 最左那一列：上面「清单」、下面「键盘」（**上层没给就不画** ——
@@ -554,6 +563,9 @@ class ChatFloaterState extends State<ChatFloater> {
           //      一模一样高 ⇒ 底下那一行的高度**一个像素都不变**（输入条与圆圈不动）。
           //   ⚠️ 它们**同时**也是两个档共用的（收起档也画）—— 与那三颗同一条规矩。
           if (widget.workPanel != null || widget.onToggleKeyboard != null) ...[
+            // 🔴 左端这一格留白 = 右端那一格（`④ 左右留空一致`）：
+            //    左右各 `d.gapS`，再加上面那块面在自己那一格里的 2px ⇒ 两端**都是 10**。
+            const SizedBox(width: d.gapS),
             Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -592,87 +604,120 @@ class ChatFloaterState extends State<ChatFloater> {
         ],
       );
 
+  /// 🔴 **那四颗按钮共同的那一层**（2026-10-10 主人：*"我需要它们风格统一……
+  ///   四个按钮一致。包括左侧的上下位，右侧两个按钮的上下位。"*）。
+  ///
+  /// 四颗**一律走这一条路**：`Tooltip` ＋ 无障碍名 ＋ `TextButton`（44×44 那一格，
+  /// D3.6）＋ 里面那块有底色、有轮廓的面（[_auxFace]）。谁也不再自己拼一遍
+  /// —— 风格只有这一处出处，以后再加一颗**不可能又长出一个样子**。
+  ///
+  /// [alignBottom] 定的是**那颗面贴着自己那一格的哪条内沿**：
+  ///   · `true` ⇒ 贴**下沿**（它是这一列的**上面那颗**）；
+  ///   · `false` ⇒ 贴**上沿**（下面那颗）。
+  ///   一格 44、面 30 ⇒ 两块各自把 14px 的空档甩到**外侧**、往中间靠，
+  ///   两块之间那条缝就正好是 [d.voiceAuxGap]（4）⇒ `2 × 30 + 4 = 64` =
+  ///   那颗录音圆圈的直径（`design.dart` 里那条等式，判据钉着）。
+  /// 🔴 **左右两列同一个规矩** ⇒ 四颗的上沿/下沿在屏幕上**逐像素对齐**
+  ///   （原来左边那一列是把面**居中**摆的：缝 18、两块合起来 78 —— 与右边对不上）。
+  ///
+  /// [centred] 只给"这一列**只有它一颗**"那一档（判据里会出现：上层只给了清单、
+  ///   没给键盘）—— 单摆一颗时居中，与那颗圆圈同心；成对时一律走上面那条。
+  Widget _auxButton(
+    DshPalette p, {
+    required Key key,
+    required String tooltip,
+    required String label,
+    required VoidCallback? onPressed,
+    required bool lit,
+    required Widget child,
+    required bool alignBottom,
+    bool centred = false,
+    bool? toggled,
+  }) =>
+      Tooltip(
+        message: tooltip,
+        child: Semantics(
+          button: true,
+          toggled: toggled,
+          // ⚠️ 读屏那句用**主人自己那个词**（"清单" / "键盘" / "展开" …）——
+          //    这一层不留空（图形按钮没有可见的字，字只挂在 tooltip 与这里）。
+          label: label,
+          child: TextButton(
+            key: key,
+            onPressed: onPressed,
+            style: _auxStyle(),
+            // ⚠️ 给一个**确定高度**的盒子（44）：这一行的交叉轴是**无界**的，
+            //    单摆一个 `Center` / `Align` 会被框架那层 `Align` 居中
+            //    ⇒ 面与面之间的缝就不是 [d.voiceAuxGap] 了（实测过 18 与 4 两种）。
+            child: SizedBox(
+              height: d.voiceAuxH,
+              child: Align(
+                alignment: centred
+                    ? Alignment.center
+                    : (alignBottom
+                          ? Alignment.bottomCenter
+                          : Alignment.topCenter),
+                child: _auxFace(p, lit: lit, child: child),
+              ),
+            ),
+          ),
+        ),
+      );
+
   /// ★ **最左那颗「清单」**（主人 2026-10-06）。
   ///
-  /// 面子与右边那三颗**同一套**（`_auxFace`：白底 ＋ 一圈琥珀 ＋ 墨色图形），
-  /// 只是它自己单独一颗（不跟谁叠）。**开着的时候整块变琥珀**（状态一眼看得出 ——
-  /// 与「播放语音」那颗同一个做法）。
+  /// 面子与右边那两颗**同一套**（[_auxFace]：白底 ＋ 一圈琥珀 ＋ 墨色图形），
+  /// 它是这一列的**上面那颗**（面贴下沿）。
+  /// **开着的时候整块变琥珀**（状态一眼看得出 —— 与「播放语音」那颗同一个做法）。
   ///
   /// ⚠️ 命中区 ≥44（D3.6）：图形只有 18，外面那一格是 44。
   /// ⚠️ 它没有可见的字 ⇒ 字挂在 `Tooltip` 与无障碍名上（另外三颗同一条规矩）。
-  Widget _workButton(DshPalette p) {
-    final open = _workOpen;
-    return Tooltip(
-      message: workButtonHint,
-      child: Semantics(
-        button: true,
-        toggled: open,
-        // ⚠️ 读屏那句用**主人自己那个词**（"清单"）：这是左下角那颗按钮的名字。
+  Widget _workButton(DshPalette p) => _auxButton(
+        p,
+        key: chatWorkKey,
+        tooltip: workButtonHint,
         label: workButtonLabel,
-        child: TextButton(
-          key: chatWorkKey,
-          onPressed: _toggleWork,
-          style: _auxStyle(),
-          child: SizedBox(
-            // ⚠️ 给一个**确定高度**的盒子（同 [_handle] 那条）：这一行的
-            //    交叉轴是无界的，单摆一个 `Center` 会被框架那层 `Align` 居中。
-            height: d.voiceAuxH,
-            child: Center(
-              child: _auxFace(
-                p,
-                lit: open,
-                child: Icon(
-                  Icons.checklist_rounded,
-                  size: d.voiceAuxIcon,
-                  // 开着的时候是琥珀底 ⇒ 图形反过来用纸的白（同 [._speakButton]）
-                  color: open ? d.card : d.ink,
-                ),
-              ),
-            ),
-          ),
+        toggled: _workOpen,
+        onPressed: _toggleWork,
+        lit: _workOpen,
+        // 上面那颗（面贴下沿）—— 与下面那颗「键盘」凑成一对（合起来 64，与圆圈齐平）。
+        // ⚠️ 只有它一颗时（上层没给「键盘」）居中，不然它会贴着这一格的下沿。
+        alignBottom: true,
+        centred: widget.onToggleKeyboard == null,
+        child: Icon(
+          Icons.checklist_rounded,
+          size: d.voiceAuxIcon,
+          // 开着的时候是琥珀底 ⇒ 图形反过来用纸的白（同 [._speakButton]）
+          color: _workOpen ? d.card : d.ink,
         ),
-      ),
-    );
-  }
+      );
 
   /// ★ **「清单」下面那一颗「键盘」**（主人 2026-10-09）。
   ///
-  /// 面子与另外几颗**同一套**（`_auxFace`：白底 ＋ 一圈琥珀 ＋ 墨色图形）；
+  /// 面子与另外几颗**同一套**（[_auxFace]：白底 ＋ 一圈琥珀 ＋ 墨色图形）；
+  /// 它是这一列的**下面那颗**（面贴上沿）。
   /// **开着的时候整块变琥珀**（一眼看得出那格正摊着 —— 同「清单」「播放语音」）。
   ///
-  /// ⚠️ 命中的仍是 44×44 那一格（D3.6），看得见的面只有 40×30（`_auxFace`）。
+  /// ⚠️ 命中的仍是 44×44 那一格（D3.6），看得见的面只有 40×30（[_auxFace]）。
   /// ⚠️ 图形翻面（开着 = 「收起键盘」那颗收起样）：位置不动 —— 同「展开」那颗的规矩。
   Widget _keyboardButton(DshPalette p) {
     final open = widget.keyboardOpen;
-    return Tooltip(
-      message: keyboardButtonHint,
-      child: Semantics(
-        button: true,
-        toggled: open,
-        // 读屏那句跟着这一档换（与"说一句 / 说完了"同一个做法）。
-        label: open ? keyboardCloseLabel : keyboardOpenLabel,
-        child: TextButton(
-          key: chatKeyboardKey,
-          onPressed: widget.onToggleKeyboard,
-          style: _auxStyle(),
-          child: SizedBox(
-            // ⚠️ 给一个**确定高度**的盒子（同 [_workButton]）：这一行的交叉轴是无界的，
-            //    单摆一个 `Center` 会被框架那层 `Align` 居中。
-            height: d.voiceAuxH,
-            child: Center(
-              child: _auxFace(
-                p,
-                lit: open,
-                child: Icon(
-                  open ? Icons.keyboard_hide_outlined : Icons.keyboard_alt_outlined,
-                  size: d.voiceAuxIcon,
-                  // 开着的时候是琥珀底 ⇒ 图形反过来用纸的白（同其余几颗）
-                  color: open ? d.card : d.ink,
-                ),
-              ),
-            ),
-          ),
-        ),
+    return _auxButton(
+      p,
+      key: chatKeyboardKey,
+      tooltip: keyboardButtonHint,
+      // 读屏那句跟着这一档换（与"说一句 / 说完了"同一个做法）。
+      label: open ? keyboardCloseLabel : keyboardOpenLabel,
+      toggled: open,
+      onPressed: widget.onToggleKeyboard,
+      lit: open,
+      alignBottom: false,
+      centred: widget.workPanel == null,
+      child: Icon(
+        open ? Icons.keyboard_hide_outlined : Icons.keyboard_alt_outlined,
+        size: d.voiceAuxIcon,
+        // 开着的时候是琥珀底 ⇒ 图形反过来用纸的白（同其余几颗）
+        color: open ? d.card : d.ink,
       ),
     );
   }
@@ -697,9 +742,10 @@ class ChatFloaterState extends State<ChatFloater> {
     ),
   );
 
-  /// 那一列里每颗按钮的**共同样子**：外面是**透明的一格**（只撑命中区 ≥44），
+  /// 那四颗按钮的**共同样子**：外面是**透明的一格**（只撑命中区 ≥44），
   /// 里面那块**看得见的长方形**由 [_auxFace] 画（**有底色 ＋ 一圈轮廓**）。
   ///
+  /// ⚠️ 只有 [_auxButton] 用得到它 —— 四颗**都从那儿出去**（风格与上下位一处出处）。
   /// ⚠️ 尺寸住 `design.dart`：`voiceAuxW/H` = 手势能打到的那一格（D3.6 硬闸量的就是它），
   ///    `voiceAuxFaceW/H` = 看得见的那一块（主人 2026-10-05："可以缩小一些，然后需要底色的"）。
   ButtonStyle _auxStyle() => TextButton.styleFrom(
@@ -713,6 +759,8 @@ class ChatFloaterState extends State<ChatFloater> {
   /// **看得见的那一块**：长方形 ＋ 底色（开着的时候是琥珀底白图形，关着是"边框色的透明版"墨图形）。
   ///
   /// 🔴 它必须**小于**外面那一格 —— 这是 D3.6 那条"视觉仍小、命中区撑够"的落点。
+  /// 🔴 **四颗的面是同一个尺寸**（`voiceAuxFaceW` × `voiceAuxFaceH`）——
+  ///    2026-10-10 主人：*"四个按钮一致"*（谁也不再有自己的宽高）。
   Widget _auxFace(DshPalette p, {required bool lit, required Widget child}) => Container(
         width: d.voiceAuxFaceW,
         height: d.voiceAuxFaceH,
@@ -722,7 +770,7 @@ class ChatFloaterState extends State<ChatFloater> {
           color: lit ? d.accent : d.card,
           borderRadius: BorderRadius.circular(d.voiceAuxRadius),
           // 🔴 **风格统一**（主人 2026-10-05）：与录音那颗圆圈**同一圈琥珀色、同一个粗细**
-          //   —— 三颗长得是同一套东西，只是形状（圆 / 长方）不同。
+          //   —— 四颗长得是同一套东西，只有形状不同（那颗圆圈是圆、这四颗是长方）。
           border: Border.all(color: d.accent, width: d.voiceCircleRing),
         ),
         child: Center(child: child),
@@ -736,41 +784,24 @@ class ChatFloaterState extends State<ChatFloater> {
   ///   ⚠️ 展开档**不再留空格**了（那正是他说的"变成缩小窗口的按钮"）。
   /// ⚠️ **单击 = 一次拉满 / 一次收起**（不再有"半开"、也不再有"拖着改高度"）。
   /// ⚠️ 字挂在 `Tooltip`（web 上悬停看得见）＋ 无障碍名上。
-  Widget _handle(DshPalette p, {required bool collapsed, bool alignBottom = false}) {
-    final button = TextButton(
-      key: chatHandleKey,
-      onPressed: collapsed ? expand : collapse,
-      style: _auxStyle(),
-      // ⚠️ **高度要写死成那一格**（44）：外面那一列的高度是**无界**的，
-      //    单摆一个 `Align` 会被框架自己那层 `Align(center)` 居中（实测：面与面之间
-      //    变成 18 而不是 4）⇒ 给一个**确定高度**的盒子，面才真的贴住内沿。
-      child: SizedBox(
-        height: d.voiceAuxH,
-        child: Align(
-        // ⚠️ 上面那一颗的面**贴着下沿**（这样两块 + 那条缝才 = 圆圈那么高）
-        alignment: alignBottom ? Alignment.bottomCenter : Alignment.topCenter,
-        child: _auxFace(
-          p,
-          lit: false,
-          child: CustomPaint(
-            size: const Size(22, 6),
-            // ★ 2026-10-06 主人：*「颜色风格要统一一下」* ⇒ 三颗的图形**同一个色**：
-            //   **墨色**（白底之上它最清楚 11.8:1，也与界面上别的图标同一个色）。
-            painter: _FlatChevron(color: d.ink, up: collapsed),
-          ),
-        ),
-        ),
-      ),
-    );
-    return Tooltip(
-      message: collapsed ? '展开' : chatCollapse,
-      child: Semantics(
-        button: true,
+  /// ⚠️ [alignBottom] 恒为真（它是这一列的**上面那颗**）—— 与左边「清单」那一颗
+  ///    **同一条内沿**（2026-10-10：四颗的上下位一致）。
+  Widget _handle(DshPalette p, {required bool collapsed, bool alignBottom = false}) =>
+      _auxButton(
+        p,
+        key: chatHandleKey,
+        tooltip: collapsed ? '展开' : chatCollapse,
         label: collapsed ? '展开' : chatCollapse,
-        child: button,
-      ),
-    );
-  }
+        onPressed: collapsed ? expand : collapse,
+        lit: false,
+        alignBottom: alignBottom,
+        child: CustomPaint(
+          size: const Size(22, 6),
+          // ★ 2026-10-06 主人：*「颜色风格要统一一下」* ⇒ 三颗的图形**同一个色**：
+          //   **墨色**（白底之上它最清楚 11.8:1，也与界面上别的图标同一个色）。
+          painter: _FlatChevron(color: d.ink, up: collapsed),
+        ),
+      );
 
   /// **播放语音**那一颗（**下面那颗** · 主人 2026-10-05）：*"所谓播放语音，就是开启和关停
   ///   的状态，如果开启，会将对 agent 的回复进行语音转换和实时播报。如果关闭，则不播报。"*
@@ -779,36 +810,23 @@ class ChatFloaterState extends State<ChatFloater> {
   /// * 命中区 ≥44（D3.6 硬闸）；
   /// * 🔴 **念不出来的设备根本不画它**（调用处 `onToggleSpeak` 传 `null`）；
   /// * 字挂在 `Tooltip` 与无障碍名上（`models/speak_words.dart` 一处出处）。
+  /// * ⚠️ 面**贴上沿** —— 与左边「键盘」那一颗**同一条内沿**（2026-10-10：四颗一致）。
   Widget _speakButton(DshPalette p) {
     final on = widget.speakOn;
-    return Tooltip(
-      message: on ? speakAutoHintOn : speakAutoHintOff,
-      child: Semantics(
-        button: true,
-        toggled: on,
-        label: speakAutoOnWords,
-        child: TextButton(
-          key: chatSpeakKey,
-          onPressed: widget.onToggleSpeak,
-          style: _auxStyle(),
-          child: SizedBox(
-            height: d.voiceAuxH,
-            child: Align(
-            // ⚠️ 下面那一颗的面**贴着上沿**（同上）
-            alignment: Alignment.topCenter,
-            child: _auxFace(
-              p,
-              lit: on,
-              child: Icon(
-                on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-                size: d.voiceAuxIcon,
-                // ★ 同上：关着的时候也是**墨色**（理由同上面那颗箭头）
-                color: on ? d.card : d.ink,
-              ),
-            ),
-            ),
-          ),
-        ),
+    return _auxButton(
+      p,
+      key: chatSpeakKey,
+      tooltip: on ? speakAutoHintOn : speakAutoHintOff,
+      label: speakAutoOnWords,
+      toggled: on,
+      onPressed: widget.onToggleSpeak,
+      lit: on,
+      alignBottom: false,
+      child: Icon(
+        on ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+        size: d.voiceAuxIcon,
+        // ★ 同上：关着的时候也是**墨色**（理由同上面那颗箭头）
+        color: on ? d.card : d.ink,
       ),
     );
   }
