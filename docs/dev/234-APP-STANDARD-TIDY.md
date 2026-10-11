@@ -101,6 +101,24 @@ if (!granted.includes('net')) return [];      // ← 要他点头才进 CSP
 （命令与核法见 [`231`](231-RESTART-CGROUP.md) §三/§四）。**重建之前不要重启**（`serve.js` 会按 P1.4
 拒起）。⚠️ 这一轮**没有**再动人格（人格昨天那版就是今天线上跑的这版）。
 
+### 6.1 重建与重启的读数（2026-10-11 22:40 / 22:41）
+
+```
+清单      /etc/hupo/integrity.json 2026-10-11 22:40 · root:root 0444 · verify ⇒ ✅ 对上了
+重启      restart-core.sh EXIT=0 · 预检「清单对得上」· 走系统单元那条路
+横幅      构建 5a833343cdab · 完整性 对上了 · 技能 1 条 · …/v2/services/core/skills
+服务      单元 active · MainPID 3168366 · cgroup …/app.slice/hupo-core.service
+两端      本机 8020 → 200 · 公网 → 200 · /api/version = 5a833343cdab
+盒子      三台自报产品层 e8f31152ae0f（hupo-a / hupo-b / hupo-t3）
+```
+
+🔴 **顺带逮到一条值得记的事**：主人说"重启完了"，但**那次其实没生效** ——
+单元 `ActiveEnterTimestamp` 还是 **22:21:25**、`NRestarts=0`，而清单已经是 **22:40** 的
+⇒ 也就是说**核心进程还停在改之前那一版**。补跑一遍（22:41:47）才是真的重启。
+⇒ 教训一句话：**"重启过了"这种话要拿时间戳核**（`systemctl --user show hupo-core -p
+ActiveEnterTimestamp` 对一下清单的 mtime），别拿"他说了/我跑了"当读数 —— 与 V13 那条
+"在哪一端验的"是同一族。
+
 ## 七、如实说（没验到的）
 
 - **模型真的会去调那个技能**仍然没验（要一次真模型调用）—— 兜底是人格点名 ＋ 目录每轮在它眼前。
