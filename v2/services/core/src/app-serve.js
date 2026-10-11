@@ -115,6 +115,8 @@ export const SIGNED_TTL_MS = 10 * 60 * 1000;
  *     能力要主人另外拍，见 `146-MINIAPP-REDESIGN.md`）。
  *   · `base-uri 'none'` / `form-action 'none'` —— 堵住"改 base 之后把请求发到别处"
  *   · `frame-ancestors <壳>` —— **只许壳嵌它**（别处嵌不了）
+ *
+ * ★ **2026-10-11：名单里的站，`https://` 与 `wss://` 一起给**（见 `cspFor` 里那段注释）。
  */
 export function cspFor(frameAncestors, hosts = []) {
   /**
@@ -127,7 +129,14 @@ export function cspFor(frameAncestors, hosts = []) {
    */
   const allow = [];
   for (const h of Array.isArray(hosts) ? hosts : []) {
-    if (typeof h === 'string' && /^[a-z0-9.-]+$/.test(h) && h.length <= 100) allow.push(`https://${h}`);
+    // ★ **2026-10-11：名单里的站，`https://` 与 `wss://` 一起给**（主人：*"小程序接入数据
+    //   可以全接入，但不落库。实际上就是 api 访问和 websocket 推送。"*）。
+    //   🔴 这不是把边界放宽：**能连哪个站还是名单说了算**（只有一处），变的是
+    //   "这个站能用哪条协议连" —— `connect-src` 里 `https://a` **不覆盖** `wss://a`
+    //   （协议对不上）⇒ 少写这一条，表现就是"声明了、也点头了，推送却永远连不上"。
+    if (typeof h === 'string' && /^[a-z0-9.-]+$/.test(h) && h.length <= 100) {
+      allow.push(`https://${h}`, `wss://${h}`);
+    }
   }
   return [
     "default-src 'none'",

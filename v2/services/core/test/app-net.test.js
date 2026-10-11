@@ -131,7 +131,12 @@ test('N1/N2 真制品头：声明了就在 `connect-src` 里；没声明就只�
     apps.setGrants('shuju', ['net']); // 他点头
     const a = await get(port, sigOf(port, 'shuju'));
     const cspA = String(a.headers['content-security-policy']);
-    assert.match(cspA, /connect-src 'self' https:\/\/api\.example\.com https:\/\/data\.example\.org/, cspA);
+    // ★ 2026-10-11：名单里的站，`https://` 与 `wss://` **一起给**（推送要走 wss）
+    assert.match(
+      cspA,
+      /connect-src 'self' https:\/\/api\.example\.com wss:\/\/api\.example\.com https:\/\/data\.example\.org wss:\/\/data\.example\.org/,
+      cspA,
+    );
     // 🔴 只放那几个站：别的照旧什么都没有
     assert.ok(!/connect-src[^;]*\*/.test(cspA), '不许出现通配');
     assert.ok(!cspA.includes('https://other.example'), '没声明的站不许出现');

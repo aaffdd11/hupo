@@ -25,13 +25,12 @@ const bare = (body) =>
   + body;
 const page = (body) => ({ files: { 'index.html': bare(`<button>按一下</button>${body}`) } });
 
-test('① 自包含：引外部资源 ⇒ **报错**（脚本/样式/图片/CSS import/WebSocket/Google 字体）', () => {
+test('① 自包含：引外部资源 ⇒ **报错**（脚本/样式/图片/CSS import/Google 字体）', () => {
   for (const bad of [
     '<script src="https://cdn.example.com/a.js"></script>',
     '<link rel="stylesheet" href="https://cdn.example.com/a.css">',
     '<img src="https://x.example.com/a.png">',
     '<style>@import url("https://x.example.com/a.css");</style>',
-    '<script>new WebSocket("wss://x.example.com")</script>',
     '<link href="https://fonts.googleapis.com/css?family=X">',
   ]) {
     const r = lintApp(page(bad));
@@ -40,6 +39,23 @@ test('① 自包含：引外部资源 ⇒ **报错**（脚本/样式/图片/CSS 
   // 正例：内联 + data: 图片 ⇒ 一条都不报
   const ok = lintApp(page('<style>body{color:#333}</style><img src="data:image/png;base64,AAA"><script>let a=1</script>'));
   assert.deepEqual(ok.errors, []);
+});
+
+test('★ 长连接：`new WebSocket(wss://声明过的站)` **允许**；没声明 ⇒ 报；明文 `ws://` ⇒ 报', () => {
+  const body = (u) => bare(`<script>const ws = new WebSocket(${JSON.stringify(u)})</script><button>连</button>`);
+  // ① 声明过 ⇒ 一条都不报（它现在**不是**"外部资源"了）
+  const ok = lintApp({ files: { 'index.html': body('wss://push.example.com/ws') }, permissions: ['net'], net: ['push.example.com'] });
+  assert.deepEqual(ok.errors, [], JSON.stringify(ok.errors));
+  // ② 没声明 ⇒ 与 `fetch` 同一条规矩（`host-not-declared`），而且 `wss://` 也算"页面连的站"
+  const undeclared = lintApp({ files: { 'index.html': body('wss://push.example.com/ws') }, permissions: ['net'], net: [] });
+  assert.equal(undeclared.errors.some((e) => e.code === 'host-not-declared'), true, JSON.stringify(undeclared.errors));
+  // ③ 明文 `ws://` ⇒ 单独一条（https 页面上会被混合内容拦掉）
+  const insecure = lintApp({ files: { 'index.html': body('ws://push.example.com/ws') }, permissions: ['net'], net: ['push.example.com'] });
+  assert.equal(insecure.errors.some((e) => e.code === 'ws-insecure'), true, JSON.stringify(insecure.errors));
+  assert.match(insecure.errors.find((e) => e.code === 'ws-insecure').text, /wss:\/\//, '要说清改成 wss://');
+  // ④ 声明了但页面里没连 ⇒ 仍然是那条"用不到就去掉"
+  const unused = lintApp({ files: { 'index.html': bare('<button>按</button>') }, permissions: ['net'], net: ['push.example.com'] });
+  assert.equal(unused.warnings.some((w) => w.code === 'host-unused'), true);
 });
 
 test('② 存储：碰 localStorage / sessionStorage / indexedDB ⇒ **报错**，并指向 /db', () => {
@@ -232,6 +248,11 @@ test('⑤ 网络：连了没声明的站 ⇒ **报错**；声明了没连 ⇒ �
   assert.equal(unused.warnings.some((w) => w.code === 'host-unused'), true);
   // 只认 host（路径/查询串不算）
   assert.deepEqual(httpsHostsIn('https://a.example.com/x?y=1 http://b.example.com:8080/z'), ['a.example.com', 'b.example.com']);
+  // ★ 2026-10-11：长连接连的站**与 fetch 是同一份名单** ⇒ `wss://` 也要数进来（去重）
+  assert.deepEqual(
+    httpsHostsIn('new WebSocket("wss://push.example.com/ws") fetch("https://push.example.com/x")'),
+    ['push.example.com'],
+  );
 });
 
 test('⑥ 定时任务：开放式的"让它干什么" ⇒ 提示；写了任务没声明 tasks ⇒ 报错', () => {

@@ -85,7 +85,7 @@ import {
 import { AppsError, MAX_DESC_CHARS, MAX_TITLE_CHARS, MAX_TOTAL_BYTES, PERMISSIONS, isAnAppRoom, isHiddenPathRefusal, newAppId } from './apps.js';
 // ★ **"活的工作区"那一刀**（契约 `docs/dev/112-OWN-APP-IS-LIVE.md`）：
 //   `/internal/workspace-live`（盒里那条口）读的就是它 —— **以盒子为准**。
-import { readLiveApp } from './workspace.js';
+import { mirrorArtifactIntoWorkspace, readLiveApp } from './workspace.js';
 
 import { RoomReclaimError } from './reclaim.js';
 import { USAGE_KINDS } from './usage.js';
@@ -3479,6 +3479,28 @@ const TENANT_ROUTES = [
         createdBy: body?.createdBy === 'agent' ? 'agent' : 'user',
         createdTurn: Number.isInteger(body?.createdTurn) ? body.createdTurn : null,
       });
+      /**
+       * ★ **他那一间已经落成过 ⇒ 新版要跟着换**（2026-10-11 修 · 做 `futures-trade` 时发现的）。
+       *
+       * 🔴 现象：桌面那一格打开的是**活的那一份**（`/w/<id>/<entry>`）—— 而"活的那一份"
+       *    第一次被读的时候就从**当时那一版**落成到工作区里了（`readLiveApp`），之后
+       *    一直按工作区那份答。⇒ 只 `create()` 出新版本，**页面还是旧的**：
+       *    "我改了它，他那边没变"（正是这个项目最忌的那句假话）。
+       *    对 `install`（开发这一侧装一版）这条路的**更新**场景，这个坑必踩。
+       *
+       * ⚠️ **只在已经落成过时才刷新**（`workspaces.has`）：还没落成的**不建** ——
+       *    它第一次被打开时会从**当前那一版**落成（那是原行为，不动）。
+       * ⚠️ 刷不进去**不许**让"这一版收下了"这件事失败（盘上已经有这一版）；
+       *    但要**留一行话**（不然就是静默的"改了没变"）。
+       */
+      try {
+        const w = worldFor(trustedSub);
+        if (w?.workspaces && typeof w.workspaces.has === 'function' && w.workspaces.has(manifest.id)) {
+          mirrorArtifactIntoWorkspace({ apps: src, workspaces: w.workspaces, id: manifest.id, version: manifest.version });
+        }
+      } catch (err) {
+        log(`[internal] 活的那一份没跟着换（${String(manifest.id).slice(0, 60)}）：${err?.message ?? err}`);
+      }
       return sendJson(res, 200, { ok: true, manifest });
     } catch (err) {
       // 校验不过要**说清是哪一条**（人话），而不是回一个笼统的 500

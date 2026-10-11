@@ -827,3 +827,40 @@ test('🔴 迁移也把 net/tasks 带过去（原来这两样在路上被丢掉�
   assert.deepEqual(m.permissions, ['net']);
   assert.deepEqual(m.net, ['api.open-meteo.com'], '★ 声明要在盒里那份清单里');
 });
+
+test('🔴 装了新版 ⇒ **他打开的那一份（活地址）也跟着换**（不然"我改了、他那边没变"）', async (t) => {
+  const boxDir = tmp();
+  const box = await bootBox(t, { dir: boxDir });
+  const client = createBoxApps({ sub: 'u2', dial: () => nodeNet.connect(box.uds) });
+  const page = (v) => `<!doctype html>\n<title>x</title>\n<h1>${v}</h1>\n`;
+  const app = (v) => ({
+    id: 'futures-trade',
+    title: '期货交易台',
+    icon: 'chart',
+    entry: 'index.html',
+    files: { 'index.html': Buffer.from(page(v), 'utf8') },
+    permissions: [],
+  });
+
+  // ① 第一版装进去
+  await client.create(app('v1'));
+  // ② **他第一次打开**（活地址那条路）：这时会从当前那一版"落成"到工作区里
+  assert.equal((await client.readLive('futures-trade', 'index.html')).content.toString('utf8'), page('v1'));
+
+  // ③ 再装一版（同一个 id ⇒ 盒里是新的一版）
+  const m2 = await client.create(app('v2'));
+  assert.equal(m2.version, 2, '盒里该是新的一版');
+  // ④ 🔴 他打开的那一份**必须跟着换**（不然页面上永远是 v1 —— 而所有闸都是绿的）
+  assert.equal(
+    (await client.readLive('futures-trade', 'index.html')).content.toString('utf8'),
+    page('v2'),
+  );
+  // ⑤ 反例：**从没落成过**的 app，装的时候**不许**顺手把工作区建出来（原行为不变）
+  await client.create({ ...app('x1'), id: 'never-opened' });
+  assert.equal(
+    new Apps({ dir: boxDir, sub: 'owner' }).current('never-opened'),
+    1,
+    '版本照样落下了',
+  );
+  assert.equal(box.worlds.worldFor('owner').workspaces.has('never-opened'), false, '没打开过 ⇒ 不建工作区');
+});

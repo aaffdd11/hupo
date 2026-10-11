@@ -60,7 +60,7 @@
 | **`P2`** | 图片用 **`data:`** 或 `blob:`；图标用**内联 SVG / emoji** | 同上（`img-src data: blob:`） |
 | **`P3`** | 🔴 **不许碰 `localStorage` / `sessionStorage` / `indexedDB`** | 网页上它活在**不透明源**里 ⇒ **一碰就抛** `SecurityError`。要记住东西 ⇒ 走 `/db`（★ **存储默认就有，不用声明**） |
 | **`P4`** | 🔴 **不许假设有原生桥**（`webkit.messageHandlers` / `HupoNative` / `Android.*`） | 手册铁律 3：**禁原生桥** ⇒ 写了就是"点了没反应"（网页与平板都没有） |
-| **`P5`** | **不许开长连接**（`new WebSocket`） | CSP 不放它 |
+| **`P5`** | **长连接（`new WebSocket`）只许连 `net` 名单里的站，而且只许 `wss://`** —— 它和 `fetch` 用的是**同一份名单**（2026-10-11 主人：*"小程序接入数据可以全接入，但不落库。实际上就是 api 访问和 websocket 推送。"*） | 没声明的站 CSP 不放；明文 `ws://` 在 https 页面上被按**混合内容**拦掉（写了也是连不上） |
 | **`P6`** | **正文里的中文照常写**；不要靠"同原点的别的文件"（引不了） | `script-src 'unsafe-inline'` **没有 `'self'`** |
 | **`P7`** | 页面要有 `<title>`（它的名字） | 有些地方会用到；空着不好看 |
 | **`P8`** | 名字 ≤ 十来个字；短名只许小写字母/数字/短横 | 硬校验（超了 `app_create` 当场拒） |
@@ -189,7 +189,8 @@
 
 | 码 | 是什么 | 改法 |
 |---|---|---|
-| `external-resource` | 引了外部脚本/样式/图片/字体/`@import`/WebSocket | 内联；图片用 `data:`（`P1`/`P2`/`P5`） |
+| `external-resource` | 引了外部脚本/样式/图片/字体/`@import` | 内联；图片用 `data:`（`P1`/`P2`） |
+| `ws-insecure` | 用明文 `ws://` 连长连接 | 改成 `wss://`（https 页面按混合内容拦明文长连接）（`P5`） |
 | `browser-storage` | 碰了 `localStorage`/`sessionStorage`/`indexedDB` | 走 `/db`（★ 存储默认有，不用声明）（`P3`/`C1`） |
 | `native-bridge` | 假设有原生桥 | **删掉**（没有桥，两端都没有）（`P4`） |
 | `ask-not-declared` / `agent-not-declared` / `tasks-not-declared` | 用了那件事却没声明 | `permissions` 里加上（⚠️ 存储**没有**这一条）（`A7`） |

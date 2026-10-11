@@ -21,9 +21,23 @@ const EXTERNAL_PATTERNS = [
   { re: /<link[^>]+\bhref\s*=\s*["']?(https?:)?\/\//i, what: '<link href=…> 引了外部样式/字体' },
   { re: /<img[^>]+\bsrc\s*=\s*["']https?:\/\//i, what: '<img src="http…"> 引了外部图片' },
   { re: /@import\s+url\(\s*["']?https?:\/\//i, what: 'CSS `@import` 拉了一个外部样式' },
-  { re: /new\s+WebSocket\s*\(/i, what: '`new WebSocket(...)`（页面连不了长连接）' },
   { re: /fonts\.googleapis\.com|fonts\.gstatic\.com/i, what: '引了 Google 字体（取不到）' },
 ];
+
+/**
+ * ★ **长连接（`new WebSocket`）是允许的** —— 2026-10-11 主人拍板：
+ *   *"小程序接入数据可以全接入，但不落库。实际上就是 api 访问和 websocket 推送。"*
+ *
+ * 两条不许破（下面第 ⑤ 段真的量它们）：
+ *   · 只许连**声明过 `net` 名单里的那几个站**（与 `fetch` 同一条规矩、同一份名单）；
+ *   · 只许 `wss://` —— 明文 `ws://` 在 https 页面上会被浏览器按**混合内容**拦掉，
+ *     写了也是"连不上"，而页面不会告诉你为什么。
+ *
+ * ⚠️ 它**原来**被归在"外部资源"那一档一票否决（跟引 CDN 并列）—— 现在拿出来了：
+ *    「连一个**声明过的**站取数据」和「引一个**没声明**的 CDN 脚本」是两件事，
+ *    一票否决那条规矩的**理由**（CSP 取不到 / 页面不受控）在 WS 这里不成立。
+ */
+const WS_INSECURE_RE = /\bws:\/\/([a-z0-9.-]+)(?::\d+)?/gi;
 
 /** 写盘/存储那几样（网页上是不透明源 ⇒ 一碰就抛）。 */
 const STORAGE_PATTERNS = [
@@ -62,10 +76,15 @@ function joinText(files) {
  */
 const NAMESPACE_HOSTS = new Set(['www.w3.org']);
 
-/** 页面里出现的**绝对 https 站**（用来对"声明的白名单"）。 */
+/**
+ * 页面里出现的**绝对站**（用来对"声明的白名单"）。
+ *
+ * ⚠️ `wss://` **也算**（2026-10-11）：长连接连的站与 `fetch` 连的站**是同一份名单** ——
+ *    同一件事只在名单里有一处，判据也只有一处。
+ */
 export function httpsHostsIn(text) {
   const out = [];
-  const re = /https?:\/\/([a-z0-9.-]+)(?::\d+)?/gi;
+  const re = /\b(?:https?|wss?):\/\/([a-z0-9.-]+)(?::\d+)?/gi;
   let m;
   while ((m = re.exec(String(text ?? ''))) !== null) {
     const h = m[1].toLowerCase();
@@ -144,7 +163,7 @@ export function lintApp({ files = {}, permissions = [], net = [], tasks = [], ti
     }
   }
 
-  // ⑤ 网络：页面**直连**的站必须在名单里（没声明的连不出去）
+  // ⑤ 网络：页面**直连**的站必须在名单里（没声明的连不出去）——`fetch` 与 `new WebSocket` 同一份名单
   const pageHosts = httpsHostsIn(text);
   for (const h of pageHosts) {
     if (!hosts.includes(h)) {
@@ -158,6 +177,11 @@ export function lintApp({ files = {}, permissions = [], net = [], tasks = [], ti
   }
   if (pageHosts.length > 0 && !has('net')) {
     E('net-not-declared', '页面自己去连外部站点，但清单里**没声明 `net`** ⇒ 一个站都连不出去。改法：声明 `net` 并把域名写进名单（见 §四·网络）。');
+  }
+  // ★ 长连接：`new WebSocket(` **现在允许**（只许连上面那份名单里的站），但**不许明文 `ws://`**
+  //   —— https 页面上浏览器按混合内容拦掉，写了就是"连不上还不告诉你为什么"。
+  for (const m of String(text).matchAll(WS_INSECURE_RE)) {
+    E('ws-insecure', `页面用 \`ws://${m[1]}\` **明文**连长连接 —— 页面上是 https ⇒ 浏览器按**混合内容**拦掉（屏幕上就是"推送一直连不上"）。改法：换成 \`wss://${m[1]}\`。`);
   }
 
   // ⑥ 任务：**不许写开放式的"让它干什么"**（那会被当成"他让它做的事"执行）

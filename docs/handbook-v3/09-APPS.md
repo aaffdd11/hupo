@@ -972,7 +972,8 @@ pending = live ? apps.readLive(...) : apps.read(...);
 | 2 | 图片用 **`data:`** 或 `blob:`；图标用**内联 SVG / emoji** | 同上（`img-src data: blob:`） |
 | 3 | 🔴 **不许碰 `localStorage` / `sessionStorage` / `indexedDB`** | 网页上它活在**不透明原点**里 ⇒ **一碰就抛** `SecurityError`。要记住东西 ⇒ 走 `/db`（★ **存储默认就有，不用声明**） |
 | 4 | 🔴 **不许假设有原生桥**（`webkit.messageHandlers` / `HupoNative` / `Android.*`） | **禁原生桥** ⇒ 写了就是"点了没反应"（网页与平板都没有） |
-| 5 | **不许开长连接**（`new WebSocket`） | CSP 不放它 |
+| 5 | ★ **长连接（`new WebSocket`）只许连 `net` 名单里的站，而且只许 `wss://`** —— 与 `fetch`／`EventSource` **同一份名单**（2026-10-11 主人拍板：*"小程序接入数据可以全接入，但不落库。实际上就是 api 访问和 websocket 推送。"*） | 没声明的站 CSP 不放（`connect-src` 里 `https://a` **不覆盖** `wss://a`，所以名单里的站两条协议一起给）；明文 `ws://` 在 https 页面上被按**混合内容**拦掉 |
+| 5·补 | ★ **外部数据不落库**（同一次拍板）：行情 / 推送那一类**一个字节都不进 `/db`**；`/db` 只放**它自己的东西**（设置、他填的表、进度、战绩） | 数据快照有自己的时效，落库就是在库里养一份会过期的"事实"；要"当前值"就放内存 |
 | 6 | **不许靠"同原点的别的文件"** | `script-src 'unsafe-inline'` **没有 `'self'`** ⇒ 引不了 |
 | 7 | 页面要有 `<title>`（它的名字） | 有些地方会用到；空着不好看 |
 | 8 | **名字要短**（长度上限住代码）；短名只许小写字母 / 数字 / 短横 | 硬校验（超了 `app_create` 当场拒） |
@@ -1069,7 +1070,8 @@ pending = live ? apps.readLive(...) : apps.read(...);
 
 | 码 | 是什么 | 改法 |
 |---|---|---|
-| `external-resource` | 引了外部脚本 / 样式 / 图片 / 字体 / `@import` / WebSocket | 内联；图片用 `data:` |
+| `external-resource` | 引了外部脚本 / 样式 / 图片 / 字体 / `@import` | 内联；图片用 `data:` |
+| `ws-insecure` | 用明文 `ws://` 连长连接 | 改成 `wss://`（`P5`） |
 | `browser-storage` | 碰了 `localStorage` / `sessionStorage` / `indexedDB` | 走 `/db`（★ 存储默认有，不用声明） |
 | `native-bridge` | 假设有原生桥 | **删掉**（没有桥，两端都没有） |
 | `ask-not-declared` / `agent-not-declared` / `tasks-not-declared` | 用了那件事却没声明 | `permissions` 里加上（⚠️ 存储**没有**这一条） |
