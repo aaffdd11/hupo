@@ -68,15 +68,35 @@ USAGE
 done
 
 # ── 0.1) ★ 判：这次走哪条路（**认单元 / 手动**）──────────────────
-# 判据只有一条：`systemctl --user is-active --quiet hupo-core`。
+# 判据只有一条：**这个单元在不在**（`systemctl --user cat` 认得出它就算在）。
+# 🔴 **2026-10-11 修**：判据原来是 `is-active` —— 那回答的是"**现在跑着没有**"，而
+#    单元**在、但此刻不是 active**（刚崩过 / systemd 正在按 `RestartSec` 重试 / 被人 stop 了）
+#    时它会判成"没有单元" ⇒ **悄悄退到手动路**：线上服务被起成**调用者那个 cgroup 里的孩子**
+#    （在开发机上就是 `dsh-subprocess-*.scope`）⇒
+#      ① 它脱离 systemd 的 `Restart=always`（崩了没人拉）；
+#      ② DSH 那个 scope 一收（或会话一结束），它跟着死；
+#      ③ 指纹 drop-in 也不再更新（下次按单元起会报旧指纹）。
+#    实测：2026-10-11 21:38 就撞上了（单元当时不是 active）—— 那一轮之后线上服务
+#    活在 `dsh-subprocess-2365-….scope` 里，是**手工搬回**单元的（`docs/dev/231`）。
 # ⚠️ **只问这一个具体单元**：不许写裸 `systemctl --user stop`（不带单元）——
 #    那会顺手清掉 DSH 的 scope，把别的会话一起杀掉（`AGENTS.md` §一，本项目真出过事）。
-# ⚠️ 没有 systemctl / 没有 user manager 时（老环境）也当"没单元"，走手动路。
+# ⚠️ 没有 systemctl / 没有 user manager / 根本没有这个单元（老环境、开发机）⇒ 手动路。
 UNIT=hupo-core
 USE_SYSTEMD=0
-if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet "$UNIT" 2>/dev/null; then
+if command -v systemctl >/dev/null 2>&1 && systemctl --user cat "$UNIT" >/dev/null 2>&1; then
   USE_SYSTEMD=1
 fi
+
+# **本机所有 `node … src/serve.js` 的 PID**。
+# ⚠️ 只看**可执行文件名正好是 `node`** 的进程（`pgrep -x node`）—— 这样**不会**误伤
+#    "命令行里提到 serve.js"的那个脚本自己（实测过这个坑：`pgrep -f src/serve.js`
+#    会把跑这条命令的 bash 也算进去）。
+serve_pids() {
+  pgrep -x node 2>/dev/null | while read -r p; do
+    [ -r "/proc/$p/cmdline" ] || continue
+    tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q 'src/serve\.js' && printf '%s\n' "$p"
+  done
+}
 
 # ★ 把真指纹递给 systemd：**它不做命令替换**，只能写文件。
 #   路径：`~/.config/systemd/user/hupo-core.service.d/10-hupo-build-id.conf`（drop-in）。
@@ -216,13 +236,40 @@ if [ "$USE_SYSTEMD" = "1" ]; then
   #    **不许**写裸 `systemctl --user stop`（不带单元）—— 那会顺手清掉 DSH 的 scope。
   # ⚠️ 这里用 stop（而不是 restart），因为 `--fresh` 要在**停了之后、起之前**删日志文件；
   #    不 fresh 时紧接着就 `start`，与 restart 等价。stop 是有意的 ⇒ `Restart=always` 不会抢跑。
-  echo "▶ 线上服务归系统单元管（$UNIT 在跑）—— 用 systemctl 停/起，**不看 serve.pid**"
+  # ⚠️ **照实报它现在是哪一档**（2026-10-11）：单元在、但没在跑也是常事（刚崩 / 刚被停）
+  #    —— 不能一律写"（$UNIT 在跑）"，那是在说假话。
+  UNIT_NOW="$(systemctl --user is-active "$UNIT" 2>/dev/null || true)"
+  if [ "$UNIT_NOW" = "active" ]; then
+    echo "▶ 线上服务归系统单元管（$UNIT 在跑）—— 用 systemctl 停/起，**不看 serve.pid**"
+  else
+    echo "▶ 系统单元在（$UNIT：${UNIT_NOW:-未知}）—— 照样用 systemctl 停/起，**不看 serve.pid**"
+  fi
   systemctl --user stop "$UNIT" || {
     echo "✗ 停不下 $UNIT；**什么都没动**，先看：systemctl --user status $UNIT --no-pager"
     exit 1
   }
   # 手动时代留下的 pid 文件清掉（留着它，下次回退手动路会拿一个死 PID 去 kill）
   rm -f serve.pid
+  # 🔴 **再认一遍"游离的"那一个**（2026-10-11 加）：单元停了之后，盘上还可能有**一个不在
+  #    单元里的** `serve.js`（上一次走手动路留下的 —— 在开发机上它活在 `dsh-subprocess-*.scope`）。
+  #    不收掉它，`systemctl start` 会因为 8020 被占而失败，而 `Restart=always` 每 3 秒重试
+  #    ⇒ **服务起不来，而脚本下面还会报"起来了"**（那是这个项目最恨的那种假话）。
+  UNIT_MAIN="$(systemctl --user show "$UNIT" -p MainPID --value 2>/dev/null || echo 0)"
+  STRAY="$(serve_pids | grep -vx "${UNIT_MAIN:-0}" || true)"
+  if [ -n "$STRAY" ]; then
+    echo "▶ 收掉不在单元里的那个服务（游离的：$(echo "$STRAY" | tr '\n' ' '))"
+    kill -TERM $STRAY 2>/dev/null || true
+    for _ in $(seq 1 20); do
+      [ -z "$(serve_pids | grep -vx "${UNIT_MAIN:-0}" || true)" ] && break
+      sleep 0.5
+    done
+    STILL="$(serve_pids | grep -vx "${UNIT_MAIN:-0}" || true)"
+    if [ -n "$STILL" ]; then
+      echo "  ⚠️ 它没在 10 秒内退出，硬杀"
+      kill -KILL $STILL 2>/dev/null || true
+      sleep 1
+    fi
+  fi
 else
   if [ -f serve.pid ]; then
     OLD="$(cat serve.pid)"
