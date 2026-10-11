@@ -274,3 +274,43 @@ test('租户那一侧也拿得到名单（盒代理没有 meta / grants ⇒ 读�
       '★ 读不出"他点头了没有" ⇒ 空名单（fail-closed）');
   nodeFs.rmSync(dir, { recursive: true, force: true });
 });
+
+// ── N7（2026-10-11 加）：**工具说明与代码不许各说各的** ─────────────
+//
+// 🔴 为什么值得一条判据：`app_create` 的 `net` 那格**原来写着「声明了就能用
+//    （不用他去点任何东西）」** —— 而代码里 `netHostsFor` 是
+//    `if (!granted.includes('net')) return []`（**要他点头才进 CSP**），
+//    人格与规范两边写的也是"要他点头"。⇒ 模型会照工具说明告诉他"**它已经能联网了**"，
+//    而页面上连一个站都出不去（2026-10-01 主人报的那件事，就是这一族的形状）。
+//    ⚠️ 它漂了很久没人发现：**没有判据把这两侧钉在一起** —— 这一条就是那颗钉子。
+test('N7 🔴 工具说明与代码不许各说各的：`net` 那格必须说"要他点头才生效"', () => {
+  const here = nodePath.dirname(new URL(import.meta.url).pathname);
+  const read = (rel) => nodeFs.readFileSync(nodePath.resolve(here, '..', rel), 'utf8');
+
+  const src = read('src/mcp-apps-server.mjs');
+  const i = src.indexOf("name: 'app_create'");
+  const j = src.indexOf('inputSchema:', i);
+  assert.ok(i > 0 && j > i, '切不出 `app_create` 的说明（工具改名了？那这条判据要跟着走）');
+  // ⚠️ `net` 那一格在 **`inputSchema` 里面**（`inputSchema:` 之后），别从工具头切到那儿就停
+  const k = src.indexOf('net: {', j);
+  const seg = src.slice(k, k + 1200);
+  assert.ok(k > j && seg.length > 100, `切不出 net 那一格（k=${k} j=${j}）—— 提取逻辑坏了，这条会空转`);
+
+  assert.equal(
+    /声明了就能用/.test(seg),
+    false,
+    '★ 又写成"声明了就能用"了 —— 代码里要他授予（`granted`）才进 CSP',
+  );
+  assert.match(
+    seg,
+    /点头|弹窗/,
+    '★ `net` 那格要说清"他第一次打开点过头才生效"（不然模型会告诉他"已经能联网了"）',
+  );
+
+  // 另一侧：**代码真的还是"要他点头"**（不然上面那两句的门槛就该掉过来）
+  assert.match(
+    read('src/app-serve.js'),
+    /if \(!granted\.includes\('net'\)\) return \[\];/,
+    '★ 代码那一侧不再是"要他点头"了 ⇒ 这条判据（与工具说明）要一起改',
+  );
+});

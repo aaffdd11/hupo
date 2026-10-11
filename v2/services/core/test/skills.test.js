@@ -188,3 +188,47 @@ test('⑦ 负向对照：把技能目录换成一个不存在的路径 ⇒ 那�
   const { names } = await listSkillsWithDsh(nodePath.join('/tmp', 'hupo-no-such-skills-dir'));
   assert.deepEqual(names, [], '一条不存在的目录居然列得出技能 —— ③ 量错了');
 });
+
+// ── ⑧⑨（2026-10-11 加）：**规范与作业书不许漂** ─────────────────────
+//
+// 🔴 为什么值得两条判据：现在同一套规矩有**两个读者** ——
+//    `docs/dev/149`（**规范**：人看，盒里读不到）与技能（**作业书**：agent 看，自足）。
+//    两份靠人手工对齐 ⇒ 迟早漂（"改了规范忘了改技能"是最省事的错）。
+//    ⇒ ① 用**同一套 id** 把它们钉在一起（规范里那 30 条，技能一条都不许少、也不许多）；
+//      ② 技能里**不许出现"照 `docs/dev/NNN` 抄"**这种在盒里读不到的指令
+//         （那是死指令：盒子里根本没有 `docs/`）。
+
+const STD_149 = nodePath.resolve(CORE, '..', '..', '..', 'docs', 'dev', '149-APP-DEV-STANDARD.md');
+
+test('⑧ 🔴 规范（149）与作业书（技能）用同一套 id：30 条，一条都不许少、不许多', () => {
+  const std = nodeFs.readFileSync(STD_149, 'utf8');
+  const skill = nodeFs.readFileSync(nodePath.join(cfgHere().skillsDir, 'mini-app', 'SKILL.md'), 'utf8');
+  const idsOf = (t) => [...new Set([...t.matchAll(/\b([PCDA]\d{1,2})\b/g)].map((m) => m[1]))];
+
+  const ids = idsOf(std);
+  assert.equal(
+    ids.length,
+    30,
+    `149 里抽出 ${ids.length} 条 id（该是 30：P1–P11 制品 / C1–C5 能力 / D1–D6 交付 / A1–A8 反模式）—— 编号坏了？`,
+  );
+  assert.ok(ids.includes('P3') && ids.includes('C1') && ids.includes('D1') && ids.includes('A1'), 'id 分组不成形');
+
+  // ⚠️ 用**词边界**比，不用子串（`C3x` / `C30` 那种不算"有 C3" —— 子串比会放过它们）
+  const at = (t, id) => new RegExp(`\\b${id}\\b`).test(t);
+  const missing = ids.filter((id) => !at(skill, id));
+  assert.deepEqual(missing, [], `技能里少了这些 id（两份漂了）：${missing.join(' ')}`);
+
+  // 反向：技能里也不许有规范没写过的号（多了 = 技能在说规范没定过的事）
+  const extra = idsOf(skill).filter((id) => !ids.includes(id));
+  assert.deepEqual(extra, [], `技能里有 149 没有的 id：${extra.join(' ')}`);
+});
+
+test('⑨ 🔴 技能里不许留"盒里读不到的必读指令"（照 `docs/dev/NNN` 抄）', () => {
+  const skill = nodeFs.readFileSync(nodePath.join(cfgHere().skillsDir, 'mini-app', 'SKILL.md'), 'utf8');
+  const dead = [...skill.matchAll(/照\s*`?docs\/dev\/\d+[^\n]{0,24}抄/g)].map((m) => m[0].trim());
+  assert.deepEqual(dead, [], `技能里还有"照 docs/dev/NNN 抄" —— 盒里没有 docs/，那是死指令：\n${dead.join('\n')}`);
+  // 负向对照：这条正则真的抓得住那种句子（不是空转）
+  assert.equal(/照\s*`?docs\/dev\/147[^\n]{0,24}抄/.test('（片段照 `docs/dev/147` §3.2 抄）。'), true);
+  // 而"开发机上还有更全的"那张表**允许**出现（它明确写了盒里没有）
+  assert.match(skill, /盒里没有|盒子里没有|盒里读不到/, '技能里连"盒里没有 docs/"都没交代');
+});

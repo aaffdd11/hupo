@@ -1128,7 +1128,7 @@ pending = live ? apps.readLive(...) : apps.read(...);
 | **写完当场自查** | `src/app-lint.js`（纯函数）＋ 套接字那条回执 ＋ 摊给模型看的那份说明 | `test/app-lint.test.js`（**每条规则一正一反**）＋ `test/app-create.test.js` 里"`files` 不给那条路也要过自查"那一条 |
 | **硬校验**（他那边也拦） | `src/apps.js`（名字长度 / 权限白名单 / `net` 形状 / `tasks` 形状） | `apps.test.js` / `app-net.test.js` / `app-tasks.test.js` |
 | **运行时闸** | CSP（网络）· `/db`、`/ask`、`/agent` 的闸与配额 · `tasks` 的配额与串行 | §八 那张表 |
-| **它读得到标准** | 人格里那一节（短清单 ＋ 指向 `docs/dev/149-APP-DEV-STANDARD.md`） | `scripts/check-persona.sh`（验的是"**真的进了模型上下文**"） |
+| **它读得到标准** | 🔴 **作业书＝技能** `v2/services/core/skills/mini-app/SKILL.md`（随产品层进盒里 `/app/code/skills`，**按需加载**；判据 `test/skills.test.js`）＋ 人格里那一段"**永远要守的边界 ＋ 一句『先加载 mini-app』**" | `scripts/check-persona.sh`（验"真的进了模型上下文"）＋ `test/skills.test.js` ⑥（验人格**点名了**那个技能）＋ `scripts/check-app-storage-rule.sh`（验技能正文里那四条规矩在）· 规范那一份是 `docs/dev/149-APP-DEV-STANDARD.md`（**人看**；盒里没有 `docs/` ⇒ 技能必须自足） |
 
 ---
 
