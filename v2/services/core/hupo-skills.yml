@@ -1,0 +1,36 @@
+# 琥珀 —— **技能层**（产品那一套「按需加载的作业指导书」）
+#
+# 用法（起 agent 进程时带，与人格/能力层同一条路）：
+#   dsh --profile sdk --patch <repo>/v2/services/core/hupo-persona.yml \
+#                     --patch <repo>/v2/services/core/hupo-capabilities.yml \
+#                     --patch <repo>/v2/services/core/hupo-skills.yml
+#
+# ── 它做的事只有一件 ────────────────────────────────────────────
+#   把 `skill-filesystem` 那个服务提供者的**额外技能目录**指到 `HUPO_SKILLS_DIR`
+#   （由 `src/config.js` 算好、`src/agent-runtime.js` 放进子进程环境）：
+#     · 宿主开发机：`<repo>/v2/services/core/skills`
+#     · 盒子里：`/app/code/skills`（产品层那一份，只读挂载进容器）
+#   ⇒ **一份技能，两条路都用**；盒子里那台跟着产品层一起发（`build-tenant-code.sh`
+#     的 `INPUTS` 里带 `skills`）—— 改技能 = 换一版产品层，可回滚。
+#
+# ── 为什么不是把技能塞进人格 ─────────────────────────────────────
+#   人格是**每次开机都整段喂**的；技能平时只占"名字 ＋ 一句话描述"
+#   （`dsh-tool-skill` 的目录），**被叫到才把正文读进来**。
+#   ⇒ 长的"怎么做"放技能；"永远不许忘的边界"留人格（那两处各有一个家，不重复）。
+#
+# ── 三条不许破 ──────────────────────────────────────────────────
+#   ① 🔴 **关的是配置，不是 `skill-filesystem` 本身**：关掉那个服务提供者会连
+#      `skill` 一起带走 ⇒ `dsh-tool-skill` 等不到它 ⇒ `plugin tree failed to load`
+#      ⇒ **整台 dsh 起不来**（`test/app-agent-ro.test.js` 的 `L1·补` 钉着这条）。
+#   ② ⚠️ **路径从环境来、不写死**（宿主与盒子两个 checkout，路径不一样）。
+#   ③ ⚠️ **没有那个目录时给一个空数组**，别给 `['']` —— `resolve('')` 会变成
+#      **当前工作目录**，那就把"他的工作区"当成技能根扫了一遍（脏且难查）。
+#
+# ⚠️ 这一份**不是** `strict`（`src/` 与 `scripts/` 今天刻意是"只报不拦"），
+#    但它与人格/能力层**一起**决定 agent 的行为 ⇒ 改它要按改产品对待（记账 + 判据）。
+
+- id: skill-filesystem
+  config:
+    # ⚠️ 整个表达式**要加引号**：不加的话 YAML 会把 `[` 当成"流式序列的开头"⇒
+    #    `bad indentation of a mapping entry`（实测，2026-10-11）。
+    customSkillDirs: !!js "(process.env.HUPO_SKILLS_DIR ? [process.env.HUPO_SKILLS_DIR] : [])"

@@ -351,6 +351,31 @@ appsFrameAncestors:
     modelPatchPath: env.HUPO_MODEL_PATCH || null,
 
     /**
+     * **技能层** patch（2026-10-11 · 契约 `docs/dev/233-SKILLS-PRODUCT.md`）。
+     *
+     * 它与人格/能力层是**同一种东西**：`dsh --patch` 的额外覆盖层。
+     * 它只做一件事：把 `skill-filesystem` 的 `customSkillDirs` 指到 [skillsDir]。
+     *
+     * ⚠️ 为什么默认**跟着仓库走**（而不是 `null`）：技能是**产品的一部分**
+     *    （那几份"作业指导书"就住在 `skills/` 里），不挂它 = 助手看不到它们。
+     *    与 `personaPath` 同一条理由：默认值指向仓库里那一份。
+     */
+    skillsPath: env.HUPO_SKILLS ?? nodePath.resolve(cwd, 'hupo-skills.yml'),
+
+    /**
+     * **技能目录**（`hupo-skills.yml` 里那条 `customSkillDirs` 读的就是它）。
+     *
+     * · 宿主开发机：`<repo>/v2/services/core/skills`
+     * · 盒子里：`/app/code/skills`（产品层那份，只读挂进容器）
+     *   —— `loadConfig` 的 `cwd` 就是**进程的工作目录**，而两边都把它设成
+     *   "那一份产品层" ⇒ 同一个默认值两边都对（不写死路径）。
+     *
+     * ⚠️ **目录不在**时要**说出来**（起服务的横幅里点名），不许悄悄变成"零个技能"
+     *    —— "写着有、其实没有"比没有更坏（手册那条纪律）。
+     */
+    skillsDir: env.HUPO_SKILLS_DIR ?? nodePath.resolve(cwd, 'skills'),
+
+    /**
      * **`userId → 租户名`的映射**（多租户 ②-4b）。
      *
      * 形如 `HUPO_TENANT_MAP="u1=hupo-a,u2=hupo-b"`。

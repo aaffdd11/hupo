@@ -81,6 +81,11 @@ export function agentEnv(cfg = {}) {
     // ★ **`HUPO_SCOPE` 是同一件事的通用名字**（2026-09-25 加）：账本那支工具
     //   也要知道"我这一轮是在哪一间里跑的"。
     ...(cfg.scope ? { HUPO_APPS_SCOPE: String(cfg.scope) } : {}),
+    // ★ **技能那一格**（2026-10-11）：`hupo-skills.yml` 里
+    //   `customSkillDirs: !!js process.env.HUPO_SKILLS_DIR` 读的就是它。
+    //   ⚠️ 它**不是秘密**（一个目录路径）；⚠️ **只放有值的**——理由同上面那条
+    //   （塞 `undefined` 会变成字面量 "undefined"，比"没设"更难查）。
+    ...(cfg.skillsDir ? { HUPO_SKILLS_DIR: cfg.skillsDir } : {}),
     HUPO_SCOPE: String(cfg.scope ?? 'main'),
   };
   const env = childEnv({ home: cfg.dshHome, extra });
@@ -126,6 +131,10 @@ export function agentPatchArgs(cfg = {}) {
   if (cfg.sdkServerPatchPath) out.push('--patch', cfg.sdkServerPatchPath);
   if (cfg.personaPath) out.push('--patch', cfg.personaPath);
   if (cfg.capabilitiesPath) out.push('--patch', cfg.capabilitiesPath);
+  // ★ **技能层**（2026-10-11 · 契约 `docs/dev/233-SKILLS-PRODUCT.md`）：
+  //   它只把 `skill-filesystem` 的 `customSkillDirs` 指到 `HUPO_SKILLS_DIR`
+  //   （那个环境变量在 `agentEnv` 里给）—— 按需加载的"作业指导书"住在那儿。
+  if (cfg.skillsPath) out.push('--patch', cfg.skillsPath);
   if (cfg.modelPatchPath) out.push('--patch', cfg.modelPatchPath);
   return out;
 }

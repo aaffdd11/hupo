@@ -50,7 +50,12 @@ NODE="${NODE_BIN:-$(command -v node || true)}"
 #      （不按人不同）⇒ 放这儿。⚠️ 少了它盒里**整个 agent 起不来**：
 #      官方那个 `sdk-jsonrpc-server` 被它关掉了，而 insert 的那条要它。
 #      （`src/` 是整目录搬的 ⇒ 插件本体 `src/sdk-server-hupo.mjs` 跟着走。）
-INPUTS=(src package.json hupo-persona.yml hupo-capabilities.yml hupo-model-proxy.yml hupo-sdk-server.yml review-policy.json)
+#    ★ `skills/` ＋ `hupo-skills.yml` = **技能层**（2026-10-11 · 契约 `docs/dev/233`）：
+#      按需加载的"作业指导书"住 `skills/`（`<名字>/SKILL.md`），那一层 patch 只把
+#      `skill-filesystem` 的 `customSkillDirs` 指到它（盒里 `/app/code/skills`）。
+#      ⇒ **改技能 = 换一版产品层**（可回滚、有指纹），不用重造镜像。⚠️ 两条一起进
+#      `INPUTS`：少了 `skills/` 目录 ⇒ 助手看不到任何技能；少了那份 patch ⇒ 同上。
+INPUTS=(src package.json hupo-persona.yml hupo-capabilities.yml hupo-model-proxy.yml hupo-sdk-server.yml review-policy.json skills hupo-skills.yml)
 
 say()  { echo "  $1"; }
 plan() { echo "▶ $1"; }

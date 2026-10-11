@@ -24,6 +24,9 @@ const PERSONA = nodePath.resolve(
   'hupo-persona.yml',
 );
 
+/// **做小程序那一段作业指导书**（2026-10-11 起它住技能里 —— 见 `docs/dev/233`）。
+const SKILL = nodePath.resolve(nodePath.dirname(PERSONA), 'skills/mini-app/SKILL.md');
+
 /** 默认配置（工作目录 = `v2/services/core`，和线上起服务时一样）。 */
 const cfgHere = () => loadConfig({}, nodePath.dirname(PERSONA));
 
@@ -155,8 +158,14 @@ test('🔴 2026-10-03 新规矩：做小程序 / app / 游戏那四条（含"有
   //     有则要做，尽量要做因为基本上都会有存储，放到桌面，以及告诉用户完成。」
   // 2026-09-24 真机栽过一次：要"天气小程序"，做出来的却是一张**存不了数据**的卡片，
   // 而且**没明说**"每天定时抓做不到" —— 这一条防的正是"造了但存不了 / 做了但没说清"。
-  // ⇒ 四条行为写进人格；判据在这一份（源码级）＋ `scripts/check-app-storage-rule.sh`（含负向对照）。
-  const t = payload();
+  //
+  // 🔴 **2026-10-11 搬过一次家**（契约 `docs/dev/233-SKILLS-PRODUCT.md`）：
+  //    详细的四条（连同那一段 ~17KB 的作业指导书）从**人格**搬进了**技能**
+  //    `skills/mini-app/SKILL.md`（按需加载）；人格里只留"永远要守的边界 ＋
+  //    一句『动手前先加载 mini-app』"。
+  //    ⇒ **判据跟着事实走**：八颗钉子现在钉**技能正文**；另加一条"人格必须点名那个技能"
+  //      （不点名 = 模型不知道该去加载它 ⇒ 那四条等于没有）。
+  const tac = nodeFs.readFileSync(SKILL, 'utf8');
   const rules = [
     ['① 触发：说要做一个东西就**动手造内容**（不是只聊方案）', '动手造内容'],
     ['① 触发：点名"游戏"（小程序 / app / 游戏）', '游戏'],
@@ -168,8 +177,12 @@ test('🔴 2026-10-03 新规矩：做小程序 / app / 游戏那四条（含"有
     ['④ 做不到 ⇒ **当场如实说清是哪一条做不到**（不许假装）', '当场如实说清是哪一条做不到'],
   ];
   for (const [name, kw] of rules) {
-    assert.ok(t.includes(kw), `新规矩缺了「${name}」（找不到「${kw}」）`);
+    assert.ok(tac.includes(kw), `技能里缺了「${name}」（找不到「${kw}」）`);
   }
+  // 负向对照之一：技能正文不能是空壳（空了上面八条全自动通过）
+  assert.ok(tac.length > 3000, `技能正文只有 ${tac.length} 字 —— 抽取或文件坏了`);
+  // 🔴 负向对照之二：**人格那一边必须点名那个技能**
+  assert.ok(payload().includes('mini-app'), '人格里那句"先加载技能 mini-app"不见了');
 });
 
 test('🔴 2026-10-05 新规矩：回答**短、白话**，不报过程、不报实现细节（但该说的实话一句都不许省）', () => {

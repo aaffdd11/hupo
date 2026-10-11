@@ -1430,6 +1430,24 @@ console.log(
   `  人格     ${cfg.personaPath}（${nodeFs.existsSync(cfg.personaPath) ? '已挂上' : '⚠️ 文件不在'}）`,
 );
 console.log(
+  // ★ **技能层**（2026-10-11 · 契约 `docs/dev/233`）：按需加载的"作业指导书"。
+  // ⚠️ 与人格同一条理由：**报出来**。目录不在 / 一条都没有的时候一切照常，
+  //    只是"它会做的事变少了"——而那正是查不出来的那种故障。
+  `  技能     ${(() => {
+    const dir = cfg.skillsDir;
+    let n = 0;
+    try {
+      n = nodeFs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && nodeFs.existsSync(nodePath.join(dir, e.name, 'SKILL.md')))
+        .length;
+    } catch {
+      return `${dir}（⚠️ 目录不在 ⇒ **一条都加载不上**）`;
+    }
+    return `${n} 条 · ${dir}${nodeFs.existsSync(cfg.skillsPath) ? '' : '（⚠️ 那一层 patch 不在 ⇒ 挂不上）'}`;
+  })()}`,
+);
+console.log(
   cfg.turnDeadlineMs > 0
     ? `  卡住收口 一轮超过 ${Math.round(cfg.turnDeadlineMs / 1000)} 秒没收口就收掉，并卸下那个 agent`
     : '  卡住收口 ⚠️ 关掉了（turnDeadlineMs=0）——agent 卡住不会有收尾',
