@@ -230,9 +230,10 @@ class ChatFloaterState extends State<ChatFloater> with SingleTickerProviderState
 
   /// 🔴 **底下这一整行收起来了没有**（最左那颗窄按钮 · 主人 2026-10-10）。
   ///
-  /// ⚠️ 收起来时**只影响"看不看得见"**：那一行**仍然在树上**（`Transform.translate`
-  ///    把它移出左边）⇒ 他打字打了一半的字、那些按钮的状态**一个都不丢**
-  ///    （这条同 `ChatFloater.composer` 那条"两档用同一个实例"的规矩）。
+  /// ⚠️ 收起来时**只影响"看不看得见"**：那一行**仍然在树上**（两半各用
+  ///    `FractionalTranslation` 移到自己那一侧的边外）⇒ 他打字打了一半的字、
+  ///    那些按钮的状态**一个都不丢**（这条同 `ChatFloater.composer` 那条
+  ///    "两档用同一个实例"的规矩）。
   bool _barHidden = false;
 
   /// **那一行"左移出去 / 滑回来"那一段**（0 = 完全看得见，1 = 完全收起来）。
@@ -643,14 +644,27 @@ class ChatFloaterState extends State<ChatFloater> with SingleTickerProviderState
   ///   聊天工具栏。隐藏时应左移，左移后，出现一个按钮，贴着边显示，是一个向右的箭头。"*
   ///   ⇒ 这一行现在分成两层（`Stack`）：
   ///     · **最左那颗窄按钮**（[_barTab]）**不在会滑走的那一层里** —— 它是"留下来的那一颗"；
-  ///     · **其余整行**（两列小按钮 ＋ 输入条＋圆圈）收起时**整体左移出屏**
-  ///       （`AnimatedSlide` 的 `-1` = 它自己那么宽，正好移出去）；
+  ///     · **其余整行**（两列小按钮 ＋ 输入条＋圆圈）收起时**滑出屏**；
   ///     · 最左那一格**一直占着** `d.voiceAuxW`（那 44 是"手势能打到的一格"，
   ///       看得见的面只有 `d.voiceAuxTabW` 那么窄）—— 那两颗「清单/键盘」不许钻到它下面。
+  ///
+  /// 🔴 **2026-10-11 主人**：*"我希望左侧的按钮往左隐藏，右侧的按钮向右移动隐藏。"*
+  ///   ⇒ **不再整条一起左移**（原来两半都往左走）：**左半（清单 / 键盘）往左**、
+  ///     **右半（输入条 ＋ 那颗圆圈 ＋ 展开/播放）往右**。两半各走**自己那么宽**
+  ///     （`FractionalTranslation(±v)`）⇒ 到 `v = 1` 各自正好落在这一格的两边之外，
+  ///     而**排版宽度始终冻在 `_barW`**（见下面那一整段）。
   Widget _bottomRow(DshPalette p, {required bool collapsed}) {
     // ── ① 会滑走的那一整行（**不含**最左那颗窄按钮）────────────────
-    final rest = Row(
-      children: [        // 🔴 给最左那颗窄按钮**让出它那一格**（它住在下面 `Stack` 的兄弟层里 ⇒
+    // ── ①a 左半：给那颗窄按钮让位的一格 ＋「清单 / 键盘」那一列 ────────
+    //
+    // 🔴 **2026-10-11 主人**：*"我希望左侧的按钮往左隐藏，右侧的按钮向右移动隐藏。"*
+    //   ⇒ 收起时**不再整条一起左移**：**左半往左**出、**右半往右**出。
+    //     两半各用 `FractionalTranslation(±v)` —— 它移的是**自己那么宽** ⇒
+    //     各自正好离开这一格的边，**不需要知道对方多宽**（字号、转屏都不怕）。
+    final leftHalf = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 🔴 给最左那颗窄按钮**让出它那一格**（它住在下面 `Stack` 的兄弟层里 ⇒
         //    收起时它不跟着滑走，而这一行要**当它一直在**才排得对）。
         const SizedBox(width: d.voiceAuxW),
         // ★ 最左那一列：上面「清单」、下面「键盘」（**上层没给就不画** ——
@@ -674,32 +688,68 @@ class ChatFloaterState extends State<ChatFloater> with SingleTickerProviderState
           ),
           const SizedBox(width: d.gapS),
         ],
-        Expanded(child: widget.composer),
-          // ★ **那一列：两块合起来正好跟录音那颗圆圈一样高**（主人 2026-10-05：
-          //   *"展开关闭，播放语音两个合起来，高度应该和录音按钮是一样的。"*）
-          //   做法：外面那两格仍是 44 高（手指打得到，D3.6），但**看得见的面**贴着
-          //   内沿（上面那颗贴下沿、下面那颗贴上沿）⇒ 两块 + 中间那条缝 = 64。
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // ★ **上下两颗里上面那颗：位置永远不动，只是"翻个方向"**
-              //   （主人 2026-10-05：*"那个展开窗口，你要帮我把它变成展开以后是变成缩小窗口的
-              //   按钮啊，所以它位置就不变"*）—— 收起档是「展开」（平箭头朝上）；
-              //   展开档就它自己变成「收起」（朝下，点一下收回去）。
-              _handle(p, collapsed: collapsed, alignBottom: true),
-              const SizedBox(height: d.voiceAuxGap),
-              // 念不出来的设备**一个按钮都不画**（`onToggleSpeak` 传 null）——
-              // ⚠️ 但**那一格留着**：不留的话这一列会矮一半 ⇒ 上面那颗面与圆圈
-              //    对不齐（"他们是一体的"就散了）。位置恒定比省那 44 像素重要。
-              if (widget.onToggleSpeak != null)
-                _speakButton(p)
-              else
-                const SizedBox(width: d.voiceAuxW, height: d.voiceAuxH),
-            ],
+      ],
+    );
+
+    // ── ①b 右半：右边那一列（展开 / 播放语音）────────────────────
+    final rightHalf = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // ★ **那一列：两块合起来正好跟录音那颗圆圈一样高**（主人 2026-10-05：
+        //   *"展开关闭，播放语音两个合起来，高度应该和录音按钮是一样的。"*）
+        //   做法：外面那两格仍是 44 高（手指打得到，D3.6），但**看得见的面**贴着
+        //   内沿（上面那颗贴下沿、下面那颗贴上沿）⇒ 两块 + 中间那条缝 = 64。
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // ★ **上下两颗里上面那颗：位置永远不动，只是"翻个方向"**
+            //   （主人 2026-10-05：*"那个展开窗口，你要帮我把它变成展开以后是变成缩小窗口的
+            //   按钮啊，所以它位置就不变"*）—— 收起档是「展开」（平箭头朝上）；
+            //   展开档就它自己变成「收起」（朝下，点一下收回去）。
+            _handle(p, collapsed: collapsed, alignBottom: true),
+            const SizedBox(height: d.voiceAuxGap),
+            // 念不出来的设备**一个按钮都不画**（`onToggleSpeak` 传 null）——
+            // ⚠️ 但**那一格留着**：不留的话这一列会矮一半 ⇒ 上面那颗面与圆圈
+            //    对不齐（"他们是一体的"就散了）。位置恒定比省那 44 像素重要。
+            if (widget.onToggleSpeak != null)
+              _speakButton(p)
+            else
+              const SizedBox(width: d.voiceAuxW, height: d.voiceAuxH),
+          ],
+        ),
+        const SizedBox(width: d.gapS),
+      ],
+    );
+
+    // ── ①c 拼成一整行：**输入条跟着右半一起走**（那颗圆圈在它右端，
+    //     而"左侧的按钮往左、右侧的按钮往右"中间那条分界线就在这一列之前）──
+    final rest = Row(
+      children: [
+        AnimatedBuilder(
+          animation: _barAnim,
+          builder: (context, child) => FractionalTranslation(
+            translation: Offset(-_barAnim.value, 0),
+            child: child,
           ),
-          const SizedBox(width: d.gapS),
-        ],
-      );
+          child: leftHalf,
+        ),
+        Expanded(
+          child: AnimatedBuilder(
+            animation: _barAnim,
+            builder: (context, child) => FractionalTranslation(
+              translation: Offset(_barAnim.value, 0),
+              child: child,
+            ),
+            child: Row(
+              children: [
+                Expanded(child: widget.composer),
+                rightHalf,
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
 
     // ── ② 两层：会滑走的那一行 ＋ **留下来的那一颗** ────────────────
     //
@@ -723,8 +773,8 @@ class ChatFloaterState extends State<ChatFloater> with SingleTickerProviderState
         return ClipRect(
           child: Stack(
             children: [
-              // 那一行：按"整条"那么宽排，收起时**整条左移出这一格**
-              // （`v = 1` ⇒ 移它自己那么宽 ⇒ 右沿正好落在这一格的左沿上）。
+              // 那一行：按"整条"那么宽排；收起时**两半各走各的边**
+              // （左半往左、右半往右 —— 各走自己那么宽，见 `rest` 那一段）。
               UnconstrainedBox(
                 // ⚠️ **只放开横向**：纵向还是要跟着这一格（不然高度会塌成 0）。
                 constrainedAxis: Axis.vertical,
@@ -734,14 +784,7 @@ class ChatFloaterState extends State<ChatFloater> with SingleTickerProviderState
                 clipBehavior: Clip.hardEdge,
                 child: SizedBox(
                   width: rowW,
-                  child: AnimatedBuilder(
-                    animation: _barAnim,
-                    builder: (context, child) => Transform.translate(
-                      offset: Offset(-_barAnim.value * rowW, 0),
-                      child: child,
-                    ),
-                    child: rest,
-                  ),
+                  child: rest,
                 ),
               ),
               // 那颗窄按钮**钉在这一格的左沿**：面平时**居中**（两端留白与另外四颗一致）、

@@ -8,13 +8,15 @@
 //   ① 🔴 它**在「清单」左边**、高 = 那颗圆圈的直径、**看得见那块只有 20 宽**
 //      （"非常窄"）、而**手势那一格仍是 44×64**（D3.6 硬闸量的是布局盒子）；
 //      两个档都在、位置一样；
-//   ② 🔴 点一下 ⇒ **底下那一整行整条移出屏幕左边**（不是"变透明"：矩形真的在左边外面），
-//      而**它自己留在原地**、并且**浮窗贴到了屏幕左边缘**（主人："贴着边显示"）；
+//   ② 🔴 点一下 ⇒ **底下那一行分两半各走各的边**（主人 2026-10-11：*"左侧的按钮往左隐藏，
+//      右侧的按钮向右移动隐藏"*）：左半（清单/键盘）**出左边**、右半（圆圈/展开）**出右边**
+//      （不是"变透明"：矩形真的在边外），而**它自己留在原地**、并且**浮窗贴到了屏幕左边缘**；
 //   ③ 🔴 再点一下 ⇒ 回来（位置一个像素不差）；箭头 左 ⇄ 右 翻面；
 //   ④ 🔴 **字不丢**：收起来之前打的那半句，放回来还在（那一行只是被移走，不是拆掉）；
 //   ⑤ 🔴 **展开着的时候按它 = 把聊天整个收起来**（"只剩时间线、没有输入条"那种窗口
 //      不该存在）；顺带把「清单」那张浮窗也收掉；
 //   ⑥ 🔴 收起来之后，屏幕底下那条**看不见的地带不吃点击**（不然就是"看不见却挡着"）。
+//   ⑧ 🔴 是**滑**过去的（起手那一帧一个像素都不动），而且**两半方向相反**。
 
 
 import 'package:flutter/material.dart';
@@ -166,18 +168,20 @@ void main() {
     expect(find.byIcon(Icons.chevron_right_rounded), findsOneWidget,
         reason: '★ 收起来之后它不是"向右的箭头"');
 
-    // 🔴 那一整行**整条在左边外面**（一个像素都不许露）。
+    // 🔴 **两半各走各的边**（主人 2026-10-11：*"左侧的按钮往左隐藏，右侧的按钮向右
+    //   移动隐藏"*）：左半（「清单」「键盘」）在这一格的**左边外面**；右半（那颗圆圈、
+    //   「展开」）在**右边外面**。
     //    ⚠️ 「播放」不在这张单子里：VM 上 `canSpeak` 恒假 ⇒ 真入口里那颗**本来就不画**
-    //      （`voice_buttons_test` ③ 钉着那条门）。下面这几样已经覆盖"整条"。
-    for (final (name, k) in [
-      ('清单', chatWorkKey),
-      ('键盘', chatKeyboardKey),
-      ('展开', chatHandleKey),
-      ('录音圆圈', voiceBarCircleKey),
-    ]) {
+    //      （`voice_buttons_test` ③ 钉着那条门）。下面这几样已经覆盖"两半"。
+    for (final (name, k) in [('清单', chatWorkKey), ('键盘', chatKeyboardKey)]) {
       final rect = tester.getRect(find.byKey(k));
       expect(rect.right, lessThanOrEqualTo(floater.left + 0.5),
-          reason: '★ $name 还露在屏幕上（${rect.right} vs ${floater.left}）');
+          reason: '★ $name 没往**左**走（${rect.right} vs ${floater.left}）');
+    }
+    for (final (name, k) in [('展开', chatHandleKey), ('录音圆圈', voiceBarCircleKey)]) {
+      final rect = tester.getRect(find.byKey(k));
+      expect(rect.left, greaterThanOrEqualTo(floater.right - 0.5),
+          reason: '★ $name 没往**右**走（${rect.left} vs ${floater.right}）');
     }
     // 反例：**留下来的那一颗**在屏幕上（而且贴着边）
     expect(tester.getRect(find.byKey(chatBarToggleKey)).left,
@@ -318,25 +322,35 @@ void main() {
 
   // ── ⑧ 是"滑过去"的，不是"啪"地跳过去 ──────────────────────
 
-  testWidgets('⑧ 🔴 半途那一行在**往左走**（主人：*"隐藏时应左移"*）', (tester) async {
+  testWidgets('⑧ 🔴 半途**两半各走各的边**（主人：左往左、右往右），不是"啪"地跳', (tester) async {
     final c = _controller();
     await _pump(tester, c);
-    final before = tester.getRect(find.byKey(voiceBarCircleKey));
+    final circleBefore = tester.getRect(find.byKey(voiceBarCircleKey));
+    final workBefore = tester.getRect(find.byKey(chatWorkKey));
 
     await tester.tap(find.byKey(chatBarToggleKey));
-    await tester.pump(); // 起手这一帧
+    await tester.pump(); // 起手这一帧：**一个像素都还没动**（＝不是"啪"地跳）
+    final t0 = tester.getRect(find.byKey(voiceBarCircleKey));
+    expect(t0.left, closeTo(circleBefore.left, 0.5),
+        reason: '★ 一按就跳过去了（${circleBefore.left} → ${t0.left}）—— 那不叫滑动');
+
     await tester.pump(const Duration(milliseconds: 60)); // 全程 220 的前一小段
     final mid = tester.getRect(find.byKey(voiceBarCircleKey));
+    final midWork = tester.getRect(find.byKey(chatWorkKey));
 
-    // 🔴 半途：**已经往左走了一截**（不是原地不动 = "跳"过去）……
-    expect(mid.left, lessThan(before.left - 1),
-        reason: '★ 半途它没往左走（${before.left} → ${mid.left}）—— 那是"跳"不是"滑"');
-    // ……而且**还在屏幕里**（不是一按就没了）
-    expect(mid.left, greaterThan(0),
-        reason: '★ 半途整条就已经出屏了（${mid.left}）—— 那也不叫滑动');
+    // 🔴 半途：**右半往右、左半往左**（两个方向各量一条，缺一条就是半张网）
+    expect(mid.left, greaterThan(circleBefore.left + 1),
+        reason: '★ 半途那颗圆圈没往右走（${circleBefore.left} → ${mid.left}）');
+    expect(midWork.right, lessThan(workBefore.right - 1),
+        reason: '★ 半途「清单」没往左走（${workBefore.right} → ${midWork.right}）');
 
     await tester.pumpAndSettle();
+    // 🔴 收完：**左半在左边外面、右半在右边外面**（两个方向都量，缺一条就是半张网）
     expect(tester.getRect(find.byKey(chatWorkKey)).right, lessThanOrEqualTo(0.5),
-        reason: '★ 收完了但那一行还在屏幕里');
+        reason: '★ 收完了但「清单」还在屏幕里（它该往左出去）');
+    final floater = tester.getRect(find.byType(ChatFloater));
+    expect(tester.getRect(find.byKey(voiceBarCircleKey)).left,
+        greaterThanOrEqualTo(floater.right - 0.5),
+        reason: '★ 收完了但那颗圆圈还在屏幕里（它该往右出去）');
   });
 }
