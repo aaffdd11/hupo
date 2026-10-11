@@ -3471,6 +3471,11 @@ const TENANT_ROUTES = [
         entry: body?.entry,
         files,
         permissions: body?.permissions ?? [],
+        // 🔴 **声明要原样收下**（2026-10-11 修）：原来这两样**在这儿被丢掉**
+        //    ⇒ 迁进来的制品在盒里变成"声明过联网、名单却是空的"那一版。
+        //    形状由 `Apps.create()` 自己校验（认不出它会拒，并回一句人话）。
+        net: Array.isArray(body?.net) ? body.net : [],
+        tasks: Array.isArray(body?.tasks) ? body.tasks : [],
         createdBy: body?.createdBy === 'agent' ? 'agent' : 'user',
         createdTurn: Number.isInteger(body?.createdTurn) ? body.createdTurn : null,
       });

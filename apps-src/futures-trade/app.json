@@ -1,0 +1,10 @@
+{
+  "id": "futures-trade",
+  "title": "期货交易台",
+  "icon": "chart",
+  "entry": "index.html",
+  "permissions": ["net"],
+  "net": ["v.stalkerai.cn"],
+  "tasks": [],
+  "note": "市场 / 交易 / 设置 三块；行情与交易数据来自 https://v.stalkerai.cn（CTP 那一套）。交易密码只存在这个小程序自己的库里（手滑闸），不是服务端鉴权 —— 见 index.html 里「设置 §安全说明」。"
+}

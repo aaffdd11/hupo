@@ -720,3 +720,110 @@ test('🔴 P2-6 裁决（纯函数）：少一个 / 报冲突 / 报要搬 ⇒ �
 });
 
 
+
+// ════════════════════════════════════════════════════════════
+// `install`：**开发这一侧做好一版，装进某个人的盒子**（2026-10-11）
+//
+// ── 这一份为什么非要有 ────────────────────────────────────
+// 「做一个小程序给他」这件事以前只有两条路：① 助手在**盒里**自己造；
+// ② 先把字节放到**宿主那份旧库**、再 `migrate` 推过去。②有两个毛病：
+//   · 盒里已有同名时它是**冲突不动**（存量搬迁的规矩）⇒ **改不动**；
+//   · `net` / `tasks` 在路上被丢掉了 ⇒ 装过去的是**另一样东西**（下面 T2 钉这一条）。
+// ⇒ 现在多一条 `install`：字节由调用方给，落点仍是**盒子自己的 `Apps.create()`**。
+// ════════════════════════════════════════════════════════════
+
+test('🔴 install：装一版进盒子 · 读回逐字节 · **再装一次是新的一版** · net/tasks 不丢', async (t) => {
+  const boxDir = tmp();
+  const box = await bootBox(t, { dir: boxDir });
+  const dataDir = tmp('hupo-install-');
+  const server = createAppsMigrateServer({
+    socketPath: migrateSocketPath(dataDir),
+    // ⚠️ install 那条**不看**宿主那份库（字节是调用方给的）—— 给 null 也要能跑
+    hostAppsFor: () => null,
+    tenantOf: (u) => (u === 'u2' ? 'hupo-b' : null),
+    dialFor: () => nodeNet.connect(box.uds),
+    log: () => {},
+  });
+  server.listen();
+  await server.ready();
+  t.after(guard(() => server.close()));
+  const sock = migrateSocketPath(dataDir);
+  assert.equal(nodeFs.statSync(sock).mode & 0o777, 0o600);
+
+  const boxApps = new Apps({ dir: boxDir, sub: 'owner' });
+  const page = (v) => `<!doctype html>\n<title>期货交易台</title>\n<h1>${v}</h1>\n`;
+  const job = (v) => ({
+    op: 'install',
+    user: 'u2',
+    app: {
+      id: 'futures-trade',
+      title: '期货交易台',
+      icon: 'chart',
+      entry: 'index.html',
+      files: { 'index.html': Buffer.from(page(v), 'utf8').toString('base64') },
+      permissions: ['net'],
+      net: ['v.stalkerai.cn'],
+      tasks: [],
+    },
+  });
+
+  // ── ① 第一版：装进去了，而且**读回来核过**
+  const one = await migrateCall({ socketPath: sock, msg: job('v1') });
+  assert.equal(one.ok, true);
+  assert.equal(one.install.version, 1);
+  assert.equal(one.install.verified, true, '回执里必须是"读回来核过"');
+  assert.equal(one.sameAsSent, true);
+  assert.deepEqual(one.install.net, ['v.stalkerai.cn'], '★ net 声明不许在运输那一层丢掉');
+  assert.equal(boxApps.read('futures-trade', 1, 'index.html').content.toString('utf8'), page('v1'));
+  assert.deepEqual(boxApps.manifest('futures-trade', 1).net, ['v.stalkerai.cn'], '★ 盒里落盘那一份也要有');
+
+  // ── ② 再装一次 = **新的一版**（与 migrate 那条"冲突不动"刻意不同）
+  const two = await migrateCall({ socketPath: sock, msg: job('v2') });
+  assert.equal(two.install.version, 2);
+  assert.equal(boxApps.current('futures-trade'), 2);
+  assert.equal(
+    boxApps.manifest('futures-trade', 1).rootHash,
+    one.install.rootHash,
+    '★ 老那一版原样留着（盒里那条"版本不可变"没被破）',
+  );
+  assert.equal(boxApps.read('futures-trade', 2, 'index.html').content.toString('utf8'), page('v2'));
+
+  // ── ③ 坏输入只让那一条失败（不许把整个口带崩）
+  const noApp = await migrateCall({ socketPath: sock, msg: { op: 'install', user: 'u2' } });
+  assert.equal(noApp.ok, false);
+  assert.equal(noApp.error, 'no-app');
+  const noFiles = await migrateCall({ socketPath: sock, msg: { op: 'install', user: 'u2', app: { id: 'x' } } });
+  assert.equal(noFiles.ok, false);
+  assert.equal(noFiles.error, 'no-files');
+  const emptyFiles = await migrateCall({ socketPath: sock, msg: { op: 'install', user: 'u2', app: { id: 'x', files: {} } } });
+  assert.equal(emptyFiles.ok, false);
+  assert.equal(emptyFiles.error, 'empty');
+  const noTenant = await migrateCall({ socketPath: sock, msg: { op: 'install', user: 'u9', app: { files: { 'index.html': 'aGk=' } } } });
+  assert.equal(noTenant.ok, false);
+  assert.equal(noTenant.error, 'no-tenant');
+});
+
+test('🔴 迁移也把 net/tasks 带过去（原来这两样在路上被丢掉了 ⇒ 盒里那份"声明过却连不出去"）', async (t) => {
+  const hostDir = tmp();
+  const boxDir = tmp();
+  new Apps({ dir: hostDir, sub: 'u2' }).create({
+    id: 'tianqi-probe',
+    title: '看天气',
+    icon: 'weather',
+    entry: 'index.html',
+    files: { 'index.html': '<p>宿主的天气</p>' },
+    permissions: ['net'],
+    net: ['api.open-meteo.com'],
+  });
+  const box = await bootBox(t, { dir: boxDir });
+  const rep = await migrateAppsToBox({
+    userId: 'u2',
+    hostApps: new Apps({ dir: hostDir, sub: 'u2' }),
+    box: createBoxApps({ sub: 'u2', dial: () => nodeNet.connect(box.uds) }),
+    apply: true,
+  });
+  assert.deepEqual(rep.pushed.map((a) => a.id), ['tianqi-probe']);
+  const m = new Apps({ dir: boxDir, sub: 'owner' }).manifest('tianqi-probe', 1);
+  assert.deepEqual(m.permissions, ['net']);
+  assert.deepEqual(m.net, ['api.open-meteo.com'], '★ 声明要在盒里那份清单里');
+});

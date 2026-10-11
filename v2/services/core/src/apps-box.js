@@ -740,6 +740,11 @@ export async function boxRegisterBlankApp({ dial, app, timeoutMs = BOX_TIMEOUT_M
  *    所以版本号 / 清单 / 权限语义与助手自己造 app 时**逐字相同** ——
  *    不是"往它的卷里撒一堆文件"。
  *
+ * 🔴 **`net` / `tasks` 必须一起带过去**（2026-10-11 修 · 做 `futures-trade` 时发现的）：
+ *    原来这两样**没进 payload** ⇒ 推过去的 app 就算声明了联网，盒里那一版清单里的
+ *    `net` 也是空的（到了屏幕上就是"取不到数据"，而两边都以为配好了）。
+ *    **声明是清单的一部分** —— 迁移/安装时丢掉它，等于让制品在盒子那头变成另一样东西。
+ *
  * @returns {Promise<object>} 盒子里那一版的 manifest
  */
 export async function boxPushApp({ dial, app, timeoutMs = BOX_TIMEOUT_MS }) {
@@ -755,6 +760,8 @@ export async function boxPushApp({ dial, app, timeoutMs = BOX_TIMEOUT_MS }) {
       entry: app.entry,
       files,
       permissions: app.permissions ?? [],
+      net: app.net ?? [],
+      tasks: app.tasks ?? [],
       createdBy: app.createdBy ?? 'user',
       createdTurn: app.createdTurn ?? null,
     }),

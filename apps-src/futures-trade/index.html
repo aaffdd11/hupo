@@ -1,0 +1,1198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>期货交易台</title>
+<!--
+  期货交易台 —— 琥珀桌面上的一格小程序（自包含 HTML，不许引外部资源）。
+
+  ── 它是干什么的 ──────────────────────────────────────────
+  三块：市场（自选行情 · 分时 · 加自选）· 交易（资金 · 持仓 · 委托 · 成交 · 下单 · 撤单）·
+  设置（交易密码 · 单笔手数上限 · 自选管理 · 安全说明）。
+
+  ── 两件必须说清的事（页面里也写着，别只在注释里）──────────
+  1. 行情与交易数据来自 https://v.stalkerai.cn —— 那是**CTP 那一套的对外口**，
+     休市时 `connected:false` 是正常的（看 `next_connect`）。
+  2. 这里的「交易密码」是本机的一道**手滑闸**：6 位数字，只把加盐哈希存在这个小程序
+     自己的库里（`/db`）。它**不是**服务端鉴权 —— 那条接口本身没有鉴权，
+     知道地址的人绕开这个页面也能下单。所以它挡的是"手滑"，不是"有心人"。
+     真钥匙（CTP 的账号口令）一个字都不在这个页面里，也不该在（反模式 A3）。
+-->
+<style>
+  :root{
+    --bg:#0e1620; --card:#17222e; --card2:#1d2b3a; --line:#27394c;
+    --fg:#e9eff6; --dim:#93a7bb; --acc:#4da3ff; --acc2:#2b6fb5;
+    --up:#ff5f5f; --down:#2fd07a; --warn:#ffb340;
+    --r:14px; --gap:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+    display:flex; flex-direction:column; overflow:hidden;
+    -webkit-tap-highlight-color:transparent;
+  }
+  header{display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px 4px}
+  header h1{font-size:17px; margin:0; letter-spacing:.02em}
+  .pill{
+    font-size:12px; padding:3px 9px; border-radius:99px; border:1px solid var(--line);
+    background:var(--card); color:var(--dim); white-space:nowrap;
+  }
+  .pill.ok{color:var(--down); border-color:#25543c}
+  .pill.bad{color:var(--warn); border-color:#5a4520}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);display:inline-block;margin-right:6px;vertical-align:middle}
+  .dot.ok{background:var(--down)} .dot.bad{background:var(--warn)}
+
+  nav{display:flex; gap:6px; padding:6px 12px 10px}
+  nav button{
+    flex:1 1 0; min-height:44px; border-radius:12px; border:1px solid var(--line);
+    background:var(--card); color:var(--dim); font:inherit; font-size:15px; cursor:pointer;
+    transition:background .16s ease, color .16s ease, transform .16s ease;
+  }
+  nav button[aria-selected="true"]{background:var(--acc2); color:#fff; border-color:var(--acc); font-weight:600}
+  nav button:active{transform:scale(.985)}
+
+  main{flex:1 1 auto; overflow:auto; padding:0 12px 24px; -webkit-overflow-scrolling:touch}
+  .view{display:none}
+  .view.on{display:block}
+
+  .cards{display:grid; gap:var(--gap); grid-template-columns:1fr}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:var(--r); padding:12px 13px; min-width:0}
+  .card h2{font-size:14px; margin:0 0 8px; color:var(--dim); font-weight:600; letter-spacing:.02em}
+  .cardhd{display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px}
+  .cardhd h2{margin:0}
+  /* 宽屏（他是在平板上点开它的）：两块并排，`.wide` 那几块占满一整行。 */
+  @media (min-width:48rem){
+    main{padding:0 18px 28px}
+    .cards{gap:16px; grid-template-columns:1fr 1fr}
+    .card{padding:16px 18px}
+    .wide{grid-column:1/-1}
+  }
+
+  .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+  .col{display:flex; flex-direction:column; gap:8px}
+  .between{justify-content:space-between}
+  .grow{flex:1 1 auto; min-width:0}
+  .muted{color:var(--dim)}
+  .small{font-size:13px}
+  .tiny{font-size:12px}
+  .up{color:var(--up)} .down{color:var(--down)} .warn{color:var(--warn)}
+  .num{font-variant-numeric:tabular-nums; font-feature-settings:"tnum"}
+
+  .btn{
+    min-height:38px; padding:0 14px; border-radius:10px; border:1px solid var(--acc);
+    background:var(--acc2); color:#fff; font:inherit; font-size:15px; cursor:pointer;
+    transition:filter .15s ease, transform .12s ease;
+  }
+  .btn:active{transform:scale(.98)}
+  .btn[disabled]{opacity:.45; cursor:not-allowed}
+  .btn.ghost{background:transparent; color:var(--fg); border-color:var(--line)}
+  .btn.buy{background:#b2372f; border-color:#d1493f}
+  .btn.sell{background:#1f7d50; border-color:#2aa268}
+  .btn.danger{background:transparent; color:var(--warn); border-color:#5a4520}
+  .btn.sm{min-height:32px; padding:0 10px; font-size:13px; border-radius:8px}
+
+  .inp{
+    min-height:38px; padding:6px 10px; border-radius:10px; border:1px solid var(--line);
+    background:var(--card2); color:var(--fg); font:inherit; font-size:15px; min-width:0; width:100%;
+  }
+  .inp:focus{outline:none}
+  .inp:focus-visible, button:focus-visible, .rowbtn:focus-visible{outline:2px solid var(--acc); outline-offset:2px}
+  label.f{display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--dim); min-width:0}
+  .seg{display:flex; border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  .seg button{
+    flex:1 1 0; min-height:38px; border:0; background:var(--card2); color:var(--dim);
+    font:inherit; font-size:15px; cursor:pointer; transition:background .15s ease, color .15s ease;
+  }
+  .seg button[aria-pressed="true"]{background:var(--acc2); color:#fff; font-weight:600}
+
+  .list{display:flex; flex-direction:column; gap:6px}
+  .rowbtn{
+    display:grid; gap:4px 10px; width:100%; text-align:left; cursor:pointer;
+    background:var(--card2); border:1px solid transparent; border-radius:10px; padding:9px 11px;
+    color:var(--fg); font:inherit; transition:border-color .15s ease, background .15s ease;
+  }
+  .rowbtn:hover{border-color:var(--line)}
+  .rowbtn.q{grid-template-columns:1.2fr 1fr .8fr auto}
+  .rowbtn.q > span{text-align:right}
+  .rowbtn.t{grid-template-columns:1.1fr .6fr .7fr .7fr auto}
+  .rowbtn.t > span{text-align:right}
+  .rowbtn b{font-weight:600}
+  .empty{border:1px dashed var(--line); border-radius:10px; padding:14px; color:var(--dim); font-size:14px; text-align:center}
+  .errbox{border:1px solid #5a4520; background:#221b0e; color:var(--warn); border-radius:10px; padding:10px 12px; font-size:14px}
+  .hint{color:var(--dim); font-size:12px; margin-top:6px}
+  .kv{display:grid; grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr)); gap:8px 12px}
+  .kv div{min-width:0}
+  .kv .k{font-size:12px; color:var(--dim)}
+  .kv .v{font-size:16px; font-variant-numeric:tabular-nums}
+  .tag{font-size:12px; padding:1px 7px; border-radius:6px; background:var(--card2); color:var(--dim); border:1px solid var(--line)}
+  .tag.buy{color:var(--up); border-color:#5a2a2a}
+  .tag.sell{color:var(--down); border-color:#20543c}
+  .tag.on{color:var(--acc); border-color:var(--acc2)}
+
+  .subtabs{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px}
+  .subtabs button{
+    min-height:32px; padding:0 12px; border-radius:8px; border:1px solid var(--line);
+    background:transparent; color:var(--dim); font:inherit; font-size:13px; cursor:pointer;
+    transition:background .15s ease, color .15s ease;
+  }
+  .subtabs button[aria-pressed="true"]{background:var(--card2); color:var(--fg); border-color:var(--acc2)}
+
+  /* ⚠️ 那条 `[hidden]` 一定要写：`.overlay{display:flex}` 是作者样式，它盖得住浏览器
+     默认的 `[hidden]{display:none}` —— 少了这一行，弹层**永远盖在页面上**（屏幕发暗、
+     点哪儿都没反应），而 JS 一切正常。这一条是"看一眼截图"看出来的。 */
+  .overlay{position:fixed; inset:0; background:rgba(4,9,14,.72); display:flex; align-items:center; justify-content:center; padding:16px; z-index:50}
+  .overlay[hidden]{display:none}
+  .sheet{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; width:100%; max-width:26rem; max-height:88vh; overflow:auto; animation:pop .16s ease}
+  @keyframes pop{from{opacity:0; transform:translateY(6px) scale(.99)} to{opacity:1; transform:none}}
+  .sheet h3{margin:0 0 10px; font-size:16px}
+  .sheet .acts{display:flex; gap:8px; justify-content:flex-end; margin-top:14px; flex-wrap:wrap}
+
+  .toasts{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:60}
+  .toast{
+    background:#0b131c; border:1px solid var(--acc2); color:var(--fg); border-radius:12px;
+    padding:11px 16px; font-size:14px; max-width:22rem; text-align:center; box-shadow:0 10px 30px rgba(0,0,0,.45);
+    animation:pop .16s ease;
+  }
+  .toast.bad{border-color:#8a4a2a}
+  .spin{display:inline-block; width:12px; height:12px; border:2px solid var(--line); border-top-color:var(--acc); border-radius:50%; animation:sp .7s linear infinite; vertical-align:-1px; margin-right:6px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="dot" id="mdDot"></span>期货交易台</h1>
+  <span class="pill" id="mdPill">行情还没取</span>
+  <span class="pill" id="clock">—</span>
+</header>
+
+<nav role="tablist" aria-label="三块">
+  <button class="tab" data-tab="market" role="tab" aria-selected="true">市场</button>
+  <button class="tab" data-tab="trade" role="tab" aria-selected="false">交易</button>
+  <button class="tab" data-tab="settings" role="tab" aria-selected="false">设置</button>
+</nav>
+
+<main>
+  <!-- ── 市场 ───────────────────────────────────────────── -->
+  <section class="view on" id="view-market" role="tabpanel">
+    <div class="cards">
+      <div class="card">
+        <div class="cardhd">
+          <h2>自选行情</h2>
+          <div class="row">
+            <span class="small muted" id="quoteAt">—</span>
+            <button class="btn ghost sm" id="btnRefreshQ">刷新</button>
+          </div>
+        </div>
+        <div class="list" id="quoteList"></div>
+        <div class="empty" id="quoteEmpty" hidden>还没有自选。右边（或下面）搜一个合约加进来。</div>
+        <div class="hint">行情是快照（秒级延迟），来自 CTP 那条链路；逐笔明细得看分时那张图。</div>
+      </div>
+
+      <div class="card">
+        <div class="cardhd"><h2>找一个合约</h2></div>
+        <div class="row">
+          <input class="inp grow" id="searchBox" placeholder="合约代码，如 rb2701 / ag2612" autocomplete="off" inputmode="text">
+          <button class="btn" id="btnSearch">搜</button>
+        </div>
+        <div class="list small" id="searchRes" style="margin-top:8px"></div>
+        <div class="hint" id="searchHint">输入代码里的一小段就能筛。第一次筛会去把全市场快照取一遍（几百个合约），之后就本地筛。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 交易 ───────────────────────────────────────────── -->
+  <section class="view" id="view-trade" role="tabpanel">
+    <div class="cards">
+      <div class="card wide">
+        <div class="cardhd">
+          <h2>交易通道</h2>
+          <div class="row">
+            <button class="btn ghost sm" id="btnRefreshT">刷新</button>
+            <button class="btn ghost sm" id="btnLock">锁定</button>
+          </div>
+        </div>
+        <div id="tStatus" class="small muted">—</div>
+      </div>
+
+      <div class="card">
+        <div class="cardhd"><h2>资金</h2><span class="small muted" id="acctAt">—</span></div>
+        <div class="kv" id="acctBox"><div><div class="k">权益</div><div class="v">—</div></div></div>
+        <div class="hint" id="acctHint"></div>
+      </div>
+
+      <div class="card">
+        <div class="cardhd"><h2>下单</h2><span class="tag" id="lockTag">未解锁</span></div>
+        <div class="col">
+          <label class="f">合约
+            <input class="inp" id="oCode" list="watchCodes" placeholder="如 rb2701" autocomplete="off">
+          </label>
+          <datalist id="watchCodes"></datalist>
+          <div class="row">
+            <label class="f grow">方向
+              <span class="seg" id="oDir">
+                <button type="button" data-v="Buy" aria-pressed="true">买</button>
+                <button type="button" data-v="Sell" aria-pressed="false">卖</button>
+              </span>
+            </label>
+            <label class="f grow">开平
+              <select class="inp" id="oOffset">
+                <option value="Open">开仓</option>
+                <option value="Close">平仓</option>
+                <option value="CloseToday">平今</option>
+                <option value="CloseYesterday">平昨</option>
+              </select>
+            </label>
+          </div>
+          <div class="row">
+            <label class="f grow">价格（限价）
+              <input class="inp" id="oPrice" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0">
+            </label>
+            <label class="f grow">手数
+              <input class="inp" id="oVol" type="number" step="1" min="1" value="1" inputmode="numeric">
+            </label>
+          </div>
+          <div id="oEst" class="small muted">—</div>
+          <div class="row">
+            <button class="btn buy grow" id="btnBuy">买入 / 开多</button>
+            <button class="btn sell grow" id="btnSell">卖出 / 开空</button>
+          </div>
+          <div class="hint">只走限价单；单笔手数上限在「设置」里。按下去会先弹一次确认，再问交易密码。</div>
+          <div class="errbox" id="oErr" hidden></div>
+        </div>
+      </div>
+
+      <div class="card wide">
+        <div class="cardhd"><h2>明细</h2><span class="small muted" id="detailAt">—</span></div>
+        <div class="subtabs" id="detailTabs">
+          <button data-d="pos" aria-pressed="true">持仓</button>
+          <button data-d="ord" aria-pressed="false">委托</button>
+          <button data-d="trd" aria-pressed="false">成交</button>
+          <button data-d="log" aria-pressed="false">本机留痕</button>
+        </div>
+        <div class="list" id="detailBox"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 设置 ───────────────────────────────────────────── -->
+  <section class="view" id="view-settings" role="tabpanel">
+    <div class="cards">
+      <div class="card">
+        <div class="cardhd"><h2>交易密码</h2><span class="tag" id="pwdTag">未设</span></div>
+        <div id="pwdBox" class="small muted">还没设。设一个 6 位数字，下单前要输它。</div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="btnSetPwd">设一个</button>
+          <button class="btn ghost" id="btnDropPwd">取消密码</button>
+        </div>
+        <div class="hint">只把加盐哈希存在这个小程序自己的库里（`/db`），明文不落盘、也不进日志。</div>
+      </div>
+
+      <div class="card">
+        <div class="cardhd"><h2>下单限额</h2></div>
+        <label class="f">单笔手数上限
+          <input class="inp" id="setMaxVol" type="number" min="1" max="1000" step="1" inputmode="numeric">
+        </label>
+        <div class="hint">默认 1 手。这是本机自己夹的一道；对面那台也有一条上限（1000 手）。</div>
+      </div>
+
+      <div class="card wide">
+        <div class="cardhd"><h2>自选管理</h2><span class="small muted" id="watchCount">—</span></div>
+        <div class="row">
+          <input class="inp grow" id="addBox" placeholder="加一个合约代码" autocomplete="off">
+          <button class="btn" id="btnAdd">加上</button>
+        </div>
+        <div class="list small" id="watchList" style="margin-top:8px"></div>
+      </div>
+
+      <div class="card wide">
+        <div class="cardhd"><h2>安全说明（请读完再下单）</h2></div>
+        <div class="small col" id="secBox"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="overlay" id="modal" hidden><div class="sheet" id="sheet"></div></div>
+<div class="toasts" id="toasts"></div>
+
+<script>
+'use strict';
+/* ────────────────────────────────────────────────────────────
+   0. 这个页面是谁、从哪儿取数、能记住什么
+   ──────────────────────────────────────────────────────────── */
+const APP_ID = 'futures-trade';
+const API = 'https://v.stalkerai.cn';
+const LOCK_MS = 5 * 60 * 1000;      // 解锁后 5 分钟自动上锁（只在内存里）
+const QUOTE_MS = 5000;              // 市场那一块：行情轮询间隔
+const TRADE_MS = 15000;             // 交易那一块：资金/持仓/委托轮询间隔
+const MAX_VOL = 1000;               // 对面那条硬上限（文档 §5.4），本机上限只会更小
+
+const Q = new URLSearchParams(location.search);
+const VER = (location.pathname.match(/^\/a\/[^/]+\/([^/]+)\//) || [])[1] || 'live';
+
+/* ── 存储：走 /db 那条口（★ 天生就有，不用声明、不用他点头）──
+   第一次要用入口 URL 里那三样换一张票，之后就用票。 */
+let ticket = null;
+async function db(op, sql, params = []) {
+  const body = ticket
+    ? { id: APP_ID, v: VER, ticket, op, sql, params }
+    : { id: APP_ID, v: VER, u: Q.get('u'), e: Q.get('e'), s: Q.get('s'), op, sql, params };
+  const r = await fetch('/db', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  let j = null;
+  try { j = await r.json(); } catch (e) { /* 下面按 r.ok 兜 */ }
+  if (!r.ok || !j || j.ok !== true) {
+    const why = (j && (j.text || j.error)) || ('存不下来（' + r.status + '）');
+    throw new Error(why);
+  }
+  if (j.ticket) ticket = j.ticket;
+  return j;   // { rows, changes, lastInsertRowid, truncated }
+}
+
+/* ── 小工具 ───────────────────────────────────────────────── */
+const $ = (s) => document.querySelector(s);
+const el = (t, cls, txt) => { const n = document.createElement(t); if (cls) n.className = cls; if (txt !== undefined) n.textContent = txt; return n; };
+function esc(s) { return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function fmt(n, d = 2) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '—';
+  return v.toLocaleString('zh-CN', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+/** 一句话里有 `**重**` 时用它（先转义再上粗体；别用 innerHTML 直接吃原文）。 */
+function rich(node, text) { node.innerHTML = esc(text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>'); return node; }
+function signCls(n) { const v = Number(n); return v > 0 ? 'up' : v < 0 ? 'down' : 'muted'; }
+function signTxt(n, d = 2) { const v = Number(n); return (Number.isFinite(v) && v > 0 ? '+' : '') + fmt(v, d); }
+function hhmmss(t) { const d = new Date(t); const p = (x) => String(x).padStart(2, '0'); return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); }
+function nowStamp() { return hhmmss(Date.now()); }
+
+/* ── 交易所：CTP 的 ExchangeID 恒空（文档 §8 坑 1）⇒ 只能按合约代码推 ──
+   两张表：两字母优先，再退一字母。认不出就**不许下单**（宁可拒，也不瞎认）。 */
+const EX2 = {
+  // 上期所
+  CU: 'SHFE', AL: 'SHFE', ZN: 'SHFE', PB: 'SHFE', NI: 'SHFE', SN: 'SHFE', AU: 'SHFE', AG: 'SHFE',
+  RB: 'SHFE', WR: 'SHFE', HC: 'SHFE', SS: 'SHFE', FU: 'SHFE', BU: 'SHFE', RU: 'SHFE', SP: 'SHFE', AO: 'SHFE', BR: 'SHFE',
+  // 上海国际能源交易中心
+  SC: 'INE', LU: 'INE', NR: 'INE', BC: 'INE', EC: 'INE',
+  // 大商所
+  A: 'DCE', B: 'DCE', C: 'DCE', CS: 'DCE', M: 'DCE', Y: 'DCE', P: 'DCE', I: 'DCE', J: 'DCE', JM: 'DCE',
+  JD: 'DCE', L: 'DCE', V: 'DCE', PP: 'DCE', EG: 'DCE', EB: 'DCE', PG: 'DCE', RR: 'DCE', LH: 'DCE', BB: 'DCE', FB: 'DCE',
+  // 郑商所
+  CF: 'CZCE', CY: 'CZCE', SR: 'CZCE', TA: 'CZCE', OI: 'CZCE', MA: 'CZCE', FG: 'CZCE', RM: 'CZCE', RS: 'CZCE',
+  ZC: 'CZCE', JR: 'CZCE', LR: 'CZCE', PM: 'CZCE', RI: 'CZCE', WH: 'CZCE', SF: 'CZCE', SM: 'CZCE', AP: 'CZCE',
+  CJ: 'CZCE', PK: 'CZCE', SA: 'CZCE', UR: 'CZCE', PF: 'CZCE', SH: 'CZCE', PX: 'CZCE',
+  // 中金所
+  IF: 'CFFEX', IH: 'CFFEX', IC: 'CFFEX', IM: 'CFFEX', T: 'CFFEX', TF: 'CFFEX', TS: 'CFFEX', TL: 'CFFEX',
+  IO: 'CFFEX', MO: 'CFFEX', HO: 'CFFEX',
+  // 广期所
+  SI: 'GFEX', LC: 'GFEX', PS: 'GFEX',
+};
+function exchangeOf(code) {
+  const s = String(code || '').trim().toUpperCase().replace(/[^A-Z].*$/, '');
+  if (!s) return null;
+  return EX2[s.slice(0, 2)] || EX2[s.slice(0, 1)] || null;
+}
+
+/* ── 交易密码（本机手滑闸）─────────────────────────────────
+   哈希：有 crypto.subtle 就用 SHA-256；没有（少见）就退一个迭代散列，并在页面里**如实写**是哪一种。 */
+async function hashPwd(pwd, salt) {
+  const msg = new TextEncoder().encode(APP_ID + '|' + salt + '|' + pwd);
+  if (window.crypto && crypto.subtle && crypto.subtle.digest) {
+    try {
+      const buf = await crypto.subtle.digest('SHA-256', msg);
+      return 'sha256:' + Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    } catch (e) { /* 退下面那条 */ }
+  }
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  for (let round = 0; round < 3000; round += 1) {
+    for (let i = 0; i < msg.length; i += 1) {
+      h1 = Math.imul(h1 ^ msg[i], 16777619) >>> 0;
+      h2 = Math.imul(h2 + msg[i] + round, 2246822519) >>> 0;
+    }
+  }
+  return 'weak:' + h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0');
+}
+function newSalt() {
+  try {
+    const a = new Uint8Array(8); crypto.getRandomValues(a);
+    return Array.from(a).map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) {
+    return 's' + Math.floor(Math.random() * 1e12).toString(36);
+  }
+}
+
+/* ── 取数：一条 http 口，错就说人话 ───────────────────────── */
+async function api(path, opts) {
+  let r;
+  try {
+    r = await fetch(API + path, opts);
+  } catch (e) {
+    throw new Error('连不上那台取数的（可能还没允许它联网 —— 第一次打开时会问你一遍，这些他随时能在设置里改）');
+  }
+  let j = null;
+  try { j = await r.json(); } catch (e) { /* 有些口不回 JSON */ }
+  // ⚠️ 只有**带了原因**的 `ok:false` 才算失败：`/api/ctp/trade/status` 那一条里的 `ok`
+  //    是"交易网关自己 ok 不 ok"（休市时就是 false），它没有 error/text/detail ——
+  //    把它当失败的话，页面上会冒出一句"那台回了 200"（这是看一眼屏幕才发现的）。
+  if (!r.ok || (j && j.ok === false && (j.error || j.text || j.detail))) {
+    const raw = j && (j.detail || j.error || j.text);
+    const text = typeof raw === 'string' ? raw : raw ? JSON.stringify(raw) : ('那台回了 ' + r.status);
+    throw new Error(text);
+  }
+  return j || {};
+}
+async function apiPost(path, body) {
+  return api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+/* ── 全局状态（都在内存里；要记住的只有存储那三张表）──────── */
+const S = {
+  tab: 'market',
+  detail: 'pos',
+  settings: {},                      // 设置表
+  watch: [],                         // 自选代码
+  quotes: {},                        // 代码 -> 行情
+  all: null,                         // 全市场快照（第一次搜索时取）
+  md: null,                          // /api/futures/md/status
+  ts: null,                          // /api/ctp/trade/status
+  acct: null, acctFlags: null, pos: null, ord: null, trd: null,
+  risk: {},                          // 合约 -> 风控要素
+  logs: [],                          // 本机下单留痕（存储里那本）
+  unlockedAt: 0,
+  dir: 'Buy',
+  detail_: null,                     // 当前展开的那一份详情（市场那张分时）
+  busy: false,
+};
+
+/* ── 提示：屏幕中间的一句话（不挡操作）────────────────────── */
+function toast(msg, bad) {
+  const box = $('#toasts');
+  const n = el('div', 'toast' + (bad ? ' bad' : ''), msg);
+  box.appendChild(n);
+  setTimeout(() => { n.style.opacity = '0'; n.style.transition = 'opacity .25s ease'; setTimeout(() => n.remove(), 300); }, bad ? 3600 : 2200);
+}
+
+/* ── 弹层：一个小 form，返回 Promise ──────────────────────── */
+function closeModal() { $('#modal').hidden = true; $('#sheet').innerHTML = ''; }
+function openModal(build) {
+  const sheet = $('#sheet');
+  sheet.innerHTML = '';
+  $('#modal').hidden = false;
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; closeModal(); resolve(v); };
+    const back = () => finish(null);
+    $('#modal').onclick = (e) => { if (e.target === $('#modal')) back(); };
+    build(sheet, finish, back);
+  });
+}
+function modalShell(title, sub) {
+  const sheet = $('#sheet');
+  sheet.appendChild(el('h3', null, title));
+  if (sub) { const p = el('div', 'small muted', sub); p.style.marginBottom = '10px'; sheet.appendChild(p); }
+  return sheet;
+}
+
+/* 问一句 6 位密码 */
+function askPassword(titleText) {
+  return openModal((sheet, done, back) => {
+    modalShell(sheet, titleText || '输入交易密码');
+    const inp = el('input', 'inp');
+    inp.type = 'password'; inp.inputMode = 'numeric'; inp.maxLength = 6; inp.autocomplete = 'off';
+    inp.placeholder = '6 位数字'; inp.style.letterSpacing = '.3em'; inp.style.fontSize = '20px';
+    sheet.appendChild(inp);
+    const acts = el('div', 'acts');
+    const ok = el('button', 'btn', '解锁');
+    const no = el('button', 'btn ghost', '算了');
+    acts.appendChild(no); acts.appendChild(ok); sheet.appendChild(acts);
+    const submit = () => {
+      const v = String(inp.value || '').trim();
+      if (!/^\d{6}$/.test(v)) { toast('6 位数字', true); return; }
+      done(v);
+    };
+    ok.onclick = submit;
+    no.onclick = back;
+    inp.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
+    setTimeout(() => inp.focus(), 30);
+  });
+}
+
+/* 下单前那一次确认（真钱，所以把关键几项再摆一遍） */
+function confirmOrder(o) {
+  return openModal((sheet, done, back) => {
+    modalShell(sheet, '这是真单 —— 按下去就直接报到期货公司，撤不回来（只能再撤单）。');
+    const rows = [
+      ['合约', o.symbol + '（' + o.exchange + '）'],
+      ['方向', o.direction === 'Buy' ? '买' : '卖'],
+      ['开平', ({ Open: '开仓', Close: '平仓', CloseToday: '平今', CloseYesterday: '平昨' })[o.offset] || o.offset],
+      ['价格', fmt(o.price, 2) + '（限价）'],
+      ['手数', String(o.volume)],
+      ['估算保证金', o.margin === null ? '算不出（乘数没取到）' : '¥' + fmt(o.margin, 0)],
+    ];
+    const kv = el('div', 'kv');
+    rows.forEach(([k, v]) => { const d = el('div'); d.appendChild(el('div', 'k', k)); d.appendChild(el('div', 'v', v)); kv.appendChild(d); });
+    sheet.appendChild(kv);
+    const acts = el('div', 'acts');
+    const ok = el('button', 'btn', '确认下单');
+    const no = el('button', 'btn ghost', '再看看');
+    acts.appendChild(no); acts.appendChild(ok); sheet.appendChild(acts);
+    ok.onclick = () => done(true);
+    no.onclick = back;
+  });
+}
+
+/* ────────────────────────────────────────────────────────────
+   1. 市场
+   ──────────────────────────────────────────────────────────── */
+async function loadWatch() {
+  const r = await db('all', 'SELECT symbol FROM watch ORDER BY added ASC');
+  S.watch = (r.rows || []).map((x) => String(x.symbol));
+  if (S.watch.length === 0) {
+    // 头一回：给三个主力铺上（都是活着的合约），他随时能删
+    const seed = ['RB2701', 'A2611', 'AG2612'];
+    for (const s of seed) await db('run', 'INSERT OR IGNORE INTO watch(symbol, added) VALUES (?, ?)', [s, Date.now()]);
+    S.watch = seed.slice();
+  }
+  const dl = $('#watchCodes');
+  dl.innerHTML = '';
+  S.watch.forEach((s) => { const o = el('option'); o.value = s; dl.appendChild(o); });
+}
+
+async function loadQuotes() {
+  if (S.watch.length === 0) { S.quotes = {}; renderMarket(); return; }
+  try {
+    const j = await api('/api/futures/md/quotes?symbols=' + encodeURIComponent(S.watch.join(',')));
+    S.quotes = j.quotes || {};
+    $('#quoteAt').textContent = '更新于 ' + nowStamp();
+  } catch (e) {
+    $('#quoteAt').textContent = '取不到';
+    toast(e.message, true);
+  }
+  renderMarket();
+}
+
+async function loadMdStatus() {
+  try {
+    const j = await api('/api/futures/md/status');
+    S.md = j;
+    const open = j.market_open === true;
+    const conn = j.connected === true;
+    const pill = $('#mdPill');
+    pill.textContent = (open ? (conn ? '开市中' : '窗口开着 · 还没连上') : '休市中') + (j.next_connect ? ' · 下一场 ' + String(j.next_connect).slice(5, 16) : '');
+    pill.className = 'pill ' + (open && conn ? 'ok' : 'bad');
+    $('#mdDot').className = 'dot ' + (open && conn ? 'ok' : 'bad');
+  } catch (e) {
+    $('#mdPill').textContent = '行情取不到';
+    $('#mdPill').className = 'pill bad';
+    $('#mdDot').className = 'dot bad';
+  }
+  $('#clock').textContent = nowStamp();
+}
+
+function renderMarket() {
+  const box = $('#quoteList');
+  box.innerHTML = '';
+  const rows = S.watch;
+  $('#quoteEmpty').hidden = rows.length > 0;
+  rows.forEach((sym) => {
+    const q = S.quotes[sym];
+    const b = el('button', 'rowbtn q');
+    const name = el('b', null, sym);
+    const price = el('span', 'num ' + (q ? signCls(q.change_pct) : 'muted'), q ? fmt(q.price, 2) : '—');
+    const chg = el('span', 'num small ' + (q ? signCls(q.change_pct) : 'muted'), q ? signTxt(q.change_pct, 2) + '%' : '—');
+    const vol = el('span', 'tiny muted num', q ? '量 ' + fmt(q.volume, 0) : '');
+    b.appendChild(name); b.appendChild(price); b.appendChild(chg); b.appendChild(vol);
+    b.onclick = () => showContract(sym);
+    box.appendChild(b);
+  });
+}
+
+/* 一个合约的详情：中文名 + 买卖一 + 分时（都是那条只读口） */
+async function showContract(sym) {
+  await openModal(async (sheet, done, back) => {
+    modalShell(sheet, sym + ' · 分时');
+    const body = el('div', 'col');
+    body.innerHTML = '<div class="small muted"><span class="spin"></span>取分时…</div>';
+    sheet.appendChild(body);
+    const acts = el('div', 'acts');
+    const toTrade = el('button', 'btn', '去下单');
+    const del = el('button', 'btn danger', S.watch.includes(sym) ? '从自选里去掉' : '加进自选');
+    const close = el('button', 'btn ghost', '关掉');
+    acts.appendChild(del); acts.appendChild(toTrade); acts.appendChild(close); sheet.appendChild(acts);
+    close.onclick = back;
+    del.onclick = async () => {
+      if (S.watch.includes(sym)) await db('run', 'DELETE FROM watch WHERE symbol = ?', [sym]);
+      else await db('run', 'INSERT OR IGNORE INTO watch(symbol, added) VALUES (?, ?)', [sym, Date.now()]);
+      await loadWatch(); await loadQuotes(); renderSettings();
+      toast(S.watch.includes(sym) ? '加进自选了' : '去掉了');
+      done(null);
+    };
+    toTrade.onclick = () => { $('#oCode').value = sym; setTab('trade'); done(null); estimate(); };
+
+    let j = null;
+    try { j = await api('/api/stock/futures/' + encodeURIComponent(sym)); } catch (e) { /* 下面如实说 */ }
+    body.innerHTML = '';
+    const q = (j && j.quote) || S.quotes[sym] || null;
+    if (!j) {
+      body.appendChild(el('div', 'errbox', '这一份取不到（可能没允许联网，或者这个代码那边没有）。'));
+    } else {
+      const kv = el('div', 'kv');
+      const put = (k, v, cls) => { const d = el('div'); d.appendChild(el('div', 'k', k)); d.appendChild(el('div', 'v ' + (cls || ''), v)); kv.appendChild(d); };
+      put('名称', j.name || sym);
+      put('最新', q ? fmt(q.price, 2) : '—', q ? signCls(q.change_pct) : '');
+      put('涨跌', q ? signTxt(q.change_pct, 2) + '%' : '—', q ? signCls(q.change_pct) : '');
+      put('买一 / 卖一', q ? fmt(q.bid_price, 2) + ' / ' + fmt(q.ask_price, 2) : '—');
+      put('成交量', q ? fmt(q.volume, 0) : '—');
+      put('持仓量', q ? fmt(q.open_interest, 0) : '—');
+      put('交易所', exchangeOf(sym) || '认不出（不许下单）');
+      body.appendChild(kv);
+      const hist = (j.history || []).slice(-120);
+      if (hist.length > 1) {
+        const ys = hist.map((p) => Number(p.close)).filter((v) => Number.isFinite(v));
+        const min = Math.min.apply(null, ys), max = Math.max.apply(null, ys), span = (max - min) || 1;
+        const W = 320, H = 96;
+        const pts = ys.map((v, i) => ((i * (W / (ys.length - 1))).toFixed(1)) + ' ' + ((H - 6 - ((v - min) / span) * (H - 12)).toFixed(1)));
+        const up = ys[ys.length - 1] >= ys[0];
+        const svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="110" preserveAspectRatio="none" aria-label="分时">'
+          + '<polyline fill="none" stroke="' + (up ? 'var(--up)' : 'var(--down)') + '" stroke-width="2" points="' + pts.join(' ') + '"/></svg>';
+        const wrap = el('div');
+        wrap.innerHTML = svg;
+        body.appendChild(wrap);
+        body.appendChild(el('div', 'tiny muted', '分时取自 ' + esc(hist[0].date) + ' 起，共 ' + hist.length + ' 个分钟点；最低 ' + fmt(min, 2) + ' · 最高 ' + fmt(max, 2)));
+      } else {
+        body.appendChild(el('div', 'empty', '这一刻还没有分时点（休市时是正常的）。'));
+      }
+    }
+    setTimeout(() => { const b = sheet.querySelector('.btn'); if (b) b.focus(); }, 30);
+  });
+}
+
+async function ensureAllQuotes() {
+  if (S.all) return S.all;
+  const j = await api('/api/futures/md/quotes');
+  S.all = Object.keys(j.quotes || {}).sort();
+  return S.all;
+}
+async function doSearch() {
+  const kw = String($('#searchBox').value || '').trim().toUpperCase();
+  const box = $('#searchRes');
+  box.innerHTML = '';
+  let all;
+  try {
+    box.innerHTML = '<div class="small muted"><span class="spin"></span>取全市场…</div>';
+    all = await ensureAllQuotes();
+  } catch (e) {
+    box.innerHTML = '';
+    box.appendChild(el('div', 'errbox', e.message));
+    return;
+  }
+  box.innerHTML = '';
+  const hit = (kw ? all.filter((s) => s.includes(kw)) : all).slice(0, 24);
+  if (hit.length === 0) { box.appendChild(el('div', 'empty', '没这个代码。')); return; }
+  hit.forEach((sym) => {
+    const b = el('button', 'rowbtn q');
+    b.appendChild(el('b', null, sym));
+    b.appendChild(el('span', 'tiny muted', exchangeOf(sym) || '交易所认不出'));
+    b.appendChild(el('span', 'tiny muted', S.watch.includes(sym) ? '已在自选' : ''));
+    const add = el('span', 'tag on', S.watch.includes(sym) ? '看' : '加');
+    b.appendChild(add);
+    b.onclick = async () => {
+      if (!S.watch.includes(sym)) {
+        await db('run', 'INSERT OR IGNORE INTO watch(symbol, added) VALUES (?, ?)', [sym, Date.now()]);
+        await loadWatch(); await loadQuotes(); renderSettings();
+        toast('加进自选了：' + sym);
+        add.textContent = '已在自选';
+      } else {
+        showContract(sym);
+      }
+    };
+    box.appendChild(b);
+  });
+}
+
+/* ────────────────────────────────────────────────────────────
+   2. 交易
+   ──────────────────────────────────────────────────────────── */
+async function loadTrade() {
+  try {
+    const st = await api('/api/ctp/trade/status');
+    S.ts = st;
+  } catch (e) { S.ts = { _err: e.message }; }
+  try {
+    const j = await api('/api/ctp/trade/account');
+    S.acct = j.account || null;
+    S.acctFlags = { ready: j.ready === true, stale: j.stale === true };
+  } catch (e) { S.acct = null; S.acctFlags = null; }
+  try { S.pos = (await api('/api/ctp/trade/positions')).positions || []; } catch (e) { S.pos = null; }
+  try { S.ord = (await api('/api/ctp/trade/orders')).orders || []; } catch (e) { S.ord = null; }
+  try { S.trd = (await api('/api/ctp/trade/trades')).trades || []; } catch (e) { S.trd = null; }
+  $('#detailAt').textContent = '更新于 ' + nowStamp();
+  renderTrade();
+}
+
+function renderTrade() {
+  // ── 通道状态（如实：连不上就说连不上，并把它自己那句话摆出来）
+  const st = S.ts || {};
+  const box = $('#tStatus');
+  box.innerHTML = '';
+  if (st._err) {
+    box.appendChild(el('div', 'errbox', st._err));
+  } else {
+    const line = el('div', 'row');
+    const mk = (t, ok) => { const s = el('span', 'tag' + (ok ? ' on' : ''), t); return s; };
+    line.appendChild(mk('前置 ' + (st.connected ? '已连' : '未连'), st.connected));
+    line.appendChild(mk('登录 ' + (st.logged_in ? '已登' : '未登'), st.logged_in));
+    line.appendChild(mk('结算确认 ' + (st.settled ? '已做' : '未做'), st.settled));
+    line.appendChild(el('span', 'small muted', '交易日 ' + esc(st.trading_day || '—')));
+    box.appendChild(line);
+    if (st.last_error) {
+      const e = el('div', 'errbox', '那台自己报的：' + st.last_error);
+      e.style.marginTop = '8px';
+      box.appendChild(e);
+    }
+    if (!st.connected) box.appendChild(rich(el('div', 'hint'), '休市或前置没连上时，查出来的资金/持仓是**上一场留下的快照**，下单也报不进去 —— 开盘前一条会自己连上。'));
+  }
+
+  // ── 资金
+  const a = S.acct || {};
+  const ab = $('#acctBox');
+  ab.innerHTML = '';
+  const put = (k, v, cls) => { const d = el('div'); d.appendChild(el('div', 'k', k)); d.appendChild(el('div', 'v ' + (cls || ''), v)); ab.appendChild(d); };
+  put('权益', fmt(a.Balance, 2));
+  put('可用', fmt(a.Available, 2));
+  put('占用保证金', fmt(a.CurrMargin, 2));
+  put('持仓盈亏', signTxt(a.PositionProfit, 2), signCls(a.PositionProfit));
+  put('平仓盈亏', signTxt(a.CloseProfit, 2), signCls(a.CloseProfit));
+  put('手续费', fmt(a.Commission, 2));
+  const risk = Number(a.Balance) > 0 ? (Number(a.CurrMargin) / Number(a.Balance)) * 100 : null;
+  put('风险度', risk === null ? '—' : fmt(risk, 1) + '%', risk !== null && risk > 80 ? 'warn' : '');
+  $('#acctAt').textContent = a.AccountID ? (a.AccountID + ' · ' + (a.BrokerID || '')) : '—';
+  rich($('#acctHint'), S.acct === null
+    ? '资金取不到（可能没允许联网，或者那台正在忙）。'
+    : (S.acctFlags && (S.acctFlags.stale || !S.acctFlags.ready)
+      ? '⚠️ 这一份是**上一场留下的快照**（那台现在没连上）—— 开盘连上之后会自己换。'
+      : ''));
+
+  // ── 下单那块的锁定状态
+  const locked = Date.now() >= S.unlockedAt;
+  $('#lockTag').textContent = !S.settings.pwd ? '还没设密码' : (locked ? '已上锁' : '已解锁');
+  $('#lockTag').className = 'tag' + (!S.settings.pwd || locked ? '' : ' on');
+  $('#oVol').max = String(Math.min(Number(S.settings.maxVol) || 1, MAX_VOL));
+
+  renderDetail();
+}
+
+function offTxt(o) { return ({ '0': '开', '1': '平', '3': '平今', '4': '平昨' })[String(o)] || String(o || ''); }
+function workable(o) { return String(o) === '1' || String(o) === '3'; }   // 还在队列里 ⇒ 能撤
+
+function renderDetail() {
+  const box = $('#detailBox');
+  box.innerHTML = '';
+  const d = S.detail;
+  if (d === 'pos') {
+    if (S.pos === null) { box.appendChild(el('div', 'errbox', '持仓取不到。')); return; }
+    if (S.pos.length === 0) { box.appendChild(el('div', 'empty', '这一刻没有持仓。')); return; }
+    S.pos.slice().sort((x, y) => String(x.InstrumentID).localeCompare(String(y.InstrumentID))).forEach((p) => {
+      const long = String(p.PosiDirection) === '2';
+      const vm = Number(p.VolumeMultiple) || 0;
+      const avg = vm > 0 && Number(p.Position) > 0 ? Number(p.PositionCost) / (Number(p.Position) * vm) : null;
+      const b = el('div', 'rowbtn t');
+      b.appendChild(el('b', null, String(p.InstrumentID)));
+      b.appendChild(el('span', 'tag ' + (long ? 'buy' : 'sell'), long ? '多' : '空'));
+      b.appendChild(el('span', 'num', fmt(p.Position, 0) + ' 手'));
+      b.appendChild(el('span', 'tiny muted num', '今' + fmt(p.TodayPosition, 0) + ' / 昨' + fmt(p.YdPosition, 0)));
+      b.appendChild(el('span', 'num ' + signCls(p.PositionProfit), signTxt(p.PositionProfit, 0)));
+      const btn = el('button', 'btn ghost sm', '平');
+      btn.onclick = (ev) => {
+        ev.stopPropagation();
+        const code = String(p.InstrumentID);
+        $('#oCode').value = code;
+        S.dir = long ? 'Sell' : 'Buy';
+        $('#oOffset').value = Number(p.TodayPosition) > 0 && Number(p.YdPosition) === 0 ? 'CloseToday' : (Number(p.TodayPosition) === 0 ? 'CloseYesterday' : 'Close');
+        const q = S.quotes[code];
+        if (q && Number(q.price) > 0) $('#oPrice').value = String(q.price);
+        $('#oVol').value = String(Math.max(1, Math.min(Number(p.Position) || 1, Math.min(Number(S.settings.maxVol) || 1, MAX_VOL))));
+        renderDirs(); estimate();
+        toast('已填进下单那张表：' + code + ' ' + (long ? '卖平' : '买平'));
+        $('#oCode').scrollIntoView({ block: 'center', behavior: 'smooth' });
+      };
+      b.appendChild(el('span', 'tiny muted', '均价 ' + (avg === null ? '—' : fmt(avg, 2)) + ' · 保证金 ' + fmt(p.UseMargin, 0)));
+      const wrap = el('div', 'row');
+      wrap.appendChild(b);
+      wrap.appendChild(btn);
+      box.appendChild(wrap);
+    });
+    return;
+  }
+  if (d === 'ord') {
+    if (S.ord === null) { box.appendChild(el('div', 'errbox', '委托取不到。')); return; }
+    const rows = S.ord.slice().sort((x, y) => {
+      const kx = String(x.InsertDate || '') + String(x.InsertTime || '');
+      const ky = String(y.InsertDate || '') + String(y.InsertTime || '');
+      return ky.localeCompare(kx);
+    }).slice(0, 60);
+    if (rows.length === 0) { box.appendChild(el('div', 'empty', '今天还没有委托。')); return; }
+    rows.forEach((o) => {
+      const buy = String(o.Direction) === '0';
+      const b = el('div', 'rowbtn t');
+      b.appendChild(el('b', null, String(o.InstrumentID)));
+      b.appendChild(el('span', 'tag ' + (buy ? 'buy' : 'sell'), (buy ? '买' : '卖') + offTxt(o.CombOffsetFlag)));
+      b.appendChild(el('span', 'num', fmt(o.LimitPrice, 2)));
+      b.appendChild(el('span', 'num', fmt(o.VolumeTotalOriginal, 0) + ' 手'));
+      b.appendChild(el('span', 'tiny muted', String(o.InsertTime || o.InsertDate || '') + ' · ' + (o.StatusMsg || o.OrderStatus || '')));
+      const wrap = el('div', 'row');
+      wrap.appendChild(b);
+      if (workable(o.OrderStatus)) {
+        const btn = el('button', 'btn danger sm', '撤');
+        btn.onclick = async (ev) => {
+          ev.stopPropagation();
+          const ok = await openModal((sheet, done, back) => {
+            modalShell(sheet, '撤掉这一单？' + String(o.InstrumentID) + ' ' + (buy ? '买' : '卖') + offTxt(o.CombOffsetFlag) + ' ' + fmt(o.LimitPrice, 2) + ' × ' + fmt(o.VolumeTotalOriginal, 0));
+            const acts = el('div', 'acts');
+            const y = el('button', 'btn', '撤单'); const n = el('button', 'btn ghost', '不撤');
+            acts.appendChild(n); acts.appendChild(y); sheet.appendChild(acts);
+            y.onclick = () => done(true); n.onclick = back;
+          });
+          if (!ok) return;
+          try {
+            await apiPost('/api/ctp/trade/cancel', {
+              order_ref: String(o.OrderRef), instrument: String(o.InstrumentID), exchange: String(o.ExchangeID || exchangeOf(o.InstrumentID) || ''),
+            });
+            toast('撤单已经报过去了');
+            await loadTrade();
+          } catch (e) { toast(e.message, true); }
+        };
+        wrap.appendChild(btn);
+      }
+      box.appendChild(wrap);
+    });
+    return;
+  }
+  if (d === 'trd') {
+    if (S.trd === null) { box.appendChild(el('div', 'errbox', '成交取不到。')); return; }
+    const rows = S.trd.slice().sort((x, y) => (String(y.TradeDate || '') + String(y.TradeTime || '')).localeCompare(String(x.TradeDate || '') + String(x.TradeTime || ''))).slice(0, 60);
+    if (rows.length === 0) { box.appendChild(el('div', 'empty', '今天还没有成交。')); return; }
+    rows.forEach((t) => {
+      const buy = String(t.Direction) === '0';
+      const b = el('div', 'rowbtn t');
+      b.appendChild(el('b', null, String(t.InstrumentID)));
+      b.appendChild(el('span', 'tag ' + (buy ? 'buy' : 'sell'), (buy ? '买' : '卖') + offTxt(t.OffsetFlag)));
+      b.appendChild(el('span', 'num', fmt(t.Price, 2)));
+      b.appendChild(el('span', 'num', fmt(t.Volume, 0) + ' 手'));
+      b.appendChild(el('span', 'tiny muted', String(t.TradeDate || '') + ' ' + String(t.TradeTime || '')));
+      box.appendChild(b);
+    });
+    return;
+  }
+  // 本机留痕
+  if (S.logs.length === 0) { box.appendChild(el('div', 'empty', '这个页面上还没下过单。')); return; }
+  S.logs.forEach((r) => {
+    const b = el('div', 'rowbtn t');
+    b.appendChild(el('b', null, String(r.symbol)));
+    b.appendChild(el('span', 'tag ' + (r.direction === 'Buy' ? 'buy' : 'sell'), (r.direction === 'Buy' ? '买' : '卖') + offTxt(r.offset)));
+    b.appendChild(el('span', 'num', fmt(r.price, 2)));
+    b.appendChild(el('span', 'num', fmt(r.volume, 0) + ' 手'));
+    b.appendChild(el('span', 'tiny ' + (r.result === 'ok' ? 'muted' : 'warn'), hhmmss(r.at) + ' · ' + (r.result === 'ok' ? '报过去了' : esc(r.detail || '没成'))));
+    box.appendChild(b);
+  });
+}
+
+function renderDirs() {
+  Array.prototype.forEach.call($('#oDir').querySelectorAll('button'), (b) => {
+    b.setAttribute('aria-pressed', b.dataset.v === S.dir ? 'true' : 'false');
+  });
+}
+
+/* 估算保证金：合约乘数 × 保证金率 × 价格 × 手数（拿不到乘数就如实说算不出） */
+async function estimate() {
+  const code = String($('#oCode').value || '').trim().toUpperCase();
+  const price = Number($('#oPrice').value);
+  const vol = Number($('#oVol').value) || 0;
+  const box = $('#oEst');
+  if (!code) { box.textContent = '填个合约代码。'; return; }
+  const ex = exchangeOf(code);
+  if (!ex) { box.innerHTML = '认不出这个代码的交易所 ⇒ <span class="warn">不许下单</span>（宁可不做，也不认一个没把握的）。'; return; }
+  if (S.risk[code] === undefined) {
+    try { S.risk[code] = await api('/api/ctp/trade/risk/' + encodeURIComponent(code)); }
+    catch (e) { S.risk[code] = null; }
+  }
+  const r = S.risk[code];
+  if (!r) { box.textContent = ex + ' · 乘数没取到，保证金算不出。'; return; }
+  const vm = Number(r.volume_multiple) || 0;
+  const rate = Number(r.long_margin_rate) || Number(r.short_margin_rate) || 0;
+  if (!(vm > 0) || !(price > 0) || !(vol > 0)) { box.textContent = ex + ' · 乘数 ' + vm + ' · 填上价格和手数就能估保证金。'; return; }
+  const m = price * vm * rate * vol;
+  box.innerHTML = esc(ex) + ' · 乘数 ' + vm + ' · 保证金率 ' + fmt(rate * 100, 1) + '% · 估算保证金 <b>¥' + fmt(m, 0) + '</b>';
+}
+
+async function placeOrder(dir) {
+  const code = String($('#oCode').value || '').trim().toUpperCase();
+  const ex = exchangeOf(code);
+  const price = Number($('#oPrice').value);
+  const vol = Number($('#oVol').value);
+  const maxVol = Math.min(Number(S.settings.maxVol) || 1, MAX_VOL);
+  const offset = String($('#oOffset').value || 'Open');
+  const err = $('#oErr');
+  err.hidden = true;
+  const bad = (m) => { err.textContent = m; err.hidden = false; toast(m, true); };
+  if (!code) return bad('先填合约代码。');
+  if (!ex) return bad('认不出这个代码的交易所（' + code + '）—— 不许下单。');
+  if (!(price > 0)) return bad('只走限价单：价格要大于 0。');
+  if (!Number.isInteger(vol) || vol < 1) return bad('手数要是整数，至少 1。');
+  if (vol > maxVol) return bad('这一笔 ' + vol + ' 手，超过你设的单笔上限 ' + maxVol + ' 手（在设置里能改）。');
+  if (vol > MAX_VOL) return bad('对面那条硬上限是 ' + MAX_VOL + ' 手。');
+
+  // ① 密码那一关（没设 ⇒ 领他去设；锁着 ⇒ 问一次）
+  if (!S.settings.pwd) {
+    toast('还没设交易密码 —— 先去设置里设一个', true);
+    setTab('settings');
+    return;
+  }
+  if (Date.now() >= S.unlockedAt) {
+    const pwd = await askPassword('输入交易密码（' + code + '）');
+    if (!pwd) return;
+    const h = await hashPwd(pwd, S.settings.salt || '');
+    if (h !== S.settings.pwd) { toast('密码不对', true); return; }
+    S.unlockedAt = Date.now() + LOCK_MS;
+    renderTrade();
+  }
+
+  // ② 二次确认（真钱）
+  let margin = null;
+  const r = S.risk[code];
+  if (r && Number(r.volume_multiple) > 0 && Number(r.long_margin_rate) > 0) {
+    margin = price * Number(r.volume_multiple) * Number(r.long_margin_rate) * vol;
+  }
+  const ok = await confirmOrder({ symbol: code, exchange: ex, direction: dir, offset, price, volume: vol, margin });
+  if (!ok) return;
+
+  // ③ 报过去
+  const body = {
+    instrument: code, exchange: ex, direction: dir, offset,
+    price: Number(price), volume: Number(vol), hedge: 'Speculation',
+    order_memo: 'hupo-app-' + Date.now(), confirm: true,
+  };
+  let result = 'ok', detail = '';
+  try {
+    const j = await apiPost('/api/ctp/trade/order', body);
+    const ref = j.order_ref || j.OrderRef || j.orderRef || (j.data && j.data.OrderRef) || null;
+    detail = ref ? ('单号 ' + ref) : JSON.stringify(j).slice(0, 200);
+    toast('报过去了' + (ref ? '：单号 ' + ref : ''));
+  } catch (e) {
+    result = 'fail'; detail = e.message;
+    toast(e.message, true);
+    $('#oErr').textContent = e.message;
+    $('#oErr').hidden = false;
+  }
+  try {
+    await db('run', 'INSERT INTO logs(at, symbol, direction, offset, price, volume, result, detail) VALUES (?,?,?,?,?,?,?,?)',
+      [Date.now(), code, dir, offset, Number(price), Number(vol), result, String(detail).slice(0, 300)]);
+    await loadLogs();
+  } catch (e) { /* 记不上不影响这一单已经报出去这件事 */ }
+  await loadTrade();
+}
+
+/* ────────────────────────────────────────────────────────────
+   3. 设置
+   ──────────────────────────────────────────────────────────── */
+function renderSettings() {
+  const has = !!S.settings.pwd;
+  $('#pwdTag').textContent = has ? '已设' : '未设';
+  $('#pwdTag').className = 'tag' + (has ? ' on' : '');
+  $('#pwdBox').textContent = has
+    ? ('已经设了（' + String(S.settings.pwd).split(':')[0] + '）。改密码要先输旧的；忘了就把密码取消掉再设一个 —— 那一下不碰服务端任何东西。')
+    : '还没设。设一个 6 位数字，下单前要输它。';
+  $('#setMaxVol').value = String(S.settings.maxVol || 1);
+  $('#watchCount').textContent = S.watch.length + ' 个';
+  const wl = $('#watchList');
+  wl.innerHTML = '';
+  if (S.watch.length === 0) wl.appendChild(el('div', 'empty', '自选是空的。'));
+  S.watch.forEach((s) => {
+    const row = el('div', 'row between');
+    row.appendChild(el('span', null, s + '　'));
+    const q = S.quotes[s];
+    const mid = el('span', 'small num ' + (q ? signCls(q.change_pct) : 'muted'), q ? fmt(q.price, 2) + '　' + signTxt(q.change_pct, 2) + '%' : '—');
+    row.appendChild(mid);
+    const del = el('button', 'btn danger sm', '去掉');
+    del.onclick = async () => {
+      await db('run', 'DELETE FROM watch WHERE symbol = ?', [s]);
+      await loadWatch(); await loadQuotes(); renderSettings();
+      toast('去掉了 ' + s);
+    };
+    row.appendChild(del);
+    wl.appendChild(row);
+  });
+
+  const sec = $('#secBox');
+  sec.innerHTML = '';
+  const lines = [
+    '**这一份数据的来路**：行情与交易都取自 v.stalkerai.cn（CTP 那条链路）。行情是快照，有秒级延迟；休市时看到"未连"是正常的，看它给的下一场时刻。',
+    '**交易密码挡得住什么**：挡住"手滑"和"别人拿了你手机随手点两下"。它只把加盐哈希存在这个小程序自己的库里，明文不落盘。',
+    '**它挡不住什么（请认清）**：那条接口本身没有鉴权，谁知道地址谁就能直接下单 —— 绕开这个页面完全可行。所以别把交易密码当成账户安全，它只是本机的一道闸。真钥匙（期货账号口令）不在这个页面里，也不该在。',
+    '**下单前的三道**：本机手数上限（设置里那个）· 弹窗再确认一次 · 服务端自己不收市价单、也核对可平数量。',
+    '**记住的只有三样**：自选合约 · 这个页面的设置（密码哈希、手数上限）· 本机下单留痕。行情数据不落盘，每次现取。',
+    '**清空**：琥珀的设置里每个小程序都有"清空它存下来的东西"（二次确认、拿不回来）。',
+  ];
+  lines.forEach((t) => {
+    const p = el('div');
+    p.innerHTML = esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+    sec.appendChild(p);
+  });
+}
+
+async function setPassword() {
+  const got = await openModal((sheet, done, back) => {
+    modalShell(sheet, S.settings.pwd ? '改密码（先输旧的）' : '设一个交易密码');
+    const col = el('div', 'col');
+    if (S.settings.pwd) {
+      const old = el('input', 'inp'); old.type = 'password'; old.inputMode = 'numeric'; old.maxLength = 6; old.placeholder = '现在的 6 位';
+      col.appendChild(old);
+    }
+    const a = el('input', 'inp'); a.type = 'password'; a.inputMode = 'numeric'; a.maxLength = 6; a.placeholder = '新的 6 位数字';
+    const b = el('input', 'inp'); b.type = 'password'; b.inputMode = 'numeric'; b.maxLength = 6; b.placeholder = '再输一遍';
+    col.appendChild(a); col.appendChild(b);
+    sheet.appendChild(col);
+    const acts = el('div', 'acts');
+    const ok = el('button', 'btn', '存下'); const no = el('button', 'btn ghost', '算了');
+    acts.appendChild(no); acts.appendChild(ok); sheet.appendChild(acts);
+    no.onclick = back;
+    ok.onclick = async () => {
+      const olds = S.settings.pwd ? String(col.querySelector('input').value || '') : '';
+      if (S.settings.pwd) {
+        const h = await hashPwd(olds, S.settings.salt || '');
+        if (h !== S.settings.pwd) { toast('旧密码不对', true); return; }
+      }
+      const v1 = String(a.value || ''), v2 = String(b.value || '');
+      if (!/^\d{6}$/.test(v1)) { toast('要 6 位数字', true); return; }
+      if (v1 !== v2) { toast('两遍不一样', true); return; }
+      done({ v1, old: olds });
+    };
+    setTimeout(() => (S.settings.pwd ? col.querySelector('input') : a).focus(), 30);
+  });
+  if (!got) return;
+  if (!S.settings.pwd) {
+    const salt = newSalt();
+    const h = await hashPwd(got.v1, salt);
+    await db('run', 'INSERT INTO settings(k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', ['salt', salt]);
+    await db('run', 'INSERT INTO settings(k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', ['pwd', h]);
+    S.settings.salt = salt; S.settings.pwd = h;
+  } else {
+    // 改密码：换一把新盐（旧哈希不能拿来比）
+    const salt = newSalt();
+    const h = await hashPwd(got.v1, salt);
+    await db('run', 'INSERT INTO settings(k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', ['salt', salt]);
+    await db('run', 'INSERT INTO settings(k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', ['pwd', h]);
+    S.settings.salt = salt; S.settings.pwd = h;
+  }
+  S.unlockedAt = 0;
+  renderSettings(); renderTrade();
+  toast('存下了 —— 下单前要输它');
+}
+
+/* ────────────────────────────────────────────────────────────
+   4. 启动
+   ──────────────────────────────────────────────────────────── */
+async function loadLogs() {
+  try {
+    const r = await db('all', 'SELECT at, symbol, direction, offset, price, volume, result, detail FROM logs ORDER BY at DESC LIMIT 40');
+    S.logs = r.rows || [];
+  } catch (e) { S.logs = []; }
+}
+
+function setTab(t) {
+  S.tab = t;
+  Array.prototype.forEach.call(document.querySelectorAll('.tab'), (b) => b.setAttribute('aria-selected', b.dataset.tab === t ? 'true' : 'false'));
+  ['market', 'trade', 'settings'].forEach((k) => { $('#view-' + k).className = 'view' + (k === t ? ' on' : ''); });
+  if (t === 'trade') loadTrade();
+  if (t === 'settings') renderSettings();
+  if (t === 'market') { loadMdStatus(); loadQuotes(); }
+}
+function setDetail(d) {
+  S.detail = d;
+  Array.prototype.forEach.call($('#detailTabs').querySelectorAll('button'), (b) => b.setAttribute('aria-pressed', b.dataset.d === d ? 'true' : 'false'));
+  renderDetail();
+}
+
+async function boot() {
+  // 事件
+  document.querySelectorAll('.tab').forEach((b) => { b.onclick = () => setTab(b.dataset.tab); });
+  $('#detailTabs').querySelectorAll('button').forEach((b) => { b.onclick = () => setDetail(b.dataset.d); });
+  $('#oDir').querySelectorAll('button').forEach((b) => { b.onclick = () => { S.dir = b.dataset.v; renderDirs(); }; });
+  $('#btnRefreshQ').onclick = () => { loadMdStatus(); loadQuotes(); };
+  $('#btnRefreshT').onclick = () => loadTrade();
+  $('#btnLock').onclick = () => { S.unlockedAt = 0; renderTrade(); toast('上锁了'); };
+  $('#btnSearch').onclick = doSearch;
+  $('#searchBox').onkeydown = (e) => { if (e.key === 'Enter') doSearch(); };
+  $('#btnBuy').onclick = () => placeOrder('Buy');
+  $('#btnSell').onclick = () => placeOrder('Sell');
+  $('#oCode').onchange = estimate;
+  $('#oPrice').onchange = estimate;
+  $('#oVol').onchange = estimate;
+  $('#btnSetPwd').onclick = setPassword;
+  $('#btnDropPwd').onclick = async () => {
+    if (!S.settings.pwd) { toast('还没设密码。'); return; }
+    const ok = await openModal((sheet, done, back) => {
+      modalShell(sheet, '取消交易密码？取消之后下单就不再问密码了（随时能再设一个）。');
+      const acts = el('div', 'acts');
+      const y = el('button', 'btn danger', '取消密码'); const n = el('button', 'btn ghost', '不取消');
+      acts.appendChild(n); acts.appendChild(y); sheet.appendChild(acts);
+      y.onclick = () => done(true); n.onclick = back;
+    });
+    if (!ok) return;
+    await db('run', 'DELETE FROM settings WHERE k IN (?, ?)', ['pwd', 'salt']);
+    delete S.settings.pwd; delete S.settings.salt; S.unlockedAt = 0;
+    renderSettings(); renderTrade(); toast('取消了');
+  };
+  $('#setMaxVol').onchange = async () => {
+    let v = Math.floor(Number($('#setMaxVol').value) || 1);
+    v = Math.max(1, Math.min(v, MAX_VOL));
+    await db('run', 'INSERT INTO settings(k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', ['maxVol', String(v)]);
+    S.settings.maxVol = v; $('#setMaxVol').value = String(v); renderTrade();
+    toast('单笔上限改成 ' + v + ' 手');
+  };
+  $('#btnAdd').onclick = async () => {
+    const s = String($('#addBox').value || '').trim().toUpperCase();
+    if (!s) return;
+    await db('run', 'INSERT OR IGNORE INTO watch(symbol, added) VALUES (?, ?)', [s, Date.now()]);
+    $('#addBox').value = '';
+    await loadWatch(); await loadQuotes(); renderSettings();
+    toast('加进自选了：' + s);
+  };
+  renderDirs();
+
+  // 建表 + 读设置（一次）
+  try {
+    await db('run', 'CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT)');
+    await db('run', 'CREATE TABLE IF NOT EXISTS watch(symbol TEXT PRIMARY KEY, added INTEGER)');
+    await db('run', 'CREATE TABLE IF NOT EXISTS logs(id INTEGER PRIMARY KEY, at INTEGER, symbol TEXT, direction TEXT, offset TEXT, price REAL, volume INTEGER, result TEXT, detail TEXT)');
+    const r = await db('all', 'SELECT k, v FROM settings');
+    (r.rows || []).forEach((x) => { S.settings[x.k] = x.v; });
+    S.settings.maxVol = Math.max(1, Math.min(Math.floor(Number(S.settings.maxVol) || 1), MAX_VOL));
+    await loadWatch();
+    await loadLogs();
+  } catch (e) {
+    // 存储用不了 ⇒ 页面照样能用（只是记不住东西）—— 如实说，不假装
+    toast('存储这会儿用不了：' + e.message, true);
+  }
+  renderSettings();
+  await loadMdStatus();
+  await loadQuotes();
+  renderTrade();
+
+  // 轮询：只在这一页看得见的时候轮（省流量也更省他那台）
+  setInterval(() => {
+    if (document.visibilityState === 'hidden') return;
+    if (S.tab === 'market') loadQuotes();
+  }, QUOTE_MS);
+  setInterval(() => {
+    if (document.visibilityState === 'hidden') return;
+    if (S.tab === 'trade') loadTrade();
+  }, TRADE_MS);
+  setInterval(() => { $('#clock').textContent = nowStamp(); if (S.unlockedAt && Date.now() >= S.unlockedAt) renderTrade(); }, 1000);
+}
+
+boot();
+</script>
+</body>
+</html>

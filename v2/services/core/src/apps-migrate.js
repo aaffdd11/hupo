@@ -168,6 +168,9 @@ export async function migrateAppsToBox({
         entry: m.entry,
         files,
         permissions: m.permissions ?? [],
+        // 🔴 声明原样带过去（`net` / `tasks`）：丢了它们，盒里那一版就变成另一样东西。
+        net: m.net ?? [],
+        tasks: m.tasks ?? [],
         createdBy: 'user',
       });
     } catch (err) {
@@ -447,6 +450,72 @@ export function describeMigrateReport(report) {
 }
 
 /**
+ * **把一版制品装进某个人的盒子**（维护口那条 `install` 作业）。
+ *
+ * ── 它和 `migrateAppsToBox` 的差别只有一条（但很要紧）──────────
+ *   迁移那条规矩是"**版本不可变**：盒里已有同名、hash 不一样 ⇒ 报冲突、**不动它**" ——
+ *   那是为**存量搬迁**定的（搬迁不许把他手里那份盖掉）。
+ *   而"开发这一侧做好一版、装给他"这件事，**本来就是要更新它** ⇒ 这里**照装**：
+ *   落点仍然是盒子自己的 `Apps.create()`，所以是**新的一版**（v2、v3…），
+ *   老那一版在盒里**原样留着**（版本不可变那条纪律在盒子那一侧仍然成立）。
+ *
+ * ── 三条不许破（与迁移同源）────────────────────────────────
+ *   ① 🔴 **落点是盒子自己那条写路**（`Apps.create()`）：版本号/清单/权限/审计语义一致，
+ *      **不是**往它的卷里撒文件（那条路 `81-HARNESS-ENTRY.md` §9.3 明令不许）。
+ *   ② 🔴 **装完读回来核**（逐个 sha256 + rootHash）：不是"我们发出去了"。
+ *   ③ 🔴 **声明一起装**（`permissions` / `net` / `tasks`）——
+ *      带上 `net` 却没带上"要用网"那样，盒里那一版就是另一样东西。
+ *
+ * @param {object} o
+ * @param {{create:Function, read:Function}} o.box   盒子那份（`createBoxApps`）
+ * @param {object} o.app   `{id,title,icon,entry,files,permissions,net,tasks,createdBy}`
+ *                        （`files` 是 `{相对路径: Buffer|string}`）
+ * @param {(m:string)=>void} [o.log]
+ * @returns {Promise<object>} 报告（**JSON 可序列化**：里面没有 Buffer）
+ */
+export async function installAppIntoBox({ box, app, log = () => {} }) {
+  const files = app?.files && typeof app.files === 'object' ? app.files : {};
+  const paths = Object.keys(files);
+  if (paths.length === 0) return { ok: false, error: 'empty', text: '这一份里一个文件都没有' };
+  const computed = paths.map((p) => ({ path: p, sha256: sha256hex(Buffer.from(files[p])) }));
+  const wantRoot = rootHashOf(computed);
+
+  let manifest;
+  try {
+    manifest = await box.create({
+      id: app.id,
+      title: app.title,
+      icon: app.icon ?? null,
+      entry: app.entry ?? 'index.html',
+      files,
+      permissions: app.permissions ?? [],
+      net: app.net ?? [],
+      tasks: app.tasks ?? [],
+      createdBy: app.createdBy === 'agent' ? 'agent' : 'user',
+    });
+  } catch (err) {
+    return { ok: false, error: err?.why ?? 'box', text: `没装进去：${err?.message ?? err}` };
+  }
+
+  const diff = await verifyBack({ box, manifest, computed });
+  if (diff) return { ok: false, error: 'verify-failed', text: `装是装了，但读回来对不上：${diff}`, box: manifest ?? null };
+
+  const info = {
+    id: manifest.id,
+    version: manifest.version,
+    rootHash: manifest.rootHash,
+    files: computed.length,
+    bytes: manifest.bytes ?? null,
+    permissions: manifest.permissions ?? [],
+    net: manifest.net ?? [],
+    tasks: (manifest.tasks ?? []).length,
+    verified: true,
+  };
+  log(`  ✔ ${info.id}：装进去第 ${info.version} 版（${info.files} 个文件），读回来对得上`);
+  return { ok: true, install: info, sameAsSent: manifest.rootHash === wantRoot };
+}
+
+/**
  * **本机维护口**（`0600` 的 UDS）。
  *
  * ⚠️ 它只干两件事（`plan` / `push`），而且**只认服务自己在跑时手上那条隧道** ——
@@ -479,7 +548,9 @@ export function createAppsMigrateServer({
   /** 一条作业。**不抛**：坏输入只让那一条失败（同 `apps.sock`）。 */
   async function handle(msg) {
     const op = msg?.op;
-    if (op !== 'plan' && op !== 'push') return { ok: false, error: '认不出这条请求（要 plan 或 push）' };
+    if (op !== 'plan' && op !== 'push' && op !== 'install') {
+      return { ok: false, error: '认不出这条请求（要 plan / push / install）' };
+    }
     const userId = typeof msg?.user === 'string' ? msg.user.trim() : '';
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(userId)) return { ok: false, error: '要一个用户名（像 u2 这种）' };
     const only = typeof msg?.only === 'string' && msg.only.trim() !== '' ? msg.only.trim() : null;
@@ -493,15 +564,50 @@ export function createAppsMigrateServer({
     if (!tenant) {
       return { ok: false, error: 'no-tenant', text: `${userId} 名下没有单独一台盒子，不用搬。` };
     }
-    const hostApps = hostAppsFor(userId);
-    if (!hostApps) return { ok: false, error: 'no-world', text: `${userId} 那一格还没建起来。` };
     if (typeof dialFor !== 'function') {
       return { ok: false, error: 'no-tunnel', text: '这台服务手上没有隧道，搬不了。' };
     }
-
     // ⚠️ 这里**才**引 `apps-box.js`（免得一个纯逻辑模块把 HTTP 那套也拖进来）
     const { createBoxApps } = await import('./apps-box.js');
     const box = createBoxApps({ sub: userId, dial: () => dialFor(tenant), log });
+
+    // ── `install`：**装一版进去**（开发这一侧做好一版就装给他的那条）
+    //   ⚠️ 它**不看**宿主那份库（字节是调用方给的），所以 `hostApps` 那两道闸不适用。
+    if (op === 'install') {
+      const app = msg?.app;
+      if (!app || typeof app !== 'object' || Array.isArray(app)) {
+        return { ok: false, error: 'no-app', text: '没给要装的那一份。' };
+      }
+      const raw = app.files;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return { ok: false, error: 'no-files', text: '这一份里一个文件都没有。' };
+      }
+      const files = {};
+      for (const [rel, b64] of Object.entries(raw)) {
+        if (typeof b64 !== 'string') {
+          return { ok: false, error: 'bad-file', text: `制品里那个文件看不懂：${String(rel).slice(0, 60)}` };
+        }
+        files[rel] = Buffer.from(b64, 'base64');
+      }
+      return await installAppIntoBox({
+        box,
+        app: {
+          id: app.id,
+          title: app.title,
+          icon: app.icon ?? null,
+          entry: app.entry ?? 'index.html',
+          permissions: Array.isArray(app.permissions) ? app.permissions : [],
+          net: Array.isArray(app.net) ? app.net : [],
+          tasks: Array.isArray(app.tasks) ? app.tasks : [],
+          createdBy: 'agent',
+          files,
+        },
+        log,
+      });
+    }
+
+    const hostApps = hostAppsFor(userId);
+    if (!hostApps) return { ok: false, error: 'no-world', text: `${userId} 那一格还没建起来。` };
     const report = await migrateAppsToBox({
       userId,
       hostApps,
