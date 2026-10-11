@@ -72,7 +72,36 @@ cat /proc/$(systemctl --user show hupo-core -p MainPID --value)/cgroup
 |---|---|
 | 0.1 的判据 | `systemctl --user cat "$UNIT"` —— **单元在不在**（认得出就算在），不再问 active |
 | 停之前那句话 | 照实报它是哪一档（`active` / `inactive` / …）—— 不再一律写"（$UNIT 在跑）" |
-| 停之后 | **再认一遍"游离的"那一个**（`serve_pids`：只看可执行名正好是 `node` 的进程，避免把"命令行里提到 serve.js"的脚本自己算进去）——不收掉它，`systemctl start` 会因 8020 被占而失败，而 `Restart=always` 每 3 秒重试 ⇒ **服务起不来而脚本还报"起来了"** |
+| 停之后 | **再认一遍"游离的"那一个**（`serve_pids`）——不收掉它，`systemctl start` 会因 8020 被占而失败，而 `Restart=always` 每 3 秒重试 ⇒ **服务起不来而脚本还报"起来了"** |
+
+### 4.1 🔴 `serve_pids` 的第一版是**静默空转**（差点把一个坏修法交出去）
+
+第一版写的是：
+
+```bash
+pgrep -x node | while read -r p; do … grep -q 'src/serve\.js' … done
+```
+
+**实测：`pgrep -x node` 一个进程都匹配不到。** 原因：node 把主线程的进程名
+（`/proc/<pid>/comm`）改成了 **`MainThread`**，而 `pgrep -x` 正是拿 `comm` 比对的
+（`/proc/3129318/comm` 实测就是 `MainThread`）⇒ 那个函数永远返回空 ⇒
+"收掉游离进程"**什么都不做**，而**调用方看不出来**（比不修更坏：纸面上像修过了）。
+
+⇒ 现在改成**直接读 `/proc/<pid>/cmdline`、按 argv 比**：`argv[0]` 是 node
+（`node` / `*/node` / `nodejs`）**而且** `argv[1]` 正好是 `src/serve.js`。
+**只看参数本身，不看"整条命令行文本"** —— 所以不会误伤"命令行里提到 serve.js"的脚本自己。
+
+**怎么验的**（不是读代码猜的）：造一个**假进程** —— `/tmp/fakebar/src/serve.js` 里就一句
+`setTimeout(()=>{},60000)`，在那目录里 `node src/serve.js &`，然后拿这个函数认：
+
+```
+  3129318 /home/deploy/.nvm/versions/node/v24.15.0/bin/node src/serve.js   ← 单元里那个（绝对路径）
+  3129729 node src/serve.js                                               ← 假的那个（PATH 里的 node）
+```
+
+两个都认到了，**而跑这条命令的那个 bash 没被认进去**（它命令行里有 `src/serve.js` 这段字）。
+验完把假的收掉。然后又**原样跑了一遍真脚本**：这次"游离的"是空 ⇒ 它一步多余动作都没做
+（`▶ 线上服务归系统单元管（hupo-core 在跑）` ⇒ 起 ⇒ cgroup 仍是 `app.slice/hupo-core.service`）。
 
 ⚠️ **手工路原样留着**（没有单元的老环境 / 开发机还要用）—— 只是现在它只在
 "**根本没有这个单元**"时才走。

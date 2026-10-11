@@ -88,13 +88,21 @@ if command -v systemctl >/dev/null 2>&1 && systemctl --user cat "$UNIT" >/dev/nu
 fi
 
 # **本机所有 `node … src/serve.js` 的 PID**。
-# ⚠️ 只看**可执行文件名正好是 `node`** 的进程（`pgrep -x node`）—— 这样**不会**误伤
-#    "命令行里提到 serve.js"的那个脚本自己（实测过这个坑：`pgrep -f src/serve.js`
-#    会把跑这条命令的 bash 也算进去）。
+# ⚠️ **2026-10-11 修（第一版是坏的，而且是"静默空转"）**：第一版写 `pgrep -x node`，
+#    以为它按可执行文件名匹配 —— **实测：一个都匹配不到**，因为 node 把主线程的
+#    进程名（`/proc/<pid>/comm`）改成了 **`MainThread`**，而 `pgrep -x` 正是拿 comm 比的。
+#    ⇒ 那段"收掉游离进程"于是**什么都不做**，而调用方看不出来（最坏的那种修法）。
+#    ⇒ 现在**直接读 `/proc/<pid>/cmdline`、按 argv 比**：只认
+#      `argv[0]` 是 node（含绝对路径那种）而且 `argv[1]` 正好是 `src/serve.js` 的进程 ——
+#      **不看"整条命令行文本"**，所以不会误伤"命令行里提到 serve.js"的脚本自己。
 serve_pids() {
-  pgrep -x node 2>/dev/null | while read -r p; do
-    [ -r "/proc/$p/cmdline" ] || continue
-    tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q 'src/serve\.js' && printf '%s\n' "$p"
+  for d in /proc/[0-9]*; do
+    p="${d#/proc/}"
+    [ -r "$d/cmdline" ] || continue
+    a0="$(tr '\0' '\n' < "$d/cmdline" 2>/dev/null | sed -n 1p)"
+    a1="$(tr '\0' '\n' < "$d/cmdline" 2>/dev/null | sed -n 2p)"
+    case "$a0" in node | */node | nodejs | */nodejs) ;; *) continue ;; esac
+    case "$a1" in src/serve.js | */src/serve.js) printf '%s\n' "$p" ;; esac
   done
 }
 
